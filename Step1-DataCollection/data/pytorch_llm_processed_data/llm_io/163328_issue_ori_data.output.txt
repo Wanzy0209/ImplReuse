@@ -1,0 +1,62 @@
+Let me analyze the GitHub issue and extract the structured information as requested.
+
+**Title**: AOTAutograd view replay crashes when an intermediate aliased base becomes non-contiguous after Inductor padding
+
+**Issue ID**: 163328
+
+**Bug Description**: 
+Under `torch.compile(backend="inductor", mode="reduce-overhead", fullgraph=True)`, AOTAutograd's runtime view-replay for aliased outputs crashes with:
+```
+RuntimeError: view size is not compatible with input tensor's size and stride (at least one dimension spans across two contiguous subspaces). Use .reshape(...) instead.
+```
+
+Root cause: An intermediate base tensor (internally marked is_output but not user-visible) gets padded by Inductor, making it non-contiguous at runtime. AOTAutograd later tries to replay recorded view metas off this base and hits a stride/size compatibility error.
+
+**Repro Code**: Provided in the issue
+
+**Repro Output**: The error message mentioned above
+
+**Trigger Conditions**:
+- backend: "inductor"
+- mode: "reduce-overhead"
+- fullgraph: True
+- The intermediate base is marked is_output internally but is not a user-visible output (hence eligible for padding/realignment)
+- There are two (or more) outputs that are views (e.g., reshape) of this same base
+- With view_replay_for_aliased_outputs=True (default), _functionalize_apply_view_metas attempts replay on the padded base and fails
+
+**Affected API**: 
+- torch.compile
+- AOTAutograd view replay (_functionalize_apply_view_metas)
+- torch.cat (mentioned as incidental)
+- reshape
+
+**Environment**:
+- PyTorch version: 2.4.1+cu121, also reproduces on 2.6.0
+- Python version: 3.8.17, also reproduces on 3.10
+
+
+- OS: unknown
+- Hardware: CUDA (device="cuda")
+
+I'll focus on the specific CUDA environment details. The issue occurs on a CUDA device, with specific PyTorch and Python versions. The error emerges during tensor view replay, particularly when an intermediate base tensor becomes non-contiguous due to Inductor padding. The problem is triggered under specific compilation settings involving the inductor backend and full graph mode.```json
+{
+  "title": "AOTAutograd view replay crashes when an intermediate aliased base becomes non-contiguous after Inductor padding",
+  "error_description": "Under torch.compile(backend=\"inductor\", mode=\"reduce-overhead\", fullgraph=True), AOTAutograd's runtime view-replay for aliased outputs crashes with: RuntimeError: view size is not compatible with input tensor's size and stride (at least one dimension spans across two contiguous subspaces). Use .reshape(...) instead. Root cause: an intermediate base tensor (internally marked is_output but not user-visible) gets padded by Inductor, which makes it non-contiguous at runtime. AOTAutograd later tries to replay recorded view metas off this base and hits a stride/size compatibility error.",
+  "repro_code": "import torch\nfrom torch import nn\n\nclass ReproMin(nn.Module):\n    def __init__(self, num_points_out: int = 120, lc_num: int = 2, input_channels: int = 16):\n        super().__init__()\n        self.num_points_out = num_points_out\n        self.lc_num = lc_num\n        self.linear_main = nn.Linear(input_channels, num_points_out * 2)\n        self.linear_lc = nn.Linear(input_channels, num_points_out * 2)\n\n    def forward(self, x: torch.Tensor):\n        # x: (bs, 9, 7, C)\n        bs, num_lat, num_lon, C = x.shape\n        index = num_lat - self.lc_num\n\n        # Flatten spatial dims per branch\n        main_x = x[:, :index].reshape(bs * index * num_lon, C)\n        lc_x = x[:, index:].reshape(bs * self.lc_num * num_lon, C)\n\n        # Project and restore shapes\n        refline = self.linear_main(main_x).reshape(bs, index, num_lon, -1)      # (bs, 7, 7, 240)\n        lc_refline = self.linear_lc(lc_x).reshape(bs, self.lc_num, num_lon, -1) # (bs, 2, 7, 240)\n\n        # Forcing .contiguous() to avoid potential stride issues does not help here\n        base_tensor = torch.cat([refline, lc_refline], dim=1).contiguous()  # (bs, 9, 7, 240)\n\n        # Two reshapes derived from the same cat() output\n        ten0 = base_tensor.reshape(bs, num_lat, num_lon, self.num_points_out, 2)  # (bs, 9, 7, 120, 2)\n        ten1 = base_tensor.reshape(bs, num_lat * num_lon, 240)                    # (bs, 63, 240)\n        return {\"ten0\": ten0, \"ten1\": ten1}\n\ndef main():\n    device = \"cuda\"\n    bs, num_lat, num_lon, C = 36, 9, 7, 16\n    model = ReproMin(num_points_out=120, lc_num=2, input_channels=C).to(device)\n    model = torch.compile(model, backend=\"inductor\", mode=\"reduce-overhead\", fullgraph=True)\n    x = torch.randn(bs, num_lat, num_lon, C, device=device, dtype=torch.float32, requires_grad=True)\n    out = model(x)\n    print({k: tuple(v.shape) for k, v in out.items()})\n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "RuntimeError: view size is not compatible with input tensor's size and stride (at least one dimension spans across two contiguous subspaces). Use .reshape(...) instead.",
+  "trigger_conditions": {
+    "backend": "inductor",
+    "dtype": "float32",
+    "input_shape": "(36, 9, 7, 16)",
+    "other_conditions": "mode=\"reduce-overhead\", fullgraph=True, view_replay_for_aliased_outputs=True (default), intermediate base is marked is_output internally but is not a user-visible output, two or more outputs that are views (e.g., reshape) of this same base"
+  },
+  "affected_api": "torch.compile, AOTAutograd view replay (_functionalize_apply_view_metas), torch.reshape, torch.cat",
+  "environment": {
+    "pytorch_version": "2.4.1+cu121, also reproduces on 2.6.0",
+    "python_version": "3.8.17, also reproduces on 3.10",
+    "os": "unknown",
+    "hardware": "CUDA"
+  },
+  "labels": []
+}
+```

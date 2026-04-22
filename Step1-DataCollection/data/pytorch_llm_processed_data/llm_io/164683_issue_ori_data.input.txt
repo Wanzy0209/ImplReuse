@@ -1,0 +1,91 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [Fuzzer][Eager/Compile Divergence] IncompatibleTypeErrorImpl('invalid operands of type pointer<bf16> and triton.language.float64')
+    - issue_id: 164683
+    - bug_description: ### 🐛 Describe the bug
+
+```
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, sentinel):
+    t0 = arg0 # size=(4, 4), stride=(4, 1), dtype=int64, device=cuda
+    t1 = torch.tanh(t0) # size=(4, 4), stride=(4, 1), dtype=int64, device=cuda
+    t2 = arg1 # size=(5,), stride=(1,), dtype=int64, device=cuda
+    t3 = t2.min() # size=(), stride=(), dtype=int64, device=cuda
+    t4 = t1.clone(); t4.fill_(t3.item()) # size=(4, 4), stride=(4, 1), dtype=int64, device=cuda
+    t5 = arg2 # size=(5000, 4), stride=(5000, 1), dtype=bfloat16, device=cuda
+    t6 = torch.nn.functional.relu(t5) # size=(5000, 4), stride=(5000, 1), dtype=bfloat16, device=cuda
+    t7 = torch.nn.functional.silu(t6) # size=(5000, 4), stride=(5000, 1), dtype=bfloat16, device=cuda
+    t8 = torch.nn.functional.embedding(torch.clamp(t4, 0, t7.size(0) - 1).to(torch.long), t7) # size=(4, 4, 4), stride=(16, 4, 1), dtype=bfloat16, device=cuda
+    t9 = t8.min() # size=(), stride=(), dtype=bfloat16, device=cuda
+    output = t9 + sentinel  # output tensor with sentinel for gradient flow
+    return output
+
+arg0 = torch.randint(0, 1000, [4, 4], dtype=torch.int64, device='cuda') # size=(4, 4), stride=(4, 1), dtype=int64, device=cuda
+arg1 = torch.randint(0, 1000, [5], dtype=torch.int64, device='cuda') # size=(5,), stride=(1,), dtype=int64, device=cuda
+arg2 = torch.rand([5000, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5000, 4), stride=(5000, 1), dtype=bfloat16, device=cuda
+sentinel = torch.tensor(0.0, dtype=torch.bfloat16, device='cuda', requires_grad=True) # Sentinel for gradient flow
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+```
+
+```
+   Eager Success! ✅                                                                                      
+   E1004 21:11:19.113000 467163 torch/_inductor/runtime/triton_heuristics.py:817] [0/0] Triton compilation failed: triton_red_fused_add_embedding_eq_isnan_logical_and_logical_or_min_relu_silu_1
+   E1004 21:11:19.113000 467163 torch/_inductor/runtime/triton_heuristics.py:817] [0/0] def triton_red_fused_add_embedding_eq_isnan_logical_and_logical_or_min_relu_silu_1(in_ptr0, in_ptr1, out_ptr1, out_ptr2, ks0, ks1, ks2, xnumel, r0_numel, XBLOCK : tl.constexpr, R0_BLOCK : tl.constexpr):
+   E1004 21:11:19.113000 467163 torch/_inductor/runtime/triton_heuristics.py:817] [0/0]     xnumel = 1    
+   E1004 21:11:19.113000 467163 torch/_inductor/runtime/triton_heuristics.py:817] [0/0]     rnumel = r0_numel
+   E1004 21:11:19.113000 467163 torch/_inductor/runtime/triton_heuristics.py:817] [0/0]     RBLOCK: tl.constexpr = R0_BLOCK
+   E1004 21:11:19.113000 467163 torch/_inductor/runtime/triton_heuristics.py:817] [0/0]     xoffset = tl.program_id(0) * XBLOCK
+   E1004 21:11:19.113000 467163 torch/_inductor/runtime/triton_heuristics.py:817] [0/0]     xindex = xoffset + tl.arange(0, XBLOCK)[:, None]
+   E1004 21:11:19.113000 467163 torch/_inductor/runtime/triton_heuristics.py:817] [0/0]     xmask = tl.full([XBLOCK, R0_BLOCK], True, tl.int1)
+   E1004 21:11:19.113000 467163 torch/_inductor/runtime/triton_heuristics.py:817] [0/0]     r0_base = tl.arange(0, R0_BLOCK)[None, :]
+   E1004 21:11:19.113000 467163 torch/_inductor/runtime/triton_heuristics.py:817] [0/0]     rbase = r0_base
+   E1004 21:11:19.113000 467163 torch/_inductor/runtime/triton_heuristics.py:817] [0/0]     tl.device_assert(((((tl.full([], 0.0, tl.float64)) * ((tl.full([], 0.0, tl.float64)) >= (ks1)) + (ks1) * ((ks1) > (tl.full([], 0.0, tl.float64))))) * ((((tl.full([], 0.0, tl.float64)) * ((tl.full([], 0.0, tl.float64)) >= (ks1)) + (ks1) *
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

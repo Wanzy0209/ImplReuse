@@ -1,0 +1,12 @@
+{
+  "title": "c10::intrusive_ptr::reset_() may never delet object due to incorrect weakcount handling",
+  "issue_id": "165262",
+  "bug_description": "### 🐛 Describe the bug\n\nHi, I'm new to PyTorch, and I'm trying to understand whether the `reset_()` implementation of `c10::intrusive_ptr` is correct.\n\nAfter reviewing both the previous and the updated implementation from Pull Request #163394, I noticed a potential issue where the target object might never be deleted.\n\nSpecifically, lines [338-359 in this commit](https://github.com/pytorch/pytorch/blob/281f8f407ed0925f73f25f89868b89dfbe895987/c10/util/intrusive_ptr.h#L338-L359).\n\nhttps://github.com/pytorch/pytorch/blob/281f8f407ed0925f73f25f89868b89dfbe895987/c10/util/intrusive_ptr.h#L338-L359\n\nAt line 341, the first `should_delete` is defined as:\n\n```cpp\nbool should_delete = (combined_refcount == detail::kWeakReferenceCountOne);\n```\n\nThis makes sense — since the weak count is always one greater than the actual number of weak references, the object can be deleted when `weakcount == 1`.\n\nHowever, once we enter the branch at line 346 (`if (!should_delete)`), it means the weak count must be **2 or higher** (i.e., there are still active weak references). Then, at line 353, we see the following:\n\n```cpp\nshould_delete = detail::atomic_weakcount_decrement(target_->combined_refcount_) == 0;\n```\n\nThis line assumes that decrementing the weak count can make it reach 0, which would trigger the final deletion. But according to the invariant above, `weakcount` can never become 0 by decreasing it by 1 when it's 2 or higher.\n\n**Therefore, `should_delete` will never become true in this path, meaning the `delete target_` statement that follows will never be executed.**\nAs a result, the object might never be freed even when both strong and weak references are gone.\n\n---\n\nI have create a minimal reproduce example for this potential problem.\n\nhttps://github.com/mayeths/torch-intrusive_ptr-minimal\n\n\n\n### Versions\n\nNo specific runtime environment can be provided since this was observed on an in-house cluster. However, I can confirm that the issue reproduces consistently across many PyTorch versions, including 2.7 and 2.8, which I'm currently using.\n\ncc @ezyang @bhosmer @smessmer @ljk53 @bdhirsh",
+  "apis": [
+    "torch"
+  ],
+  "best_code": "should_delete = detail::atomic_weakcount_decrement(target_->combined_refcount_) == 0;",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/163394"
+  ]
+}

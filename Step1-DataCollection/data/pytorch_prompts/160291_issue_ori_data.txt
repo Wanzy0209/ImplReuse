@@ -1,0 +1,60 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [FSDP2] Bug: NaN gradient when both HSDP and CPU offload are enabled
+    - issue_id: 160291
+    - bug_description: Long time no see, Will @weifengpy , Yifan @mori360 , and Andrew @awgu~ 
+
+As a big fan of FSDP2, here is my first bug fix in H2 2025 😄.
+
+**Bug: When both HSDP and CPU offload are enabled, FSDP2 suffers from wrong CPU-GPU sync, which gives NaN gradient after `backward()`**
+
+**Reason**: `post_reduce_stream` is `all_reduce_stream` during HSDP, but CPU-GPU sync is hard coded to `reduce_scatter_stream`!
+<img width="457" height="831" alt="Image" src="https://github.com/user-attachments/assets/137fe2e2-e826-407b-96a9-baa6695fce3c" />
+
+https://github.com/pytorch/pytorch/blob/842cc77ab9aafd518593c2fce077d6abb42a5b7f/torch/distributed/fsdp/_fully_shard/_fsdp_collectives.py#L606
+
+**Implication**: This can give non-deterministic NaN gradient, which is hard to debug and identify in production. 
+
+**Why HSDP x CPU offload is useful**: when networking bandwidth is limited and GPU memory is small but CPU memory and PCI/NVLink is available.
+
+**Fix**: simply change `reduce_scatter_stream.record_event` to `post_reduce_stream.record_event` 😄
+
+
+cc @H-Huang @awgu @wanchaol @fegin @fduwjj @wz337 @wconstab @d4l3k @pragupta @zhaojuanmao @mrshenli @rohan-varma @chauhang @mori360
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

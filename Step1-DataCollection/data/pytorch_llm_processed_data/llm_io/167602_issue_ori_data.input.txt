@@ -1,0 +1,101 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [CD][CUDA] Stable Diffusion Cannot Be Run Due to CUDNN Errors
+    - issue_id: 167602
+    - bug_description: ### 🐛 Describe the bug
+
+During testing, @Aidyn-A  noticed that our latest available ARM binary (e.g. cu130) cannot run stable diffusion on `ubuntu:24.04`. 
+
+Steps to reproduce: 
+apt update && apt install python3 python3-pip   
+~~pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu130~~ Thanks @malfet for pointing out the mistake! 
+
+pip3 install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu130
+
+
+Run mini stable diffusion code below: 
+
+pip install diffusers transformers
+
+`sd.py` below: 
+
+```python
+import torch
+from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler
+
+model_id = "stabilityai/stable-diffusion-2-1"
+
+# Use the DPMSolverMultistepScheduler (DPM-Solver++) scheduler here instead
+pipe = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16)      
+pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+pipe = pipe.to("cuda")
+
+prompt = "a photo of an astronaut riding a horse on mars"
+import time
+start = time.time()
+for i in range(10):
+  image = pipe(prompt).images[0]
+print("Time taken: ", time.time() - start)
+
+image.save("astronaut_rides_horse.png")
+```
+
+```
+python3 sd.py 
+
+Error snippet: 
+
+  File "/usr/local/lib/python3.12/dist-packages/transformers/integrations/sdpa_attention.py", line 96, in sdpa_attention_forward
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: cuDNN Frontend error: [cudnn_frontend] Error: No valid execution plans built.
+```
+
+### Versions
+
+nightly arm cu13 binary. 
+
+
+We root-caused it to missing PRELOAD of `libnvrtc-builtinso.so.*`. See: https://github.com/pytorch/pytorch/pull/167586 
+
+As @Aidyn-A  found export LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/cu13/lib was a workaround and I further confirmed that if we move libnvrtc-builtinso.so.* to /tmp and 
+export LD_LIBRARY_PATH=/tmp would also be a good workaround, clearly showing that sth about libnvrtc-builtin PRELOAD was gone. Then I noticed a recent change: https://github.com/pytorch/pytorch/pull/167046 
+
+cc @seemethere @malfet @atalman @csarofeen @ptrblck @xwang233 @eqy @msaroufim @jerryzh168 @snadampal @milpuz01 @aditew01 @nikhil-arm @fadara01 @Aidyn-A @tinglvv
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

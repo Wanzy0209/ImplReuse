@@ -1,0 +1,66 @@
+Let me analyze this GitHub issue and extract the structured information as requested.
+
+From the issue, I can extract:
+
+1. **title**: "torch.compilecrashes on model exported viatorch.export, with lifted constant from cache tensor"
+
+2. **error_description**: The bug description states:
+   - A crash when using `torch.compile` on a model exported via `torch.export`
+   - The model runs normally before export
+   - After exporting and compiling, it triggers:
+     - A warning about a missing `get_attr` reference
+     - A `BackendCompilerFailed` caused by mismatched `FakeTensorMode` contexts
+   - This happens only after export
+   - Seems related to the way `nn.Parameter(..., requires_grad=False)` and `.data` mutation are handled in conjunction with the `torch.export` lifted constant system
+
+3. **repro_code**: The minimal reproducible code is provided in the issue.
+
+4. **repro_output**: The actual error output shows:
+   - UserWarning: "Attempted to insert a get_attr Node with no underlying reference in the owning GraphModule!"
+   - BackendCompilerFailed: "backend='inductor' raised: AssertionError: fake mode (...) doesn't match mode (...) from fake tensor input"
+   - The crash is thrown during FX/Inductor pre-grad passes.
+
+5. **trigger_conditions**:
+   - backend: "inductor" (mentioned in error output)
+   - dtype: Not explicitly mentioned
+   - input_shape: The input is `torch.randn(1, 3, MyModel.INPUT_FEATURES)` where INPUT_FEATURES = 5, so shape is (1, 3, 5)
+   - other_conditions: 
+     - Using `torch.export.export` followed by `torch.compile`
+     - Using `nn.Parameter(..., requires_grad=False)` with `.data` mutation
+     - Using lifted constant system from `torch.export`
+
+6. **affected_api**: 
+   - `torch.compile`
+   - `torch.export`
+   - `nn.Parameter` with `.data` mutation
+
+7. **environment**:
+   - pytorch_version: "2.7.1a0+gite2d141d"
+   - python_version: "3.10.16"
+   - os: "Ubuntu 22.04.4 LTS (x86_64)"
+   - hardware: CUDA 12.6 is used to build PyTorch, CUDA is available
+
+8. **labels**: Not explicitly provided in the issue, so I'll leave this as an empty list.
+
+Let me format this into the requested JSON structure.```json
+{
+  "title": "torch.compilecrashes on model exported viatorch.export, with lifted constant from cache tensor",
+  "error_description": "A crash when using torch.compile on a model exported via torch.export. The model runs normally before export, but after exporting and compiling, it triggers a warning about a missing get_attr reference followed by a BackendCompilerFailed caused by mismatched FakeTensorMode contexts. This happens only after export, and seems related to the way nn.Parameter(..., requires_grad=False) and .data mutation are handled in conjunction with the torch.export lifted constant system.",
+  "repro_code": "import torch\nimport torch.nn as nn\nfrom torch.utils.data import DataLoader, TensorDataset\n\nclass BaseModule(nn.Module):\n    def forward(self, *args, **kwargs):\n        raise NotImplementedError\n\n    def predict(self, X, batch_size=1):\n        data_loader = DataLoader(TensorDataset(X), batch_size=batch_size, shuffle=False)\n        self.eval()\n        n_samples = X.size(0)\n        y_pred = torch.zeros((n_samples,) + self(X[0:1]).size()[1:])\n        r = 0\n        for batch_data in data_loader:\n            X_batch = torch.autograd.Variable(batch_data[0])\n            y_batch_pred = self(X_batch).data\n            y_pred[r:r + len(y_batch_pred)] = y_batch_pred\n            r += len(y_batch_pred)\n        return y_pred\n\nclass CacheModule(BaseModule):\n    def __init__(self, cache: torch.Tensor):\n        super().__init__()\n        assert cache.ndim == 3\n        self.cache = nn.Parameter(cache, requires_grad=False)\n\n    def forward(self, x: torch.Tensor) -> torch.Tensor:\n        n_tokens = x.size(1)\n        rolled_cache = torch.roll(self.cache.data, -n_tokens, dims=1)\n        rolled_cache[:, -n_tokens:, :] = x\n        self.cache.data = rolled_cache\n        return self.cache\n\nclass LinearBlock(nn.Module):\n    def __init__(self, in_features, out_features, activation=None):\n        super().__init__()\n        self.linear = nn.Linear(in_features, out_features)\n        self.activation = activation\n\n    def forward(self, x):\n        x = self.linear(x)\n        return self.activation(x) if self.activation else x\n\nclass MyModel(BaseModule):\n    INPUT_FEATURES = 5\n    CACHE_SEQ_LEN = 10\n\n    def __init__(self):\n        super().__init__()\n        default_cache = torch.zeros(1, self.CACHE_SEQ_LEN, self.INPUT_FEATURES)\n        self.cache_layer = CacheModule(default_cache)\n        self.fc1 = LinearBlock(self.INPUT_FEATURES, 10, activation=nn.ReLU())\n        self.fc2 = LinearBlock(10, self.INPUT_FEATURES)\n\n    def forward(self, x):\n        cached = self.cache_layer(x)\n        out = self.fc1(cached)\n        out = self.fc2(out)\n        return out\n\ndef my_model_function():\n    return MyModel()\n\ndef GetInput():\n    return torch.randn(1, 3, MyModel.INPUT_FEATURES)\n\nif __name__ == \"__main__\":\n    input_tensor = GetInput()\n    exported_program = torch.export.export(my_model_function(), (input_tensor,))\n    exported_model = exported_program.module()\n\n    compiled_model = torch.compile(exported_model, mode=\"max-autotune-no-cudagraphs\")\n    compiled_output = compiled_model(input_tensor)",
+  "repro_output": "/.../torch/export/_unlift.py:81: UserWarning: Attempted to insert a get_attr Node with no underlying reference in the owning GraphModule!\n...\nBackendCompilerFailed: backend='inductor' raised:\nAssertionError: fake mode (...) doesn't match mode (...) from fake tensor input",
+  "trigger_conditions": {
+    "backend": "inductor",
+    "dtype": "",
+    "input_shape": "(1, 3, 5)",
+    "other_conditions": "Using torch.export.export followed by torch.compile; using nn.Parameter(..., requires_grad=False) with .data mutation; using lifted constant system from torch.export"
+  },
+  "affected_api": "torch.compile, torch.export, nn.Parameter with .data mutation",
+  "environment": {
+    "pytorch_version": "2.7.1a0+gite2d141d",
+    "python_version": "3.10.16",
+    "os": "Ubuntu 22.04.4 LTS (x86_64)",
+    "hardware": "CUDA 12.6"
+  },
+  "labels": []
+}
+```

@@ -1,0 +1,83 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: c10::intrusive_ptr::reset_() may never delet object due to incorrect weakcount handling
+    - issue_id: 165262
+    - bug_description: ### 🐛 Describe the bug
+
+Hi, I'm new to PyTorch, and I'm trying to understand whether the `reset_()` implementation of `c10::intrusive_ptr` is correct.
+
+After reviewing both the previous and the updated implementation from Pull Request #163394, I noticed a potential issue where the target object might never be deleted.
+
+Specifically, lines [338-359 in this commit](https://github.com/pytorch/pytorch/blob/281f8f407ed0925f73f25f89868b89dfbe895987/c10/util/intrusive_ptr.h#L338-L359).
+
+https://github.com/pytorch/pytorch/blob/281f8f407ed0925f73f25f89868b89dfbe895987/c10/util/intrusive_ptr.h#L338-L359
+
+At line 341, the first `should_delete` is defined as:
+
+```cpp
+bool should_delete = (combined_refcount == detail::kWeakReferenceCountOne);
+```
+
+This makes sense — since the weak count is always one greater than the actual number of weak references, the object can be deleted when `weakcount == 1`.
+
+However, once we enter the branch at line 346 (`if (!should_delete)`), it means the weak count must be **2 or higher** (i.e., there are still active weak references). Then, at line 353, we see the following:
+
+```cpp
+should_delete = detail::atomic_weakcount_decrement(target_->combined_refcount_) == 0;
+```
+
+This line assumes that decrementing the weak count can make it reach 0, which would trigger the final deletion. But according to the invariant above, `weakcount` can never become 0 by decreasing it by 1 when it's 2 or higher.
+
+**Therefore, `should_delete` will never become true in this path, meaning the `delete target_` statement that follows will never be executed.**
+As a result, the object might never be freed even when both strong and weak references are gone.
+
+---
+
+I have create a minimal reproduce example for this potential problem.
+
+https://github.com/mayeths/torch-intrusive_ptr-minimal
+
+
+
+### Versions
+
+No specific runtime environment can be provided since this was observed on an in-house cluster. However, I can confirm that the issue reproduces consistently across many PyTorch versions, including 2.7 and 2.8, which I'm currently using.
+
+cc @ezyang @bhosmer @smessmer @ljk53 @bdhirsh
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

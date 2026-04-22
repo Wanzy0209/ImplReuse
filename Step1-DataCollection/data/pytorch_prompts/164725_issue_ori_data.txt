@@ -1,0 +1,94 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [Fuzzer][Eager/Compile Divergence] DDE when calling .item() fake impl not called.
+    - issue_id: 164725
+    - bug_description: ### 🐛 Describe the bug
+
+
+```
+
+
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1000030)
+
+def fuzzed_program(sentinel):
+    var_node_4 = torch.full((6,), True, dtype=torch.bool) # size=(6,), stride=(1,), dtype=bool, device=cuda
+    var_node_3 = torch.reshape(var_node_4, [2, 3]) # size=(2, 3), stride=(3, 1), dtype=bool, device=cuda
+    var_node_5 = torch.full((2, 3), False, dtype=torch.bool) # size=(2, 3), stride=(3, 1), dtype=bool, device=cuda
+    _x_ms = torch.arange(max(1, 1), device=var_node_3.device).to(var_node_3.dtype)
+    _mask_ms = torch.zeros_like(_x_ms, dtype=torch.bool)
+    _mask_ms[:1] = True
+    var_node_2 = torch.masked_select(_x_ms, _mask_ms) # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_1 = torch.squeeze(var_node_2) # size=(), stride=(), dtype=bool, device=cuda
+    var_node_0 = var_node_1.item() # dtype=bool
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+
+args = () + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+```
+
+```
+   ✅ eager success                                                                                                                                                                                                                             
+   Traceback (most recent call last):                                                                                                                                                                                                           
+     File "/tmp/torchfuzz/fuzz_b3cba9ad.py", line 31, in <module>                                                                                                                                                                               
+       result_compiled = compiled_program(*args)                                                                                                                                                                                                
+     File "/home/bobren/local/a/pytorch/torch/_dynamo/eval_frame.py", line 895, in compile_wrapper                                                                                                                                              
+       raise e.with_traceback(None) from e.__cause__  # User compiler error                                                                                                                                                                     
+   torch._dynamo.exc.UserError: Could not guard on data-dependent expression Eq(u0, 1) (unhinted: Eq(u0, 1)).  (Size-like symbols: u0)                                                                                                          
+   consider using data-dependent friendly APIs such as guard_or_false, guard_or_true and statically_known_trueCaused by: var_node_0 = var_node_1.item() # dtype=bool  # mp/torchfuzz/fuzz_b3cba9ad.py:16 in fuzzed_program (_dynamo/utils.py:3577 in run_node)
+   For more information, run with TORCH_LOGS="dynamic"                                                                                                                                                                                          
+   For extended logs when we create symbols, also add TORCHDYNAMO_EXTENDED_DEBUG_CREATE_SYMBOL="u0"                                                                                                                                             
+   If you suspect the guard was triggered from C++, add TORCHDYNAMO_EXTENDED_DEBUG_CPP=
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

@@ -1,0 +1,166 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: PyTorch 2.8.0 ONNX export generates boolean values for integer-only allowzero attribute
+    - issue_id: 161941
+    - bug_description: ### 🐛 Describe the bug
+
+**Problem:**
+PyTorch 2.8.0 ONNX export incorrectly generates boolean `True` instead of integer `1` for the `allowzero` attribute in Reshape operations, causing downstream serialization failures with onnx-ir.
+
+**Minimal reproducing example:**
+```python
+#!/usr/bin/env python3
+import torch
+import torch.nn as nn
+import warnings
+import tempfile
+import os
+
+# CRITICAL: Force DeprecationWarnings to be errors (this triggers the issue!)
+warnings.filterwarnings("error", category=DeprecationWarning)
+
+class TestModel(nn.Module):
+    def forward(self, x):
+        # This reshape triggers the boolean->int issue
+        return x.reshape(1, -1)
+
+model = TestModel().eval()
+x = torch.randn(2, 4)
+
+# Try ONNX export - this should trigger SerdeError
+with tempfile.NamedTemporaryFile(suffix='.onnx', delete=False) as f:
+    try:
+        torch.onnx.export(
+            model,
+            (x,),
+            f.name,
+            opset_version=18,
+            dynamo=True,
+            verbose=False
+        )
+        print("❌ UNEXPECTED: Export succeeded")
+    except Exception as e:
+        print(f"✅ CONFIRMED: {type(e).__name__}: {e}")
+    finally:
+        try:
+            os.unlink(f.name)
+        except:
+            pass
+```
+
+**Error:**
+```
+onnx_ir.serde.SerdeError: Error calling serialize_attribute_into with: Attr('allowzero', INT, True)
+```
+
+**Full traceback showing the root cause:**
+```
+File "/usr/local/lib/python3.11/dist-packages/onnx_ir/serde.py", line 1703, in serialize_node_into
+  serialize_attribute_into(node_proto.attribute.add(), from_=attr)
+onnx_ir.serde.SerdeError: Error calling serialize_attribute_into with: Attr('allowzero', INT, True)
+
+Node(..., attributes={'allowzero': Attr('allowzero', INT, True)}, ...)
+```
+
+**Environment:**
+- **PyTorch**: 2.8.0+cpu
+- **ONNX**: 1.19.0  
+- **onnx-ir**: 0.1.7
+- **Platform**: Linux (Ubuntu 22.04)
+- **Python**: 3.11.0rc1
+- **Protobuf**: 6.32.0
+
+**Root Cause:**
+PyTorch's new dynamo-based ONNX export generates `Attr('allowzero', INT, True)` instead of the ONNX-compliant `Attr('allowzero', INT, 1)`. The ONNX specification requires integer values (0/1) for the allowzero attribute.
+
+**Impact:**
+- Breaks ONNX export for PyTorch Geometric models in CI environments
+- Affects any model using reshape operations with strict warning handling
+- Forces workarounds in downstream projects
+
+**Expected Behavior:**
+`allowzero=True` should serialize as `Attr('allowzero', INT, 1)`
+
+**Actual Behavior:**
+`allowzero=True` serializes as `Attr('allowzero', INT, True)` (boolean in integer field)
+
+
+
+### Versions
+
+
+### **Versions:**
+Collecting environment information...
+PyTorch version: 2.8.0+cpu
+Is debug build: False
+CUDA used to build PyTorch: None
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.5 LTS (x86_64)
+GCC version: (Ubuntu 11.4.0-1ubuntu1~22.04.2) 11.4.0
+Clang version: Could not collect
+CMake version: Could not collect
+Libc version: glibc-2.35
+
+Python version: 3.11.0rc1 (main, Aug 12 2022, 10:02:14) [GCC 11.2.0] (64-bit runtime)
+Python platform: Linux-5.15.167.4-microsoft-standard-WSL2-x86_64-with-glibc2.35
+Is CUDA available: False
+CUDA runtime version: No CUDA
+CUDA_MODULE_LOADING set to: N/A
+GPU models and configuration: No CUDA
+Nvidia driver version: No CUDA
+cuDNN version: No CUDA
+Is XPU available: False
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: True
+
+Versions of relevant libraries:
+[pip3] numpy==2.3.2
+[pip3] onnx==1.19.0
+[pip3] onnx-ir==0.1.7
+[pip3] onnxscript==0.4.0
+[pip3] torch==2.8.0+cpu
+[pip3] torch-geometric==2.6.1
+[pip3] torchvision==0.23.0+cpu
+[conda] Could not collect
+
+
+cc @justinchuby @titaiwangms
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

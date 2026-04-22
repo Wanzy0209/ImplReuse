@@ -1,0 +1,146 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Backpropagation to flex_attentionscore_modbiases fails based on presence of graph breaks
+    - issue_id: 162228
+    - bug_description: ### 🐛 Describe the bug
+
+The following minimal code snippet:
+```python
+import torch
+from torch.nn.attention.flex_attention import flex_attention
+
+@torch.compile()
+def test(x, y):
+    # Materialize a bias matrix
+    B, L, device = x.shape[0], x.shape[1], x.device
+    b = torch.arange(B, device=device, dtype=torch.long).view(B, 1, 1)
+    q_idx = torch.arange(L, device=device, dtype=torch.long).view(1, L, 1)
+    kv_idx = torch.arange(L, device=device, dtype=torch.long).view(1, 1, L)
+    bias_mat = y[b, q_idx] + y[b, kv_idx] # (B, L, L)
+
+    # Dummy score_mod retrieving bias values
+    def score_mod(score, b, h, q_idx, kv_idx):
+        return score + bias_mat[b, q_idx, kv_idx]
+
+    x_ = x[:, :, None].repeat(1, 1, 16, 1)
+    # torch._dynamo.graph_break()
+    return flex_attention(x_, x_, x_, score_mod=score_mod)
+
+
+DEVICE = "cuda"
+B, L, D = 2, 16, 64
+
+x = torch.randn(B, L, D, device=DEVICE, requires_grad=True)
+y = torch.randn(B, L, device=DEVICE, requires_grad=True)
+
+out = test(x, y).mean().backward()
+
+print(torch.__version__)
+print(f"x: {(x.grad is not None) and (x.grad.norm() > 0)}, y: {(y.grad is not None) and (y.grad.norm() > 0)}")
+assert x.grad.norm() > 0
+assert y.grad.norm() > 0
+```
+fails to properly backpropagate gradients into `y` for me (on the current stable PyTorch 2.8.0-cu12.8 installed via pip, the current nightly, and `2.8.0a0+34c6371d24.nv25.08` via the `nvidia/pytorch:25.08-py3` container, across two differently configured systems with H100s & H200s).
+
+Curiously, un-commenting it enables the code to work as expected.
+
+The code above is a minified version of a longer snippet I started out with that had the same behavior, and various other variations of this code snippet also (seemingly randomly to me) affect whether gradients are propagated to `y`. Gradients are always successfully propagated to `x`.
+
+Some further things I've tried (in this case in the aforementioned NGC container):
+- `backend="eager"`: works
+- `backend="aot_eager"`: fails
+- `backend="aot_eager_decomp_partition"`: fails
+- `backend="inductor"`: fails
+
+### Error logs
+
+Running the script above produces:
+```
+2.8.0a0+34c6371d24.nv25.08
+x: True, y: False
+Traceback (most recent call last):
+  File "/home/hpc/v104dd/v104dd11/dev/diffusion-video-pixel-diffusion-fsdp2/weird_shit.py", line 33, in <module>
+    assert y.grad.norm() > 0
+           ^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'norm'
+```
+indicating that gradients are (wrongfully) not backpropagated to the bias term. Removing the `# torch._dynamo.graph_break()` _comment_ fixes this error.
+
+### Versions
+
+Version with stable PyTorch 2.8:
+```
+PyTorch version: 2.8.0+cu128
+Is debug build: False
+CUDA used to build PyTorch: 12.8
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.5 LTS (x86_64)
+GCC version: (Ubuntu 11.4.0-1ubuntu1~22.04.2) 11.4.0
+Clang version: Could not collect
+CMake version: version 3.22.1
+Libc version: glibc-2.35
+
+Python version: 3.11.11 (main, Dec 11 2024, 16:28:39) [GCC 11.2.0] (64-bit runtime)
+Python platform: Linux-5.15.0-130-generic-x86_64-with-glibc2.35
+Is CUDA available: True
+CUDA runtime version: 12.8.93
+CUDA_MODULE_LOADING set to: LAZY
+GPU models and configuration: GPU 0: NVIDIA H200
+Nvidia driver version: 550.144.03
+cuDNN version: Probably one of the following:
+/usr/lib/x86_64-linux-gnu/libcudnn.so.8.9.7
+/usr/lib/x86_64-linux-gnu/libcudnn_adv_infer.so.8.9.7
+/usr/lib/x86_64-linux-gnu/libcudnn_adv_train.so.8.9.7
+/usr/lib/x86_64-linux-gnu/libcudnn_cnn_infer.so.8.9.7
+/usr/lib/x86_64-linux-gnu/libcudnn_cnn_train.so.8.9.7
+/usr/lib/x86_64-linux-gnu/libcudnn_ops_infer.so.8.9.7
+/usr/lib/x86_64-linux-gnu/libcudnn_ops_train.so.8.9.7
+Is XPU available: False
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: True
+
+CPU:
+Architecture:                         x86_64
+CPU op-mode(s):                       32-bit, 64-bit
+Address sizes:                        52 bits physical, 57 bits virtual
+Byte Order:                           Little Endian
+CPU(s):          
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

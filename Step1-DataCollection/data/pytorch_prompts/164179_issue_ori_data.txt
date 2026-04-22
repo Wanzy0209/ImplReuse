@@ -1,0 +1,119 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: distributed async_save doesn't work in single-rank environment
+    - issue_id: 164179
+    - bug_description: ### 🐛 Describe the bug
+
+When using `torch.distributed.checkpoint.save_async` in a setup with only one rank `async_save` breaks. As far as I can see there is no indication in the documentation that this should not work and `torch.distributed.checkpoint.save` works fine. Additionally, asynchronous checkpoint is quite useful in single-rank setups.
+
+```python
+import torch.distributed as dist
+import torch.distributed.checkpoint as dcp
+from torch.distributed.checkpoint.stateful import Stateful
+
+class AppState(Stateful):
+    def __init__(self, value: int = 0):
+        self.value = value
+
+    def state_dict(self):
+        return {
+            "value": self.value,
+        }
+
+    def load_state_dict(self, state):
+        self.value = state['value']
+
+if __name__ == "__main__":
+    if not dist.is_initialized():
+        dist.init_process_group(
+            backend="gloo",
+            rank=0,
+            world_size=1,
+            init_method="file:///tmp/tmpfile"
+        )
+
+    app_state = AppState(value=7)
+    state = {"app": app_state}
+    future = dcp.async_save(state, checkpoint_id="checkpoints/ckpt")
+    future.result() # AttributeError: 'FileSystemReader' object has no attribute 'storage_meta'
+
+    restored = AppState()
+    state = {"app": restored}
+    dcp.load(state, checkpoint_id="checkpoints/ckpt")
+
+    assert restored.value == app_state.value
+```
+
+Produces the error:
+
+```
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "test.py", line 30, in <module>
+[rank0]:     future.result()
+[rank0]:     ~~~~~~~~~~~~~^^
+[rank0]:   File "/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/concurrent/futures/_base.py", line 456, in result
+[rank0]:     return self.__get_result()
+[rank0]:            ~~~~~~~~~~~~~~~~~^^
+[rank0]:   File "/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/concurrent/futures/_base.py", line 401, in __get_result
+[rank0]:     raise self._exception
+[rank0]:   File "/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/concurrent/futures/thread.py", line 59, in run
+[rank0]:     result = self.fn(*self.args, **self.kwargs)
+[rank0]:   File "/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/logger.py", line 87, in wrapper
+[rank0]:     result = func(*args, **kwargs)
+[rank0]:   File "/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/utils.py", line 475, in inner_func
+[rank0]:     return func(*args, **kwargs)
+[rank0]:   File "/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/state_dict_saver.py", line 176, in save
+[rank0]:     return _save_state_dict(
+[rank0]:         state_dict=_stateful_to_state_dict(state_dict),
+[rank0]:     ...<3 lines>...
+[rank0]:         planner=planner,
+[rank0]:     )
+[rank0]:   File "/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/state_dict_saver.py", line 362, in _save_state_dict
+[rank0]:     central_plan: SavePlan = distW.reduce_scatter("plan", local_step, global_step)
+[rank0]:                              ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/utils.py", line 219, in reduce_scatter
+[rank0]:     raise result
+[rank0]: torch.distributed.checkpoint.api.CheckpointException: CheckpointException ranks:dict_keys([0])
+[rank0]: Traceback (most recent call last): (RANK 0)
+[rank0]:   File "/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/utils.py", line 192, in reduce_scatter
+[rank0]:     local_data = map_fun()
+[rank0]:   File "/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/logger.py", line 87, in wrapper
+[rank0]:     result = func(*args, **kwargs)
+[rank0]:   File "/opt/homebrew/Caskroom
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

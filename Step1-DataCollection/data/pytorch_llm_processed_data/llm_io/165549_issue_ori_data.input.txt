@@ -1,0 +1,154 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Operations likeabs(dispatched via CompositeExplicitAutograd) return empty tensors when run through cpu_fallback
+    - issue_id: 165549
+    - bug_description: ### 🐛 Describe the bug
+
+When a custom device backend relies on CPU fallback for unimplemented operations, `CompositeExplicitAutograd` operations fail to return properly sized tensors. This affects operations like `abs`, `isfinite`, `isinf`, and `isnan`.
+
+assuming we have implemented the minimal set of ops as described: https://docs.pytorch.org/docs/main/accelerator/operators.html for a privateuse1 out-of-tree backend, and implementing the cpu fallback as described (just a call to `at::native::cpu_fallback(op, stack);`)
+
+```python
+# This fails - returns tensor with shape [0]
+t = torch.randn(4, 4, device='privateuse1')
+result = torch.abs(t)  # result.shape == torch.Size([0])
+
+# But these work correctly
+torch.abs(t, out=pre_allocated_tensor)  # Works
+t.abs_()  # Works (in-place)
+torch.neg(t)  # Works (uses structured_delegate)
+```
+
+## Possible Root Cause
+
+### 1. Implementation Pattern
+
+In `pytorch/aten/src/ATen/native/UnaryOps.cpp`:
+
+```cpp
+// Line 471-480
+template <typename OutImpl>
+static inline Tensor unary_op_impl_with_complex_to_float(const Tensor& self, OutImpl& out_impl) {
+  if (self.is_complex()) {
+    const auto float_type = c10::toRealValueType(self.scalar_type());
+    Tensor result = at::empty_like(self, self.options().dtype(float_type));
+    return out_impl(result, self);
+  }
+
+  Tensor result = at::empty({0}, self.options());  // Creates placeholder with shape [0]
+  return out_impl(result, self);  // Expects out_impl to resize
+}
+
+// Line 546-548
+Tensor abs(const Tensor& self) {
+  return unary_op_impl_with_complex_to_float(self, at::abs_out);
+}
+```
+
+The pattern creates an empty tensor with shape `[0]` as a placeholder, expecting the `.out` variant (`at::abs_out`) to resize it appropriately.
+
+### 2. How the Resize is Expected to Happen
+
+When `out_impl(result, self)` is called with the empty `[0]` shaped tensor, here's the expected resize chain:
+
+1. **`at::abs_out()` is called** (UnaryOps.cpp:543-544):
+   ```cpp
+   Tensor& abs_out(const Tensor& self, Tensor& result) {
+     return unary_op_impl_with_complex_to_float_out(result, self, abs_stub, false);
+   }
+   ```
+
+2. **Creates TensorIterator** (UnaryOps.cpp:405-408):
+   ```cpp
+   Tensor& unary_op_impl_out(Tensor& result, const Tensor& self, Stub& stub) {
+     auto iter = TensorIterator::unary_op(result, self);  // KEY: This should handle resize
+     stub(iter.device_type(), iter);
+     return result;
+   }
+   ```
+
+3. **TensorIterator detects empty tensor and marks for resize** (TensorIterator.cpp:1203-1210):
+   ```cpp
+   if (!output.defined()) {
+     operands_[i].will_resize = true;
+   }
+   if (output.defined() && !output.sizes().equals(shape_)) {
+     if (config.resize_outputs_ && !operands_[i].is_read_write) {
+       operands_[i].will_resize = true;  // Marks empty [0] tensor for resize
+     }
+   }
+   ```
+
+4. **TensorIterator allocates/resizes output** (TensorIterator.cpp:574-601):
+   ```cpp
+   // In allocate_or_resize_outputs()
+   if (!op.tensor_base().defined() || op.will_resize) {
+     // Calculates correct shape and strides
+     set_output_raw_strided(i, tensor_shape, tensor_stride, original_options(op), names_);
+   }
+   ```
+
+5. **Actual resize happens** (TensorIterator.cpp:1644-1651):
+   ```cpp
+   if (!op.tensor_base().defined()) {
+     // Creates new tensor with correct shape
+     op.tensor(c10::MaybeOwned<TensorBase>::owned(at::empty(sizes, options)));
+   } else if (op.will_resize) {
+     // Resizes existing tensor to correct shape
+     at::native::resize_output(op.tensor(), sizes);
+   }
+   ```
+
+### 3. Why the Resize is Lost
+
+When the operation goes through CPU fallback (`pytorch/aten/src/ATen/native/CPUFallback.cpp`):
+
+1. **Input Conversion** (lines 114-147):
+   ```cpp
+   // Simplified from CPUFallback.cpp
+   auto ivalue = (*stack)[idx];
+   if (ivalue.isTensor()) {
+     auto src_tensor = ivalue.toTensor();
+     // Convert to CPU tensor
+     (*stack)[idx] = c10::IValue(src_tensor.cpu());
+   }
+   ```
+   - Custom device tensors are converted to CPU tensors
+   - The 
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

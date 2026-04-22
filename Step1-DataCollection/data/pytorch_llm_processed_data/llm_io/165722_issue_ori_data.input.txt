@@ -1,0 +1,145 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [dynamo] RelationalGuard classes store raw PyObject* without proper reference counting
+    - issue_id: 165722
+    - bug_description: ### 🐛 Describe the bug
+
+ ## 🐛 Bug
+
+Similar to #156527, there are dangling pointer issues in `torch/csrc/dynamo/guards.cpp` where `PyObject*` pointers are stored without incrementing reference counts.
+
+ ### Affected Classes
+
+1. **OBJECT_ALIASING** (line 2259-2282)
+     - Stores `PyObject* _first_tensor` without `Py_INCREF`
+     - Can become dangling after `torch._dynamo.reset()`
+```cpp
+ bool check_nopybind(PyObject* value) override { // borrowed ref
+    if (_is_first_call) {
+      _first_tensor = value;
+      _is_first_call = false;
+      return true;
+    }
+    return _first_tensor == value;
+  }
+
+  void reset_state() final {
+    _is_first_call = true;
+  }
+
+ private:
+  bool _is_first_call{true};
+  PyObject* _first_tensor{nullptr};
+};
+```
+<img width="500" alt="Image" src="https://github.com/user-attachments/assets/c21fea0c-a29f-4f81-b852-6726f4d986c3" />
+
+## Proposed Solution
+
+  Following the pattern from #156527:
+  - Replace PyObject* with py::object for automatic reference counting
+  - Update OBJECT_ALIASING::_first_tensor to use py::object
+
+##  Environment
+
+  - PyTorch Version: main branch
+  - File: torch/csrc/dynamo/guards.cpp
+
+##  Additional context
+
+This issue was found while investigating similar patterns to PR #156527. The fix should follow the same approach of using pybind11's py::object for proper lifetime management.
+
+
+I have a fix ready and can submit a PR if this issue is confirmed.
+
+cc @jansel @anijain2305 (reviewers of #156527)
+
+
+### Versions
+
+<details style="background-color: #f6f8fa; border: 1px solid #d1d5da; border-radius: 6px; padding: 0; margin: 16px 0;">
+     <summary style="padding: 10px 16px; cursor: pointer; font-weight: 600; background-color: #f1f3f5; border-radius: 6px 6px 0 0;">
+     📊 Environment Information (Click to expand)
+     </summary>
+     <div style="padding: 16px; background-color: #ffffff; border-radius: 0 0 6px 6px;">
+     <pre style="background-color: #f6f8fa; padding: 12px; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 14px;">
+Collecting environment information...
+PyTorch version: 2.10.0.dev20251015+cu126
+Is debug build: False
+CUDA used to build PyTorch: 12.6
+ROCM used to build PyTorch: N/A
+
+     OS: Ubuntu 24.04.3 LTS (x86_64)
+     GCC version: (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0
+     Clang version: Could not collect
+     CMake version: Could not collect
+     Libc version: glibc-2.39
+
+     Python version: 3.12.3 (main, Aug 14 2025, 17:47:21) [GCC 13.3.0] (64-bit runtime)
+     Python platform: Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39
+     Is CUDA available: True
+     CUDA runtime version: Could not collect
+     CUDA_MODULE_LOADING set to:
+     GPU models and configuration: GPU 0: NVIDIA GeForce MX230
+     Nvidia driver version: Could not collect
+     cuDNN version: Could not collect
+     Is XPU available: False
+     HIP runtime version: N/A
+     MIOpen runtime version: N/A
+     Is XNNPACK available: True
+
+     CPU:
+     Architecture:                         x86_64
+     CPU op-mode(s):                       32-bit, 64-bit
+     Address sizes:                        39 bits physical, 48 bits virtual
+     Byte Order:                           Little Endian
+     CPU(s):                               2
+     On-line CPU(s) list:                  0,1
+     Vendor ID:                            GenuineIntel
+     Model name:                           Intel(R) Core(TM) i5-1035G1 CPU @ 1.00GHz
+     CPU family:                           6
+     Model:                                126
+     Thread(s) per core:                   2
+     Core(s) per socket:                   1
+     Socket(s):                            1
+     Stepping:                             5
+     BogoMIPS:                             2380.80
+     Flags:                                fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht
+     syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl xtopology tsc_reliable non
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

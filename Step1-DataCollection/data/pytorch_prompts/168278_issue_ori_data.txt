@@ -1,0 +1,175 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: torch.compile produces different output shape than eager execution
+    - issue_id: 168278
+    - bug_description: ### 🐛 Describe the bug
+
+## Description
+
+`torch.compile()` produces a different output shape compared to eager execution for a model with element-wise operations. This violates the correctness guarantee that compiled models should produce identical outputs to their eager counterparts.
+
+**Expected behavior**: Both eager and compiled execution should produce identical output shapes and values.
+
+**Actual behavior**: 
+- Eager execution produces shape: `torch.Size([6, 2, 3])`
+- Compiled execution produces shape: `torch.Size([1, 6, 2])`
+
+## Minimal Reproducing Example
+
+```python
+import torch
+import torch.nn as nn
+
+# Set seed for reproducibility
+torch.manual_seed(1139008151)
+
+class BuggyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.depth = 6
+    
+    def forward(self, x):
+        # Clone, detach, and re-enable gradients
+        clone = x.clone()
+        detach = clone.detach()
+        requires_grad_ = detach.requires_grad_(True)
+        
+        # Dead code - computed but not used
+        # (may trigger compiler optimization issues)
+        _ = requires_grad_.ndim
+        _ = requires_grad_.ndim + 1
+        _ = requires_grad_.ndim >= 1
+        
+        # Element-wise operations only - should preserve shape
+        result = torch.abs(requires_grad_)
+        result = torch.sqrt(result)
+        result = torch.exp(result)
+        result = -result
+        result = torch.abs(result)
+        result = torch.sqrt(result)
+        
+        return result
+
+# Create input tensor
+x = torch.randn(3, 6, 2)
+
+# Create model
+model = BuggyModel().eval()
+compiled = torch.compile(model)
+
+# Execute both versions
+with torch.no_grad():
+    out_eager = model(x)
+    out_compiled = compiled(x)
+
+# Compare outputs
+print(f"Input shape:     {x.shape}")
+print(f"Eager output:    {out_eager.shape}")
+print(f"Compiled output: {out_compiled.shape}")
+print(f"Shapes match:    {out_eager.shape == out_compiled.shape}")
+
+# This assertion should pass but fails
+try:
+    torch.testing.assert_close(out_eager, out_compiled)
+    print("✓ Outputs match")
+except Exception as e:
+    print(f"✗ Error: {e}")
+```
+
+## Expected Output
+
+```
+Input shape:     torch.Size([3, 6, 2])
+Eager output:    torch.Size([3, 6, 2])
+Compiled output: torch.Size([3, 6, 2])
+Shapes match:    True
+✓ Outputs match
+```
+
+## Actual Output
+
+```
+Input shape:     torch.Size([3, 6, 2])
+Eager output:    torch.Size([6, 2, 3])
+Compiled output: torch.Size([1, 6, 2])
+Shapes match:    False
+✗ Error: The size of tensor a (2) must match the size of tensor b (3) at non-singleton dimension 2
+```
+
+### Versions
+
+Collecting environment information...
+PyTorch version: 2.9.1+cu128
+Is debug build: False
+CUDA used to build PyTorch: 12.8
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 24.04.3 LTS (x86_64)
+GCC version: (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0
+Clang version: 18.1.3 (1ubuntu1)
+CMake version: version 3.28.3
+Libc version: glibc-2.39
+
+Python version: 3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0] (64-bit runtime)
+Python platform: Linux-6.14.0-35-generic-x86_64-with-glibc2.39
+Is CUDA available: True
+CUDA runtime version: 12.9.86
+CUDA_MODULE_LOADING set to: 
+GPU models and configuration: GPU 0: NVIDIA GeForce RTX 5090
+Nvidia driver version: 575.57.08
+cuDNN version: Could not collect
+Is XPU available: False
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: True
+
+CPU:
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           46 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  24
+On-line CPU(s) list:                     0-23
+Vendor ID:                               GenuineIntel
+Model name:                              Intel(R) Core(TM) Ultra 9 285K
+CPU family:                              6
+Model:                                   198
+Thread(s) per core:                      1
+Core(s) 
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

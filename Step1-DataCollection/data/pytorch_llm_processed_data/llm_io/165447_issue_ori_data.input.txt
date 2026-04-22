@@ -1,0 +1,127 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [precompile] AOT Precompile serialization failed when running mutliple times
+    - issue_id: 165447
+    - bug_description: ### 🐛 Describe the bug
+
+Create a simple python script `precompile_repro.py`
+
+```python
+
+import torch
+
+class M(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear1 = torch.nn.Linear(2, 4)
+        self.relu = torch.nn.ReLU()
+        self.linear2 = torch.nn.Linear(4, 8)
+    def forward(self, x):
+        return self.linear2(self.relu(self.linear1(x)))
+
+device = "cuda"
+m = M().to(device)
+sample_inputs = (torch.randn(2, 2, device=device),)
+eager_out = m(*sample_inputs)
+
+with torch._dynamo.config.patch("enable_aot_compile", True):
+    compiled_fn_path = "./m.pt"
+    compiled_fn = torch.compile(
+        m,
+        fullgraph=True
+    ).forward.aot_compile((sample_inputs, {}))
+
+    compiled_fn.save_compiled_function(compiled_fn_path)
+    torch._dynamo.reset()
+    with torch.compiler.set_stance("fail_on_recompile"):
+        with open(compiled_fn_path, "rb") as f:
+            loaded_fn = torch.compiler.load_compiled_function(f)
+
+assert loaded_fn is not None
+
+compiled_out = loaded_fn(m, *sample_inputs).
+
+assert torch.allclose(eager_out, compiled_out)
+```
+
+Then in terminal run `python precompile_repro.py`. It works the first time. Then if running this script again, we will get
+
+```
+ File "/data/users/yimingzhou/pytorch/torch/_dynamo/aot_compile.py", line 118, in save_compiled_function
+    f.write(type(self).serialize(self))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/yimingzhou/pytorch/torch/_dynamo/aot_compile.py", line 130, in serialize
+    type(compiled_fn).serialize_compile_artifacts(compiled_fn),
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/yimingzhou/pytorch/torch/_dynamo/aot_compile.py", line 181, in serialize_compile_artifacts
+    result = pickle.dumps(fn.compiled_fn.serialize())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: Can't get local object 'align_inputs_from_check_idxs.<locals>.run'
+```
+
+If the device is `cpu`, then running the script the second will get the following error
+```
+  File "/data/users/yimingzhou/pytorch/precompile-repro.py", line 25, in <module>
+    compiled_fn.save_compiled_function(compiled_fn_path)
+  File "/data/users/yimingzhou/pytorch/torch/_dynamo/aot_compile.py", line 118, in save_compiled_function
+    f.write(type(self).serialize(self))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/yimingzhou/pytorch/torch/_dynamo/aot_compile.py", line 130, in serialize
+    type(compiled_fn).serialize_compile_artifacts(compiled_fn),
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/yimingzhou/pytorch/torch/_dynamo/aot_compile.py", line 181, in serialize_compile_artifacts
+    result = pickle.dumps(fn.compiled_fn.serialize())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: Can't get local object 'WeakValueDictionary.__init__.<locals>.remove'
+```
+
+The error is gone when adding `fresh_cache()` context manager  from `torch._inductor.utils` 
+
+```python
+with fresh_cache(), torch._dynamo.config.patch("enable_aot_compile", True):
+     ....aot_compile...
+```
+Then we can the script multiple times and it always works on both cpu and cuda.
+
+### Versions
+
+main
+
+cc @chauhang @penguinwu @avikchaudhuri @gmagogsfm @zhxchen17 @tugsbayasgalan @angelayi @suo @ydwu4 @desertfire @chenyang78 @yushangdi @benjaminglass1 @jamesjwu
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

@@ -1,0 +1,104 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [Fuzzer][Eager/Compile Divergence] LoweringException assert bool(static_expr)
+    - issue_id: 166319
+    - bug_description: ```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1215252001)
+
+def fuzzed_program(arg_0, arg_1, arg_2, sentinel):
+    var_node_4 = arg_0 # size=(9, 1, 15, 4), stride=(60, 60, 0, 1), dtype=int32, device=cuda
+    var_node_3 = torch.squeeze(var_node_4) # size=(9, 15, 4), stride=(60, 4, 1), dtype=int32, device=cuda
+    var_node_2 = torch.chunk(var_node_3, 4, dim=2)[0] # size=(9, 15, 1), stride=(1, 1, 1), dtype=int32, device=cuda
+    var_node_1 = torch.squeeze(var_node_2) # size=(9, 15), stride=(0, 1), dtype=int32, device=cuda
+    var_node_7 = arg_1 # size=(20, 15), stride=(15, 1), dtype=int64, device=cuda
+    var_node_8 = arg_2 # size=(18, 15), stride=(15, 1), dtype=int64, device=cuda
+    _input_size_var_node_6 = var_node_7.size(0)
+    _index_var_node_6 = torch.randint(0, _input_size_var_node_6, (18, 15), device=var_node_7.device)
+    var_node_6 = torch.gather(var_node_7, 0, _index_var_node_6) # size=(18, 15), stride=(0, 0), dtype=int64, device=cuda
+    var_node_5 = torch.chunk(var_node_6, 2, dim=0)[0] # size=(9, 15), stride=(0, 1), dtype=int64, device=cuda
+    var_node_0 = torch.mul(var_node_1, var_node_5) # size=(9, 15), stride=(0, 1), dtype=int64, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(5, 30, (484,)).to(torch.int32), (9, 1, 15, 4), (60, 60, 0, 1))
+arg_1 = torch.as_strided(torch.randint(5, 30, (300,)).to(torch.int64), (20, 15), (15, 1))
+arg_2 = torch.as_strided(torch.randint(5, 30, (270,)).to(torch.int64), (18, 15), (15, 1))
+
+args = (arg_0, arg_1, arg_2) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+```
+
+```
+   ✅ eager success
+   Traceback (most recent call last):
+     File "/tmp/torchfuzz/fuzz_57e10380.py", line 35, in <module>
+       result_compiled = compiled_program(*args)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 749, in compile_wrapper
+       raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 923, in _compile_fx_inner
+       raise InductorError(e, currentframe()).with_traceback(
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 907, in _compile_fx_inner
+       mb_compiled_graph = fx_codegen_and_compile(
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 1578, in fx_codegen_and_compile
+       return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 1377, in codegen_and_compile
+       graph.run(*example_inputs)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/graph.py", line 921, in run
+       return super().run(*args)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/fx/interpreter.py", line 173, in run
+       self.env[node] = self.run_node(node)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/graph.py", line 1599, in run_node
+       result = super().run_node(n)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/fx/interpreter.py", line 242, in run_node
+       return getattr(self, n.op)(n.target, args, kwargs)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/graph.py", line 1268, in call_func
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

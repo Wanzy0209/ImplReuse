@@ -1,0 +1,96 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [Question] How to robustly prevent operator fusion in Inductor to workaround a compilation bug?
+    - issue_id: 161060
+    - bug_description: ### 🐛 Describe the bug
+
+I've encountered a Triton compilation failure when using torch.compile with the AOT Inductor backend. The issue appears in a model that uses a computation pattern similar to Rotary Position Embeddings (RoPE).
+
+I'm opening this issue in advance while I work on creating a minimal, self-contained reproducer for a compiler bug, as that process may take some time. My immediate goal is to seek advice on how to effectively workaround the issue.
+
+Source code just belike:
+```Python
+        _to_copy_default_17 = torch.ops.aten._to_copy.default(detach_default_8, dtype = torch.int64, layout = torch.strided, device = device(type='cuda', index=0))
+        unsqueeze_default_86 = torch.ops.aten.unsqueeze.default(_to_copy_default_17, 1);  _to_copy_default_17 = None
+        unsqueeze_default_87 = torch.ops.aten.unsqueeze.default(unsqueeze_default_86, -1);  unsqueeze_default_86 = None
+        _tensor_constant12 = self._tensor_constant12
+        mul_tensor_5 = torch.ops.aten.mul.Tensor(unsqueeze_default_87, _tensor_constant12);  unsqueeze_default_87 = _tensor_constant12 = None
+        cos_default_1 = torch.ops.aten.cos.default(mul_tensor_5)
+        sin_default_1 = torch.ops.aten.sin.default(mul_tensor_5);  mul_tensor_5 = None
+        split_tensor_1 = torch.ops.aten.split.Tensor(transpose_int_1, 64, -1);  transpose_int_1 = None
+        getitem_6 = split_tensor_1[0]
+        getitem_7 = split_tensor_1[1];  split_tensor_1 = None
+        mul_tensor_6 = torch.ops.aten.mul.Tensor(getitem_6, cos_default_1)
+        mul_tensor_7 = torch.ops.aten.mul.Tensor(getitem_7, sin_default_1)
+        return mul_tensor_7 
+```
+
+And my demo code is:
+```
+    with torch.inference_mode():
+        with torch.amp.autocast(
+                    device_type="cuda", enabled=True, dtype=torch.float16
+                ):
+            exported_model = torch.export.export(
+                mod = model,
+                args = (),
+                kwargs = inputs_dict,
+                dynamic_shapes = {k: {0:torch.export.Dim.STATIC} for k in inputs_dict.keys()}
+            )
+        
+            inductor_configs = {
+                "max_autotune": False, 
+            }
+            aoti_package_path = torch._inductor.aoti_compile_and_package(
+                exported_model, 
+                package_path=os.path.join(os.path.dirname(__file__), "wenqi_ele_0820.pt2"),
+                inductor_configs=inductor_configs
+            )
+```
+
+The compiler attempts to create a large fused kernel, but the generated Triton code is invalid, leading to a NameError: 'zuf0' is not defined during compilation. I am working on creating a minimal, self-contained reproducer and will provide it as soon as it's ready.
+
+```
+E0820 22:49:40.184000 162221 /home/admin/zy429782/miniforge3/envs/pytorch271/lib/python3.11/site-packages/torch/_inductor/runtime/triton_heuristics.py:539]     module = src.make_ir(options, codegen_fns, module_map, context)
+E0820 22:49:40.184000 162221 /home/admin/zy429782/miniforge3/envs/pytorch271/lib/python3.11/site-packages/torch/_inductor/runtime/triton_heuristics.py:539]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E0820 22:49:40.184000 162221 /home/admin/zy429782/miniforge3/envs/pytorch271/lib/python3.11/site-packages/torch/_inductor/runtime/triton_heuristics.py:539]   File "/home/zy429782/miniforge3/envs/pytorch271/lib/python3.11/site-packages/triton/compiler/compiler.py", line 81, in make_ir
+E0820 22:49:40.184000 162221 /home/admin/zy429782/miniforge3/envs/pytorch271/lib/python3.11/site-packages/torch/_inductor/runtime/triton_heuristics.py:539]     return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+E0820 22:49:40.184000 162221 /home/admin/zy429782/miniforge3/envs/pytorch271/lib/python3.11/site-packages/torch/_inductor/runtime/triton_heuristics.py:539]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E0820 22:49:40.184000 162221 /home/admin/zy429782/mi
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

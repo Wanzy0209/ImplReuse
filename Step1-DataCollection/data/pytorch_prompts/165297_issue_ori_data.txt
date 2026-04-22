@@ -1,0 +1,104 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [BUG] MaxPool2d with channels_last + bfloat16 on CUDA produces NaNs for large tensors
+    - issue_id: 165297
+    - bug_description: ### 🐛 Describe the bug
+
+# Description
+When using torch.nn.MaxPool2d on large tensors with memory_format=torch.channels_last on GPU, the output can contain NaN values or even cause an illegal memory access error, depending on dtype and the memory content. This happens even when the input has no NaN/Inf. Changing to contiguous (NCHW) memory format before MaxPool fixes the issue.
+
+# Steps to Reproduce
+```python
+import torch
+import torch.nn as nn
+
+device = torch.device("cuda")
+
+def test_maxpool_nan():
+    # Large input tensor
+    N, C, H, W = 84, 64, 512, 960
+    # Case 1: bfloat16 + channels_last  => NaN
+    x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+
+    # Case 2: float32 + channels_last => illegal memory access
+    # x = torch.randn(N, C, H, W, device=device)  # default float32
+
+
+    # Convert to NHWC channels_last layout
+    x = x.to(memory_format=torch.channels_last)
+
+    # Uncommenting the line below avoids NaNs
+    # x = x.contiguous()
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+    print(f"Input stride: {x.stride()}")
+
+    pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1).to(device)
+    y = pool(x)
+
+    print(f"Output contains NaN? {torch.isnan(y).any().item()}")
+    print(f"Output contains Inf? {torch.isinf(y).any().item()}")
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    if torch.isnan(y).any():
+        print("Detected NaNs in MaxPool output!")
+
+test_maxpool_nan()
+```
+
+# Observed Behavior
+- **bfloat16** + **channels_last**: produces NaNs.
+- **float32** + **channels_last**: consistently triggers CUDA error: an illegal memory access was encountered with the above shape.
+- Input tensor itself contains no NaN or Inf.
+- Disabling channels_last (x.contiguous()) always produces correct results.
+
+
+
+
+### Versions
+
+PyTorch version: 2.7.0a0+79aa17489c.nv25.04
+CUDA used to build PyTorch: 12.9
+Python version: 3.12.3 (main, Feb  4 2025, 14:48:35) [GCC 13.3.0] (64-bit runtime)
+NVIDIA H20
+Nvidia driver version: 535.216.03
+
+
+cc @albanD @mruberry @jbschlosser @walterddr @mikaylagawarecki @ptrblck @msaroufim @eqy @jerryzh168
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

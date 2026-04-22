@@ -1,0 +1,116 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: [Fuzzer][Eager/Compile Divergence] IndexError: list index out of range
+
+**Issue ID**: 166290
+
+**Bug Description**: The issue describes a divergence between eager mode and compiled mode in PyTorch. The code runs successfully in eager mode but fails during compilation with an IndexError.
+
+**Repro Code**: The code is provided in the issue:
+```python
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(974450504)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0 # size=(17, 30, 17, 3), stride=(1530, 51, 3, 1), dtype=bool, device=cuda
+    var_node_2 = torch.chunk(var_node_3, 3, dim=3)[0] # size=(17, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda
+    var_node_5 = torch.full((17,), 3, dtype=torch.int64) # size=(17,), stride=(1,), dtype=int64, device=cuda
+    var_node_6 = arg_1 # size=(15,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_4 = var_node_5.size(0)
+    _index_var_node_4 = torch.randint(0, _input_size_var_node_4, (15,), device=var_node_5.device)
+    var_node_4 = torch.gather(var_node_5, 0, _index_var_node_4) # size=(15,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_1 = var_node_2.size(0)
+    _index_var_node_1 = torch.randint(0, _input_size_var_node_1, (15,), device=var_node_2.device)
+    var_node_1 = torch.index_select(var_node_2, 0, _index_var_node_1) # size=(15, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda
+    var_node_0 = torch.squeeze(var_node_1) # size=(15, 30, 17), stride=(510, 17, 1), dtype=bool, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(0, 2, (26010,), dtype=torch.int8).bool(), (17, 30, 17, 3), (1530, 51, 3, 1))
+arg_1 = torch.as_strided(torch.randint(5, 30, (15,)).to(torch.int64), (15,), (1,))
+
+args = (arg_0, arg_1) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+```
+
+**Repro Output**: The output shows:
+```
+✅ eager success
+Traceback (most recent call last):
+  File "/tmp/torchfuzz/fuzz_28a325ad.py", line 34, in <module>
+    result_compiled = compiled_program(*args)
+  File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 749, in compile_wrapper
+    raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1
+  File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 923, in _compile_fx_inner
+    raise InductorError(e, currentframe()).with_traceback(
+  File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 907, in _compile_fx_inner
+    mb_compiled_graph = fx_codegen_and_compile(
+  File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 1578, in fx_codegen_and_compile
+    return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
+  File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 1377, in codegen_and_compile
+    graph.run(*example_inputs)
+  File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/graph.py", line 921, in run
+    return super().run(*args)
+  File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/fx/interpreter.py", line 173, in run
+    self.env[node] = self.run_node(node)
+  File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/graph.py", line 1684, in run_node
+    result = ir.ExternKernel.require_exact_strides(
+  File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/ir.py", line 5657, in require_exact_strides
+    return cls.require_strides(
+  File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/ir.py", line 5623, in require_strides
+    expanded_dims = [
+  File "/home/bobren/local/a/pytorch-env/lib/python3.10/
+```
+
+The traceback is cut off, but it shows an IndexError occurring in `torch._inductor/ir.py` at line 5623 in the `require_strides` method.
+
+**Trigger Conditions**:
+- backend: CUDA (device=cuda mentioned in comments)
+- dtype: bool, int64
+- input_shape: Various shapes including (17, 30, 17, 3), (17,), (15,), (15, 30, 17, 1), (15, 30, 17)
+- other_conditions: Using torch.compile with fullgraph=True and dynamic=True
+
+**Affected API**: torch.compile, torch.chunk, torch.gather, torch.index_select, torch.squeeze, torch.as_strided
+
+**Environment**:
+- pytorch_version: Not explicitly stated, but the paths suggest a recent version
+- python_version: 3.10 (from the path)
+- os: Linux (from the path structure)
+- hardware: CUDA device
+
+**Labels**: Based on the title, this appears to be related to Fuzzer, Eager/Compile Divergence, and IndexError.
+
+Let me format this into the requested JSON structure.```json
+{
+  "title": "[Fuzzer][Eager/Compile Divergence] IndexError: list index out of range",
+  "error_description": "The program runs successfully in eager mode but fails during torch.compile with an IndexError in torch._inductor/ir.py at line 5623 in the require_strides method.",
+  "repro_code": "import torch\ntorch._dynamo.config.capture_scalar_outputs = True\n\ntorch.manual_seed(974450504)\n\ndef fuzzed_program(arg_0, arg_1, sentinel):\n    var_node_3 = arg_0 # size=(17, 30, 17, 3), stride=(1530, 51, 3, 1), dtype=bool, device=cuda\n    var_node_2 = torch.chunk(var_node_3, 3, dim=3)[0] # size=(17, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda\n    var_node_5 = torch.full((17,), 3, dtype=torch.int64) # size=(17,), stride=(1,), dtype=int64, device=cuda\n    var_node_6 = arg_1 # size=(15,), stride=(1,), dtype=int64, device=cuda\n    _input_size_var_node_4 = var_node_5.size(0)\n    _index_var_node_4 = torch.randint(0, _input_size_var_node_4, (15,), device=var_node_5.device)\n    var_node_4 = torch.gather(var_node_5, 0, _index_var_node_4) # size=(15,), stride=(1,), dtype=int64, device=cuda\n    _input_size_var_node_1 = var_node_2.size(0)\n    _index_var_node_1 = torch.randint(0, _input_size_var_node_1, (15,), device=var_node_2.device)\n    var_node_1 = torch.index_select(var_node_2, 0, _index_var_node_1) # size=(15, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda\n    var_node_0 = torch.squeeze(var_node_1) # size=(15, 30, 17), stride=(510, 17, 1), dtype=bool, device=cuda\n    # Ensure gradient computation by multiplying with sentinel and taking real part\n    result = var_node_0 * sentinel\n    if result.is_complex():\n        result = result.real\n    return result\n\n# Sentinel tensor to ensure gradient computation\nsentinel = torch.tensor(1.0, requires_grad=True)\n\narg_0 = torch.as_strided(torch.randint(0, 2, (26010,), dtype=torch.int8).bool(), (17, 30, 17, 3), (1530, 51, 3, 1))\narg_1 = torch.as_strided(torch.randint(5, 30, (15,)).to(torch.int64), (15,), (1,))\n\nargs = (arg_0, arg_1) + (sentinel,)\nresult_original = fuzzed_program(*args)\nprint('✅ eager success')\ncompiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)\nresult_compiled = compiled_program(*args)\nprint('✅ compile success')",
+  "repro_output": "✅ eager success\nTraceback (most recent call last):\n  File \"/tmp/torchfuzz/fuzz_28a325ad.py\", line 34, in <module>\n    result_compiled = compiled_program(*args)\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py\", line 749, in compile_wrapper\n    raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py\", line 923, in _compile_fx_inner\n    raise InductorError(e, currentframe()).with_traceback(\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py\", line 907, in _compile_fx_inner\n    mb_compiled_graph = fx_codegen_and_compile(\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py\", line 1578, in fx_codegen_and_compile\n    return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py\", line 1377, in codegen_and_compile\n    graph.run(*example_inputs)\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/graph.py\", line 921, in run\n    return super().run(*args)\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/fx/interpreter.py\", line 173, in run\n    self.env[node] = self.run_node(node)\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/graph.py\", line 1684, in run_node\n    result = ir.ExternKernel.require_exact_strides(\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/ir.py\", line 5657, in require_exact_strides\n    return cls.require_strides(\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/ir.py\", line 5623, in require_strides\n    expanded_dims = [\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "bool, int64",
+    "input_shape": "(17, 30, 17, 3), (17,), (15,), (15, 30, 17, 1), (15, 30, 17)",
+    "other_conditions": "torch.compile with fullgraph=True and dynamic=True"
+  },
+  "affected_api": "torch.compile, torch.chunk, torch.gather, torch.index_select, torch.squeeze, torch.as_strided",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "3.10",
+    "os": "Linux",
+    "hardware": "CUDA"
+  },
+  "labels": ["Fuzzer", "Eager/Compile Divergence", "IndexError"]
+}
+```

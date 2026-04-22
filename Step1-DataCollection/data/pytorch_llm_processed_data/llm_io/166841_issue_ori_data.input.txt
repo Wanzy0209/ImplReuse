@@ -1,0 +1,127 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: aoti_compile_and_package incorrectly generates CUDA kernel call for CPU scatter_add_ in multi-device models
+    - issue_id: 166841
+    - bug_description: ### 🐛 Describe the bug
+
+When using `torch._inductor.aoti_compile_and_package` on a model that contains both CPU and CUDA operations, the compiler incorrectly generates a call to the CUDA-specific kernel (`aoti_torch_cuda_scatter_reduce_two_out`) for a `scatter_add_` operation that is running entirely on CPU tensors.
+This bug is only triggered when the exported graph contains both CPU and CUDA device types. If the model is CPU-only, the correct CPU kernel is generated.
+This leads to a runtime exception when the compiled model is loaded and run, as the CUDA-specific kernel is (correctly) called with CPU tensors, causing a `CUDAGuardImpl initialized with non-CUDA DeviceType: cpu` error.
+
+## Minimal Reproduction Script
+This script defines a model with a `scatter_add_` on CPU tensors and a matmul on CUDA tensors. It exports, compiles, and then attempts to run the model, which triggers the runtime exception.
+
+```python
+import torch
+import torch.export
+import torch._inductor
+import os
+import shutil
+
+# --- 1. Minimal Model Definition ---
+class MyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Buffers are on CPU
+        self.register_buffer(
+            "index",
+            torch.tensor([1, 4, 1, 7], device='cpu', dtype=torch.int64)
+        )
+        self.register_buffer(
+            "src",
+            torch.ones(4, device='cpu', dtype=torch.int64)
+        )
+
+    def forward(self, matrix, vector):
+        # Inputs are on CUDA
+
+        # 1. Operation on CPU tensors
+        z = torch.zeros((vector.shape[0],), device='cpu', dtype=torch.int64)
+        scatter_result = z.scatter_add(0, self.index, self.src)
+
+        # 2. Move result to CUDA and continue on CUDA
+        v = vector + scatter_result.to(vector.dtype).to('cuda')
+        return torch.matmul(matrix, v)
+
+# --- 2. Setup and Compile ---
+model = MyModel().eval().to('cpu')
+matrix = torch.randn(10, 10, device='cuda')
+vector = torch.randn(10, device='cuda')
+example_args = (matrix, vector)
+
+print("Exporting model...")
+ep = torch.export.export(model, example_args)
+
+output_dir = "/tmp/my_aoti_model"
+if os.path.exists(output_dir):
+    shutil.rmtree(output_dir)
+os.makedirs(output_dir, exist_ok=True)
+package = os.path.join(output_dir, "model_package.pt2")
+
+print("Starting AOTInductor compilation...")
+torch._inductor.aoti_compile_and_package(
+    ep,
+    package_path=package,
+)
+print(f"Compiled package at: {package}")
+
+# --- 3. Load and Run (This is where it fails) ---
+print("\nAttempting to load and run compiled model...")
+loaded = torch._inductor.aoti_load_package(package)
+print("\nModel package loaded successfully.")
+
+loaded(*example_args)
+print("Model ran successfully with the loaded package.")
+```
+
+## Expected Behavior
+Inductor should inspect the device of the tensors involved in the `scatter_add_` operation (which are all 'cpu') and generate a call to the CPU-equivalent kernel (e.g., `aoti_torch_cpu_scatter_reduce_two_out`). The model should run without errors.
+
+## Actual Behavior
+The generated C++ code contains a hardcoded call to the CUDA kernel `aoti_torch_cuda_scatter_reduce_two_out` for the CPU `scatter_add_` operation.
+When the compiled model is run, this function is called with CPU tensors, triggering a CUDAGuard error.
+
+Runtime Error Log:
+```
+[E1103 04:13:34.730912069 c_shim_cuda.cpp:1551] Exception in aoti_torch: CUDAGuardImpl initialized with non-CUDA DeviceType: cpu
+Exception raised from CUDAGuardImpl at /pytorch/c10/cuda/impl/CUDAGuardImpl.h:28 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7efd83d7cb80 in /opt/conda/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: c10::detail::torchCheckFail(char const*, char const*, unsigned int, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x65 (0x7efd83d0efbf in /opt/conda/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #2:
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

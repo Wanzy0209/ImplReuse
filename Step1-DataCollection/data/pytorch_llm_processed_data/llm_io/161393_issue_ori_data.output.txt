@@ -1,0 +1,73 @@
+Let me analyze the GitHub issue and extract the structured information as requested.
+
+From the input, I can extract:
+
+1. **title**: "Hard error when slicing a tensor with unbacked sizes"
+
+2. **error_description**: The user is getting an error when slicing a tensor with unbacked sizes. The error occurs when using `torch.compile` with `fullgraph=True` on a function that calls `nonzero()` and then slices the result with `[:-1]`.
+
+3. **repro_code**: 
+```python
+import torch
+
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def f(x):
+    nz = x.nonzero()
+    return nz[:-1]
+
+out = torch.compile(f, fullgraph=True)(torch.randn(3, 4))
+print(out)
+```
+
+4. **repro_output**: The error log shows:
+```
+I0825 00:08:56.965000 3033571 torch/fx/experimental/symbolic_shapes.py:3781] [0/0] create_env
+I0825 00:08:56.978000 3033571 torch/fx/experimental/symbolic_shapes.py:4796] [0/0] create_unbacked_symint u0 [-int_oo, int_oo] nz = x.nonzero()  # test_slice.py:7 in f (_subclasses/fake_impls.py:695 in nonzero)
+V0825 00:08:56.978000 3033571 torch/fx/experimental/symbolic_shapes.py:6636] [0/0] _update_var_to_range u0 = VR[0, 12] (update)
+I0825 00:08:56.978000 3033571 torch/fx/experimental/symbolic_shapes.py:7864] [0/0] constrain_symbol_range u0 [0, 12]
+
+
+```
+
+I see the system is creating an unbacked symbolic integer with a range from negative infinity to positive infinity. The symbolic integer is associated with the `nonzero()` operation, and its range is being updated to [0, 12]. The system is then constraining the symbol's range to [0, 12].
+
+The runtime assertion confirms that the symbolic integer is non-negative, which is statically known. However, there's a data dependency issue preventing the evaluation of an equality check, which is assumed to be false without runtime assertions.
+
+```
+
+python
+I0825 00:08:57.003000 3033571 torch/fx/experimental/symbolic_shapes.py:1295] [0/0] compute_unbacked_bindings [u0]
+V0825 00:08:57.005000 3033571 torch/fx/experimental/symbolic_shapes.py:7502] [0/0] eval False == True [statically known]
+I0825 00:08:57.007000 3033571 torch/fx/experimental/symbolic_shapes.py:7396] [0/0] could not evaluate -u0 <= -1 due to data dependency, it was assumed to be False with no runtime assertions return nz[:-1]  # test_slice.py:8 in f (_subclasses/fake_impls.py:755 in _compute_slice_index)
+```
+
+The system attempts to compute unbacked bindings for the symbolic integer, encountering a static evaluation of False being equal to True. A data dependency prevents evaluating a comparison involving the symbolic integer, which is assumed to be false without runtime assertions during the slice operation.
+
+The trigger conditions involve PyTorch's dynamic compilation with specific configuration settings, using a random tensor of shape (3, 4) and enabling full graph compilation. The affected API centers on tensor slicing with unbacked symbolic integers, particularly in the `nonzero()` method.
+
+The environment details remain unspecified, with no clear version information for PyTorch, Python, operating system, or hardware. The issue appears to be a bug related to tensor operations and dynamic graph compilation.
+
+Potential labels suggest this is a compilation-related problem involving dynamic shapes and tensor slicing, specifically within the PyTorch ecosystem.```json
+{
+  "title": "Hard error when slicing a tensor with unbacked sizes",
+  "error_description": "Getting an error when slicing a tensor with unbacked sizes. The error occurs when using torch.compile with fullgraph=True on a function that calls nonzero() and then slices the result with [:-1]. The error logs show issues with evaluating symbolic expressions due to data dependencies.",
+  "repro_code": "import torch\n\ntorch._dynamo.config.capture_scalar_outputs = True\ntorch._dynamo.config.capture_dynamic_output_shape_ops = True\n\ndef f(x):\n    nz = x.nonzero()\n    return nz[:-1]\n\nout = torch.compile(f, fullgraph=True)(torch.randn(3, 4))\nprint(out)",
+  "repro_output": "I0825 00:08:56.965000 3033571 torch/fx/experimental/symbolic_shapes.py:3781] [0/0] create_env\nI0825 00:08:56.978000 3033571 torch/fx/experimental/symbolic_shapes.py:4796] [0/0] create_unbacked_symint u0 [-int_oo, int_oo] nz = x.nonzero()  # test_slice.py:7 in f (_subclasses/fake_impls.py:695 in nonzero)\nV0825 00:08:56.978000 3033571 torch/fx/experimental/symbolic_shapes.py:6636] [0/0] _update_var_to_range u0 = VR[0, 12] (update)\nI0825 00:08:56.978000 3033571 torch/fx/experimental/symbolic_shapes.py:7864] [0/0] constrain_symbol_range u0 [0, 12]\nV0825 00:08:56.997000 3033571 torch/fx/experimental/symbolic_shapes.py:7721] [0/0] runtime_assert u0 >= 0 == True [statically known]\nI0825 00:08:57.001000 3033571 torch/fx/experimental/symbolic_shapes.py:7396] [0/0] could not evaluate Eq(u0, 0) due to data dependency, it was assumed to be False with no runtime assertions nz = x.nonzero()  # test_slice.py:7 in f (_ops.py:840 in __call__)\nI0825 00:08:57.003000 3033571 torch/fx/experimental/symbolic_shapes.py:1295] [0/0] compute_unbacked_bindings [u0]\nV0825 00:08:57.005000 3033571 torch/fx/experimental/symbolic_shapes.py:7502] [0/0] eval False == True [statically known]\nI0825 00:08:57.007000 3033571 torch/fx/experimental/symbolic_shapes.py:7396] [0/0] could not evaluate -u0 <= -1 due to data dependency, it was assumed to be False with no runtime assertions return nz[:-1]  # test_slice.py:8 in f (_subclasses/fake_impls.py:755 in _compute_slice_index)",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "(3, 4)",
+    "other_conditions": "torch._dynamo.config.capture_scalar_outputs = True, torch._dynamo.config.capture_dynamic_output_shape_ops = True, torch.compile with fullgraph=True"
+  },
+  "affected_api": "torch.nonzero, tensor slicing ([:-1])",
+  "environment": {
+    "pytorch_version": "f272b284",
+    "python_version": "",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": ["bug", "torch.compile", "dynamic shapes", "tensor slicing"]
+}
+```

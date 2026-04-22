@@ -1,0 +1,128 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [dynamo] Requires_grad error using torch.inference_mode()
+    - issue_id: 161191
+    - bug_description: ### 🐛 Describe the bug
+
+Error when running `neuralmagic/Meta-Llama-3.1-8B-FP8` model using transformers and `torch.compile` with inductor backend using `with torch.inference_mode()`.
+
+### Error:
+```sh
+torch._dynamo.exc.InternalTorchDynamoError: RuntimeError: Setting requires_grad=True on inference tensor outside InferenceMode is not allowed.
+```
+
+Full Error log:  [full_error.log](https://github.com/user-attachments/files/21924052/full_error.log)
+
+### Repro:
+```py
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model = AutoModelForCausalLM.from_pretrained("neuralmagic/Meta-Llama-3.1-8B-FP8").to("cuda").eval()
+tokenizer = AutoTokenizer.from_pretrained("neuralmagic/Meta-Llama-3.1-8B-FP8")
+input_ids = torch.randint(0, tokenizer.vocab_size, (1, 20), device="cuda")
+model = torch.compile(model, backend="inductor")
+with torch.inference_mode():
+    model(input_ids=input_ids, attention_mask=torch.ones_like(input_ids))
+```
+
+### Pip Packages needed:
+```sh
+pip install transformers compressed-tensors accelerate
+```
+
+### Potential Fix:
+
+The error seems to come from this PR: https://github.com/pytorch/pytorch/pull/149321
+
+After a little look it seems like simply passing down requires_grad in [the code here](https://github.com/pytorch/pytorch/blob/50cfe76231768ee2c784f68a1eba03369f386019/torch/_dynamo/variables/torch.py#L1816) fixes the error.
+
+```py
+example_value = torch.nn.Parameter(
+    # Potential fix: add requires_grad=requires_grad here:
+    tx.output.example_value_from_input_node(data.as_proxy().node),  # requires_grad=True by default
+)
+```
+@jansel @zou3519 @anijain2305 @StrongerXi 
+
+### Versions
+
+### Env:
+```
+PyTorch version: 2.8.0a0+5228986c39
+Is debug build: False
+CUDA used to build PyTorch: 12.9
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 24.04.2 LTS (x86_64)
+GCC version: (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0
+Clang version: Could not collect
+CMake version: version 3.31.6
+Libc version: glibc-2.39
+
+Python version: 3.12.3 (main, Feb  4 2025, 14:48:35) [GCC 13.3.0] (64-bit runtime)
+Python platform: Linux-6.14.0-27-generic-x86_64-with-glibc2.39
+Is CUDA available: True
+CUDA runtime version: 12.9.86
+CUDA_MODULE_LOADING set to: LAZY
+
+Versions of relevant libraries:
+[pip3] intel-openmp==2021.4.0
+[pip3] mkl==2021.1.1
+[pip3] mkl-devel==2021.1.1
+[pip3] mkl-include==2021.1.1
+[pip3] mypy_extensions==1.1.0
+[pip3] numpy==1.26.4
+[pip3] nvidia-cudnn-frontend==1.12.0
+[pip3] nvtx==0.2.11
+[pip3] onnx==1.17.0
+[pip3] optree==0.16.0
+[pip3] pynvjitlink==0.3.0
+[pip3] pytorch-triton==3.3.0+git96316ce52
+[pip3] tbb==2021.13.1
+[pip3] torch==2.8.0a0+5228986c39
+[pip3] torch_tensorrt==2.8.0a0
+[pip3] torchao==0.11.0+git
+[pip3] torchprofile==0.0.4
+[pip3] torchvision==0.22.0a0+95f10a4e
+[conda] Could not collect
+```
+
+cc @voznesenskym @penguinwu @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @chenyang78 @kadeng @chauhang @amjames @Lucaskabela
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

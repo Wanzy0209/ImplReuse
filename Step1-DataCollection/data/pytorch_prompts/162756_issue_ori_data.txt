@@ -1,0 +1,138 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: torch.compile fails with NameError when helper functions are required and combo_kernels enabled
+    - issue_id: 162756
+    - bug_description: ### 🐛 Describe the bug
+
+When `torch._inductor.config.combo_kernels = True` is enabled, compilation fails with `NameError` for Triton helper functions (e.g., `_triton_helper_fn_add0`) when operations that require helper functions (like `cumsum`) are combined into combo kernels.
+
+repro:
+```python
+import torch
+torch._inductor.config.combo_kernels = True
+
+@torch.compile
+def fn(x, y, z):
+    return x.sum(1), y.mean(1), z.cumsum(1)
+
+inps = (
+    torch.rand(16, 128, device="cuda"),
+    torch.rand(32, 128, device="cuda"),
+    torch.rand(32, 256, device="cuda"),
+)
+
+fn(*inps)
+```
+
+error:
+```bash
+torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+CompilationError: at 73:50:
+        xmask = xindex < xnumel
+        r0_index = tl.arange(0, R0_BLOCK_2)[None, :]
+        r0_offset = 0
+        r0_mask = r0_index < r0_numel
+        roffset = r0_offset
+        rindex = r0_index
+        r0_5 = r0_index
+        x4 = xindex
+        tmp12 = tl.load(in_ptr2 + (r0_5 + 256*x4), r0_mask & xmask, other=0.0)
+        tmp13 = tmp12.to(tl.float32)
+        tmp14 = tl.broadcast_to(tmp13, [XBLOCK, R0_BLOCK_2])
+        tmp15, = tl.associative_scan((tmp14,), 1, _triton_helper_fn_add0)
+                                                  ^
+NameError('_triton_helper_fn_add0 is not defined')
+```
+
+Root cause analysis: ComboKernels combine multiple sub-kernels but only write out the main kernel code. They do not write out the helper functions that individual sub-kernels generate.
+
+cc: @eellison @mlazos 
+
+### Versions
+
+PyTorch version: 2.10.0a0+git8470c16
+Is debug build: False
+CUDA used to build PyTorch: 12.9
+ROCM used to build PyTorch: N/A
+
+OS: CentOS Stream 9 (x86_64)
+GCC version: (GCC) 11.5.0 20240719 (Red Hat 11.5.0-9)
+Clang version: Could not collect
+CMake version: version 4.1.0
+Libc version: glibc-2.34
+
+Python version: 3.13.5 | packaged by conda-forge | (main, Jun 16 2025, 08:27:50) [GCC 13.3.0] (64-bit runtime)
+Python platform: Linux-6.4.3-0_fbk15_hardened_2630_gf27365f948db-x86_64-with-glibc2.34
+Is CUDA available: True
+CUDA runtime version: 12.9.86
+CUDA_MODULE_LOADING set to: 
+GPU models and configuration: 
+GPU 0: NVIDIA PG509-210
+GPU 1: NVIDIA PG509-210
+
+Nvidia driver version: 550.90.07
+cuDNN version: Could not collect
+Is XPU available: False
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: False
+
+CPU:
+Architecture:                       x86_64
+CPU op-mode(s):                     32-bit, 64-bit
+Address sizes:                      46 bits physical, 48 bits virtual
+Byte Order:                         Little Endian
+CPU(s):                             44
+On-line CPU(s) list:                0-43
+Vendor ID:                          GenuineIntel
+Model name:                         Intel(R) Xeon(R) Platinum 8339HC CPU @ 1.80GHz
+CPU family:                         6
+Model:                              85
+Thread(s) per core:                 1
+Core(s) per socket:                 44
+Socket(s):                          1
+Stepping:                           11
+BogoMIPS:                           3591.77
+Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault invpcid_single ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid mpx avx512f avx512dq rdseed adx smap clflushopt clwb avx512cd avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 arat vnmi umip pku ospke avx512_vnni md_clear flush_l1d arch_capabilities
+Virtualization:                     VT-x
+Hypervisor vendor:                  KVM
+Virtualization type:                full
+L1d cache:                          1.4 MiB (44 instances)
+L1i cache:        
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

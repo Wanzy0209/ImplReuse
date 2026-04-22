@@ -1,0 +1,122 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [Fuzzer][Eager/Compile Divergence] torch._inductor.exc.InductorError: ImportError:
+    - issue_id: 164486
+    - bug_description: ### 🐛 Describe the bug
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(238)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = torch.full((), 1, dtype=torch.int16) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_3 = arg_0 # size=(), stride=(), dtype=int16, device=cuda
+    var_node_1 = torch.add(var_node_2, var_node_3) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_5 = torch.full((1,), 3, dtype=torch.int16) # size=(1,), stride=(1,), dtype=int16, device=cuda
+    var_node_4 = torch.squeeze(var_node_5) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_0 = torch.div(var_node_1, var_node_4) # size=(), stride=(), dtype=int16, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randn(1).to(torch.int16), (), ())
+
+args = (arg_0,) + (sentinel,)
+out_eager = fuzzed_program(*args)
+out_eager.sum().backward()
+print('Eager Success! ✅')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+out_compiled = compiled_program(*args)
+out_compiled.sum().backward()
+print('Compile Success! ✅')
+out_eager_sum = out_eager.sum()
+out_compiled_sum = out_compiled.sum()
+diff = (out_eager_sum - out_compiled_sum).abs().item()
+rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100
+print(f'Relative diff (sum): {rel_diff:.6f}%')
+if rel_diff > 5 and diff > 1:
+    print(f'❌ Forward output sums differ significantly (relative and absolute)!')
+    print('out_eager_sum:', out_eager_sum.item())
+    print('out_compiled_sum:', out_compiled_sum.item())
+    print('Absolute diff:', diff)
+    print('Relative diff (%):', rel_diff)
+    import sys; sys.exit(1)
+```
+
+```
+Eager Success! ✅
+Traceback (most recent call last):
+  File "/tmp/torchfuzz/fuzz_b614f1af.py", line 30, in <module>
+    out_compiled.sum().backward()
+  File "/home/bobren/local/a/pytorch/torch/_tensor.py", line 626, in backward
+    torch.autograd.backward(
+  File "/home/bobren/local/a/pytorch/torch/autograd/__init__.py", line 354, in backward
+    _engine_run_backward(
+  File "/home/bobren/local/a/pytorch/torch/autograd/graph.py", line 847, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+  File "/home/bobren/local/a/pytorch/torch/autograd/function.py", line 316, in apply
+    return user_fn(self, *args)
+  File "/home/bobren/local/a/pytorch/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 2334, in backward
+    return impl_fn()
+  File "/home/bobren/local/a/pytorch/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 2320, in impl_fn
+    out = CompiledFunction._backward_impl(ctx, all_args)
+  File "/home/bobren/local/a/pytorch/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 2463, in _backward_impl
+    CompiledFunction.compiled_bw = aot_config.bw_compiler(
+  File "/home/bobren/local/a/pytorch/torch/_functorch/_aot_autograd/schemas.py", line 1242, in __call__
+    return self.compiler_fn(gm, example_inputs)
+  File "/home/bobren/local/a/pytorch/torch/_dynamo/backends/common.py", line 82, in _wrapped_bw_compiler
+    disable(
+  File "/home/bobren/local/a/pytorch/torch/_dynamo/eval_frame.py", line 1098, in _fn
+    return fn(*args, **kwargs)
+  File "/home/bobren/local/a/pytorch/torch/_utils_internal.py", line 93, in wrapper_function
+    return function(*args, **kwargs)
+  File "/home/bobren/local/a/pytorch/torch/_inductor/compile_fx.py", line 2641, in bw_compiler
+    return compile_fx_backward(
+  File "/home/bobren/local/a/pytorch/torch/_inductor/compile_fx.py", line 2329, in compile_fx_backward
+    return inner_compile(
+  File "/home/bobren/local/a/pytorch/torch/_inductor/compile_fx.py", line 792, in compile_fx_inner
+    return wrap_compile
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

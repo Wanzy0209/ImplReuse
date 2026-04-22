@@ -1,0 +1,115 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [MPS] Inconsistency/Strange behaviour with claimed lack of contiguousness in complied function.
+    - issue_id: 161969
+    - bug_description: ### 🐛 Describe the bug
+
+I have a function that I want to compile to work on `mps`. If I run it, it fails with `RuntimeError: A_t.is_contiguous() INTERNAL ASSERT FAILED at "/Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/native/mps/operations/LinearAlgebra.mm":331, please report a bug to PyTorch. 
+`
+
+If I uncomment the line, `# print(matrix.is_contiguous()) # Uncomment this line to make the code run`, it runs fine, and `True` is printed out.
+
+A simple example of the code is
+
+```python
+import torch
+
+def example_function():
+
+    def logp(x, matrix):
+        # print(matrix.is_contiguous()) # Uncomment this line to make the code run
+        p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+        p_mat_sqrt_inv = p_mat_sqrt.inverse()
+        val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+        return -val/2
+
+    score_func = torch.vmap(torch.func.grad(logp, 0), (0, None))
+
+    return score_func
+
+if __name__ == "__main__":
+
+    device = torch.device("mps")
+    dtype = torch.float32
+    data = torch.zeros((2, 5, 3), device=device, dtype=dtype)
+    compiled_function = torch.compile(example_function())
+
+    p = torch.diag(torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)**2)
+    res = compiled_function(data, p)
+```
+
+It works fine in `cpu` mode and if I remove the `torch.compile()`. 
+
+Also, if you remove the `vmap` and `grad`, and modify `x`, then it crashes with the same error, with and without the print statement.
+
+I've also tried adding `.contiguous()` to `matrix` and/or `p_mat_sqrt` and that makes no difference, the `.contiguous()` after `cholesky()` appears to be required (for `mps` mode).
+
+### Error logs
+
+```
+Traceback (most recent call last):
+  File "/Users/braddoyle/IdeaProjects/PyTorchIssue/issue.py", line 24, in <module>
+    res = compiled_function(data, p)
+  File "/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_dynamo/eval_frame.py", line 736, in compile_wrapper
+    return fn(*args, **kwargs)
+  File "/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_functorch/apis.py", line 201, in wrapped
+    def wrapped(*args, **kwargs):
+  File "/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_dynamo/eval_frame.py", line 929, in _fn
+    return fn(*args, **kwargs)
+  File "/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_functorch/aot_autograd.py", line 1241, in forward
+    return compiled_fn(full_args)
+  File "/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 384, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+        compiled_fn, args, disable_amp=disable_amp, steal_args=True
+    )
+  File "/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+                            ~^^^^^^
+  File "/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 750, in inner_fn
+    outs = compiled_fn(args)
+  File "/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 556, in wrapper
+    return compiled_fn(runtime_args)
+  File "/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_inductor/output_code.py", line 584, in __call__
+    return self.current_callable(inputs)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_inductor/utils.py", line 2716, in run
+    out = model(new_inputs)
+  File "/var/folders/1h/xb_4xr7s3tn15_twsvjf4n840000gn/T/torchinductor_braddoyle/md/cmdvwtct4oz77pyf26i2dhickdd7tnzyq3yy2krnp25eyhasiygq.py", line 131, in call
+    buf4 = torch.ops.aten.linalg_inv_ex.default
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

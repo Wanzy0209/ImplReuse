@@ -1,0 +1,50 @@
+Let me analyze this GitHub issue and extract the structured information as requested.
+
+**Title**: Inconsistent output with same input using equivalent block masks created via different methods in Flex Attention
+
+**Issue ID**: 165838
+
+**Bug Description**: The user reports that Flex Attention produces different outputs when using logically identical block masks created through different implementations. Two functions are provided that both create equivalent causal masks in logic, but the outputs can differ even when inputs are fixed. The discrepancy happens around 6 times out of 500 when seq_len = 16, and becomes much worse at longer sequence lengths (370 out of 500 when seq_len = 2048).
+
+**Repro Code**: The user provided a complete code snippet to reproduce the issue.
+
+**Repro Output**: The code prints 'Different element count' and 'Sum difference' values, showing that outputs differ.
+
+**Trigger Conditions**:
+- Backend: CUDA (GPU: NVIDIA L20)
+- dtype: torch.bfloat16
+- input_shape: query: (1, 16, seq_len, 128), key: (1, 8, seq_len, 128), value: (1, 8, seq_len, 128)
+- other_conditions: seq_len values tested include 16 and 2048; BLOCK_SIZE=(16, 16); kernel_options with FORCE_USE_FLEX_ATTENTION=True, BLOCK_M=16, BLOCK_N=16, IS_DIVISIBLE=False
+
+**Affected API**: flex_attention, create_block_mask
+
+**Environment**:
+- PyTorch version: 2.10.0.dev20250914+cu128
+- Python version: 3.12.3
+- OS: Ubuntu 22.04.5 LTS (x86_64)
+- Hardware: NVIDIA L20 GPU
+
+**Labels**: Based on the issue, this appears to be a bug related to flex_attention, so labels might include "bug", "flex_attention", "attention"
+
+Let me format this as JSON:```json
+{
+  "title": "Inconsistent output with same input using equivalent block masks created via different methods in Flex Attention",
+  "error_description": "Flex Attention produces different outputs when using logically identical block masks created through different implementations. Two functions both create equivalent causal masks in logic, but the outputs can differ even when the inputs are fixed. This discrepancy happens around 6 times out of 500 when seq_len = 16, but becomes much worse at longer sequence lengths (370 out of 500 when seq_len = 2048).",
+  "repro_code": "from typing import Union\nimport torch\nfrom torch import Tensor\nfrom torch.nn.attention.flex_attention import flex_attention, create_block_mask\n\ncompiled_flex_attention_hf = torch.compile(flex_attention,fullgraph=True)\ndef block_mask_fn_1(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):\n    causal_mask = (q >= kv)\n    return causal_mask\n\ndef block_mask_fn_2(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):\n    causal_mask = hand_made_causal_mask[q, kv]\n    return causal_mask\n\nseq_len = 2048\nquery_head = 16\nkv_head = 8\nhead_dim = 128\n\nkernel_options: dict[str, Union[int, bool]] = {\n        \"FORCE_USE_FLEX_ATTENTION\": True,\n        \"BLOCK_M\": 16,\n        \"BLOCK_N\": 16,\n        \"IS_DIVISIBLE\": False,\n    }\n\nattention_mask = torch.ones((1, seq_len), dtype=torch.bool).cuda()\n# hand made causal mask\nhand_made_causal_mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=attention_mask.device))\n\nfor i in range(500):\n    query_hf = torch.randn((1, query_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()\n    key_hf = torch.randn((1, kv_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()\n    value_hf = torch.randn((1, kv_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()\n\n    print('-'*50)\n    # first method to create block mask\n    block_mask_hf_1 = create_block_mask(block_mask_fn_1, 1, None, seq_len, seq_len, BLOCK_SIZE=(16, 16), device='cuda')\n    y1 = compiled_flex_attention_hf(query_hf,key_hf,\n            value_hf,\n            block_mask=block_mask_hf_1,\n            scale=None,\n            enable_gqa=True,\n            score_mod=None,\n            kernel_options=kernel_options,\n        )\n    # second method to create block mask\n    block_mask_hf_2 = create_block_mask(block_mask_fn_2, 1, None, seq_len, seq_len, BLOCK_SIZE=(16, 16), device='cuda')\n    y2 = compiled_flex_attention_hf(\n            query_hf,\n            key_hf,\n            value_hf,\n            block_mask=block_mask_hf_2,\n            scale=None,\n            enable_gqa=True,\n            score_mod=None,\n            kernel_options=kernel_options,\n        )\n    print('Different element count',torch.sum((y1-y2)!=0), 'Sum difference', (y1.float().sum()-y2.float().sum()).abs())",
+  "repro_output": "The code prints 'Different element count' and 'Sum difference' values, showing that outputs differ between the two methods.",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.bfloat16",
+    "input_shape": "query: (1, 16, seq_len, 128), key: (1, 8, seq_len, 128), value: (1, 8, seq_len, 128)",
+    "other_conditions": "seq_len values tested include 16 and 2048; BLOCK_SIZE=(16, 16); kernel_options with FORCE_USE_FLEX_ATTENTION=True, BLOCK_M=16, BLOCK_N=16, IS_DIVISIBLE=False; enable_gqa=True"
+  },
+  "affected_api": "flex_attention, create_block_mask",
+  "environment": {
+    "pytorch_version": "2.10.0.dev20250914+cu128",
+    "python_version": "3.12.3",
+    "os": "Ubuntu 22.04.5 LTS (x86_64)",
+    "hardware": "NVIDIA L20 GPU"
+  },
+  "labels": ["bug", "flex_attention", "attention"]
+}
+```

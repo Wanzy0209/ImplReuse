@@ -1,0 +1,118 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: distributed checkpoint errors with unused weights and stateful optimizer
+    - issue_id: 164257
+    - bug_description: ### 🐛 Describe the bug
+
+If the optimizer is provided parameters which are not used as part of the loss function calculation, they do not get an internal optimization state (e.g. a state used by in Adam). This confuses the `torch.distributed.checkpoint.state_dict.set_state_dict` function and it errors. The error happens even if `StateDictOptions(strict=False)` and `DefaultLoadPlanner(allow_partial_load=True)` is used.
+
+```python
+import pathlib
+import shutil
+
+import torch
+import torch.optim as optim
+import torch.distributed.checkpoint as dcp
+from torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict, StateDictOptions
+from torch.distributed.checkpoint.stateful import Stateful
+from torch.distributed.checkpoint import DefaultLoadPlanner
+
+class AppState(Stateful):
+    def __init__(self, model, optimizer):
+        self.model = model
+        self.optimizer = optimizer
+
+    def state_dict(self):
+        # this line automatically manages FSDP FQN's, as well as sets the default state dict type to FSDP.SHARDED_STATE_DICT
+        model_state_dict, optimizer_state_dict = get_state_dict(self.model, self.optimizer)
+        return {
+            "model": model_state_dict,
+            "optim": optimizer_state_dict
+        }
+
+    def load_state_dict(self, state_dict):
+        # sets our state dicts on the model and optimizer, now that we've loaded
+        set_state_dict(
+            self.model,
+            self.optimizer,
+            model_state_dict=state_dict["model"],
+            optim_state_dict=state_dict["optim"],
+            options=StateDictOptions(strict=False)
+        )
+
+tmp_dir = pathlib.Path("test/tmp/test_dataset_datamodule_resume")
+shutil.rmtree(tmp_dir, ignore_errors=True)
+
+# Model + optimizer
+model = torch.nn.Linear(4, 2, bias=True)
+optimizer = optim.AdamW(model.parameters(), lr=0.01)
+
+# One training step
+loss = torch.mean(model.weight)
+loss.backward()
+optimizer.step()
+
+# Save checkpoint
+dcp.save({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir)
+
+# Recreate model + optimizer and load
+model2 = torch.nn.Linear(4, 2, bias=True)
+optimizer2 = optim.AdamW(model2.parameters(), lr=0.01)
+
+# RuntimeError: Missing key in checkpoint state_dict: optimizer.state.bias.step.
+dcp.load({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir,
+         planner=DefaultLoadPlanner(allow_partial_load=True))
+```
+
+```
+W0930 10:27:20.827000 79300 site-packages/torch/distributed/elastic/multiprocessing/redirects.py:29] NOTE: Redirects are currently not supported in Windows or MacOs.
+/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/state_dict_saver.py:167: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to save in a single process.
+  warnings.warn(
+/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/filesystem.py:131: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  if tensor.storage().size() != tensor.numel():
+/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/state_dict_loader.py:153: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+  warnings.warn(
+Traceback (most recent call last):
+  File "test3.py", line 54, in <module>
+    dcp.load({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir,
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+             planner=DefaultLoadPlanner(allow_partial_load=True))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

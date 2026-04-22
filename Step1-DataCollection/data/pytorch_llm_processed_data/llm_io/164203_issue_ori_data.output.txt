@@ -1,0 +1,109 @@
+Let me analyze the GitHub issue and extract the structured information as requested.
+
+From the issue, I can extract:
+
+1. **title**: "Bug: torch.distributed.pipelining produces incorrect graph when model contains nn.Embedding"
+
+2. **error_description**: The bug description states that when splitting a model containing an nn.Embedding layer into pipeline stages with torch.distributed.pipelining.pipeline API, the pipeline representation incorrectly calls the embedding layer twice. The second call passes the embedding output (a FloatTensor) as the index argument to nn.Embedding, but nn.Embedding expects an index tensor of type LongTensor. This causes an assertion failure with "Tensor dtype mismatch! Expected: Float, Got: long long" error.
+
+3. **repro_code**: The issue provides a complete reproducible script:
+```python
+import torch
+from torch.distributed.pipelining import pipeline, SplitPoint
+
+class X(torch.nn.Module):
+    def forward(self, hidden_states):
+        return hidden_states.to(torch.float32)
+
+class Y(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.embed_tokens = torch.nn.Embedding(32, 16, -1)
+        self.layers = torch.nn.ModuleList([X() for _ in range(2)])
+
+    def forward(self, input_ids):
+        x = self.embed_tokens(input_ids)
+        _dummy_tensor = torch.zeros(2, 1, 32, 32)
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+def main():
+    model = Y()
+    # split before the second layer
+    split_point = "layers.1"
+    example_input_ids = torch.randint(0, 32, (2, 32), dtype=torch.long)
+    print("--- Splitting model into pipeline stages ---")
+    try:
+        pipe = pipeline(
+            model,
+            mb_args=(example_input_ids,),
+            split_spec={split_point: SplitPoint.BEGINNING},
+        )
+        print("\n--- Running pipeline ---")
+        _output = pipe(example_input_ids)
+        print("\n--- Execution successful (bug not reproduced) ---")
+    except Exception as e:
+        print("\n--- ERROR (bug reproduced) ---")
+        print(f"Error message: {e}")
+
+if __name__ == "__main__":
+    main()
+```
+
+4. **repro_output**: The observed error output:
+```
+--- Splitting model into pipeline stages ---
+--- Running pipeline ---
+--- ERROR (bug reproduced) ---
+Error message: Tensor dtype mismatch! Expected: Float, Got: long long
+
+While executing %_assert_tensor_metadata_default : [num_users=0] = call_function[target=torch.ops.aten._assert_tensor_metadata.default](args = (%embedding_default,), kwargs = {dtype: torch.float32, device: cpu, layout: torch.strided})
+…
+GraphModule:
+    def forward(self, input_ids: "i64[2, 32][32, 1]"):
+        …
+        embed_tokens: "f32[2, 32, 16]" = self.embed_tokens(input_ids, embed_tokens_weight_1)
+        …
+        embed_tokens_1 = self.embed_tokens(embed_tokens)  # incorrect second call
+        …
+```
+
+5. **trigger_conditions**:
+   - backend: CPU (mentioned in the reproduction)
+   - dtype: The issue involves both LongTensor (for input_ids) and FloatTensor (for embedding output)
+   - input_shape: (2, 32) for input_ids
+   - other_conditions: Model contains nn.Embedding layer, using torch.distributed.pipelining.pipeline API with split_spec
+
+6. **affected_api**: torch.distributed.pipelining.pipeline
+
+7. **environment**:
+   - pytorch_version: 2.8.0
+   - python_version: 3.11
+   - os: macOS 13.5
+   - hardware: CPU
+
+8. **labels**: Based on the issue, this is a bug related to pipelining and embedding layers. I'll use appropriate labels like "bug", "pipelining", "distributed".
+
+Let me format this as JSON:```json
+{
+  "title": "Bug: torch.distributed.pipelining produces incorrect graph when model contains nn.Embedding",
+  "error_description": "When splitting a simple model that contains an nn.Embedding layer into pipeline stages with the torch.distributed.pipelining.pipeline API, the pipeline representation incorrectly calls the embedding layer twice. The second call passes the embedding output (a FloatTensor) as the index argument to nn.Embedding, but nn.Embedding expects an index tensor of type LongTensor. During execution, the compiled graph inserts an aten._assert_tensor_metadata.default node that checks the dtype of the tensor, and this assertion fails with a Tensor dtype mismatch! Expected: Float, Got: long long error.",
+  "repro_code": "import torch\nfrom torch.distributed.pipelining import pipeline, SplitPoint\n\nclass X(torch.nn.Module):\n    def forward(self, hidden_states):\n        return hidden_states.to(torch.float32)\n\nclass Y(torch.nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.embed_tokens = torch.nn.Embedding(32, 16, -1)\n        self.layers = torch.nn.ModuleList([X() for _ in range(2)])\n\n    def forward(self, input_ids):\n        x = self.embed_tokens(input_ids)\n        _dummy_tensor = torch.zeros(2, 1, 32, 32)\n        for layer in self.layers:\n            x = layer(x)\n        return x\n\ndef main():\n    model = Y()\n    # split before the second layer\n    split_point = \"layers.1\"\n    example_input_ids = torch.randint(0, 32, (2, 32), dtype=torch.long)\n    print(\"--- Splitting model into pipeline stages ---\")\n    try:\n        pipe = pipeline(\n            model,\n            mb_args=(example_input_ids,),\n            split_spec={split_point: SplitPoint.BEGINNING},\n        )\n        print(\"\\n--- Running pipeline ---\")\n        _output = pipe(example_input_ids)\n        print(\"\\n--- Execution successful (bug not reproduced) ---\")\n    except Exception as e:\n        print(\"\\n--- ERROR (bug reproduced) ---\")\n        print(f\"Error message: {e}\")\n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "--- Splitting model into pipeline stages ---\n--- Running pipeline ---\n--- ERROR (bug reproduced) ---\nError message: Tensor dtype mismatch! Expected: Float, Got: long long\n\nWhile executing %_assert_tensor_metadata_default : [num_users=0] = call_function[target=torch.ops.aten._assert_tensor_metadata.default](args = (%embedding_default,), kwargs = {dtype: torch.float32, device: cpu, layout: torch.strided})\n…\nGraphModule:\n    def forward(self, input_ids: \"i64[2, 32][32, 1]\"):\n        …\n        embed_tokens: \"f32[2, 32, 16]\" = self.embed_tokens(input_ids, embed_tokens_weight_1)\n        …\n        embed_tokens_1 = self.embed_tokens(embed_tokens)  # incorrect second call\n        …",
+  "trigger_conditions": {
+    "backend": "CPU",
+    "dtype": "LongTensor (input_ids), FloatTensor (embedding output)",
+    "input_shape": "(2, 32)",
+    "other_conditions": "Model contains nn.Embedding layer, using torch.distributed.pipelining.pipeline API with split_spec"
+  },
+  "affected_api": "torch.distributed.pipelining.pipeline",
+  "environment": {
+    "pytorch_version": "2.8.0",
+    "python_version": "3.11",
+    "os": "macOS 13.5",
+    "hardware": "CPU"
+  },
+  "labels": ["bug", "pipelining", "distributed", "nn.Embedding"]
+}
+```

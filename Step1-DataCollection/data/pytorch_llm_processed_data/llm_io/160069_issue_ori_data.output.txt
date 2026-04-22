@@ -1,0 +1,107 @@
+1.  **Analyze the Request:**
+    *   **Goal:** Extract structured information from a GitHub issue.
+    *   **Constraints:** Extract *only* explicitly stated information. No inference, speculation, or explanations. Use empty strings for missing fields. Return JSON only.
+    *   **Input:** A GitHub issue text (title, issue_id, bug_description).
+
+2.  **Analyze the Input Data:**
+    *   **Title:** "torch.cuda.empty_cache() shall support MemPool as an argument just like the C++ interface"
+    *   **Issue ID:** 160069
+    *   **Bug Description:**
+        *   *Requirements:*
+            1.  `torch.cuda.empty_cache()` should support `torch.cuda.MemPool` as an optional argument (defaulting to the default memory pool), similar to the C++ interface `c10::cuda::CUDACachingAllocator::emptyCache`.
+            2.  Provide a new interface to clear the cache for all memory pools.
+        *   *Current Behavior:* `torch.cuda.empty_cache()` currently only clears the cache of the "default memory pool". (Note: There is a correction in the text stating that `torch.cuda.empty_cache()` clears all memory safe to clear, but the design of mempool prevents clearing if the object is alive. However, the user's example and the core request imply a desire to explicitly target specific pools or clear all pools via an interface, as the current behavior doesn't meet the requirement of clearing specific pools while they are alive or clearing all pools easily).
+        *   *Example Code:* A Python script allocating 1GB in default pool and 1GB in a custom pool (`torch.cuda.MemPool`), then calling `torch.cuda.empty_cache()`.
+        *   *Observed Output:* Log showing memory usage. After `torch.cuda.empty_cache()`, free memory is 138.29 GiB (only the default pool's 1GB returned), whereas the user expects 139.29 GiB (both pools cleared).
+        *   *C++ Reference:* Links to `c10::cuda::CUDACachingAllocator::emptyCache`.
+
+3.  **Map to Output Schema:**
+
+    *   **title:** "torch.cuda.empty_cache() shall support MemPool as an argument just like the C++ interface"
+    *   **error_description:** The user wants `torch.cuda.empty_cache()` to support `torch.cuda.MemPool` as an optional argument (defaulting to the default memory pool) and a new interface to clear the cache for all memory pools. Currently, `torch.cuda.empty_cache()` only clears the cache of the "default memory pool" (or memory safe to clear, which excludes alive custom pools), leaving other memory pools uncleared unless the pool object is deleted.
+    *   **repro_code:** The Python script provided in the issue.
+    *   **repro_output:** The bash log provided in the issue.
+    *   **trigger_conditions:**
+        *   *backend:* CUDA (implied by `torch.cuda`, `torch.device('cuda')`, H200 system).
+        *   *dtype:* `torch.int8`.
+        *   *input_shape:* `(GB,)` where `GB = 1024*1024*1024`.
+        *   *other_conditions:* Using `torch.cuda.MemPool` and `torch.cuda.use_mem_pool`.
+    *   **affected_api:** `torch.cuda.empty_cache`, `torch.cuda.MemPool`.
+    *   **environment:**
+        *   *pytorch_version:* Not explicitly stated (unknown).
+        *   *python_version:* Not explicitly stated (unknown).
+        *   *os:* Not explicitly stated (unknown).
+        *   *hardware:* H200 system.
+    *   **labels:** Not explicitly stated in the text provided (unknown).
+
+4.  **Refine and Format:**
+
+    *   *Title:* Copy exactly.
+    *   *Error Description:* Summarize the requirements vs current behavior based on the text. "torch.cuda.empty_cache() currently ONLY clears the cache of the "default memory pool", but leaves the other memory pools uncleared." The user wants it to support MemPool as an argument.
+    *   *Repro Code:* Copy the Python block.
+    *   *Repro Output:* Copy the bash block.
+    *   *Trigger Conditions:*
+        *   Backend: CUDA.
+        *   Dtype: torch.int8.
+        *   Input Shape: (1024*1024*1024,).
+        *   Other Conditions: Using `torch.cuda.MemPool` and `torch.cuda.use_mem_pool`.
+    *   *Affected API:* `torch.cuda.empty_cache`, `torch.cuda.MemPool`.
+    *   *Environment:*
+        *   Hardware: H200.
+        *   Others: unknown.
+    *   *Labels:* [] (empty list or empty string? Schema says `["<label1>", "<label2>"]`. If missing, usually empty list or empty string. The prompt says "If a field is missing, use empty string." for general fields, but for lists, usually an empty list is safer, or strictly following the prompt "use empty string" might mean `""`. However, looking at the schema `["<label1>", "<label2>"]`, it implies a list. I will provide an empty list `[]` as it's standard for JSON arrays, or `""` if strictly interpreting "missing field". Let's look at the prompt again: "If a field is missing, use empty string." This usually applies to string fields. For array fields, `[]` is the JSON equivalent of null/empty. I will use `[]`.)
+
+5.  **Final Review against Constraints:**
+    *   Extract only explicitly stated? Yes.
+    *   No inference? Yes.
+    *   JSON only? Yes.
+
+    *Self-Correction on "Error Description":* The prompt asks for "natural language bug description". The issue is a feature request/enhancement based on a perceived limitation. I will describe the limitation and the request.
+    *Self-Correction on "Hardware":* The text says "The log below is on a H200 system." So hardware is H200.
+    *Self-Correction on "Backend":* The code uses `torch.device('cuda')`. So backend is CUDA.
+
+6.  **Construct JSON:**
+
+    ```json
+    {
+      "title": "torch.cuda.empty_cache() shall support MemPool as an argument just like the C++ interface",
+      "error_description": "torch.cuda.empty_cache() currently ONLY clears the cache of the \"default memory pool\", but leaves the other memory pools uncleared. The user requests that torch.cuda.empty_cache() supports torch.cuda.MemPool as an optional argument (defaulting to the default memory pool) and a new interface to clear the cache for all memory pools.",
+      "repro_code": "import torch\n\nGB = 1024*1024*1024\ndevice = torch.device('cuda')\n\n\ndef dump_mem():\n    free, total = torch.cuda.mem_get_info()\n    print(f\"free: {free / (GB):.2f} GiB, total: {total / (GB):.2f} GiB\")\n\n\ndef alloc_1gb():\n    return torch.empty((GB,), dtype=torch.int8, device=device)\n\n\nprint(\"before allocation\")\ndump_mem()\n\nt0 = alloc_1gb()\nprint(\"t0 allocated\")\ndump_mem()\n\nmpool = torch.cuda.MemPool()\nwith torch.cuda.use_mem_pool(mpool):\n    t1 = alloc_1gb()\n    print(\"t1 allocated\")\n    dump_mem()\n\nt0 = None\nt1 = None\nprint(\"t0 and t1 freed\")\ndump_mem()\ntorch.cuda.empty_cache()\nprint(\"cache emptied\")\ndump_mem()",
+      "repro_output": "before allocation\nfree: 139.29, total: 139.81 GiB\nt0 allocated\nfree: 138.29 GiB, total: 139.81 GiB\nt1 allocated\nfree: 137.29 GiB, total: 139.81 GiB\nt0 and t1 freed\nfree: 137.29 GiB, total: 139.81 GiB\ncache emptied\nfree: 138.29 GiB, total: 139.81 GiB       <------ the free memory should be 139.29 GiB.",
+      "trigger_conditions": {
+        "backend": "CUDA",
+        "dtype": "torch.int8",
+        "input_shape": "(1024*1024*1024,)",
+        "other_conditions": "Using torch.cuda.MemPool and torch.cuda.use_mem_pool"
+      },
+      "affected_api": "torch.cuda.empty_cache, torch.cuda.MemPool",
+      "environment": {
+        "pytorch_version": "unknown",
+        "python_version": "unknown",
+        "os": "unknown",
+        "hardware": "H200"
+      },
+      "labels": []
+    }
+    ``````json
+{
+  "title": "torch.cuda.empty_cache() shall support MemPool as an argument just like the C++ interface",
+  "error_description": "torch.cuda.empty_cache() currently ONLY clears the cache of the \"default memory pool\", but leaves the other memory pools uncleared. The user requests that torch.cuda.empty_cache() supports torch.cuda.MemPool as an optional argument (defaulting to the default memory pool) and a new interface to clear the cache for all memory pools.",
+  "repro_code": "import torch\n\nGB = 1024*1024*1024\ndevice = torch.device('cuda')\n\n\ndef dump_mem():\n    free, total = torch.cuda.mem_get_info()\n    print(f\"free: {free / (GB):.2f} GiB, total: {total / (GB):.2f} GiB\")\n\n\ndef alloc_1gb():\n    return torch.empty((GB,), dtype=torch.int8, device=device)\n\n\nprint(\"before allocation\")\ndump_mem()\n\nt0 = alloc_1gb()\nprint(\"t0 allocated\")\ndump_mem()\n\nmpool = torch.cuda.MemPool()\nwith torch.cuda.use_mem_pool(mpool):\n    t1 = alloc_1gb()\n    print(\"t1 allocated\")\n    dump_mem()\n\nt0 = None\nt1 = None\nprint(\"t0 and t1 freed\")\ndump_mem()\ntorch.cuda.empty_cache()\nprint(\"cache emptied\")\ndump_mem()",
+  "repro_output": "before allocation\nfree: 139.29, total: 139.81 GiB\nt0 allocated\nfree: 138.29 GiB, total: 139.81 GiB\nt1 allocated\nfree: 137.29 GiB, total: 139.81 GiB\nt0 and t1 freed\nfree: 137.29 GiB, total: 139.81 GiB\ncache emptied\nfree: 138.29 GiB, total: 139.81 GiB       <------ the free memory should be 139.29 GiB.",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.int8",
+    "input_shape": "(1024*1024*1024,)",
+    "other_conditions": "Using torch.cuda.MemPool and torch.cuda.use_mem_pool"
+  },
+  "affected_api": "torch.cuda.empty_cache, torch.cuda.MemPool",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "H200"
+  },
+  "labels": []
+}
+```

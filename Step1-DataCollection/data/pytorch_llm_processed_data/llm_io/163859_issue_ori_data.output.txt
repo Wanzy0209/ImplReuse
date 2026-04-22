@@ -1,0 +1,57 @@
+Let me analyze this GitHub issue and extract the structured information as requested.
+
+From the issue, I can extract:
+
+1. **title**: "[torch.distributed.pipelining] PP with ScheduleGPipe causes divergence in grad updates compared to single GPU training"
+
+2. **error_description**: The bug description states that when using `torch.distributed.pipelining` with `ScheduleGPipe`, gradient computations are incorrect, producing significantly different gradient values compared to single-GPU baseline. The forward pass produces nearly identical loss, but the backward pass generates gradients that differ by orders of magnitude.
+
+3. **repro_code**: There's a minimal reproducible example provided in the issue. It's a Python script that:
+   - Uses a simple transformer model split into 4 stages
+   - Each stage has 3 transformer layers
+   - Uses standard ScheduleGPipe with 4 microbatches
+   - Demonstrates the issue with gradient norm comparison
+
+4. **repro_output**: The issue shows a comparison table:
+```
+Step | Single GPU Loss | Pipeline Loss | Loss Diff    | Single GPU Grad | Pipeline Grad | Grad Diff    | Status
+--------------------------------------------------------------------------------------------------------------
+  0  | 10.540012       | 10.551013     | 0.011001     | 3.378159        | 13.392914     | 10.014754    | DIVERGED
+  1  | 10.560583       | 10.559126     | 0.001457     | 0.675389        | 2.703015      | 2.027627     | DIVERGED
+  2  | 10.578341       | 10.582466     | 0.004126     | 0.576893        | 2.338186      | 1.761293     | DIVERGED
+
+
+```
+
+I notice the pipeline implementation is causing significant gradient divergence. The code snippet reveals a custom `TransformerStage` class that handles embedding, transformer layers, and potentially a language model head. The forward method suggests a complex multi-stage processing approach that might be contributing to the gradient inconsistencies.
+
+The implementation uses a distributed pipeline strategy with multiple stages, each processing a portion of the transformer model. This distributed approach could be introducing subtle computational variations that lead to the observed gradient differences.
+
+The key observation is the dramatic gradient scaling discrepancy between single GPU and pipeline parallel execution, which suggests a potential issue in how gradients are being handled during the backward pass.
+
+```
+
+python
+I'm investigating potential causes for the gradient divergence, focusing on the backward pass implementation. The discrepancy suggests a problem in how gradients are computed or scaled across different pipeline stages. I'll carefully examine the ScheduleGPipe implementation to understand the gradient handling mechanism.
+``````json
+{
+  "title": "[torch.distributed.pipelining] PP with ScheduleGPipe causes divergence in grad updates compared to single GPU training",
+  "error_description": "When using torch.distributed.pipelining with ScheduleGPipe, gradient computations are incorrect, producing significantly different gradient values compared to single-GPU baseline. While the forward pass produces nearly identical loss in the first step starting with identical model initialization and input data (confirming correct forward computation), the backward pass generates gradients that differ by orders of magnitude, making the library unusable.",
+  "repro_code": "import torch\nimport torch.nn as nn\nimport torch.distributed as dist\nfrom torch.distributed.pipelining import PipelineStage, ScheduleGPipe\nimport os\nimport pprint\nimport argparse\n\n\nclass TransformerStage(nn.Module):\n    def __init__(self, hidden_size=1536, num_layers=3, vocab_size=32000, stage_index=0, num_stages=4):\n        super().__init__()\n        self.stage_index = stage_index\n        self.num_stages = num_stages\n        \n        if stage_index == 0:\n            self.embed_tokens = nn.Embedding(vocab_size, hidden_size)\n        \n        self.layers = nn.ModuleList([\n            nn.TransformerEncoderLayer(\n                hidden_size, \n                nhead=12,\n                dim_feedforward=5440,\n                batch_first=True\n            )\n            for _ in range(num_layers)\n        ])\n        \n        if stage_index == num_stages - 1:\n            self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)\n    \n    def forward(self, x):\n        if hasattr(self, 'embed_tokens'):\n            x = self.embed_tokens(x)\n        \n        for layer in self.layers:\n            x = layer(x)\n        \n        i",
+  "repro_output": "Step | Single GPU Loss | Pipeline Loss | Loss Diff    | Single GPU Grad | Pipeline Grad | Grad Diff    | Status\n--------------------------------------------------------------------------------------------------------------\n  0  | 10.540012       | 10.551013     | 0.011001     | 3.378159        | 13.392914     | 10.014754    | DIVERGED\n  1  | 10.560583       | 10.559126     | 0.001457     | 0.675389        | 2.703015      | 2.027627     | DIVERGED\n  2  | 10.578341       | 10.582466     | 0.004126     | 0.576893        | 2.338186      | 1.761293     | DIVERGED",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "",
+    "other_conditions": "Uses torch.distributed.pipelining with ScheduleGPipe, 4 stages, 3 transformer layers per stage, 4 microbatches, scale_grads=True"
+  },
+  "affected_api": "torch.distributed.pipelining.ScheduleGPipe",
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": []
+}
+```

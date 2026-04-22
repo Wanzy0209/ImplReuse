@@ -1,0 +1,61 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: Export Qwen3 Model with past_key_values
+
+**Issue ID**: 163076
+
+**Bug Description**: The user is trying to export the "Qwen/Qwen3-0.6B" model with past_key_values but is encountering an error. They tried passing past_key_values both as a DynamicCache object and as a list/tuple, but neither worked.
+
+**Repro Code**: The user provided a complete code snippet that:
+1. Loads the Qwen/Qwen3-0.6B model
+2. Creates a wrapper module QwenTorchModule
+3. Attempts to export to ONNX with past_key_values
+
+**Repro Output**: The error message shows:
+```
+RuntimeError: Only tuples, lists and Variables are supported as JIT inputs/outputs. Dictionaries and strings are also accepted, but their usage is not recommended. Here, received an input of unsupported type: DynamicCache
+```
+
+**Trigger Conditions**:
+- backend: Not explicitly mentioned, but using CUDA (`.cuda()`)
+- dtype: torch.float16
+- input_shape: Not explicitly specified beyond "Hello World" tokenization
+- other_conditions: Using torch.onnx.export with past_key_values
+
+**Affected API**: torch.onnx.export, specifically when dealing with DynamicCache objects
+
+**Environment**:
+- pytorch_version: Not explicitly stated (can see from traceback it's using torch.onnx.utils.py)
+- python_version: 3.10 (from traceback path)
+- os: Not explicitly mentioned
+- hardware: CUDA (mentioned `.cuda()`)
+
+**Labels**: Based on the issue, this seems related to:
+- onnx
+- export
+- qwen
+- past_key_values
+- dynamic_cache
+
+Let me format this into the required JSON schema.```json
+{
+  "title": "Export Qwen3 Model with past_key_values",
+  "error_description": "I am trying to export \"Qwen/Qwen3-0.6B\" model with past_key_values but I have blocked with the error attached below. I tried passing past_key_values both as a DynamicCache object and as a list/tuple, but neither worked — I ended up getting errors in both cases.",
+  "repro_code": "import torch\nfrom torch.nn import Module\nfrom transformers import AutoModelForCausalLM, AutoTokenizer\nfrom transformers.modeling_outputs import CausalLMOutputWithPast\n\nMODEL_NAME = \"Qwen/Qwen3-0.6B\"\nONNX_PATH = \"qwen3_kv_cache.onnx\"\nOPSET = 18  \n\ntokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)\nmodel = AutoModelForCausalLM.from_pretrained(\n    MODEL_NAME,\n    torch_dtype=torch.float16\n).eval().cuda()\n\ndevice = model.device\n\ninput_ids = tokenizer.encode(\"Hello World\", return_tensors=\"pt\").to(device)\n\nclass QwenTorchModule(Module):\n    def __init__(self, model):\n        super().__init__()\n        self.model = model\n\n    def forward(self, input_ids, past_key_values=None, **kwargs):\n        outputs: CausalLMOutputWithPast = self.model(\n            input_ids=input_ids,\n            past_key_values=past_key_values,\n            use_cache=True,\n            **kwargs\n        )\n        return (outputs.logits, outputs.past_key_values)\n\nqwen_module = QwenTorchModule(model)\n\nwith torch.inference_mode():\n    outputs = qwen_module(input_ids)\n    past_key_values = outputs[1]\n\nold_forward = qwen_module.forward\ndef _export_forward(input_ids, past_key_values):\n    return old_forward(input_ids=input_ids, past_key_values=past_key_values)\n\nqwen_module.forward = _export_forward\n\nexport_inputs = (input_ids, past_key_values)\n\ntorch.onnx.export(\n    qwen_module,\n    export_inputs,\n    ONNX_PATH,\n    opset_version=OPSET,\n    do_constant_folding=True,\n    input_names=[\"input_ids\", \"past_key_values\"],\n    output_names=[\"logits\", \"present_key_values\"],\n    dynamic_axes={\n        \"input_ids\": {0: \"batch\", 1: \"sequence\"},\n        \"logits\": {0: \"batch\", 1: \"sequence\"},\n    },\n)",
+  "repro_output": "RuntimeError: Only tuples, lists and Variables are supported as JIT inputs/outputs. Dictionaries and strings are also accepted, but their usage is not recommended. Here, received an input of unsupported type: DynamicCache",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.float16",
+    "input_shape": "",
+    "other_conditions": "Using torch.onnx.export with past_key_values, opset_version=18"
+  },
+  "affected_api": "torch.onnx.export",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "3.10",
+    "os": "unknown",
+    "hardware": "CUDA"
+  },
+  "labels": ["onnx", "export", "qwen", "past_key_values", "dynamic_cache"]
+}
+```

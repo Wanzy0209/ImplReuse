@@ -1,0 +1,110 @@
+1.  **Analyze the Request:**
+    *   **Goal:** Extract structured information from a GitHub issue.
+    *   **Input:** A specific GitHub issue text (title, issue_id, bug_description).
+    *   **Constraints:** Extract *only* explicitly stated information. No inference, speculation, or explanations. Missing fields = empty string. Return *only* JSON.
+    *   **Schema:** `title`, `error_description`, `repro_code`, `repro_output`, `trigger_conditions` (backend, dtype, input_shape, other_conditions), `affected_api`, `environment` (pytorch_version, python_version, os, hardware), `labels`.
+
+2.  **Analyze the Input Data:**
+    *   **Title:** "Umbrella bug: failures in basic custom MemPool patterns"
+    *   **Issue ID:** 167745
+    *   **Bug Description:**
+        *   Mentions failures in basic custom MemPool patterns.
+        *   Mentions a repo with tests: `https://github.com/MatthiasKohl/pytorch-mempool-litmus`.
+        *   **Test 1 (Failing):** Code snippet provided. Reason: Incorrectly uses default `cudaFree` because owner pool isn't active when blocks are released.
+        *   **Test 2 (Failing):** Code snippet provided. Reason: Internal assert failure when deleting `MemPool` object while still "capturing".
+        *   **Test 3 (Failing):** Code snippet provided. Reason: Incorrect nesting (duplicate of issue #161193).
+        *   Mentions CUDA graph pools (interactions not included in tests yet).
+        *   Mentions thread-safety (not checking for now).
+        *   Mentions specific file/line references in `c10/cuda/CUDACachingAllocator.cpp`.
+
+3.  **Map to Schema Fields:**
+
+    *   **title:** "Umbrella bug: failures in basic custom MemPool patterns" (Direct copy).
+    *   **error_description:** The text under "### 🐛 Describe the bug". It describes failures in custom MemPool allocations, specifically regarding temporary `MemPool` objects and incorrect nesting. It details specific failure reasons (incorrect `cudaFree` usage, internal assert, nesting issues).
+    *   **repro_code:** The issue provides three specific test cases (Test 1, Test 2, Test 3). I should include these. Since there are multiple, I will combine them or pick the most representative ones, but the prompt asks for "minimal reproducible code if exists". I will include the code blocks provided in the issue.
+    *   **repro_output:** The issue describes *why* they fail (e.g., "incorrectly uses the default cudaFree", "running into the internal assert"), but doesn't provide specific console output (like a stack trace or error message text) other than referencing asserts. I will leave this empty or put the description of the failure if it counts as output. The prompt asks for "observed incorrect output". The text says "Test 1 fails because...", "Test 2 fails because...". It doesn't show the actual error message printed to stdout/stderr. I will stick to empty string for strict adherence to "observed incorrect output" (like a traceback), or perhaps the description of the failure if interpreted loosely. Given the strict constraints ("Do NOT infer"), and the lack of actual error logs, I will leave it empty.
+    *   **trigger_conditions:**
+        *   *backend:* Mentions "CUDA" (`torch.cuda.use_mem_pool`, `cudaFree`, `CUDA graph pools`). So, "CUDA".
+        *   *dtype:* Not mentioned.
+        *   *input_shape:* Not mentioned (though `torch.randn(8, device="cuda")` is used, that's part of the repro code, not a general constraint).
+        *   *other_conditions:* "custom MemPool allocations", "temporary MemPool objects", "nested MemPool contexts".
+    *   **affected_api:** `torch.cuda.use_mem_pool`, `torch.cuda.MemPool`.
+    *   **environment:**
+        *   *pytorch_version:* Not mentioned.
+        *   *python_version:* Not mentioned.
+        *   *os:* Not mentioned.
+        *   *hardware:* Mentions "CUDA", implies GPU. I'll put "CUDA" or "GPU" or "unknown". The prompt says "cpu/gpu info or unknown". Since it's CUDA, it's GPU.
+    *   **labels:** The issue doesn't have explicit labels listed in the text provided (like "bug", "high priority"). I will leave this empty.
+
+4.  **Refining the Content:**
+
+    *   *Error Description:* "This is a bug to document several problematic patterns with custom MemPool allocations... Test 1 fails because it incorrectly uses the default cudaFree... Test 2 fails because in the nested case, when deleting the MemPool object for pool2, we are still capturing... Test 3... failing tests due to incorrect nesting..."
+    *   *Repro Code:* I will concatenate the code blocks for Test 1, 2, and 3.
+    *   *Trigger Conditions:*
+        *   Backend: CUDA
+        *   Other: "custom MemPool allocations", "temporary MemPool objects", "nested MemPool contexts"
+    *   *Affected API:* `torch.cuda.use_mem_pool`, `torch.cuda.MemPool`
+
+5.  **Final JSON Construction:**
+
+    ```json
+    {
+      "title": "Umbrella bug: failures in basic custom MemPool patterns",
+      "error_description": "This is a bug to document several problematic patterns with custom MemPool allocations. Test 1 fails because it incorrectly uses the default cudaFree as the owner pool of the private pool isn't active anymore at the time where the blocks get released. Test 2 fails because in the nested case, when deleting the MemPool object for pool2, the code is still capturing, running into an internal assert. Test 3 fails due to incorrect nesting.",
+      "repro_code": "pool1 = make_custom_pool(1)\n\nwith torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):\n    print(\"Pool 1 ctx start\")\n    x1 = torch.randn(8, device=\"cuda\")\n    print(\"Pool 1 ctx end\")\ndel x1\n\npool1 = make_custom_pool(1)\npool2 = make_custom_pool(2)\n\nx1 = torch.randn(8, device=\"cuda\")\nwith torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):\n    print(\"Pool 1 ctx start\")\n    with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool2)):\n        print(\"Pool 2 ctx start\")\n        print(\"Pool 2 ctx end\")\n    print(\"Pool 1 ctx end\")\ndel x1\n\npool1 = torch.cuda.MemPool(make_custom_pool(1))\npool2 = torch.cuda.MemPool(make_custom_pool(2))\n\nwith torch.cuda.use_mem_pool(pool1):\n    print(\"Pool 1 ctx start\")\n    with torch.cuda.use_mem_pool(pool2):\n        print(\"Pool 2 ctx start\")\n        x1 = torch.randn(8, device=\"cuda\")\n        print(\"Pool 2 ctx end\")\n    print(\"Pool 1 ctx end\")\ndel x1",
+      "repro_output": "",
+      "trigger_conditions": {
+        "backend": "CUDA",
+        "dtype": "",
+        "input_shape": "",
+        "other_conditions": "custom MemPool allocations, temporary MemPool objects, nested MemPool contexts"
+      },
+      "affected_api": "torch.cuda.use_mem_pool, torch.cuda.MemPool",
+      "environment": {
+        "pytorch_version": "",
+        "python_version": "",
+        "os": "",
+        "hardware": "CUDA"
+      },
+      "labels": []
+    }
+    ```
+
+6.  **Review against constraints:**
+    *   Extract only explicitly stated? Yes.
+    *   No inference? Yes.
+    *   Missing fields empty? Yes.
+    *   JSON only? Yes.
+
+    *Self-Correction on `repro_code`:* The prompt asks for "minimal reproducible code". Since there are three distinct tests, including all three is the most accurate representation of the issue content. I will format them clearly.
+
+    *Self-Correction on `error_description`:* I should summarize the description provided in the text without adding external knowledge.
+
+    *Self-Correction on `hardware`:* The text mentions "CUDA graph pools" and "cudaFree". It implies CUDA hardware. I will list "CUDA" or "GPU". "CUDA" is more specific to the context.
+
+    *Self-Correction on `labels`:* The input text does not contain a "Labels" section or list of tags. So `[]` is correct.
+
+    *Self-Correction on `repro_output`:* The text says "Test 1 fails because...", "Test 2 fails because...". It does not show the actual error message (e.g., `RuntimeError: ...`). So empty string is correct.
+
+    *Final check of the JSON structure.*```json
+{
+  "title": "Umbrella bug: failures in basic custom MemPool patterns",
+  "error_description": "This is a bug to document several problematic patterns with custom MemPool allocations. Test 1 fails because it incorrectly uses the default cudaFree as the owner pool of the private pool isn't active anymore at the time where the blocks get released. Test 2 fails because in the nested case, when deleting the MemPool object for pool2, the code is still capturing, running into an internal assert. Test 3 fails due to incorrect nesting.",
+  "repro_code": "pool1 = make_custom_pool(1)\n\nwith torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):\n    print(\"Pool 1 ctx start\")\n    x1 = torch.randn(8, device=\"cuda\")\n    print(\"Pool 1 ctx end\")\ndel x1\n\npool1 = make_custom_pool(1)\npool2 = make_custom_pool(2)\n\nx1 = torch.randn(8, device=\"cuda\")\nwith torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):\n    print(\"Pool 1 ctx start\")\n    with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool2)):\n        print(\"Pool 2 ctx start\")\n        print(\"Pool 2 ctx end\")\n    print(\"Pool 1 ctx end\")\ndel x1\n\npool1 = torch.cuda.MemPool(make_custom_pool(1))\npool2 = torch.cuda.MemPool(make_custom_pool(2))\n\nwith torch.cuda.use_mem_pool(pool1):\n    print(\"Pool 1 ctx start\")\n    with torch.cuda.use_mem_pool(pool2):\n        print(\"Pool 2 ctx start\")\n        x1 = torch.randn(8, device=\"cuda\")\n        print(\"Pool 2 ctx end\")\n    print(\"Pool 1 ctx end\")\ndel x1",
+  "repro_output": "",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "",
+    "input_shape": "",
+    "other_conditions": "custom MemPool allocations, temporary MemPool objects, nested MemPool contexts"
+  },
+  "affected_api": "torch.cuda.use_mem_pool, torch.cuda.MemPool",
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "",
+    "hardware": "CUDA"
+  },
+  "labels": []
+}
+```

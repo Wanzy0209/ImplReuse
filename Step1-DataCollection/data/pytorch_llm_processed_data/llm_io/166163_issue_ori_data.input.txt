@@ -1,0 +1,169 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: ONNX export fails for torchvision CNN architectures
+    - issue_id: 166163
+    - bug_description: ### 🐛 Describe the bug
+
+Some torchvision CNNs fail to export to ONNX. Specifically, I've seen issues with EfficientNet, MobileNet, and Resnet from torchvision.models, while convenxt, vgg, and squeezenet export successfully.
+
+Failing models:
+```
+torchvision.models.efficientnet_b0
+torchvision.models.mobilenet_v2
+torchvision.models.resnet18
+```
+
+The common thread seems to be *batchnorm layers*, as the error messages include
+```
+<class 'ValueError'>: Key 'b_features_0_1_running_mean' does not match the name of the value 'getitem_3'. Please use the value.name as the key.
+```
+or
+```
+<class 'ValueError'>: Key 'b_bn1_running_mean' does not match the name of the value 'getitem_3'. Please use the value.name as the key.
+```
+
+Python code to reproduce:
+
+```
+import torch
+import torchvision
+import pandas as pd
+import traceback
+
+models = [
+    torchvision.models.convnext_tiny,
+    torchvision.models.efficientnet_b0,
+    torchvision.models.mobilenet_v2,
+    torchvision.models.resnet18,
+    torchvision.models.squeezenet1_0,
+    torchvision.models.vgg11,
+]
+results = []
+for cl in models:
+    try: 
+        m=cl(weights=None)
+        input = torch.rand((3, 224, 224))  # Example input for ResNet
+        input_batch = torch.stack([input, input])
+        output_batch = m(input_batch) # successfull forward pass
+        output_batch.shape # torch.Size([2, 1000])
+
+        onnx_program = torch.onnx.export(
+            m,
+            (input_batch,),
+            dynamic_shapes=[{0: "dim_x"}],
+            report=True,
+            dynamo=True,
+        )
+
+        onnx_program.save("cnn_dynamic.onnx")
+        results.append({
+            "Model": m.__class__.__name__,
+            "Status": "Success",
+            "Error Type": None,
+            "Error Message": None,
+            "Full Traceback": None
+        })
+    except Exception as e:
+        
+        # include full error with traceback
+        results.append({
+            "Model": m.__class__.__name__,
+            "Status": "Failed",
+            "Error Type": type(e).__name__,
+            "Error Message": str(e),
+            "Full Traceback": traceback.format_exc()
+        })
+df = pd.DataFrame(results)
+df.to_csv('cnn_onnx_export_results.csv', index=False)
+```
+
+Full csv of successes and failures + stack traces:
+https://gist.github.com/sammlapp/7e087d4949d5ace04410836a71233a5f 
+
+### Versions
+
+Collecting environment information...
+PyTorch version: 2.10.0.dev20251023
+Is debug build: False
+CUDA used to build PyTorch: None
+ROCM used to build PyTorch: N/A
+
+OS: macOS 15.1 (arm64)
+GCC version: Could not collect
+Clang version: 16.0.0 (clang-1600.0.26.4)
+CMake version: Could not collect
+Libc version: N/A
+
+Python version: 3.13.5 | packaged by Anaconda, Inc. | (main, Jun 12 2025, 11:23:37) [Clang 14.0.6 ] (64-bit runtime)
+Python platform: macOS-15.1-arm64-arm-64bit-Mach-O
+Is CUDA available: False
+CUDA runtime version: No CUDA
+CUDA_MODULE_LOADING set to: N/A
+GPU models and configuration: No CUDA
+Nvidia driver version: No CUDA
+cuDNN version: No CUDA
+Is XPU available: False
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: True
+
+CPU:
+Apple M1 Pro
+
+Versions of relevant libraries:
+[pip3] mypy_extensions==1.1.0
+[pip3] numpy==2.2.0
+[pip3] onnx==1.19.1
+[pip3] onnx-ir==0.1.11
+[pip3] onnxruntime==1.23.2
+[pip3] onnxscript==0.5.4
+[pip3] pytorch-lightning==2.5.2
+[pip3] torch==2.10.0.dev20251023
+[pip3] torchaudio==2.10.0.dev20251023
+[pip3] torchmetrics==1.8.0
+[pip3] torchvision==0.25.0.dev20251023
+[conda] numpy                            2.2.0               pypi_0              pypi
+[conda] pytorch-lightning                2.5.2               pypi_0              pypi
+[conda] torch                            2.10.0.dev20251023  pypi_0              pypi
+[conda] torchaudio                       2.10.0.dev20251023  pypi_0              pypi
+[conda] torchmetrics                     1.8.0               pypi_0              pypi
+[conda] torchvision                      0.25.0.dev20251023  pypi_0              pypi
+
+cc @
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

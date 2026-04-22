@@ -1,0 +1,64 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Failed to change backward stream
+    - issue_id: 164094
+    - bug_description: in [pytorch cuda semantic ](https://docs.pytorch.org/docs/stable/notes/cuda.html#stream-semantics-of-backward-passes)
+> Each backward CUDA op runs on the same stream that was used for its corresponding forward op. If your forward pass runs independent ops in parallel on different streams, this helps the backward pass exploit that same parallelism.
+
+
+I currently have a requirement to run the backward pass on a different stream. I implemented an `autograd.Function` node and used `torch.cuda.set_stream()` in its backward method to switch streams, but I observed in the nsys timeline that the backward still runs on the same stream as the forward. Is there any way to force PyTorch’s backward to use a different CUDA stream than the forward?
+
+```
+class BackwardStream(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input_tensor: torch.Tensor, stream: torch.cuda.Stream) -> torch.Tensor:
+        ctx.stream = stream
+        return input_tensor
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
+        stream = ctx.stream
+        stream.wait_stream(torch.cuda.current_stream())
+        torch.cuda.set_stream(stream)
+        return grad_output
+    
+```
+
+cc @ezyang @albanD @gqchen @nikitaved @soulitzer @Varal7 @xmfan
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

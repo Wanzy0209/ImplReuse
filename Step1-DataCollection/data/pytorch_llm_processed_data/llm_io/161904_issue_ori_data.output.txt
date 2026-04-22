@@ -1,0 +1,83 @@
+Let me analyze the GitHub issue and extract the structured information as requested.
+
+From the input, I can see:
+
+1. **title**: "ZeroBubble and DualPipeV pipeline parallel schedules fail with torch.compiled model"
+
+2. **issue_id**: 161904
+
+3. **bug_description**: The issue describes that ZeroBubble and DualPipeV schedules don't seem to be compatible with models that are `torch.compiled`. The user provides a minimal reproducible example following the TorchTitan code base.
+
+4. **repro_code**: There's a complete Python script provided that demonstrates the issue.
+
+5. **repro_output**: Not explicitly provided in the input.
+
+6. **trigger_conditions**:
+   - backend: CUDA (mentioned in the code with `torch.device("cuda", local_rank)`)
+   - dtype: Not explicitly mentioned
+   - input_shape: `torch.randint(0, 128, (8, 4096), device=device)` - so input shape is (8, 4096)
+   - other_conditions: Using `torch.compiled` models, using pipeline parallel with PP_DEGREE=2, using schedules "ZBVZeroBubble" or "DualPipeV"
+
+7. **affected_api**: The issue involves `torch.distributed.pipelining.schedules.get_schedule_class`, `torch.compile`, and pipeline parallel schedules.
+
+8. **environment**: Not explicitly mentioned in the input.
+
+9. **labels**: Not explicitly mentioned in the input.
+
+Let me structure this into the requested JSON format:
+
+```json
+{
+  "title": "ZeroBubble and DualPipeV pipeline parallel schedules fail with torch.compiled model",
+  "error_description": "The ZeroBubble and DualPipeV schedules don't seem to be compatible with models that are `torch.compiled`.",
+  "repro_code": "\"\"\"\nRun:\n\ntorchrun --nproc_per_node=2 repro.py\n\"\"\"\n\nimport torch\nfrom torch.distributed.device_mesh import init_device_mesh\nfrom torch.distributed.pipelining import PipelineStage\nfrom torch.distributed.pipelining.schedules import get_schedule_class\nimport torch.nn as nn\nfrom torchtitan.distributed.pipeline_parallel import pipeline_module_split\n\nPP_DEGREE = 2\nSCHEDULE_NAME = \"ZBVZeroBubble\"  # or \"DualPipeV\"\n\n\nclass Transformer(nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.tok_embeddings = nn.Embedding(128, 32)\n        self.layers = torch.nn.ModuleDict()\n        for layer_id in range(4):\n            self.layers[str(layer_id)] = nn.Linear(32, 32, bias=False)\n        self.output = nn.Linear(32, 128, bias=False)\n\n    def forward(self, x):\n        x = self.tok_embeddings(x) if self.tok_embeddings else x\n        for layer in self.layers.values():\n            x = layer(x)\n        return self.output(x) if self.output else x\n\n\ndef main() -> None:\n    local_rank = torch.distributed.get_node_local_rank()\n    device = torch.device(\"cuda\", local_rank)\n    torch.distributed.init_process_group(\"nccl\")\n    mesh = init_device_mesh(\"cuda\", (2,), mesh_dim_names=(\"pp\",))\n\n    with torch.device(\"meta\"):\n        model = Transformer()\n\n    pp_schedule, model_parts, has_first_stage, has_last_stage = pipeline_transformer(\n        model,\n        mesh,\n        device,\n        parallelize_transformer,\n        loss_fn,\n    )\n    for m in model_parts:\n        m.to_empty(device=device)\n        m.train()\n\n    input_ids = torch.randint(0, 128, (8, 4096), device=device)\n    labels = input_ids.clone()\n\n    losses: list[torch.Tensor] | None\n    targets, losses = (labels, []) if has_last_stage else (None, None)\n    if has_first_stage:\n        pp_schedule.step(\n            input_ids,\n            target=targets,\n            losses=losses,\n        )\n    else:\n        pp_schedule.step(\n            target=targets,\n            losses=losses,\n        )\n\n\ndef pipeline_transformer(\n    model: nn.Module,\n    world_mesh,\n    device: torch.device,\n    parallelize_fn,\n    loss_fn,\n):\n    pp_mesh = world_mesh[\"pp\"]\n    module_names_per_stage = [\n        [\"tok_embeddings\", \"layers.0\"],\n        [\"layers.1\", \"layers.2\"],\n        [\"layers.3\"],\n        [\"norm\", \"output\"],\n    ]\n\n    stages, model_parts = pipeline_module_split(\n        model,\n        pp_mesh,\n        SCHEDULE_NAME,\n        device,\n        module_names_per_stage,\n    )\n\n    for i, m in enumerate(model_parts):\n        m = parallelize_fn(m)\n        model_parts[i] = m\n        stages[i].submod = m\n\n    pp_schedule = build_pipeline_schedule(stages, loss_fn)\n\n    has_first_stage = False\n    has_last_stage = False\n    for stage in stages:\n        if stage.is_first:\n            has_first_stage = True\n        if stage.is_last:\n            has_last_stage = True\n\n    return pp_schedule, model_parts, has_first_stage, has_last_stage\n\n\ndef build_pipeline_schedule(stages: list[PipelineStage], loss_fn):\n    microbatch_size = 1  # job_config.parallelism.pipeline_parallel_microbatch_size\n    batch_size = 8\n    assert batch_size % microbatch_size == 0\n    n_microbatches = batch_size // microbatch_size\n    num_total_stages = PP_DEGREE * len(stages)\n    assert n_microbatches >= num_total_stages\n    schedule_class = get_schedule_class(SCHEDULE_NAME)\n    return schedule_class(\n        stages,\n        n_microbatches=n_microbatches,\n        loss_fn=loss_fn,\n    )\n\n\ndef parallelize_transformer(model: nn.Module, compile=True) -> nn.Module:\n    if compile:\n        torch._functorch.config.donated_buffer = False  # why needed?\n        # apply_ac(model, job_config.activation_checkpoint)\n        # apply_compile(model)\n        for layer_id, transformer_block in model.layers.named_children():",
+  "repro_output": "",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "unknown",
+    "input_shape": "(8, 4096)",
+    "other_conditions": "Using torch.compiled models, using pipeline parallel with PP_DEGREE=2, using schedules \"ZBVZeroBubble\" or \"DualPipeV\""
+  },
+  "affected_api": "torch.distributed.pipelining.schedules.get_schedule_class, torch.compile",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "unknown"
+  },
+  "labels": []
+}
+```
+
+Wait, I notice the code is cut off at the end. Let me check the input again... The input ends with `for layer_id, transformer_block in model.layers.named_children():` which is incomplete. I should include what's provided.
+
+Also, I need to be careful about what's explicitly stated. Let me re-read:
+
+- The bug description says "The ZeroBubble and DualPipeV schedules don't seem to be compatible with models that are `torch.compiled`."
+- The code shows `SCHEDULE_NAME = "ZBVZeroBubble"  # or "DualPipeV"`
+- The code uses `torch.device("cuda", local_rank)` so CUDA is the backend
+- Input shape is `(8, 4096)` from `torch.randint(0, 128, (8, 4096), device=device)`
+- The code mentions `torch._functorch.config.donated_buffer = False` which seems to be a workaround
+
+Let me finalize the JSON:```json
+{
+  "title": "ZeroBubble and DualPipeV pipeline parallel schedules fail with torch.compiled model",
+  "error_description": "The ZeroBubble and DualPipeV schedules don't seem to be compatible with models that are `torch.compiled`.",
+  "repro_code": "\"\"\"\nRun:\n\ntorchrun --nproc_per_node=2 repro.py\n\"\"\"\n\nimport torch\nfrom torch.distributed.device_mesh import init_device_mesh\nfrom torch.distributed.pipelining import PipelineStage\nfrom torch.distributed.pipelining.schedules import get_schedule_class\nimport torch.nn as nn\nfrom torchtitan.distributed.pipeline_parallel import pipeline_module_split\n\nPP_DEGREE = 2\nSCHEDULE_NAME = \"ZBVZeroBubble\"  # or \"DualPipeV\"\n\n\nclass Transformer(nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.tok_embeddings = nn.Embedding(128, 32)\n        self.layers = torch.nn.ModuleDict()\n        for layer_id in range(4):\n            self.layers[str(layer_id)] = nn.Linear(32, 32, bias=False)\n        self.output = nn.Linear(32, 128, bias=False)\n\n    def forward(self, x):\n        x = self.tok_embeddings(x) if self.tok_embeddings else x\n        for layer in self.layers.values():\n            x = layer(x)\n        return self.output(x) if self.output else x\n\n\ndef main() -> None:\n    local_rank = torch.distributed.get_node_local_rank()\n    device = torch.device(\"cuda\", local_rank)\n    torch.distributed.init_process_group(\"nccl\")\n    mesh = init_device_mesh(\"cuda\", (2,), mesh_dim_names=(\"pp\",))\n\n    with torch.device(\"meta\"):\n        model = Transformer()\n\n    pp_schedule, model_parts, has_first_stage, has_last_stage = pipeline_transformer(\n        model,\n        mesh,\n        device,\n        parallelize_transformer,\n        loss_fn,\n    )\n    for m in model_parts:\n        m.to_empty(device=device)\n        m.train()\n\n    input_ids = torch.randint(0, 128, (8, 4096), device=device)\n    labels = input_ids.clone()\n\n    losses: list[torch.Tensor] | None\n    targets, losses = (labels, []) if has_last_stage else (None, None)\n    if has_first_stage:\n        pp_schedule.step(\n            input_ids,\n            target=targets,\n            losses=losses,\n        )\n    else:\n        pp_schedule.step(\n            target=targets,\n            losses=losses,\n        )\n\n\ndef pipeline_transformer(\n    model: nn.Module,\n    world_mesh,\n    device: torch.device,\n    parallelize_fn,\n    loss_fn,\n):\n    pp_mesh = world_mesh[\"pp\"]\n    module_names_per_stage = [\n        [\"tok_embeddings\", \"layers.0\"],\n        [\"layers.1\", \"layers.2\"],\n        [\"layers.3\"],\n        [\"norm\", \"output\"],\n    ]\n\n    stages, model_parts = pipeline_module_split(\n        model,\n        pp_mesh,\n        SCHEDULE_NAME,\n        device,\n        module_names_per_stage,\n    )\n\n    for i, m in enumerate(model_parts):\n        m = parallelize_fn(m)\n        model_parts[i] = m\n        stages[i].submod = m\n\n    pp_schedule = build_pipeline_schedule(stages, loss_fn)\n\n    has_first_stage = False\n    has_last_stage = False\n    for stage in stages:\n        if stage.is_first:\n            has_first_stage = True\n        if stage.is_last:\n            has_last_stage = True\n\n    return pp_schedule, model_parts, has_first_stage, has_last_stage\n\n\ndef build_pipeline_schedule(stages: list[PipelineStage], loss_fn):\n    microbatch_size = 1  # job_config.parallelism.pipeline_parallel_microbatch_size\n    batch_size = 8\n    assert batch_size % microbatch_size == 0\n    n_microbatches = batch_size // microbatch_size\n    num_total_stages = PP_DEGREE * len(stages)\n    assert n_microbatches >= num_total_stages\n    schedule_class = get_schedule_class(SCHEDULE_NAME)\n    return schedule_class(\n        stages,\n        n_microbatches=n_microbatches,\n        loss_fn=loss_fn,\n    )\n\n\ndef parallelize_transformer(model: nn.Module, compile=True) -> nn.Module:\n    if compile:\n        torch._functorch.config.donated_buffer = False  # why needed?\n        # apply_ac(model, job_config.activation_checkpoint)\n        # apply_compile(model)\n        for layer_id, transformer_block in model.layers.named_children():",
+  "repro_output": "",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "unknown",
+    "input_shape": "(8, 4096)",
+    "other_conditions": "Using torch.compiled models, using pipeline parallel with PP_DEGREE=2, using schedules \"ZBVZeroBubble\" or \"DualPipeV\""
+  },
+  "affected_api": "torch.distributed.pipelining.schedules.get_schedule_class, torch.compile",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "unknown"
+  },
+  "labels": []
+}
+```

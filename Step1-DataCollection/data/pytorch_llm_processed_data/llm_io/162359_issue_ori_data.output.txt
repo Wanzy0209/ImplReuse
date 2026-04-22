@@ -1,0 +1,56 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: SequentialLR aliases lr Tensor with initial_lr, corrupting base_lrs for chained schedulers
+
+**Issue ID**: 162359
+
+**Bug Description**: 
+The issue describes a bug where:
+1. When using an optimizer with a Tensor learning rate (as recommended to avoid recompilation), `SequentialLR.__init__` assigns `group["lr"] = group["initial_lr"]`, which aliases the tensors.
+2. The initial step of the first scheduler writes the lr in-place, which mutates the `initial_lr` and all chained schedulers' `base_lrs` that reference it.
+3. Chained schedulers which rely on `base_lrs` therefore start from the wrong base (e.g., scaled by `start_factor` if using a `LinearLR` first).
+
+The example shows that when using a Tensor learning rate and `SequentialLR` with `schedulers=[LinearLR, CosineAnnealingLR]`, the `base_lrs` of chained schedulers (and thus `CosineAnnealingLR` outputs) are scaled by the `LinearLR`'s `start_factor`.
+
+**Repro Code**: There's a complete reproduction script provided in the issue.
+
+**Repro Output**: The issue mentions that the output shows the `base_lrs` of chained schedulers are scaled by the `LinearLR`'s `start_factor`, causing incorrect behavior. There are also images showing the incorrect vs correct schedule.
+
+**Trigger Conditions**:
+- backend: Not explicitly mentioned
+- dtype: Not explicitly mentioned (though using Tensor learning rate)
+- input_shape: Not explicitly mentioned
+- other_conditions: Using an optimizer with a Tensor learning rate, using SequentialLR with chained schedulers
+
+**Affected API**: `torch.optim.lr_scheduler.SequentialLR`
+
+**Environment**:
+- PyTorch version: 2.8.0
+
+
+- Python version: 3.13.7
+- OS: macOS 15.6.1 (arm64)
+- Hardware: Not explicitly mentioned (but arm64 suggests Apple Silicon)
+
+I'll focus on the key environmental details for reproducing the issue. The specific Python version and macOS architecture are critical for understanding the potential compatibility constraints. The arm64 hardware indicates this is likely an Apple Silicon-based system, which could have unique performance or compatibility considerations.```json
+{
+  "title": "SequentialLR aliases lr Tensor with initial_lr, corrupting base_lrs for chained schedulers",
+  "error_description": "When using an optimizer with a Tensor learning rate, SequentialLR.__init__ assigns group[\"lr\"] = group[\"initial_lr\"], aliasing the tensors. The initial step of the first scheduler writes the lr in-place, which mutates the initial_lr and all chained schedulers' base_lrs that reference it. Chained schedulers which rely on base_lrs therefore start from the wrong base (e.g., scaled by start_factor if using a LinearLR first).",
+  "repro_code": "import torch\nfrom torch import optim\nimport matplotlib.pyplot as plt\n\n# 1. Use a tensor learning rate. The choice of optimizer doesn't matter.\nlr = 1.0\nx = torch.tensor(0.0, device='meta')\nopt = optim.AdamW([x], lr=torch.tensor(lr))\n\n# 2. Initialize our chained schedulers.\nmilestone, total_steps = 40, 100\nstart_factor, end_factor = 0.2, 1.0\nwarmup = optim.lr_scheduler.LinearLR(opt, start_factor, end_factor, total_iters=milestone)\ndecay = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=total_steps-milestone)\n\n# Note that each scheduler's base_lr aliases with the optimizer's initial_lr.\nassert warmup.base_lrs[0].is_set_to(opt.param_groups[0]['initial_lr'])\nassert decay.base_lrs[0].is_set_to(opt.param_groups[0]['initial_lr'])\n\n# 3. Initialize our SequentialLR.\nscheduler = optim.lr_scheduler.SequentialLR(opt, schedulers=[warmup, decay], milestones=[milestone])\n\n# SequentialLR.__init__ aliases our optimizer's lr and initial_lr.\n# for group in self.optimizer.param_groups:\n#     group[\"lr\"] = group[\"initial_lr\"]\nassert opt.param_groups[0]['lr'].is_set_to(opt.param_groups[0]['initial_lr'])\n\n# Which means they're also aliased with the base_lrs of each scheduler!\nassert (warmup.base_lrs[0].data_ptr() \n    == decay.base_lrs[0].data_ptr()\n    == opt.param_groups[0]['initial_lr'].data_ptr() \n    == opt.param_groups[0]['lr'].data_ptr())\n\n# It also calls _initial_step() on our LinearLR, setting all tensors to start_factor * lr.\nassert (start_factor * lr\n    == opt.param_groups[0]['lr']\n    == opt.param_groups[0]['initial_lr']\n    == warmup.base_lrs[0]\n    == decay.base_lrs[0])\n\n# 4. Now if we do something which breaks the aliases, e.g. save/load the optimizer's state_dict...\nopt.load_state_dict(opt.state_dict())\nassert not warmup.base_lrs[0].data_ptr() == opt.param_groups[0]['initial_lr'].data_ptr()\n\n# Our base_lrs are incorrect. The LinearLR will work as intended (since get_lr updates based on the\n# previous iteration, not base_lr), but the outputs of further schedulers are incorrectly scaled by \n# start_factor. In our case, these are the outputs of CosineAnnealingLR which appear after the milestone.\nlrs = []\nfor step in range(total_steps):\n    scheduler.step()\n    lrs.append(scheduler.get_last_lr()[0].item())\n\nplt.plot(lrs)\nplt.show()",
+  "repro_output": "",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "",
+    "other_conditions": "Using an optimizer with a Tensor learning rate, using SequentialLR with chained schedulers (e.g., LinearLR followed by CosineAnnealingLR)"
+  },
+  "affected_api": "torch.optim.lr_scheduler.SequentialLR",
+  "environment": {
+    "pytorch_version": "2.8.0",
+    "python_version": "3.13.7",
+    "os": "macOS 15.6.1 (arm64)",
+    "hardware": ""
+  },
+  "labels": []
+}
+```

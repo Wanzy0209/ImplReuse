@@ -1,0 +1,120 @@
+Let me analyze the GitHub issue and extract the structured information as requested.
+
+From the input, I can extract:
+
+1. **title**: "Severe Memory Leak in Dataloader on Windows when using a long-live/infinite iterator"
+
+2. **error_description**: The bug description states there's a significant and consistent memory leak in PyTorch `DataLoader` on Windows when the iterator is kept alive for many steps (e.g., in an "infinite" sampling loop). Key characteristics:
+   - System RAM continuously increases until crash/unresponsiveness
+   - Occurs with `num_workers=0` (not multiprocessing-related)
+   - Occurs with `pin_memory=False` (not CUDA pinned memory related)
+   - With `pin_memory=True`: Shared GPU Memory increases continuously, leading to CUDA OOM
+   - `gc.collect()` doesn't free the memory (suggests C++ component leak)
+   - Independent of I/O library (reproduced with OpenCV and torchvision.io.read_image)
+   - Standard finite-epoch training loop does NOT leak memory
+   - Suggests DataLoaderIterator accumulates native resources only released on destruction
+
+3. **repro_code**: There's a Python script provided, but it appears to be cut off (ends with `while True: in`). I should include what's provided.
+
+4. **repro_output**: Not explicitly mentioned in the input.
+
+5. **trigger_conditions**:
+   - backend: Not explicitly mentioned, but CUDA is mentioned in context
+   - dtype: Not explicitly mentioned
+   - input_shape: Not explicitly mentioned
+   - other_conditions: Windows platform, long-live/infinite iterator, DataLoader with infinite sampler
+
+6. **affected_api**: `DataLoader`, `DataLoaderIterator`
+
+7. **environment**:
+   - pytorch_version: Not explicitly mentioned
+   - python_version: Not explicitly mentioned
+   - os: Windows
+   - hardware: Not explicitly mentioned (but GPU is mentioned in context)
+
+8. **labels**: Not explicitly provided in the input
+
+Let me format this as JSON:
+
+```json
+{
+  "title": "Severe Memory Leak in Dataloader on Windows when using a long-live/infinite iterator",
+  "error_description": "There appears to be a significant and consistent memory leak in the PyTorch `DataLoader` on the Windows platform. The leak occurs specifically when the DataLoader's iterator is kept alive for a large number of steps (e.g., in an \"infinite\" sampling loop for step-based training). System RAM continuously increases until the program crashes or the system becomes unresponsive. The leak occurs even when `num_workers=0`, indicating it is not a multiprocessing-related issue. The leak occurs even when pin_memory=False, indicating it is not related to CUDA pinned memory. With pin_memory=True: The Shared GPU Memory (as reported by Windows Task Manager) continuously increases, even if no tensors are ever moved to a CUDA device. This eventually leads to a CUDA out of memory error, while the dedicated GPU memory remains unused. Explicitly calling gc.collect() does not free the leaked memory, suggesting the leak is happening in a lower-level, native (C++) component, not in Python's managed memory. The leak is independent of the underlying I/O library, as it has been reproduced with both `OpenCV (cv2)` and `torchvision.io.read_image`. Crucially, a standard, finite-epoch training loop (for epoch in ...: for batch in dataloader: ...) does not leak memory. This evidence strongly suggests that the DataLoaderIterator object accumulates native resources during its lifetime that are only released upon its destruction. In an infinite loop, the iterator is never destroyed, causing the resources to leak continuously.",
+  "repro_code": "import torch\nfrom torch.utils.data import Sampler, DataLoader, Dataset\nimport itertools\nimport random\nimport gc\nimport cv2\nimport numpy as np\nfrom pathlib import Path\n\nIMG_EXTENSIONS = (\".jpg\", \".jpeg\", \".png\", \".ppm\", \".bmp\", \".pgm\", \".tif\", \".tiff\", \".webp\")\n\ndef is_image_file(filename: str | Path) -> bool:\n    filename = Path(filename)\n    return filename.suffix.lower() in IMG_EXTENSIONS\n\ndef read_image(path: str | Path, as_tensor: bool = False) -> torch.Tensor | np.ndarray:\n    image = cv2.imread(str(path), cv2.IMREAD_COLOR)\n    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)\n    image = image.astype(np.float32) / 255.0\n    if as_tensor:\n        return torch.from_numpy(image).permute(2, 0, 1)\n    return image\n\ndef read_mask(path: str | Path, as_tensor: bool = False) -> torch.Tensor | np.ndarray:\n    mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)\n    mask = mask.astype(np.int8)\n    if as_tensor:\n        mask = torch.from_numpy(mask)\n    return mask\n\nclass SegDataset(Dataset):\n    \"\"\"Maks dataset for segmentation.\"\"\"\n    \n    def __init__(\n        self, \n        image_dir: str | Path,\n        mask_dir: str | Path, \n    ):\n        super().__init__()\n        self.image_dir = Path(image_dir)\n        self.mask_dir = Path(mask_dir)\n\n        image_paths = list(self.image_dir.glob(\"*\"))\n        self.image_paths = [i for i in image_paths if is_image_file(i)]\n\n        self.mask_paths = []\n        for img_p in self.image_paths:\n            file_name = os.path.splitext(os.path.basename(img_p))[0]\n            self.mask_paths.append(os.path.join(self.mask_dir, file_name + \".png\"))\n    \n    def __getitem__(self, index):\n        image_path = self.image_paths[index]\n        image = read_image(image_path, as_tensor=True)\n\n        mask_path = self.mask_paths[index]\n        mask = read_mask(mask_path, as_tensor=True)\n        \n        return {\"image\": image, \"mask\": mask.long()}\n    \n    def __len__(self):\n        return len(self.image_paths)\n\n\nclass InfiniteSampler(Sampler):\n    \n    def __init__(self, data_source: Dataset, shuffle: bool = True):\n        self.data_source = data_source\n        self.shuffle = shuffle\n        self.num_samples = len(self.data_source)\n        self.start_index = 0\n\n    def __iter__(self):\n        while True:\n            in",
+  "repro_output": "",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "",
+    "other_conditions": "Windows platform, long-live/infinite iterator, DataLoader with infinite sampler, num_workers=0, pin_memory=False or True"
+  },
+  "affected_api": "DataLoader, DataLoaderIterator",
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "Windows",
+    "hardware": ""
+  },
+  "labels": []
+}
+```
+
+Wait, I need to be more careful. The instructions say "Do NOT infer, speculate, or generate explanations" and "If a field is missing, use empty string."
+
+Let me reconsider:
+- For backend, it's not explicitly stated what backend is being used. CUDA is mentioned in the context of pin_memory, but that's not the same as the backend. I'll leave it empty.
+- For dtype, it's not explicitly mentioned. I'll leave it empty.
+- For input_shape, it's not explicitly mentioned. I'll leave it empty.
+- For other_conditions, I should only include what's explicitly stated. The description mentions "Windows platform", "long-live/infinite iterator", "num_workers=0", "pin_memory=False", "pin_memory=True". These are explicitly stated conditions.
+
+Let me revise:
+
+```json
+{
+  "title": "Severe Memory Leak in Dataloader on Windows when using a long-live/infinite iterator",
+  "error_description": "There appears to be a significant and consistent memory leak in the PyTorch `DataLoader` on the Windows platform. The leak occurs specifically when the DataLoader's iterator is kept alive for a large number of steps (e.g., in an \"infinite\" sampling loop for step-based training). System RAM continuously increases until the program crashes or the system becomes unresponsive. The leak occurs even when `num_workers=0`, indicating it is not a multiprocessing-related issue. The leak occurs even when pin_memory=False, indicating it is not related to CUDA pinned memory. With pin_memory=True: The Shared GPU Memory (as reported by Windows Task Manager) continuously increases, even if no tensors are ever moved to a CUDA device. This eventually leads to a CUDA out of memory error, while the dedicated GPU memory remains unused. Explicitly calling gc.collect() does not free the leaked memory, suggesting the leak is happening in a lower-level, native (C++) component, not in Python's managed memory. The leak is independent of the underlying I/O library, as it has been reproduced with both `OpenCV (cv2)` and `torchvision.io.read_image`. Crucially, a standard, finite-epoch training loop (for epoch in ...: for batch in dataloader: ...) does not leak memory. This evidence strongly suggests that the DataLoaderIterator object accumulates native resources during its lifetime that are only released upon its destruction. In an infinite loop, the iterator is never destroyed, causing the resources to leak continuously.",
+  "repro_code": "import torch\nfrom torch.utils.data import Sampler, DataLoader, Dataset\nimport itertools\nimport random\nimport gc\nimport cv2\nimport numpy as np\nfrom pathlib import Path\n\nIMG_EXTENSIONS = (\".jpg\", \".jpeg\", \".png\", \".ppm\", \".bmp\", \".pgm\", \".tif\", \".tiff\", \".webp\")\n\ndef is_image_file(filename: str | Path) -> bool:\n    filename = Path(filename)\n    return filename.suffix.lower() in IMG_EXTENSIONS\n\ndef read_image(path: str | Path, as_tensor: bool = False) -> torch.Tensor | np.ndarray:\n    image = cv2.imread(str(path), cv2.IMREAD_COLOR)\n    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)\n    image = image.astype(np.float32) / 255.0\n    if as_tensor:\n        return torch.from_numpy(image).permute(2, 0, 1)\n    return image\n\ndef read_mask(path: str | Path, as_tensor: bool = False) -> torch.Tensor | np.ndarray:\n    mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)\n    mask = mask.astype(np.int8)\n    if as_tensor:\n        mask = torch.from_numpy(mask)\n    return mask\n\nclass SegDataset(Dataset):\n    \"\"\"Maks dataset for segmentation.\"\"\"\n    \n    def __init__(\n        self, \n        image_dir: str | Path,\n        mask_dir: str | Path, \n    ):\n        super().__init__()\n        self.image_dir = Path(image_dir)\n        self.mask_dir = Path(mask_dir)\n\n        image_paths = list(self.image_dir.glob(\"*\"))\n        self.image_paths = [i for i in image_paths if is_image_file(i)]\n\n        self.mask_paths = []\n        for img_p in self.image_paths:\n            file_name = os.path.splitext(os.path.basename(img_p))[0]\n            self.mask_paths.append(os.path.join(self.mask_dir, file_name + \".png\"))\n    \n    def __getitem__(self, index):\n        image_path = self.image_paths[index]\n        image = read_image(image_path, as_tensor=True)\n\n        mask_path = self.mask_paths[index]\n        mask = read_mask(mask_path, as_tensor=True)\n        \n        return {\"image\": image, \"mask\": mask.long()}\n    \n    def __len__(self):\n        return len(self.image_paths)\n\n\nclass InfiniteSampler(Sampler):\n    \n    def __init__(self, data_source: Dataset, shuffle: bool = True):\n        self.data_source = data_source\n        self.shuffle = shuffle\n        self.num_samples = len(self.data_source)\n        self.start_index = 0\n\n    def __iter__(self):\n        while True:\n            in",
+  "repro_output": "",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "",
+    "other_conditions": "Windows platform, long-live/infinite iterator, num_workers=0, pin_memory=False, pin_memory=True"
+  },
+  "affected_api": "DataLoader, DataLoaderIterator",
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "Windows",
+    "hardware": ""
+  },
+  "labels": []
+}
+```
+
+Actually, looking at the code more carefully, I see that the code is cut off at "while True:\n            in". This is incomplete code. I should include it as is since that's what's provided in the input.
+
+Also, I notice that the code uses `os.path.splitext` and `os.path.join` but `os` is not imported. This is an error in the provided code, but I should include it as is since I'm only extracting what's explicitly stated.
+
+Let me finalize the JSON:```json
+{
+  "title": "Severe Memory Leak in Dataloader on Windows when using a long-live/infinite iterator",
+  "error_description": "There appears to be a significant and consistent memory leak in the PyTorch `DataLoader` on the Windows platform. The leak occurs specifically when the DataLoader's iterator is kept alive for a large number of steps (e.g., in an \"infinite\" sampling loop for step-based training). System RAM continuously increases until the program crashes or the system becomes unresponsive. The leak occurs even when `num_workers=0`, indicating it is not a multiprocessing-related issue. The leak occurs even when pin_memory=False, indicating it is not related to CUDA pinned memory. With pin_memory=True: The Shared GPU Memory (as reported by Windows Task Manager) continuously increases, even if no tensors are ever moved to a CUDA device. This eventually leads to a CUDA out of memory error, while the dedicated GPU memory remains unused. Explicitly calling gc.collect() does not free the leaked memory, suggesting the leak is happening in a lower-level, native (C++) component, not in Python's managed memory. The leak is independent of the underlying I/O library, as it has been reproduced with both `OpenCV (cv2)` and `torchvision.io.read_image`. Crucially, a standard, finite-epoch training loop (for epoch in ...: for batch in dataloader: ...) does not leak memory. This evidence strongly suggests that the DataLoaderIterator object accumulates native resources during its lifetime that are only released upon its destruction. In an infinite loop, the iterator is never destroyed, causing the resources to leak continuously.",
+  "repro_code": "import torch\nfrom torch.utils.data import Sampler, DataLoader, Dataset\nimport itertools\nimport random\nimport gc\nimport cv2\nimport numpy as np\nfrom pathlib import Path\n\nIMG_EXTENSIONS = (\".jpg\", \".jpeg\", \".png\", \".ppm\", \".bmp\", \".pgm\", \".tif\", \".tiff\", \".webp\")\n\ndef is_image_file(filename: str | Path) -> bool:\n    filename = Path(filename)\n    return filename.suffix.lower() in IMG_EXTENSIONS\n\ndef read_image(path: str | Path, as_tensor: bool = False) -> torch.Tensor | np.ndarray:\n    image = cv2.imread(str(path), cv2.IMREAD_COLOR)\n    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)\n    image = image.astype(np.float32) / 255.0\n    if as_tensor:\n        return torch.from_numpy(image).permute(2, 0, 1)\n    return image\n\ndef read_mask(path: str | Path, as_tensor: bool = False) -> torch.Tensor | np.ndarray:\n    mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)\n    mask = mask.astype(np.int8)\n    if as_tensor:\n        mask = torch.from_numpy(mask)\n    return mask\n\nclass SegDataset(Dataset):\n    \"\"\"Maks dataset for segmentation.\"\"\"\n    \n    def __init__(\n        self, \n        image_dir: str | Path,\n        mask_dir: str | Path, \n    ):\n        super().__init__()\n        self.image_dir = Path(image_dir)\n        self.mask_dir = Path(mask_dir)\n\n        image_paths = list(self.image_dir.glob(\"*\"))\n        self.image_paths = [i for i in image_paths if is_image_file(i)]\n\n        self.mask_paths = []\n        for img_p in self.image_paths:\n            file_name = os.path.splitext(os.path.basename(img_p))[0]\n            self.mask_paths.append(os.path.join(self.mask_dir, file_name + \".png\"))\n    \n    def __getitem__(self, index):\n        image_path = self.image_paths[index]\n        image = read_image(image_path, as_tensor=True)\n\n        mask_path = self.mask_paths[index]\n        mask = read_mask(mask_path, as_tensor=True)\n        \n        return {\"image\": image, \"mask\": mask.long()}\n    \n    def __len__(self):\n        return len(self.image_paths)\n\n\nclass InfiniteSampler(Sampler):\n    \n    def __init__(self, data_source: Dataset, shuffle: bool = True):\n        self.data_source = data_source\n        self.shuffle = shuffle\n        self.num_samples = len(self.data_source)\n        self.start_index = 0\n\n    def __iter__(self):\n        while True:\n            in",
+  "repro_output": "",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "",
+    "other_conditions": "Windows platform, long-live/infinite iterator, num_workers=0, pin_memory=False, pin_memory=True"
+  },
+  "affected_api": "DataLoader, DataLoaderIterator",
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "Windows",
+    "hardware": ""
+  },
+  "labels": []
+}
+```

@@ -1,0 +1,151 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Inconsistent output with same input using equivalent block masks created via different methods in Flex Attention
+    - issue_id: 165838
+    - bug_description: ### 🐛 Describe the bug
+
+I observed that Flex Attention produces different outputs when using logically identical block masks created through different implementations.
+
+For example, the following two functions both create equivalent causal masks in logic:
+```python
+def block_mask_fn_1(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):
+    causal_mask = (q >= kv)
+    return causal_mask
+
+def block_mask_fn_2(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):
+    causal_mask = hand_made_causal_mask[q, kv]
+    return causal_mask
+```
+However, the outputs can differ even when the inputs are fixed.
+This discrepancy does not always occur — it happens around 6 times out of 500 when `seq_len = 16`, but becomes much worse at longer sequence lengths (370 out of 500 when `seq_len = 2048`).
+
+
+**Environment**
+PyTorch:  2.10.0.dev20250914+cu128
+GPU: L20 x1
+
+This is the code to reproduce this problem.
+```python
+from typing import Union
+import torch
+from torch import Tensor
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+
+compiled_flex_attention_hf = torch.compile(flex_attention,fullgraph=True)
+def block_mask_fn_1(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):
+    causal_mask = (q >= kv)
+    return causal_mask
+
+def block_mask_fn_2(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):
+    causal_mask = hand_made_causal_mask[q, kv]
+    return causal_mask
+
+seq_len = 2048
+query_head = 16
+kv_head = 8
+head_dim = 128
+
+kernel_options: dict[str, Union[int, bool]] = {
+        "FORCE_USE_FLEX_ATTENTION": True,
+        "BLOCK_M": 16,
+        "BLOCK_N": 16,
+        "IS_DIVISIBLE": False,
+    }
+
+attention_mask = torch.ones((1, seq_len), dtype=torch.bool).cuda()
+# hand made causal mask
+hand_made_causal_mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=attention_mask.device))
+
+for i in range(500):
+    query_hf = torch.randn((1, query_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()
+    key_hf = torch.randn((1, kv_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()
+    value_hf = torch.randn((1, kv_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()
+
+    print('-'*50)
+    # first method to create block mask
+    block_mask_hf_1 = create_block_mask(block_mask_fn_1, 1, None, seq_len, seq_len, BLOCK_SIZE=(16, 16), device='cuda')
+    y1 = compiled_flex_attention_hf(query_hf,key_hf,
+            value_hf,
+            block_mask=block_mask_hf_1,
+            scale=None,
+            enable_gqa=True,
+            score_mod=None,
+            kernel_options=kernel_options,
+        )
+    # second method to create block mask
+    block_mask_hf_2 = create_block_mask(block_mask_fn_2, 1, None, seq_len, seq_len, BLOCK_SIZE=(16, 16), device='cuda')
+    y2 = compiled_flex_attention_hf(
+            query_hf,
+            key_hf,
+            value_hf,
+            block_mask=block_mask_hf_2,
+            scale=None,
+            enable_gqa=True,
+            score_mod=None,
+            kernel_options=kernel_options,
+        )
+    print('Different element count',torch.sum((y1-y2)!=0), 'Sum difference', (y1.float().sum()-y2.float().sum()).abs())
+```
+
+### Versions
+
+PyTorch version: 2.10.0.dev20250914+cu128
+Is debug build: False
+CUDA used to build PyTorch: 12.8
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.5 LTS (x86_64)
+GCC version: (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0
+Clang version: Could not collect
+CMake version: version 4.1.0
+Libc version: glibc-2.35
+
+Python version: 3.12.3 | packaged by Anaconda, Inc. | (main, May  6 2024, 19:46:43) [GCC 11.2.0] (64-bit runtime)
+Python platform: Linux-5.15.0-91-generic-x86_64-with-glibc2.35
+Is CUDA available: True
+CUDA runtime version: 12.8.93
+CUDA_MODULE_LOADING set to: 
+GPU models and configuration: GPU 0: NVIDIA L20
+Nvidia driver version: 580.65.06
+cuDNN version: Probably one of the following:
+/usr/lib/x86_64-linux-gnu/libcudnn.so.9.8.0
+/usr/lib/x86_64-linux-gnu/libcudnn_adv.so.9.8.0
+/usr/lib/x86_64-linux-gnu/libcudnn_cnn.so.9.8.0
+/usr/lib/x86_64-linux-gnu/libcudnn_engines_precompiled.so.9
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

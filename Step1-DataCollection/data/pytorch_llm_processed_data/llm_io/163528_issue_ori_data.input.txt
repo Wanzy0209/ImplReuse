@@ -1,0 +1,129 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: torch.compile don't work with searchsorted
+    - issue_id: 163528
+    - bug_description: ### 🐛 Describe the bug
+
+I discovered that torch.searchsorted is not working correctly when used with torch.compile on gpu. Everything looks like working fine on cpu.
+```python
+import torch
+from torch import nn
+
+class Foo(nn.Module):
+    def __init__(
+        self,
+        quantiles: torch.Tensor,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        self.q = nn.Parameter(quantiles, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.searchsorted(self.q, x.T).T
+    
+
+def test_device(device, x, quantiles):
+    x = x.to(device)
+    quantiles = quantiles.to(device)
+    foo = Foo(quantiles).to(device)
+    foo_compiled = torch.compile(Foo(quantiles).to(device), fullgraph=True)
+
+    # warm up
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+
+    # proper inference
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    print(f'device: {device}, diff: {torch.max(torch.abs(y_original - y_compiled)).item()}')
+    print('orignal',y_original[:5, :5])
+    print('compiled',y_compiled[:5, :5])
+    
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    quantile_size = 100
+    torch.manual_seed(42)
+    x = torch.randn(batch_size, feature_dim, dtype=torch.float32)
+    quantiles = torch.randn(quantile_size, feature_dim, dtype=torch.float32)
+    quantiles = torch.sort(quantiles, dim=0)[0]
+    test_device('cpu', x, quantiles)
+    test_device('cuda', x, quantiles)
+
+main()
+```
+
+output i got:
+```
+device: cpu, diff: 0
+orignal tensor([[99, 91, 77,  3, 77],
+        [35,  9, 20, 31, 20],
+        [23, 84, 74, 94, 95],
+        [44, 83,  2, 23, 39],
+        [ 7, 84, 12, 29, 15]])
+compiled tensor([[99, 91, 77,  3, 77],
+        [35,  9, 20, 31, 20],
+        [23, 84, 74, 94, 95],
+        [44, 83,  2, 23, 39],
+        [ 7, 84, 12, 29, 15]])
+device: cuda, diff: 99
+orignal tensor([[99, 91, 77,  3, 77],
+        [35,  9, 20, 31, 20],
+        [23, 84, 74, 94, 95],
+        [44, 83,  2, 23, 39],
+        [ 7, 84, 12, 29, 15]], device='cuda:0')
+compiled tensor([[0, 0, 0, 1, 0],
+        [1, 1, 1, 1, 1],
+        [1, 0, 0, 0, 0],
+        [1, 0, 1, 1, 1],
+        [1, 0, 1, 1, 1]], device='cuda:0')
+```
+
+### Versions
+
+torch==2.8.0
+
+cc @ezyang @gchanan @zou3519 @kadeng @msaroufim @chauhang @penguinwu @voznesenskym @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @ipiszy @chenyang78 @muchulee8 @amjames @aakhundov @coconutruben
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

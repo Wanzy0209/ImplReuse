@@ -1,0 +1,93 @@
+Let me analyze the GitHub issue to extract the structured information.
+
+**Title**: [DTensor] Inplace ops preduces wrong result
+
+**Issue ID**: 163374
+
+**Bug Description**: The issue describes a problem with DTensor's inplace operations producing incorrect results. Specifically:
+1. After calling `clamp_()` on a partial DTensor, the placement is wrong - it remains `Partial(sum)` instead of becoming `Replicate()`
+2. The tensor output value is wrong (outputs 144. instead of expected 2.)
+3. The `_local_tensor` value is also wrong
+
+**Repro Code**: The issue provides a complete reproducible code snippet:
+```python
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import torch
+from torch import distributed as dist
+from torch.utils.debug_mode import DebugMode
+
+
+if __name__ == '__main__':
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    partial_dt = in_dtensor.sum()
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        out = partial_dt.clamp_(max=2)
+        full = out.full_tensor()
+
+    if rank == 0:
+        print(debug_mode.debug_string())
+        # redistribute_input(0, [P] -> [R])
+        #   _c10d_functional::all_reduce(t: f32[], sum, 0)
+        #   _c10d_functional::wait_tensor(t: f32[])
+        #   aten::clamp_(t: f32[], None, 2)
+        # _c10d_functional::all_reduce(t: f32[], sum, 0)
+        # _c10d_functional::wait_tensor(t: f32[])
+        #   aten::view(t: f32[], [])
+
+        print(out.placements)
+        # (Partial(sum),)
+        # Expected (Replicate(),)
+
+        print(full)
+        # tensor(144., device='cuda:0')
+        # Expected tensor(2., device='cuda:0')
+```
+
+**Repro Output**: 
+- `out.placements` prints `(Partial(sum),)` but expected `(Replicate(),)`
+- `full` prints `tensor(144., device='cuda:0')` but expected `tensor(2., device='cuda:0')`
+
+**Trigger Conditions**:
+- backend: nccl
+- dtype: f32 (float32, default for torch.ones)
+- input_shape: (12, 12)
+- other_conditions: Using DTensor with Shard(0) distribution, then sum() to get partial, then clamp_() operation
+
+**Affected API**: `DTensor.clamp_()` (inplace clamp operation on DTensor)
+
+**Environment**:
+- pytorch_version: unknown (not specified)
+- python_version: unknown (not specified)
+- os: unknown (not specified)
+- hardware: cuda (GPU)
+
+**Labels**: Not explicitly provided in the issue, so I'll leave this empty.
+
+Let me format this as JSON:```json
+{
+  "title": "[DTensor] Inplace ops preduces wrong result",
+  "error_description": "Placement is wrong, it should be replicated, instead of Partial(sum). Tensor output value is also wrong. _local_tensor value is also wrong.",
+  "repro_code": "from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate\nimport torch\nfrom torch import distributed as dist\nfrom torch.utils.debug_mode import DebugMode\n\n\nif __name__ == '__main__':\n    dist.init_process_group(backend=\"nccl\", world_size=2)\n    rank = dist.get_rank()\n    mesh = init_device_mesh('cuda', (2,))\n\n    tensor = torch.ones(12, 12, device=\"cuda\")\n    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) \n\n    partial_dt = in_dtensor.sum()\n    with DebugMode(record_torchfunction=False) as debug_mode:\n        out = partial_dt.clamp_(max=2)\n        full = out.full_tensor()\n\n    if rank == 0:\n        print(debug_mode.debug_string())\n        # redistribute_input(0, [P] -> [R])\n        #   _c10d_functional::all_reduce(t: f32[], sum, 0)\n        #   _c10d_functional::wait_tensor(t: f32[])\n        #   aten::clamp_(t: f32[], None, 2)\n        # _c10d_functional::all_reduce(t: f32[], sum, 0)\n        # _c10d_functional::wait_tensor(t: f32[])\n        #   aten::view(t: f32[], [])\n\n        print(out.placements)\n        # (Partial(sum),)\n        # Expected (Replicate(),)\n\n        print(full)\n        # tensor(144., device='cuda:0')\n        # Expected tensor(2., device='cuda:0')",
+  "repro_output": "out.placements prints (Partial(sum),) but expected (Replicate(),). full prints tensor(144., device='cuda:0') but expected tensor(2., device='cuda:0')",
+  "trigger_conditions": {
+    "backend": "nccl",
+    "dtype": "f32",
+    "input_shape": "(12, 12)",
+    "other_conditions": "Using DTensor with Shard(0) distribution, then sum() to get partial, then clamp_() operation"
+  },
+  "affected_api": "DTensor.clamp_()",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "cuda"
+  },
+  "labels": []
+}
+```

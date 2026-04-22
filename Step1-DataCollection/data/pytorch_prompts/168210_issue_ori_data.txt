@@ -1,0 +1,153 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: coredump for aoti_compile_and_package
+    - issue_id: 168210
+    - bug_description: ### 🐛 Describe the bug
+
+A coredump occurred while using the `torch._inductor.aoti_compile_and_package` and `torch._inductor.aoti_load_package` interfaces. The test script is as follows.
+```python
+import copy
+import math
+import torch
+import argparse
+from transformers import (
+    AutoConfig,
+    AutoModelForQuestionAnswering,
+    AutoTokenizer,
+)
+
+torch.backends.cudnn.allow_tf32=False
+
+parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
+parser.add_argument('-b', '--batch-size', default=256, type=int,
+                    metavar='N',
+                    help='mini-batch size (default: 256), this is the total '
+                         'batch size of all GPUs on the current node when '
+                         'using Data Parallel or Distributed Data Parallel')
+args = parser.parse_args()
+
+model_name = "bert-base-cased"
+config = AutoConfig.from_pretrained(
+    model_name,
+    cache_dir=None,
+)
+
+
+model = AutoModelForQuestionAnswering.from_pretrained(
+    model_name,
+    from_tf=False,
+    config=config,
+    cache_dir = None,
+)
+
+tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        do_lower_case=False,
+        cache_dir= None,
+        use_fast=False
+    )
+
+text = "Replace me by any text you'd like."
+encoded_input = tokenizer(text, return_tensors='pt')
+
+torch.manual_seed(0)
+
+input_x_cpu = encoded_input["input_ids"].expand(args.batch_size, 13).contiguous()
+input_y_cpu = encoded_input["attention_mask"].expand(args.batch_size, 13).contiguous()
+input_z_cpu = encoded_input["token_type_ids"].expand(args.batch_size, 13).contiguous()
+input_x_cuda = input_x_cpu.to("cuda")
+input_y_cuda = input_y_cpu.to("cuda")
+input_z_cuda = input_z_cpu.to("cuda")
+
+
+# Load the pre-trained resnet50 model with ImageNet weights
+
+model=model.eval()
+
+with torch.inference_mode() and torch.amp.autocast("cuda"):
+    device = 'cuda'
+    aot_model = model.to(device=device)
+
+    tensor_x = torch.randint(low=0, high=10, size=(args.batch_size, 384), dtype=torch.int64, device=device)
+    tensor_y = torch.randint(low=0, high=10, size=(args.batch_size, 384), dtype=torch.int64, device=device)
+    tensor_z = torch.randint(low=0, high=10, size=(args.batch_size, 384), dtype=torch.int64, device=device)
+    aot_args = (tensor_x, tensor_y, tensor_z)
+    aot_kwargs = {"return_dict":False}
+
+    # batch_dim = torch.export.Dim("batch", min=1, max=1024)
+    # sc = torch.export.ShapesCollection()
+    # sc[tensor_x] = (batch_dim, 384)
+    # sc[tensor_y] = (batch_dim, 384)
+    # sc[tensor_z] = (batch_dim, 384)
+
+    # exported = torch.export.export(aot_model, aot_args, aot_kwargs, dynamic_shapes=sc)
+    exported = torch.export.export(aot_model, aot_args, aot_kwargs)
+    output_path = torch._inductor.aoti_compile_and_package(exported, package_path=f"./bert_base_{device}.pt2")
+    print(f"aot model output_path is {output_path}")
+
+aot_model_cuda = torch._inductor.aoti_load_package("./bert_base_cuda.pt2")
+
+with torch.no_grad() and torch.amp.autocast("cuda"):
+    output_cuda = aot_model_cuda(input_x_cuda, input_y_cuda, input_z_cuda, return_dict=False)
+```
+
+### Error logs
+
+```
+root@bjysw0042:/workspace# python test.py 
+Some weights of BertForQuestionAnswering were not initialized from the model checkpoint at bert-base-cased and are newly initialized: ['qa_outputs.bias', 'qa_outputs.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+/opt/conda/lib/python3.11/copyreg.py:105: FutureWarning: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+  return cls.__new__(cls, *args)
+aot model output_path is ./bert_base_cuda.pt2
+Segmentation fault (core dumped)
+```
+
+### Versions
+
+Collecting environment information...
+PyTorch version: 2.10.0.dev20251117+cu129
+Is debug build: False
+CUDA used to build PyTorch: 12.9
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.5 LTS (x86_64)
+GCC version: (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0
+Clang version:
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

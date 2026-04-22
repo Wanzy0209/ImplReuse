@@ -1,0 +1,56 @@
+Let me analyze this GitHub issue and extract the structured information as requested.
+
+From the issue, I can extract:
+
+1. **title**: "torch.compile(Inductor) segfaults ontorch.slice_copywith huge step; eager andaot_eagerOK"
+
+2. **error_description**: The bug description states that compiling a tiny model that calls `torch.slice_copy` with a very large `step` (e.g. `2**63 - 1`) causes a segmentation fault when using the default Inductor backend. Eager execution returns an empty tensor (expected). `backend="aot_eager"` also runs correctly. Only Inductor crashes with `Segmentation fault (core dumped)`. This suggests an Inductor codegen/runtime bug handling extreme (but valid) slice strides that result in zero-length outputs.
+
+3. **repro_code**: The minimal reproduction script is provided in the issue.
+
+4. **repro_output**: The observed output shows:
+```
+[eager] OK, output shape: (0,)
+[compile:aot_eager] OK, output shape: (0,)
+[compile:inductor(default)] running ...
+Segmentation fault (core dumped)
+```
+
+5. **trigger_conditions**:
+   - backend: Inductor (default backend for torch.compile)
+   - dtype: float32 (from `torch.randn(n, dtype=torch.float32)`)
+   - input_shape: (875,) (from `get_input(n=875)`)
+   - other_conditions: Using `torch.slice_copy` with a very large step value (`2**63 - 1`), specifically `start=449`, `step=(2**63 - 1)`, `dim=0`, `end=None`
+
+6. **affected_api**: `torch.slice_copy`
+
+7. **environment**:
+   - pytorch_version: 2.7.1a0+gite2d141d & 2.8.0a0+gitba56102
+   - python_version: 3.10.16
+   - os: Ubuntu 22.04.4 LTS (x86_64)
+   - hardware: CPU (forced via `CUDA_VISIBLE_DEVICES=""`), but CUDA is available on the system
+
+I'll focus on the specific conditions that trigger the segmentation fault. The issue occurs when using the Inductor backend with a large step value in `torch.slice_copy`, causing a crash while other backends work correctly. The key factors are the extreme step size and the specific backend configuration.
+
+The environment details reveal a complex setup with multiple PyTorch versions and CUDA availability, which might contribute to the unexpected behavior. The segmentation fault suggests a low-level memory or runtime issue specific to the Inductor backend's implementation.```json
+{
+  "title": "torch.compile(Inductor) segfaults ontorch.slice_copywith huge step; eager andaot_eagerOK",
+  "error_description": "Compiling a tiny model that calls `torch.slice_copy` with a very large `step` (e.g. `2**63 - 1`) causes a segmentation fault when using the default Inductor backend. Eager execution returns an empty tensor (expected). `backend=\"aot_eager\"` also runs correctly. Only Inductor crashes with `Segmentation fault (core dumped)`. This suggests an Inductor codegen/runtime bug handling extreme (but valid) slice strides that result in zero-length outputs.",
+  "repro_code": "# repro_slice_huge_step_model.py\nimport os\nimport torch\nfrom torch import nn\n\n# Force CPU to minimize unrelated noise\nos.environ.setdefault(\"CUDA_VISIBLE_DEVICES\", \"\")\n\nclass SliceHugeStepModel(nn.Module):\n    def __init__(self, start=449, step=(2**63 - 1)):\n        super().__init__()\n        self.start = start\n        self.step = step\n\n    def forward(self, x: torch.Tensor):\n        # Huge step makes the slice empty; eager returns shape (0,)\n        sliced = torch.slice_copy(x, dim=0, start=self.start, end=None, step=self.step)\n        return torch.reciprocal(sliced)\n\ndef get_input(n=875):\n    return torch.randn(n, dtype=torch.float32)\n\ndef run_eager():\n    m = SliceHugeStepModel()\n    x = get_input()\n    y = m(x)\n    print(\"[eager] OK, output shape:\", tuple(y.shape))\n\ndef run_compiled_aot_eager():\n    m = SliceHugeStepModel()\n    m_compiled = torch.compile(m, backend=\"aot_eager\")\n    x = get_input()\n    y = m_compiled(x)\n    print(\"[compile:aot_eager] OK, output shape:\", tuple(y.shape))\n\ndef run_compiled_inductor_should_crash():\n    print(\"[compile:inductor(default)] running ...\")\n    m = SliceHugeStepModel()\n    m_compiled = torch.compile(m)  # default backend = inductor\n    x = get_input()\n    y = m_compiled(x)              # <-- segfault here\n    print(\"[compile:inductor] (unexpected) survived, output shape:\", tuple(y.shape))\n\nif __name__ == \"__main__\":\n    run_eager()\n    run_compiled_aot_eager()\n    run_compiled_inductor_should_crash()",
+  "repro_output": "[eager] OK, output shape: (0,)\n[compile:aot_eager] OK, output shape: (0,)\n[compile:inductor(default)] running ...\nSegmentation fault (core dumped)",
+  "trigger_conditions": {
+    "backend": "Inductor (default)",
+    "dtype": "float32",
+    "input_shape": "(875,)",
+    "other_conditions": "torch.slice_copy with very large step value (2**63 - 1), start=449, dim=0, end=None, resulting in zero-length output"
+  },
+  "affected_api": "torch.slice_copy",
+  "environment": {
+    "pytorch_version": "2.7.1a0+gite2d141d & 2.8.0a0+gitba56102",
+    "python_version": "3.10.16",
+    "os": "Ubuntu 22.04.4 LTS (x86_64)",
+    "hardware": "CPU (forced via CUDA_VISIBLE_DEVICES=\"\"), CUDA available: True"
+  },
+  "labels": []
+}
+```

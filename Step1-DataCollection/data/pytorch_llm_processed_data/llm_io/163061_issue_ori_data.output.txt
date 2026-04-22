@@ -1,0 +1,84 @@
+Let me analyze this GitHub issue and extract the structured information as requested.
+
+**Title**: "GIL is not released when calling torch.compile kernels"
+
+**Issue ID**: 163061
+
+**Bug Description**: The user reports that PyTorch releases the GIL when calling CUDA APIs in most cases, but the GIL is held when calling torch.compile kernels. They're asking if this is expected and if it's possible to release the GIL when calling torch.compile kernels.
+
+**Repro Code**: There's a Python script provided that demonstrates the issue:
+```python
+import torch
+import triton
+import triton.language as tl
+
+def torch_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@torch.compile
+def torch_compile_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@triton.jit
+def add_kernel(x_ptr,
+               y_ptr,
+               output_ptr,
+               n_elements,
+               BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+def triton_add(x: torch.Tensor, y: torch.Tensor):
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    return output
+
+
+def main():
+    x = torch.randn(4096, 4096, device='cuda')
+    y = torch.randn(4096, 4096, device='cuda')
+    for _ in range(10):
+        torch_add(x, y)
+        torch_compile_add(x, y)
+        triton_add(x, y)
+        
+
+if __name__ == "__main__":
+    main()
+```
+
+I'll continue analyzing the environment details and potential implications of this GIL behavior in torch.compile kernels.
+
+The system configuration reveals a high-performance computing environment with dual NVIDIA H200 GPUs and a powerful Intel Xeon Platinum 8480C processor. The CUDA 13.0 runtime and PyTorch 2.8.0 alpha version suggest cutting-edge hardware and software integration.
+
+The investigation centers on understanding the Global Interpreter Lock's interaction with compiled PyTorch functions, specifically examining performance and threading implications in this advanced computational setup.```json
+{
+  "title": "GIL is not released when calling torch.compile kernels",
+  "error_description": "In most cases, PyTorch releases GIL when calling CUDA APIs, but I found the GIL is held when calling torch.compile kernels, is this expected? Is it possible to release GIL when calling torch.compile kernels?",
+  "repro_code": "import torch\nimport triton\nimport triton.language as tl\n\ndef torch_add(x: torch.Tensor, y: torch.Tensor):\n    return x + y\n\n@torch.compile\ndef torch_compile_add(x: torch.Tensor, y: torch.Tensor):\n    return x + y\n\n@triton.jit\ndef add_kernel(x_ptr,\n               y_ptr,\n               output_ptr,\n               n_elements,\n               BLOCK_SIZE: tl.constexpr):\n    pid = tl.program_id(axis=0)\n    block_start = pid * BLOCK_SIZE\n    offsets = block_start + tl.arange(0, BLOCK_SIZE)\n    mask = offsets < n_elements\n    x = tl.load(x_ptr + offsets, mask=mask)\n    y = tl.load(y_ptr + offsets, mask=mask)\n    output = x + y\n    tl.store(output_ptr + offsets, output, mask=mask)\n\n\ndef triton_add(x: torch.Tensor, y: torch.Tensor):\n    output = torch.empty_like(x)\n    n_elements = output.numel()\n    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )\n    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)\n    return output\n\n\ndef main():\n    x = torch.randn(4096, 4096, device='cuda')\n    y = torch.randn(4096, 4096, device='cuda')\n    for _ in range(10):\n        torch_add(x, y)\n        torch_compile_add(x, y)\n        triton_add(x, y)\n        \n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "unknown",
+    "input_shape": "(4096, 4096)",
+    "other_conditions": "Using @torch.compile decorator"
+  },
+  "affected_api": "torch.compile",
+  "environment": {
+    "pytorch_version": "2.8.0a0+34c6371d24.nv25.08",
+    "python_version": "3.12.3",
+    "os": "Ubuntu 24.04.2 LTS (x86_64)",
+    "hardware": "NVIDIA H200, Intel(R) Xeon(R) Platinum 8480C"
+  },
+  "labels": []
+}
+```

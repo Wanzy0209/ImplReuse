@@ -1,0 +1,131 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [torch.distributed.pipelining] PP with ScheduleGPipe causes divergence in grad updates compared to single GPU training
+    - issue_id: 163859
+    - bug_description: ### 🐛 Describe the bug
+
+## Bug Description
+
+When using `torch.distributed.pipelining` with `ScheduleGPipe`, gradient computations are incorrect, producing significantly different gradient values compared to single-GPU baseline. While the forward pass produces nearly identical loss [0] in the first step starting with identical model initialization and input data (confirming correct forward computation), the backward pass generates gradients that differ by orders of magnitude, making the library unusable.
+
+It's unclear to me if the bug is in _how_ the library is being used (I thoroughly checked the documentation, api, tutorials, etc, I don't think so), or if its a bug in the backwards pass handling.
+
+[0] not exact but within reason considering numerical issues due to floating point error / order of operation / tensor slices
+
+## To Reproduce
+
+1. Save the provided script as repro.py
+2. Run single-GPU baseline: `python repro.py --mode single`
+3. Run pipeline parallel: `torchrun --nproc_per_node=4 repro.py --mode pipeline`
+4. Observe the comparison table showing _~3-4x gradient magnitude difference from step 0_
+
+### Expected behavior
+
+Given identical model parameters and inputs, the backward pass should produce nearly identical gradients between pipeline parallel and single-GPU execution. Minor differences due to floating-point precision are acceptable, but gradient magnitudes should be consistent. The pipeline schedule with `scale_grads=True` should properly handle gradient scaling across microbatches.
+
+### Actual behavior
+
+Despite nearly identical forward passes (loss difference < 0.1%), gradients differ dramatically from the first step:
+
+```
+Step | Single GPU Loss | Pipeline Loss | Loss Diff    | Single GPU Grad | Pipeline Grad | Grad Diff    | Status
+--------------------------------------------------------------------------------------------------------------
+  0  | 10.540012       | 10.551013     | 0.011001     | 3.378159        | 13.392914     | 10.014754    | DIVERGED
+  1  | 10.560583       | 10.559126     | 0.001457     | 0.675389        | 2.703015      | 2.027627     | DIVERGED
+  2  | 10.578341       | 10.582466     | 0.004126     | 0.576893        | 2.338186      | 1.761293     | DIVERGED
+```
+
+**Key observations:**
+
+Step 0: Loss values match (10.540 vs 10.551), confirming forward pass is correct
+Step 0: Gradients are wildly different (3.38 vs 13.39), indicating backward pass bug
+Steps 1+: Loss comparison becomes meaningless as models have already diverged due to different gradient updates
+
+
+**Minimal reproducible example:**
+
+This example: 
+
+1. Uses a simple transformer model split into 4 stages
+2. Each stage has 3 transformer layers
+3. Uses standard ScheduleGPipe with 4 microbatches
+4. Demonstrates the issue clearly with gradient norm comparison between the two cases: **why do PP grads substantially diverge?**
+
+
+```
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+from torch.distributed.pipelining import PipelineStage, ScheduleGPipe
+import os
+import pprint
+import argparse
+
+
+class TransformerStage(nn.Module):
+    def __init__(self, hidden_size=1536, num_layers=3, vocab_size=32000, stage_index=0, num_stages=4):
+        super().__init__()
+        self.stage_index = stage_index
+        self.num_stages = num_stages
+        
+        if stage_index == 0:
+            self.embed_tokens = nn.Embedding(vocab_size, hidden_size)
+        
+        self.layers = nn.ModuleList([
+            nn.TransformerEncoderLayer(
+                hidden_size, 
+                nhead=12,
+                dim_feedforward=5440,
+                batch_first=True
+            )
+            for _ in range(num_layers)
+        ])
+        
+        if stage_index == num_stages - 1:
+            self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
+    
+    def forward(self, x):
+        if hasattr(self, 'embed_tokens'):
+            x = self.embed_tokens(x)
+        
+        for layer in self.layers:
+            x = layer(x)
+        
+        i
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

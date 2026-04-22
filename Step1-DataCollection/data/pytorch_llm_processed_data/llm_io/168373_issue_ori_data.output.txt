@@ -1,0 +1,95 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: [compile] Recompilations due to backend mismatch
+
+**Issue ID**: 168373
+
+**Bug Description**: The issue describes a problem where creating a fresh backend function on every instance of `torch.compile` call leads to recompilation issues. This happens because `torch.compile` guards on the backend function to check if it can reuse previously compiled artifacts. While this is intentional (to allow different backends to produce different compiled artifacts), in the user's example this appears to be accidental. The issue provides a workaround using `functools.partial` or `functools.lru_cache` to reuse the same cached backend.
+
+**Repro Code**: The issue provides a minimal reproducible example showing the problem:
+
+```python
+import torch
+from torch._dynamo.backends.common import aot_autograd
+from functorch.compile import nop
+
+
+def torch_compile_with_custom_backend(
+    module: torch.nn.Module,
+):
+    opt_layer = torch.compile(
+        module, backend=aot_autograd(fw_compiler=nop, bw_compiler=nop), fullgraph=True
+    )
+
+    return opt_layer
+
+
+class SubMod(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return torch.sin(x)
+
+
+class Mod(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.mod_a = SubMod()
+        self.mod_b = SubMod()
+
+        self.mod_a = torch_compile_with_custom_backend(self.mod_a)
+        self.mod_b = torch_compile_with_custom_backend(self.mod_b)
+
+    def forward(self, x):
+        return self.mod_a(x) + self.mod_b(x)
+
+
+mod = Mod()
+x = torch.randn(4)
+mod(x)
+```
+
+**Repro Output**: The issue mentions that after a specific PR, users will see this recompilation message:
+```
+BACKEND_MATCH failure: torch.compile detected different backend callables. If this is unexpected, wrap your backend in functools.partial (or reuse the same cached backend) to avoid creating a new backend function each time. More details: https://github.com/pytorch/pytorch/issues/168373
+```
+
+**Trigger Conditions**:
+- Backend: Not specified (uses aot_autograd with nop compilers)
+- Dtype: Not specified
+- Input shape: torch.randn(4) - 1D tensor of size 4
+- Other conditions: Creating a fresh backend function on each torch.compile call
+
+**Affected API**: `torch.compile` with custom backend functions
+
+**Environment**:
+- PyTorch version: Not specified (NA)
+- Python version: Not specified
+- OS: Not specified
+- Hardware: Not specified
+
+**Labels**: The issue doesn't explicitly list labels, but based on the content, it's related to compilation and backend functionality.
+
+Let me format this into the requested JSON schema:```json
+{
+  "title": "[compile] Recompilations due to backend mismatch",
+  "error_description": "Consider this code where a fresh backend function is created on every instance of `torch.compile` call. This leads to a recompilation issue because `torch.compile` guards on the backend function to check if it can reuse the previously compiled artifact. This is **intentional** because if user want to use two different backends, we want to give two different compiled artifacts. However, in this example this seems accidental on the user side. So, this issue gives you a workaround.",
+  "repro_code": "import torch\nfrom torch._dynamo.backends.common import aot_autograd\nfrom functorch.compile import nop\n\n\ndef torch_compile_with_custom_backend(\n    module: torch.nn.Module,\n):\n    opt_layer = torch.compile(\n        module, backend=aot_autograd(fw_compiler=nop, bw_compiler=nop), fullgraph=True\n    )\n\n    return opt_layer\n\n\nclass SubMod(torch.nn.Module):\n    def __init__(self):\n        super().__init__()\n\n    def forward(self, x):\n        return torch.sin(x)\n\n\nclass Mod(torch.nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.mod_a = SubMod()\n        self.mod_b = SubMod()\n\n        self.mod_a = torch_compile_with_custom_backend(self.mod_a)\n        self.mod_b = torch_compile_with_custom_backend(self.mod_b)\n\n    def forward(self, x):\n        return self.mod_a(x) + self.mod_b(x)\n\n\nmod = Mod()\nx = torch.randn(4)\nmod(x)",
+  "repro_output": "BACKEND_MATCH failure: torch.compile detected different backend callables. If this is unexpected, wrap your backend in functools.partial (or reuse the same cached backend) to avoid creating a new backend function each time. More details: https://github.com/pytorch/pytorch/issues/168373",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "",
+    "other_conditions": "Creating a fresh backend function on every instance of torch.compile call"
+  },
+  "affected_api": "torch.compile",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "unknown"
+  },
+  "labels": []
+}
+```

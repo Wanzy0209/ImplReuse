@@ -1,0 +1,83 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [DTensor] gaps in uneven strided shard
+    - issue_id: 168134
+    - bug_description: ### 🐛 Describe the bug
+
+for full tensor [0, 1, 2, 3, 4] over _StridedShard(0, split=2),  mesh (2,), we should have following local tensor 
+* rank0: [0, 1, 3, 4]
+* rank1: [2, pad]
+
+right now the result is wrong (see following repro)
+* rank0: [0, 1, 3]
+* rank2: [2, 4]
+
+the wrong result is because of these lines https://github.com/pytorch/pytorch/blob/c8d790b56d7bbb4ee266976944ab920f2d513b40/torch/distributed/tensor/placement_types.py#L596-L601
+
+the recommend approach is (5, ) -> unflatten -> (2, 3, ) -> S(1) -> flatten
+```
+0, 1  | 2
+3, 4  | pad
+```
+
+I follow up to improve https://github.com/pytorch/pytorch/pull/163843
+```
+@with_comms
+def test_strided_shard_bug(self):
+    assert self.world_size == 2
+    device_mesh = init_device_mesh(self.device_type, (2, ))
+    global_tensor = torch.Tensor([0, 1, 2, 3, 4])
+    dtensor = distribute_tensor(global_tensor, device_mesh, (Replicate(), )).redistribute(device_mesh, (_StridedShard(0, split_factor=2),))
+    import time
+    time.sleep(torch.distributed.get_rank())
+    print(f"{torch.distributed.get_rank()=} {dtensor._local_tensor=}")
+```
+
+```
+torch.distributed.get_rank()=0 dtensor._local_tensor=tensor([0., 1., 3.], device='cuda:0')
+torch.distributed.get_rank()=1 dtensor._local_tensor=tensor([2., 4.], device='cuda:1')
+```
+
+
+
+
+### Versions
+
+ dddd
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

@@ -1,0 +1,83 @@
+Let me analyze this GitHub issue and extract the structured information as requested.
+
+**Title:** PyTorch 2.8.0 ONNX export generates boolean values for integer-only allowzero attribute
+
+**Issue ID:** 161941
+
+**Bug Description:**
+PyTorch 2.8.0 ONNX export incorrectly generates boolean `True` instead of integer `1` for the `allowzero` attribute in Reshape operations, causing downstream serialization failures with onnx-ir.
+
+**Repro Code:**
+```python
+#!/usr/bin/env python3
+import torch
+import torch.nn as nn
+import warnings
+import tempfile
+import os
+
+# CRITICAL: Force DeprecationWarnings to be errors (this triggers the issue!)
+warnings.filterwarnings("error", category=DeprecationWarning)
+
+class TestModel(nn.Module):
+    def forward(self, x):
+        # This reshape triggers the boolean->int issue
+        return x.reshape(1, -1)
+
+model = TestModel().eval()
+x = torch.randn(2, 4)
+
+# Try ONNX export - this should trigger SerdeError
+with tempfile.NamedTemporaryFile(suffix='.onnx', delete=False) as f:
+    try:
+        torch.onnx.export(
+            model,
+            (x,),
+            f.name,
+            opset_version=18,
+            dynamo=True,
+            verbose=False
+        )
+        print("❌ UNEXPECTED: Export succeeded")
+    except Exception as e:
+        print(f"✅ CONFIRMED: {type(e).__name__}: {e}")
+    finally:
+        try:
+            os.unlink(f.name)
+        except:
+            pass
+```
+
+**Repro Output:**
+```
+onnx_ir.serde.SerdeError: Error calling serialize_attribute_into with: Attr('allowzero', INT, True)
+
+
+```
+
+I see the serialization error occurs when attempting to export a PyTorch model to ONNX. The problem stems from an incorrect boolean value being used for an integer attribute during the export process. This triggers a serialization error in the onnx-ir library, preventing successful model conversion.
+
+The traceback reveals the specific location of the error in the serialization code, highlighting the mismatch between the expected integer type and the boolean value being passed.
+
+``` I'm investigating a PyTorch ONNX export issue with the `allowzero` attribute. The problem occurs during model export, specifically when using the `torch.onnx.export` function with a specific configuration. The error suggests a type mismatch in the serialization process, where a boolean value is being incorrectly used for an integer attribute. This impacts models using reshape operations, particularly in environments with strict warning handling. The issue seems to be related to the ONNX export mechanism in PyTorch version 2.8.0+cpu, running on a Linux system with Python 3.11.0rc1.```json
+{
+  "title": "PyTorch 2.8.0 ONNX export generates boolean values for integer-only allowzero attribute",
+  "error_description": "PyTorch 2.8.0 ONNX export incorrectly generates boolean `True` instead of integer `1` for the `allowzero` attribute in Reshape operations, causing downstream serialization failures with onnx-ir.",
+  "repro_code": "#!/usr/bin/env python3\nimport torch\nimport torch.nn as nn\nimport warnings\nimport tempfile\nimport os\n\n# CRITICAL: Force DeprecationWarnings to be errors (this triggers the issue!)\nwarnings.filterwarnings(\"error\", category=DeprecationWarning)\n\nclass TestModel(nn.Module):\n    def forward(self, x):\n        # This reshape triggers the boolean->int issue\n        return x.reshape(1, -1)\n\nmodel = TestModel().eval()\nx = torch.randn(2, 4)\n\n# Try ONNX export - this should trigger SerdeError\nwith tempfile.NamedTemporaryFile(suffix='.onnx', delete=False) as f:\n    try:\n        torch.onnx.export(\n            model,\n            (x,),\n            f.name,\n            opset_version=18,\n            dynamo=True,\n            verbose=False\n        )\n        print(\"❌ UNEXPECTED: Export succeeded\")\n    except Exception as e:\n        print(f\"✅ CONFIRMED: {type(e).__name__}: {e}\")\n    finally:\n        try:\n            os.unlink(f.name)\n        except:\n            pass",
+  "repro_output": "onnx_ir.serde.SerdeError: Error calling serialize_attribute_into with: Attr('allowzero', INT, True)",
+  "trigger_conditions": {
+    "backend": "CPU",
+    "dtype": "unknown",
+    "input_shape": "(2, 4)",
+    "other_conditions": "warnings.filterwarnings(\"error\", category=DeprecationWarning), opset_version=18, dynamo=True"
+  },
+  "affected_api": "torch.onnx.export",
+  "environment": {
+    "pytorch_version": "2.8.0+cpu",
+    "python_version": "3.11.0rc1",
+    "os": "Ubuntu 22.04.5 LTS (x86_64)",
+    "hardware": "CPU"
+  },
+  "labels": ["onnx", "bug"]
+}
+```

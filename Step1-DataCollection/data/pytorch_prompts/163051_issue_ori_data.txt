@@ -1,0 +1,139 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [torch.export]AssertionError: assert isinstance(a, FakeTensor)in_free_unbacked_symbols_with_pathwhen exporting model that usestorch.func.jvp+functional_call+ dict params
+    - issue_id: 163051
+    - bug_description: ### 🐛 Describe the bug
+
+### Summary
+
+Exporting a small model that (1) wraps a base `nn.Module` with a linearized forward using `torch.func.jvp` and `functional_call(params, …)`, and (2) performs a simple post-processing loop, fails on PyTorch 2.8.0 with:
+```
+AssertionError: assert isinstance(a, FakeTensor)
+```
+The failure occurs inside `torch/export/_trace.py` → `_replace_unbacked_bindings` → `symbolic_shapes._free_unbacked_symbols_with_path`, suggesting the exporter encounters an unbacked symbolic that isn’t a `FakeTensor`, but code assumes it is.
+
+Eager execution is fine; only `torch.export.export` fails.
+
+### Minimal Reproducer
+```python
+import torch
+import torch.nn as nn
+from torch.func import functional_call, jvp
+
+class Linearized(nn.Module):
+    def __init__(self, base: nn.Module):
+        super().__init__()
+        self.base = base.eval()
+        # Frozen reference params and trainable params (dict of nn.Parameter)
+        p0 = dict(self.base.named_parameters(remove_duplicate=False))
+        self.params0 = {k: nn.Parameter(v.detach().clone(), requires_grad=False) for k, v in p0.items()}
+        self.params  = {k: nn.Parameter(v.detach().clone())                      for k, v in p0.items()}
+
+    def f(self, params, x):
+        return functional_call(self.base, params, (x,))
+
+    def forward(self, x):
+        dparams = {k: self.params[k] - self.params0[k] for k in self.params0}
+        (_, dp) = jvp(lambda P: self.f(P, x), (self.params0,), (dparams,))
+        return self.f(self.params0, x) + dp
+
+class Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.lin = Linearized(nn.Linear(10, 5))
+        self.post = nn.Linear(5, 5)
+
+    def forward(self, x, substitution_tensor):
+        x = self.lin(x)
+        x = self.post(x)
+        # simple post loop that writes Longs
+        out = torch.zeros_like(x).long()
+        B, D = out.shape
+        if substitution_tensor.shape[0] != D:
+            raise RuntimeError("shape mismatch")
+        for i in range(B):
+            out[i, :] = substitution_tensor
+        return out
+
+def get_inputs(B=32):
+    x = torch.randn(B, 10)
+    sub = torch.randint(0, 10, (5,), dtype=torch.long)
+    return (x, sub)
+
+if __name__ == "__main__":
+    m = Model().eval()
+    # Eager works:
+    _ = m(*get_inputs())
+    # Export fails:
+    ep = torch.export.export(m, get_inputs())  # AssertionError on 2.8.0
+```
+
+### Observed Trace (tail)
+```
+...
+  File ".../torch/export/_trace.py", line 547, in _produce_aten_artifact
+    _replace_unbacked_bindings(gm)
+  File ".../torch/export/_trace.py", line 503, in _replace_unbacked_bindings
+    unbacked_bindings := _free_unbacked_symbols_with_path(
+  File ".../torch/fx/experimental/symbolic_shapes.py", line 1149, in _free_unbacked_symbols_with_path
+    assert isinstance(a, FakeTensor)
+AssertionError
+```
+
+### Versions
+
+```
+PyTorch version:  2.8.0a0+gitba56102 & 2.9.0a0+git31d5c67
+Is debug build: True
+CUDA used to build PyTorch: 12.6
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.4 LTS (x86_64)
+GCC version: (Ubuntu 12.3.0-1ubuntu1~22.04) 12.3.0
+Clang version: Could not collect
+CMake version: version 3.22.1
+Libc version: glibc-2.35
+
+Python version: 3.10.16 (main, Dec 11 2024, 16:24:50) [GCC 11.2.0] (64-bit runtime)
+Python platform: Linux-6.8.0-59-generic-x86_64-with-glibc2.35
+Is CUDA available: True
+```
+
+cc @chauhang @penguinwu @avikchaudhuri @gmagogsfm @zhxchen17 @tugsbayasgalan @angelayi @suo @ydwu4
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

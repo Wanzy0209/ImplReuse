@@ -1,0 +1,92 @@
+Let me analyze the GitHub issue and extract the structured information as requested.
+
+From the input, I can extract:
+
+1. **title**: [CUDA][Distributed][Symmetric Memory] _SymmetricMemory.rendezvous fails on DGX B200
+
+2. **error_description**: The bug description states that "Torch symmetric memory rendevous fails at initilialization with an error" and shows a RuntimeError: CUDA driver error: system not yet initialized
+
+3. **repro_code**: There's a script provided to reproduce the issue:
+```python
+# torchrun --nproc_per_node=2 rendezvous_script.py
+import os
+import torch
+import torch.distributed as dist
+
+try:
+    import torch.distributed._symmetric_memory as torch_symm_mem
+    symm_mem_available = True
+except ImportError:
+    symm_mem_available = False
+
+def run_rendezvous():
+    rank = int(os.environ["RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+
+    if not symm_mem_available:
+        print(f"Rank {rank}: Symmetric memory is not available.")
+        return
+
+    device = torch.device(f"cuda:{rank}")
+    torch.cuda.set_device(device)
+
+    max_size = 1024
+    dtype = torch.bfloat16
+    buffer = torch_symm_mem.empty(
+        max_size // dtype.itemsize,
+        device=device,
+        dtype=dtype,
+    )
+
+    group_name = dist.group.WORLD.group_name
+    handle = torch_symm_mem.rendezvous(buffer, group_name)
+
+    tensor_to_reduce = torch.ones(4, device=device, dtype=dtype) * (rank + 1)
+    dist.all_reduce(tensor_to_reduce, op=dist.ReduceOp.SUM)
+```
+
+4. **repro_output**: The error output shows:
+```
+RuntimeError: CUDA driver error: system not yet initialized
+```
+
+5. **trigger_conditions**:
+   - backend: "nccl" (from `dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)`)
+   - dtype: "torch.bfloat16"
+   - input_shape: max_size = 1024, buffer shape is `max_size // dtype.itemsize`
+   - other_conditions: Running with `torchrun --nproc_per_node=2`, on DGX B200 hardware
+
+6. **affected_api**: `torch.distributed._symmetric_memory._SymmetricMemory.rendezvous` or `torch_symm_mem.rendezvous`
+
+7. **environment**:
+   - pytorch_version: Not explicitly stated, but the traceback shows it's using torch.distributed
+   - python_version: "3.12" (from the traceback path: `/home/ilia/vllm-venv/lib/python3.12/`)
+   - os: Not explicitly stated
+   - hardware: "DGX B200" (from the title)
+
+8. **labels**: Based on the title tags: ["CUDA", "Distributed", "Symmetric Memory"]
+
+Let me format this as JSON:```json
+{
+  "title": "[CUDA][Distributed][Symmetric Memory] _SymmetricMemory.rendezvous fails on DGX B200",
+  "error_description": "Torch symmetric memory rendevous fails at initilialization with an error: RuntimeError: CUDA driver error: system not yet initialized",
+  "repro_code": "# torchrun --nproc_per_node=2 rendezvous_script.py\nimport os\nimport torch\nimport torch.distributed as dist\n\ntry:\n    import torch.distributed._symmetric_memory as torch_symm_mem\n    symm_mem_available = True\nexcept ImportError:\n    symm_mem_available = False\n\ndef run_rendezvous():\n    rank = int(os.environ[\"RANK\"])\n    world_size = int(os.environ[\"WORLD_SIZE\"])\n\n    dist.init_process_group(backend=\"nccl\", rank=rank, world_size=world_size)\n\n    if not symm_mem_available:\n        print(f\"Rank {rank}: Symmetric memory is not available.\")\n        return\n\n    device = torch.device(f\"cuda:{rank}\")\n    torch.cuda.set_device(device)\n\n    max_size = 1024\n    dtype = torch.bfloat16\n    buffer = torch_symm_mem.empty(\n        max_size // dtype.itemsize,\n        device=device,\n        dtype=dtype,\n    )\n\n    group_name = dist.group.WORLD.group_name\n    handle = torch_symm_mem.rendezvous(buffer, group_name)\n\n    tensor_to_reduce = torch.ones(4, device=device, dtype=dtype) * (rank + 1)\n    dist.all_reduce(tensor_to_reduce, op=dist.ReduceOp.SUM)",
+  "repro_output": "RuntimeError: CUDA driver error: system not yet initialized",
+  "trigger_conditions": {
+    "backend": "nccl",
+    "dtype": "torch.bfloat16",
+    "input_shape": "max_size // dtype.itemsize",
+    "other_conditions": "torchrun --nproc_per_node=2, DGX B200"
+  },
+  "affected_api": "torch.distributed._symmetric_memory._SymmetricMemory.rendezvous",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "3.12",
+    "os": "unknown",
+    "hardware": "DGX B200"
+  },
+  "labels": ["CUDA", "Distributed", "Symmetric Memory"]
+}
+```

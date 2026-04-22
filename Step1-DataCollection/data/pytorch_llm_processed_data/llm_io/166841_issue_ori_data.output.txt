@@ -1,0 +1,50 @@
+Let me analyze the GitHub issue and extract the structured information as requested.
+
+From the issue, I can extract:
+
+1. **title**: "aoti_compile_and_package incorrectly generates CUDA kernel call for CPU scatter_add_ in multi-device models"
+
+2. **error_description**: The bug description states that when using `torch._inductor.aoti_compile_and_package` on a model with both CPU and CUDA operations, the compiler incorrectly generates a call to the CUDA-specific kernel (`aoti_torch_cuda_scatter_reduce_two_out`) for a `scatter_add_` operation that is running entirely on CPU tensors. This only happens when the exported graph contains both CPU and CUDA device types. This leads to a runtime exception: `CUDAGuardImpl initialized with non-CUDA DeviceType: cpu`.
+
+3. **repro_code**: There's a minimal reproduction script provided in the issue.
+
+4. **repro_output**: The runtime error log shows:
+```
+[E1103 04:13:34.730912069 c_shim_cuda.cpp:1551] Exception in aoti_torch: CUDAGuardImpl initialized with non-CUDA DeviceType: cpu
+Exception raised from CUDAGuardImpl at /pytorch/c10/cuda/impl/CUDAGuardImpl.h:28 (most recent call first):
+```
+
+5. **trigger_conditions**:
+   - backend: CUDA (and CPU mixed)
+   - dtype: int64 (mentioned in the code)
+   - input_shape: Not explicitly specified as a constraint, but the example uses (10, 10) for matrix and (10,) for vector
+   - other_conditions: The bug is only triggered when the exported graph contains both CPU and CUDA device types. If the model is CPU-only, the correct CPU kernel is generated.
+
+6. **affected_api**: `torch._inductor.aoti_compile_and_package` and `scatter_add_` operation
+
+7. **environment**: Not explicitly specified in the issue, so I'll use "unknown" for all fields.
+
+8. **labels**: The issue doesn't have explicit labels, but based on the content, it's clearly a bug related to AOTInductor, CUDA, and CPU operations. However, since I should only extract what's explicitly stated, I'll leave this as an empty list or not include labels if they're not explicitly mentioned.
+ 
+I'll focus on the key details of the bug, highlighting the specific kernel generation issue and the runtime error that occurs when mixing CPU and CUDA operations in the model.```json
+{
+  "title": "aoti_compile_and_package incorrectly generates CUDA kernel call for CPU scatter_add_ in multi-device models",
+  "error_description": "When using `torch._inductor.aoti_compile_and_package` on a model that contains both CPU and CUDA operations, the compiler incorrectly generates a call to the CUDA-specific kernel (`aoti_torch_cuda_scatter_reduce_two_out`) for a `scatter_add_` operation that is running entirely on CPU tensors. This bug is only triggered when the exported graph contains both CPU and CUDA device types. If the model is CPU-only, the correct CPU kernel is generated. This leads to a runtime exception when the compiled model is loaded and run, as the CUDA-specific kernel is (correctly) called with CPU tensors, causing a `CUDAGuardImpl initialized with non-CUDA DeviceType: cpu` error.",
+  "repro_code": "import torch\nimport torch.export\nimport torch._inductor\nimport os\nimport shutil\n\n# --- 1. Minimal Model Definition ---\nclass MyModel(torch.nn.Module):\n    def __init__(self):\n        super().__init__()\n        # Buffers are on CPU\n        self.register_buffer(\n            \"index\",\n            torch.tensor([1, 4, 1, 7], device='cpu', dtype=torch.int64)\n        )\n        self.register_buffer(\n            \"src\",\n            torch.ones(4, device='cpu', dtype=torch.int64)\n        )\n\n    def forward(self, matrix, vector):\n        # Inputs are on CUDA\n\n        # 1. Operation on CPU tensors\n        z = torch.zeros((vector.shape[0],), device='cpu', dtype=torch.int64)\n        scatter_result = z.scatter_add(0, self.index, self.src)\n\n        # 2. Move result to CUDA and continue on CUDA\n        v = vector + scatter_result.to(vector.dtype).to('cuda')\n        return torch.matmul(matrix, v)\n\n# --- 2. Setup and Compile ---\nmodel = MyModel().eval().to('cpu')\nmatrix = torch.randn(10, 10, device='cuda')\nvector = torch.randn(10, device='cuda')\nexample_args = (matrix, vector)\n\nprint(\"Exporting model...\")\nep = torch.export.export(model, example_args)\n\noutput_dir = \"/tmp/my_aoti_model\"\nif os.path.exists(output_dir):\n    shutil.rmtree(output_dir)\nos.makedirs(output_dir, exist_ok=True)\npackage = os.path.join(output_dir, \"model_package.pt2\")\n\nprint(\"Starting AOTInductor compilation...\")\ntorch._inductor.aoti_compile_and_package(\n    ep,\n    package_path=package,\n)\nprint(f\"Compiled package at: {package}\")\n\n# --- 3. Load and Run (This is where it fails) ---\nprint(\"\\nAttempting to load and run compiled model...\")\nloaded = torch._inductor.aoti_load_package(package)\nprint(\"\\nModel package loaded successfully.\")\n\nloaded(*example_args)\nprint(\"Model ran successfully with the loaded package.\")",
+  "repro_output": "[E1103 04:13:34.730912069 c_shim_cuda.cpp:1551] Exception in aoti_torch: CUDAGuardImpl initialized with non-CUDA DeviceType: cpu\nException raised from CUDAGuardImpl at /pytorch/c10/cuda/impl/CUDAGuardImpl.h:28 (most recent call first):\nframe #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7efd83d7cb80 in /opt/conda/lib/python3.11/site-packages/torch/lib/libc10.so)\nframe #1: c10::detail::torchCheckFail(char const*, char const*, unsigned int, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x65 (0x7efd83d0efbf in /opt/conda/lib/python3.11/site-packages/torch/lib/libc10.so)\nframe #2:",
+  "trigger_conditions": {
+    "backend": "CUDA and CPU mixed",
+    "dtype": "int64",
+    "input_shape": "",
+    "other_conditions": "The bug is only triggered when the exported graph contains both CPU and CUDA device types. If the model is CPU-only, the correct CPU kernel is generated."
+  },
+  "affected_api": "torch._inductor.aoti_compile_and_package, scatter_add_",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "unknown"
+  },
+  "labels": []
+}
+```

@@ -1,0 +1,97 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Wrong-size gradients in Expert Parallel MoE
+    - issue_id: 160285
+    - bug_description: ### 🐛 Describe the bug
+
+### Repro
+
+[test_moe_gradients.txt](https://github.com/user-attachments/files/21707913/test_moe_gradients.txt)
+[torch_moe.txt](https://github.com/user-attachments/files/21707912/torch_moe.txt)
+
+Install torchtitan on your system (`pip install torchtitan`). Rename the file extensions to .py. Run with `OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 test_moe_gradients.py`.
+
+The observed behavior is that the gradients for MoE layers are doubled with EP=2.
+
+Use of TorchGroupedExperts in a non-testcase environment shows that loss curves are equivalent even with the doubled gradients; each MoE gradient is exactly 2x in size.
+
+### Observables
+
+This testcase replicates torchtitan's EP+MoE layer by copying code directly into `torch_moe.py`. Possibilities:
+1. torch has a bug (perhaps in the distributed parts)
+2. torchtitan has a bug. I don't see it though.
+
+~3. my replication of torchtitan has a bug.~ I checked, vanilla torchtitan has the same bug.
+
+```
+kevin@kevin-h100-0:/mnt/clusterstorage/workspace/kevin$ OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 test_moe_gradients.py 
+Testing with 2 processes
+
+==================================================
+TEST 1: Without Expert Parallel Sharding
+==================================================
+1 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+1 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+1 experts.w3 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+0 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+0 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+0 experts.w3 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+
+WITHOUT EP Gradient Analysis:
+  experts.w1: grad_norm = 0.066087, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local()[0, 0, 0]=tensor(0.0013, device='cuda:0')
+  experts.w2: grad_norm = 0.554278, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local()[0, 0, 0]=tensor(0.0553, device='cuda:0')
+  experts.w3: grad_norm = 0.122219, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local()[0, 0, 0]=tensor(0.0024, device='cuda:0')
+  Total gradient norm: 0.571427
+
+==================================================
+TEST 2: With Expert Parallel Sharding
+==================================================
+Applying ExpertParallel sharding with EP size: 2Applying ExpertParallel sharding with EP size: 2
+
+0 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+0 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+0 experts.w3 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+1 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+1 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+1 experts.w3 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+
+WITH EP Gradient Analysis:
+  experts.w1: grad_norm = 0.132158, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local()[0, 0, 0]=tensor(0.0026, device='cuda:0')
+  experts.w2: grad_norm = 1.109194, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local()[0, 0, 0]=tensor(0.
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

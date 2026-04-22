@@ -1,0 +1,88 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [Fuzzer][Eager/Compile Divergence] TypeError('unexpected type fp32')
+    - issue_id: 164063
+    - bug_description: ### 🐛 Describe the bug
+
+```
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, sentinel):
+    t0 = arg0 # size=(36, 7112, 1, 1), stride=(7112, 1, 1, 1), dtype=bfloat16, device=cuda
+    t1 = t0.reshape((28, 24, 3, 127)) # size=(28, 24, 3, 127), stride=(9144, 381, 127, 1), dtype=bfloat16, device=cuda
+    t2 = t1.var(dim=2) # size=(28, 24, 127), stride=(3048, 127, 1), dtype=bfloat16, device=cuda
+    t3 = arg1 # size=(30, 24), stride=(30, 1), dtype=int64, device=cuda
+    t4 = arg2 # size=(512, 127), stride=(512, 1), dtype=bfloat16, device=cuda
+    t5 = torch.nn.functional.embedding(torch.clamp(t3, 0, t4.size(0) - 1).to(torch.long), t4) # size=(30, 24, 127), stride=(3048, 127, 1), dtype=bfloat16, device=cuda
+    t6 = arg3 # size=(30, 24, 15), stride=(720, 24, 1), dtype=bfloat16, device=cuda
+    t7 = torch.nn.functional.pad(t6, [0, 1], mode='constant', value=0.0) # size=(30, 24, 16), stride=(384, 16, 1), dtype=bfloat16, device=cuda
+    t8 = arg4 # size=(30, 4, 16, 127), stride=(8128, 2032, 127, 1), dtype=bfloat16, device=cuda
+    t9 = t8.sum(dim=1) # size=(30, 16, 127), stride=(2032, 127, 1), dtype=bfloat16, device=cuda
+    t10 = torch.baddbmm(t5, t7, t9) # size=(30, 24, 127), stride=(3048, 127, 1), dtype=bfloat16, device=cuda
+    t11 = torch.cat([t2, t10], dim=0) # size=(58, 24, 127), stride=(3048, 127, 1), dtype=bfloat16, device=cuda
+    output = t11 + sentinel  # output tensor with sentinel for gradient flow
+    return output
+
+arg0 = torch.rand([36, 7112, 1, 1], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(36, 7112, 1, 1), stride=(7112, 1, 1, 1), dtype=bfloat16, device=cuda
+arg1 = torch.randint(0, 512, [30, 24], dtype=torch.int64, device='cuda') # size=(30, 24), stride=(30, 1), dtype=int64, device=cuda
+arg2 = torch.rand([512, 127], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(512, 127), stride=(512, 1), dtype=bfloat16, device=cuda
+arg3 = torch.rand([30, 24, 15], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(30, 24, 15), stride=(720, 24, 1), dtype=bfloat16, device=cuda
+arg4 = torch.rand([30, 4, 16, 127], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(30, 4, 16, 127), stride=(8128, 2032, 127, 1), dtype=bfloat16, device=cuda
+sentinel = torch.tensor(0.0, dtype=torch.bfloat16, device='cuda', requires_grad=True) # Sentinel for gradient flow
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+```
+
+```
+   Eager Success! ✅                                                                                
+   /data/users/bobren/a/pytorch/torch/backends/cuda/__init__.py:131: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /data/users/bobren/a/pytorch/aten/src/ATen/Context.cpp:80.)
+     return torch._C._get_cublas_allow_tf32()                                                       
+   W0927 23:02:22.943000 4101112 torch/_functorch/_aot_autograd/graph_compile.py:1798] [0/0] failed to eagerly compile backwards for dynamic, suppressing in case backwards not needed
+   W0927 23:02:22.943000 4101112 torch/_functorch/_aot_autograd/graph_compile.py:1798] [0/0] Tracebac
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

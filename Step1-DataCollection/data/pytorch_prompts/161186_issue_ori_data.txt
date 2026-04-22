@@ -1,0 +1,86 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Memory leak when custom autograd Function is used with AC due to early-stopping
+    - issue_id: 161186
+    - bug_description: ### 🐛 Describe the bug
+
+Originally reported by Alex Nichol in slack channel
+
+```python
+import torch
+import torch.utils.checkpoint
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary
+        return None
+
+
+def op_fn(inp):
+    return MyOp.apply(inp)[0]
+
+
+dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+for i in range(1000):
+    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+    full_out.sum().backward()
+    dummy_input.grad = None  # free gradient memory
+    print(i, torch.cuda.memory_allocated() / 1024**2, "MiB")
+```
+
+This leak happens when a custom autograd Function is the last operation in a checkpointed region (and the autograd Function saves an output for backward). It happens because AC raises an exception to exit the forward early prior to the proper clean up custom autograd Function needs to do when it saves tensors. 
+
+### Versions
+
+main
+
+cc @ezyang @gchanan @zou3519 @kadeng @msaroufim @albanD @gqchen @nikitaved @Varal7 @xmfan
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

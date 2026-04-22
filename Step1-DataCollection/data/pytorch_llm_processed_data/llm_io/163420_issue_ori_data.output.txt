@@ -1,0 +1,68 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: [Fuzzer][Eager/Compile Divergence] Inductor fails ont2.fill_diagonal_(t1.item())call
+
+**Issue ID**: 163420
+
+**Bug Description**: The issue describes a bug where Inductor fails on a `t2.fill_diagonal_(t1.item())` call. There's a divergence between eager and compiled execution.
+
+**Repro Code**: There's a complete reproducible code snippet provided:
+```python
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(arg0, arg1):
+    t0 = arg0 # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    t1 = arg1 # size=(), stride=(), dtype=float32, device=cuda
+    t2 = t0.clone(); t2.fill_diagonal_(t1.item()) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    return t2
+
+arg0 = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+arg1 = torch.empty([], dtype=torch.float32, device='cuda', requires_grad=True) # size=(), stride=(), dtype=float32, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+```
+
+**Repro Output**: The error output shows a Triton compilation failure:
+```
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] Triton compilation failed: triton_poi_fused_fill_1
+
+
+```
+
+I see a Triton compilation error occurring during the execution of a PyTorch function. The error suggests a problem with the `fill_diagonal_` operation when using `torch.compile` with specific configurations. The compilation failure happens in the Triton backend, indicating a potential issue with how the operation is being translated or optimized for GPU execution.
+
+The key observations are the specific function call, the compilation mode, and the Triton-related error. This points to a nuanced interaction between PyTorch's compilation process and the underlying GPU kernel generation.
+
+```
+I'll investigate the specific conditions causing the compilation failure, focusing on the CUDA backend and float32 data type. The error suggests a Triton compilation issue with a specific kernel, likely related to tensor operations. The environment details are sparse, but the problem seems tied to PyTorch's compilation process on CUDA devices.
+
+The key observations involve a 1x1 tensor and a scalar tensor, which might trigger unexpected behavior in the compilation pipeline. I'll need to trace the exact sequence of operations that leads to this Triton kernel generation failure.
+``````json
+{
+  "title": "[Fuzzer][Eager/Compile Divergence] Inductor fails ont2.fill_diagonal_(t1.item())call",
+  "error_description": "Inductor fails on t2.fill_diagonal_(t1.item()) call with Triton compilation error when using torch.compile with fullgraph=True and dynamic=True",
+  "repro_code": "import torch\ntorch._dynamo.config.capture_scalar_outputs = True\n\ndef foo(arg0, arg1):\n    t0 = arg0 # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda\n    t1 = arg1 # size=(), stride=(), dtype=float32, device=cuda\n    t2 = t0.clone(); t2.fill_diagonal_(t1.item()) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda\n    return t2\n\narg0 = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda\narg1 = torch.empty([], dtype=torch.float32, device='cuda', requires_grad=True) # size=(), stride=(), dtype=float32, device=cuda\nif __name__ == '__main__':\n    out_eager = foo(arg0, arg1)\n    out_eager.sum().backward()\n    print('Eager Success! ✅')\n    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)\n    out_compiled = compiled_foo(arg0, arg1)\n    out_compiled.sum().backward()\n    print('Compile Success! ✅')",
+  "repro_output": "E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] Triton compilation failed: triton_poi_fused_fill_1\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] def triton_poi_fused_fill_1(out_ptr0, xnumel, XBLOCK : tl.constexpr):\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     xnumel = 1\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     xoffset = tl.program_id(0) * XBLOCK\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     xindex = xoffset + tl.arange(0, XBLOCK)[:]\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     xmask = tl.full([XBLOCK], True, tl.int1)\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     tmp0 = zuf0\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     tmp1 = tmp0.to(tl.float32)\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     tl.store(out_ptr0 + (tl.full([XBLOCK], 0, tl.int32)), tmp1, None)\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] \nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] metadata: {'signature': {'out_ptr0': '*fp32', 'xnumel': 'constexpr', 'XBLOCK': 'constexpr'}, 'device': 0, 'constants': {'xnumel': 1, 'XBLOCK': 1}, 'configs': [{(0,): [['tt.divisibility', 16]]}], 'device_type': 'cuda', 'num_warps': 1, 'num_stages': 1, 'debug': True, 'cc': 80}\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] Traceback (most recent call last):\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]   File \"/data/users/bobren/a/pytorch/torch/_inductor/runtime/triton_heuristics.py\", line 758, in _precompile_config\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     binary = triton.compile(*compile_args, **compile_kwargs)\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]   File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/triton/compiler/compiler.py\", line 339, in compile\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     module = src.make_ir(options, codegen_fns, module_map, context)\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]   File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/triton/compiler/compiler.py\", line 83, in make_ir\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] triton.compiler.errors.CompilationError: at 6:11:\nE0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] def triton_poi_fused_fill_1(out_",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "float32",
+    "input_shape": "arg0: [1, 1], arg1: [] (scalar)",
+    "other_conditions": "torch._dynamo.config.capture_scalar_outputs = True, torch.compile with fullgraph=True and dynamic=True"
+  },
+  "affected_api": "fill_diagonal_",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "3.10",
+    "os": "unknown",
+    "hardware": "CUDA (compute capability 80)"
+  },
+  "labels": ["Fuzzer", "Eager/Compile Divergence"]
+}
+```

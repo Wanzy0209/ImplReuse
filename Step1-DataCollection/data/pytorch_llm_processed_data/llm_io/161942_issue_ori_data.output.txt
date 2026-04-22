@@ -1,0 +1,67 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: "Any way to convert c10::cuda::CUDAStream from and to torch.cuda.Stream"
+
+**Issue ID**: 161942
+
+**Bug Description**: The user wants to subclass ProcessGroupNCCL to enable communication using a user-specified CUDA stream. They're trying to pass a Python `torch.cuda.Stream` to a C++ function that expects `c10::cuda::CUDAStream`, but there's no automatic conversion.
+
+**Repro Code**: The issue includes C++ code for a custom ProcessGroupNCCL subclass and Python code that attempts to use it. The key part is:
+```python
+# Create a custom CUDA stream
+device = torch.device(f"cuda:{rank}")
+torch.cuda.set_device(device)
+custom_stream = torch.cuda.Stream(device=device)
+print(f"[Rank {rank}] Created custom stream: {custom_stream}")
+  
+# Set the custom stream for this device
+backend.set_nccl_stream_by_device(rank, custom_stream)
+```
+
+**Repro Output**: 
+```
+-- Process 0 terminated with the following error:
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py", line 90, in _wrap
+    fn(i, *args)
+  File "/mnt/code/wangtianxing.wtx/code/streamer-ttv-7b/csrc/ProcessGroupNCCLCustom/example_usage.py", line 84, in example_with_custom_streams
+    backend.set_nccl_stream_by_device(rank, custom_stream)
+TypeError: set_nccl_stream_by_device(): incompatible function arguments. The following argument types are supported:
+    1. (self: custom_nccl_backend.CustomProcessGroupNCCL, device_index: int, stream: c10::cuda::CUDAStream) -> None
+
+Invoked with: <custom_nccl_backend.CustomProcessGroupNCCL object at 0x7f1f528a39b0>, 0, <torch.cuda.Stream device=cuda:0 cuda_stream=0xa43a250>
+
+
+```
+
+I see a type mismatch between the Python `torch.cuda.Stream` and the C++ `c10::cuda::CUDAStream`. The error indicates that the function expects a specific C++ stream type, but the Python stream cannot be automatically converted. This suggests a need for an explicit conversion mechanism between these stream types.
+
+The key challenge is finding a way to bridge the Python and C++ stream representations, likely requiring a custom conversion method or wrapper to enable proper stream handling across language boundaries.
+
+``````json
+{
+  "title": "Any way to convert c10::cuda::CUDAStream from and to torch.cuda.Stream",
+  "error_description": "I want to subclass ProcessGroupNCCL to enable communication using a user-specified CUDA stream. It seems that `c10::cuda::CUDAStream` cannot be converted to and from Python's `torch.cuda.Stream`. I think converting a torch.cuda.Stream back and forth between Python and C++ should be a very common need. Does PyTorch provide any built-in helpers for this conversion?",
+
+  "repro_code": "class CustomProcessGroupNCCL: public ProcessGroupNCCL {\npublic:\nusing ProcessGroupNCCL::ProcessGroupNCCL;\n  \n// Set NCCL stream by device index\nvoid setNcclStreamByDevice(int device_index, const c10::cuda::CUDAStream& stream) {\n  std::string key = std::to_string(device_index);\n  std::lock_guard<std::mutex> guard(mutex_);\n  if (ncclStreams_.find(key) != ncclStreams_.end()) {\n    ncclStreams_.at(key) = stream;\n  } else {\n    TORCH_CHECK(false, \"Key not found in ncclStreams_: \", key);\n  }\n}\n  \n// Get NCCL stream by device index\nc10::cuda::CUDAStream getNcclStreamByDevice(int device_index) {\n  std::string key = std::to_string(device_index);\n  std::lock_guard<std::mutex> guard(mutex_);\n  auto it = ncclStreams_.find(key);\n  TORCH_CHECK(it != ncclStreams_.end(), \"Key not found in ncclStreams_: \", key);\n  return it->second;\n}\n  \n// List all available NCCL stream keys\nstd::vector<std::string> getAvailableStreamKeys() {\n  std::lock_guard<std::mutex> guard(mutex_);\n  std::vector<std::string> keys;\n  for (const auto& pair : ncclStreams_) {\n    keys.push_back(pair.first);\n  }\n  return keys;\n}\n\n// List all available NCCL streams \nstd::unordered_map<std::string, c10::cuda::CUDAStream> getAvailableStreams(){\n  return ncclStreams_;\n} \n  \nprotected:\nstd::mutex mutex_;\n};\n\nimport custom_nccl_backend\n\ndef setup_custom_nccl_backend():\n  \"\"\"\n  Register the custom NCCL backend with PyTorch distributed.\n  \"\"\"\n  def custom_nccl_backend_creator(store, rank, size, *args):\n      # Create default options for ProcessGroupNCCL\n      options = torch.distributed.ProcessGroupNCCL.Options()\n      # You can customize options here if needed\n      # options.timeout = timedelta(seconds=300)\n      # options.is_high_priority_stream = False\n      \n      # Use our custom factory function\n      print(\"register args:\", store, rank, size, *args)\n      return custom_nccl_backend.create_custom_nccl_backend(\n          store, rank, size, options\n      )\n  \n  # Register the custom backend\n  dist.Backend.register_backend(\"CUSTOM_NCCL\", custom_nccl_backend_creator\n# main\ndist.init_process_group(\n      backend=\"cuda:custom_nccl\", \n      rank=rank, \n      world_size=world_size\n  )\n  \n# Get the process group\npg = dist.group.WORLD\nbackend = pg._get_backend(torch.device(f\"cuda:{rank}\"))\n# Create a custom CUDA stream\ndevice = torch.device(f\"cuda:{rank}\")\ntorch.cuda.set_device(device)\ncustom_stream = torch.cuda.Stream(device=device)\nprint(f\"[Rank {rank}] Created custom stream: {custom_stream}\")\n  \n# Set the custom stream for this device\nbackend.set_nccl_stream_by_device(rank, custom_stream)",
+  "repro_output": "-- Process 0 terminated with the following error:\nTraceback (most recent call last):\n  File \"/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py\", line 90, in _wrap\n    fn(i, *args)\n  File \"/mnt/code/wangtianxing.wtx/code/streamer-ttv-7b/csrc/ProcessGroupNCCLCustom/example_usage.py\", line 84, in example_with_custom_streams\n    backend.set_nccl_stream_by_device(rank, custom_stream)\nTypeError: set_nccl_stream_by_device(): incompatible function arguments. The following argument types are supported:\n    1. (self: custom_nccl_backend.CustomProcessGroupNCCL, device_index: int, stream: c10::cuda::CUDAStream) -> None\n\nInvoked with: <custom_nccl_backend.CustomProcessGroupNCCL object at 0x7f1f528a39b0>, 0, <torch.cuda.Stream device=cuda:0 cuda_stream=0xa43a250>",
+
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "unknown",
+    "input_shape": "unknown",
+    "other_conditions": "Using custom ProcessGroupNCCL subclass with torch.cuda.Stream"
+  },
+
+  "affected_api": "c10::cuda::CUDAStream, torch.cuda.Stream, ProcessGroupNCCL",
+
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "3.12",
+    "os": "unknown",
+    "hardware": "CUDA"
+  },
+
+  "labels": ["module: cuda", "module: distributed"]
+}
+```

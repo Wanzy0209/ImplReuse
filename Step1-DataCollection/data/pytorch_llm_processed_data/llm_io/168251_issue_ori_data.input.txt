@@ -1,0 +1,169 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [Compile Error] TorchDynamo returns a tuple output that breaks shape access
+    - issue_id: 168251
+    - bug_description: ### 🐛 Describe the bug
+
+Description:
+When running a VAE model whose forward() returns a tuple (reconstruction, mu, log_var), eager mode executes correctly. However, under torch.compile, the returned object is still a tuple, but accessing output.shape triggers:AttributeError: 'tuple' object has no attribute 'shape'
+code：
+```
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class VAE(nn.Module):
+
+    def __init__(self, input_dim, hidden_dim, latent_dim):
+        super(VAE, self).__init__()
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_var = nn.Linear(hidden_dim, latent_dim)
+        self.decoder = nn.Sequential(nn.Linear(latent_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, input_dim), nn.Sigmoid())
+
+    def encode(self, x):
+        h = self.encoder(x)
+        mu = self.fc_mu(h)
+        log_var = self.fc_var(h)
+        return (mu, log_var)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def decode(self, z):
+        return self.decoder(z)
+
+    def forward(self, x):
+        x = x.view(-1, self.input_dim)
+        (mu, log_var) = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        reconstruction = self.decode(z)
+        return (reconstruction, mu, log_var)
+
+def get_default_model():
+    input_dim = 784
+    hidden_dim = 400
+    latent_dim = 20
+    model = VAE(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim)
+    return model
+
+def get_sample_inputs():
+    batch_size = 32
+    input_dim = 784
+    x = torch.randn(batch_size, input_dim)
+    return (x,)
+
+def main():
+    model = get_default_model()
+    model.eval()
+    inputs = get_sample_inputs()
+    with torch.no_grad():
+        (reconstruction, mu, log_var) = model(*inputs)
+    print('Model executed successfully!')
+    print(f'Input shape: {inputs[0].shape}')
+    print(f'Reconstruction shape: {reconstruction.shape[1]}')
+    print(f'Mu shape: {mu.shape}')
+    print(f'Log_var shape: {log_var.shape}')
+    print(f'Model parameters: {sum((p.numel() for p in model.parameters()))}')
+    compiled_model = torch.compile(model)
+    with torch.no_grad():
+        output_compile = compiled_model(*inputs)
+    print(f'Compile  shape: {output_compile.shape}')
+if __name__ == '__main__':
+    main()
+
+```
+output:
+```
+Model executed successfully!
+Input shape: torch.Size([32, 784])
+Reconstruction shape: 784
+Mu shape: torch.Size([32, 20])
+Log_var shape: torch.Size([32, 20])
+Model parameters: 973624
+Traceback (most recent call last):
+ line 67, in <module>
+    main()
+line 65, in main
+    print(f'Compile  shape: {output_compile.shape}')
+AttributeError: 'tuple' object has no attribute 'shape'
+
+```
+
+### Versions
+
+PyTorch version: 2.8.0+cu126
+Is debug build: False
+CUDA used to build PyTorch: 12.6
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 24.04.1 LTS (x86_64)
+GCC version: (Ubuntu 9.5.0-6ubuntu2) 9.5.0
+Clang version: Could not collect
+CMake version: version 4.0.3
+Libc version: glibc-2.39
+
+Python version: 3.9.7 (default, Jul 16 2025, 16:34:47) [GCC 13.3.0] (64-bit runtime)
+Python platform: Linux-6.14.0-29-generic-x86_64-with-glibc2.39
+Is CUDA available: False
+CUDA runtime version: Could not collect
+CUDA_MODULE_LOADING set to: N/A
+GPU models and configuration: GPU 0: NVIDIA GeForce RTX 4060 Laptop GPU
+Nvidia driver version: 580.65.06
+cuDNN version: Could not collect
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: True
+
+CPU:
+Architecture: x86_64
+CPU op-mode(s): 32-bit, 64-bit
+Address sizes: 39 bits physical, 48 bits virtual
+Byte Order: Little Endian
+CPU(s): 32
+On-line CPU(s) list: 0-31
+Vendor ID: GenuineIntel
+Model name: Intel(R) Core(TM) i9-14900HX
+CPU family: 6
+Model: 
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

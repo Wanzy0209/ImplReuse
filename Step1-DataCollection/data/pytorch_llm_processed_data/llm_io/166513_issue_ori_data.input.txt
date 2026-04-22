@@ -1,0 +1,135 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Severe Memory Leak in Dataloader on Windows when using a long-live/infinite iterator
+    - issue_id: 166513
+    - bug_description: ### 🐛 Describe the bug
+
+# Description
+There appears to be a significant and consistent memory leak in the PyTorch `DataLoader` on the Windows platform. The leak occurs specifically when the DataLoader's iterator is kept alive for a large number of steps (e.g., in an "infinite" sampling loop for step-based training).
+
+The key characteristics of this bug are:
+* System RAM continuously increases until the program crashes or the system becomes unresponsive.
+* The leak occurs even when `num_workers=0`, indicating it is not a multiprocessing-related issue.
+* The leak occurs even when pin_memory=False, indicating it is not related to CUDA pinned memory.
+* With pin_memory=True: The Shared GPU Memory (as reported by Windows Task Manager) continuously increases, even if no tensors are ever moved to a CUDA device. This eventually leads to a CUDA out of memory error, while the dedicated GPU memory remains unused.
+* Explicitly calling gc.collect() does not free the leaked memory, suggesting the leak is happening in a lower-level, native (C++) component, not in Python's managed memory.
+* The leak is independent of the underlying I/O library, as it has been reproduced with both `OpenCV (cv2)` and `torchvision.io.read_image`.
+* Crucially, a standard, finite-epoch training loop (for epoch in ...: for batch in dataloader: ...) does not leak memory.
+
+This evidence strongly suggests that the DataLoaderIterator object accumulates native resources during its lifetime that are only released upon its destruction. In an infinite loop, the iterator is never destroyed, causing the resources to leak continuously.
+
+# To Reproduce
+The following minimal, self-contained script reliably reproduces the memory leak. 
+
+```python3
+import torch
+from torch.utils.data import Sampler, DataLoader, Dataset
+import itertools
+import random
+import gc
+import cv2
+import numpy as np
+from pathlib import Path
+
+IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".ppm", ".bmp", ".pgm", ".tif", ".tiff", ".webp")
+
+def is_image_file(filename: str | Path) -> bool:
+    filename = Path(filename)
+    return filename.suffix.lower() in IMG_EXTENSIONS
+
+def read_image(path: str | Path, as_tensor: bool = False) -> torch.Tensor | np.ndarray:
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image = image.astype(np.float32) / 255.0
+    if as_tensor:
+        return torch.from_numpy(image).permute(2, 0, 1)
+    return image
+
+def read_mask(path: str | Path, as_tensor: bool = False) -> torch.Tensor | np.ndarray:
+    mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    mask = mask.astype(np.int8)
+    if as_tensor:
+        mask = torch.from_numpy(mask)
+    return mask
+
+class SegDataset(Dataset):
+    """Maks dataset for segmentation."""
+    
+    def __init__(
+        self, 
+        image_dir: str | Path,
+        mask_dir: str | Path, 
+    ):
+        super().__init__()
+        self.image_dir = Path(image_dir)
+        self.mask_dir = Path(mask_dir)
+
+        image_paths = list(self.image_dir.glob("*"))
+        self.image_paths = [i for i in image_paths if is_image_file(i)]
+
+        self.mask_paths = []
+        for img_p in self.image_paths:
+            file_name = os.path.splitext(os.path.basename(img_p))[0]
+            self.mask_paths.append(os.path.join(self.mask_dir, file_name + ".png"))
+    
+    def __getitem__(self, index):
+        image_path = self.image_paths[index]
+        image = read_image(image_path, as_tensor=True)
+
+        mask_path = self.mask_paths[index]
+        mask = read_mask(mask_path, as_tensor=True)
+        
+        return {"image": image, "mask": mask.long()}
+    
+    def __len__(self):
+        return len(self.image_paths)
+
+
+class InfiniteSampler(Sampler):
+    
+    def __init__(self, data_source: Dataset, shuffle: bool = True):
+        self.data_source = data_source
+        self.shuffle = shuffle
+        self.num_samples = len(self.data_source)
+        self.start_index = 0
+
+    def __iter__(self):
+        while True:
+            in
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

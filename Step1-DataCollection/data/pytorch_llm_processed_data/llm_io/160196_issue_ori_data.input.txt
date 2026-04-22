@@ -1,0 +1,123 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Assertion Error When Freeing Unbacked Symbolic Shapes in Torch.Export
+    - issue_id: 160196
+    - bug_description: ### 🐛 Describe the bug
+
+When trying to export the TinyLlama model(It should be a general issue for all llama models) using torch.export.export API, I run into the following error:
+```
+Traceback (most recent call last):
+  File "torch_reproducer.py", line 41, in <module>
+    exported_program = torch.export.export(
+  File "torch/export/__init__.py", line 319, in export
+    raise e
+  File "torch/export/__init__.py", line 286, in export
+    return _export(
+  File "torch/export/_trace.py", line 1164, in wrapper
+    raise e
+  File "torch/export/_trace.py", line 1130, in wrapper
+    ep = fn(*args, **kwargs)
+  File "torch/export/exported_program.py", line 123, in wrapper
+    return fn(*args, **kwargs)
+  File "torch/export/_trace.py", line 2176, in _export
+    ep = _export_for_training(
+  File "torch/export/_trace.py", line 1164, in wrapper
+    raise e
+  File "torch/export/_trace.py", line 1130, in wrapper
+    ep = fn(*args, **kwargs)
+  File "torch/export/exported_program.py", line 123, in wrapper
+    return fn(*args, **kwargs)
+  File "torch/export/_trace.py", line 2037, in _export_for_training
+    export_artifact = export_func(
+  File "torch/export/_trace.py", line 1501, in _strict_export
+    aten_export_artifact = _to_aten_func(
+  File "torch/export/_trace.py", line 1802, in _export_to_aten_ir_make_fx
+    return _produce_aten_artifact(
+  File "torch/export/_trace.py", line 547, in _produce_aten_artifact
+    _replace_unbacked_bindings(gm)
+  File "torch/export/_trace.py", line 503, in _replace_unbacked_bindings
+    unbacked_bindings := _free_unbacked_symbols_with_path(
+  File "torch/fx/experimental/symbolic_shapes.py", line 1154, in _free_unbacked_symbols_with_path
+    assert isinstance(a, FakeTensor)
+AssertionError
+
+```
+
+After some initial investigation I found out that in `_free_unbacked_symbols_with_path` we assert if a node's tensor is FakeTensor object. For this model, a Batched Tensor object is formed which inherits torch.Tensor. This BatchedTensor object is what fails the assertion of FakeTensor and causes an issue. I am not sure if this is an edge case that was missed while developing this function but I hope to find a solution to this problem.
+
+In this line in llama modelling code https://github.com/huggingface/transformers/blob/7b20915f4e36a801873a26351b8b030c4d8d7b3b/src/transformers/masking_utils.py#L176 a vmap is used which results in the underlying tensor for this node to be traced as a BatchedTensor and hence results in this error. This change was introduced in transformers 4.53.0+ as per my knowledge.
+
+A minimal reproducer :
+
+```
+import torch
+from transformers.integrations.executorch import TorchExportableModuleWithStaticCache
+from transformers import AutoModelForCausalLM
+
+MODEL_ID = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+
+class TorchExportableModuleWithStaticCacheDynamicShape(TorchExportableModuleWithStaticCache):
+    def forward(self, input_ids: torch.Tensor, cache_position: torch.Tensor) -> torch.Tensor:
+        abc = cache_position.unsqueeze(0)
+        outs = self.model(
+            input_ids=input_ids,
+            position_ids=abc,
+            cache_position=cache_position,
+            past_key_values=self.static_cache,
+            use_cache=True,
+        )
+        return outs.logits
+
+model = AutoModelForCausalLM.from_pretrained(MODEL_ID)
+
+# For a smaller model i.e only 1 attention head use the below line. This makes it easier to debug
+# model = AutoModelForCausalLM.from_pretrained(MODEL_ID, num_hidden_layers=1)
+
+with torch.no_grad():
+    example_input_ids = torch.ones(1, 8, dtype=torch.long)
+    example_cache_position = torch.arange(0, 8, dtype=torch.long)
+    model_config = None
+    gen_config = None
+    model.generation_config.cache_implementation = "static"
+    model.generation_config.cache_config = {"batch_size": 1, "max_cache_len": 512}
+    model.generation_config.max_new_tokens = 100
+    gen_config = model.generation_config
+    model_config = model.config
+    model = TorchExportableModuleWithStaticCacheDynamicS
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

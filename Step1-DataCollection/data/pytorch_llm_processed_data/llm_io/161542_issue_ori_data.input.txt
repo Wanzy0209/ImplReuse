@@ -1,0 +1,90 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [dynamo] Codegen error when Python code has local and cell with same name
+    - issue_id: 161542
+    - bug_description: ```python
+import torch
+
+keys = range(10)
+allowed = [0, 1, 2, 3]
+
+
+def fn(x):
+    x = x + 1
+    torch._dynamo.graph_break()
+    key = [key for key in keys if key in allowed]
+
+    def inner():
+        nonlocal key
+
+    return x + key[0]
+
+
+torch.compile(fn, backend="eager")(torch.ones(3))
+```
+gives error
+```
+...
+  File "/data/users/williamwen/pytorch/torch/_dynamo/resume_execution.py", line 296, in lookup
+    cls.cache[code][key] = cls.generate(code, lineno, *key)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/williamwen/pytorch/torch/_dynamo/resume_execution.py", line 505, in generate
+    new_code, _ = transform_code_object(code, update)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/williamwen/pytorch/torch/_dynamo/bytecode_transformation.py", line 1469, in transform_code_object
+    _, bytecode = clean_and_assemble_instructions(instructions, keys, code_options)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/williamwen/pytorch/torch/_dynamo/bytecode_transformation.py", line 1485, in clean_and_assemble_instructions
+    fix_vars(instructions, code_options, varname_from_oparg=varname_from_oparg)
+  File "/data/users/williamwen/pytorch/torch/_dynamo/bytecode_transformation.py", line 1379, in fix_vars
+    instructions[i].arg = varnames[instructions[i].argval]
+                          ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+torch._dynamo.exc.InternalTorchDynamoError: KeyError: key
+
+from user code:
+   File "/data/users/williamwen/pytorch/playground3.py", line 11, in fn
+    torch._dynamo.graph_break()
+```
+
+This is because the original code refers to `key` as both a cell and a local variable, but the resume function revers to `key` only as a free variable.
+
+This was discovered due to an internal inductor test failure (https://www.internalfb.com/intern/test/562950131984224): `test/inductor/test_triton_kernels.py -k test_autotune_unbacked`
+
+cc @chauhang @penguinwu @voznesenskym @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @chenyang78 @kadeng @amjames @Lucaskabela
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

@@ -1,0 +1,121 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: AOTAutograd view replay crashes when an intermediate aliased base becomes non-contiguous after Inductor padding
+    - issue_id: 163328
+    - bug_description: ### 🐛 Describe the bug
+
+Under `torch.compile(backend="inductor", mode="reduce-overhead", fullgraph=True)`, AOTAutograd’s runtime view-replay for aliased outputs can crash with:
+```
+RuntimeError: view size is not compatible with input tensor's size and stride (at least one dimension spans across two contiguous subspaces). Use .reshape(...) instead.
+```
+Root cause (from debugging): an intermediate base tensor (internally marked is_output but not user-visible) gets padded by Inductor, which makes it non-contiguous at runtime. AOTAutograd later tries to replay recorded view metas off this base and hits a stride/size compatibility error.
+
+In the minimal repro the base comes from a tensor produced after concatenation, but `cat` is incidental—any sequence that produces the same padded, non-contiguous intermediate base will trigger the issue.
+
+I also tried forcing contiguity/materialization on the intermediate base by calling `.contiguous()` or `.clone()`. This is ineffective: prior to Inductor’s padding pass the tensor is already contiguous, so these ops are treated as no-ops/folded away during compilation. The padding happens after that (when the tensor is marked is_output but not user-visible), which changes its layout to non-contiguous. As a result, view replay still sees a padded, non-contiguous base and the same crash occurs.
+
+**Trigger conditions (from the repro)**
+
+- The intermediate base is marked is_output internally but is not a user-visible output (hence eligible for padding/realignment).
+
+- There are two (or more) outputs that are views (e.g., reshape) of this same base.
+
+- With view_replay_for_aliased_outputs=True (default), _functionalize_apply_view_metas attempts replay on the padded base and fails.
+
+**Environment**
+
+- PyTorch version: 2.4.1+cu121
+- Python version: 3.8.17 
+
+Also reproduces on:
+- Python 3.10 + PyTorch 2.6.0 (wheel) — same runtime error observed.
+
+**Minimal Repro**
+
+```python
+import torch
+from torch import nn
+
+class ReproMin(nn.Module):
+    def __init__(self, num_points_out: int = 120, lc_num: int = 2, input_channels: int = 16):
+        super().__init__()
+        self.num_points_out = num_points_out
+        self.lc_num = lc_num
+        self.linear_main = nn.Linear(input_channels, num_points_out * 2)
+        self.linear_lc = nn.Linear(input_channels, num_points_out * 2)
+
+    def forward(self, x: torch.Tensor):
+        # x: (bs, 9, 7, C)
+        bs, num_lat, num_lon, C = x.shape
+        index = num_lat - self.lc_num
+
+        # Flatten spatial dims per branch
+        main_x = x[:, :index].reshape(bs * index * num_lon, C)
+        lc_x = x[:, index:].reshape(bs * self.lc_num * num_lon, C)
+
+        # Project and restore shapes
+        refline = self.linear_main(main_x).reshape(bs, index, num_lon, -1)      # (bs, 7, 7, 240)
+        lc_refline = self.linear_lc(lc_x).reshape(bs, self.lc_num, num_lon, -1) # (bs, 2, 7, 240)
+
+        # Forcing .contiguous() to avoid potential stride issues does not help here
+        base_tensor = torch.cat([refline, lc_refline], dim=1).contiguous()  # (bs, 9, 7, 240)
+
+        # Two reshapes derived from the same cat() output
+        ten0 = base_tensor.reshape(bs, num_lat, num_lon, self.num_points_out, 2)  # (bs, 9, 7, 120, 2)
+        ten1 = base_tensor.reshape(bs, num_lat * num_lon, 240)                    # (bs, 63, 240)
+        return {"ten0": ten0, "ten1": ten1}
+
+def main():
+    device = "cuda"
+    bs, num_lat, num_lon, C = 36, 9, 7, 16
+    model = ReproMin(num_points_out=120, lc_num=2, input_channels=C).to(device)
+    model = torch.compile(model, backend="inductor", mode="reduce-overhead", fullgraph=True)
+    x = torch.randn(bs, num_lat, num_lon, C, device=device, dtype=torch.float32, requires_grad=True)
+    out = model(x)
+    print({k: tuple(v.shape) for k, v in out.items()})
+
+if __name__ == "__main__":
+    # If needed for testing toggles:
+    # import torch._functorch.config
+    # torch._functorch.config.view_replay_for_aliased_outputs = False
+    main()
+```
+
+**Expected behavi
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

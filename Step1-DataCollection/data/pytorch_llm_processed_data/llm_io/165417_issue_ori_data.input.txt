@@ -1,0 +1,128 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [torch.compile][fullgraph][dynamic shapes]torch.unique(aten._unique2.default) rejected as “Dynamic shape operator” in fullgraph mode (eager OK)
+    - issue_id: 165417
+    - bug_description: ### 🐛 Describe the bug
+
+A tiny model that calls torch.unique(sorted=True, return_inverse=True) and returns a tuple (unique_values, inverse_indices) runs fine in eager, but fails under torch.compile(fullgraph=True) with:
+```
+torch._dynamo.exc.Unsupported: Dynamic shape operator
+Explanation: Operator `aten._unique2.default`'s output shape depends on input Tensor data.
+Hint: Enable tracing of dynamic shape operators with `torch._dynamo.config.capture_dynamic_output_shape_ops = True`
+```
+This blocks full-graph compilation for a very common data-dependent op (unique) used in tokenization / indexing pipelines.
+
+### Minimal Repro
+```python
+import torch, time
+from torch import nn
+
+class MyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        # _unique2.default under the hood
+        _x, _i = torch.unique(x, sorted=True, return_inverse=True)
+        _x = _x.clone().detach()   # keep it simple
+        return self.relu(_x), _i   # tuple output
+
+def GetInput():
+    return torch.randn(8)         # CPU or CUDA; same failure in front-end
+
+def run_once(model, x, label):
+    model.eval()
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        y = model(x)
+    print(f"[{label}] ok, types={[type(t) for t in (y if isinstance(y, (tuple, list)) else [y])]} "
+          f"time={(time.perf_counter()-t0)*1000:.3f}ms")
+    return y
+
+def main():
+    print("torch.__version__ =", torch.__version__)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    m = MyModel().to(device)
+    x = GetInput().to(device)
+
+    # Eager: OK
+    run_once(m, x, "eager")
+
+    # Compile: fails in Dynamo front-end (fullgraph=True)
+    cm = torch.compile(m, fullgraph=True)
+    run_once(cm, x, "compiled")   # <-- raises Unsupported: Dynamic shape operator
+
+if __name__ == "__main__":
+    main()
+```
+
+### Error logs
+
+```
+[eager] output: [[...unique values...], [...inverse indices...]]
+=== torch.compile(fullgraph=True) ===
+torch._dynamo.exc.Unsupported: Dynamic shape operator
+  Explanation: Operator `aten._unique2.default`'s output shape depends on input Tensor data.
+  Hint: Enable tracing of dynamic shape operators with `torch._dynamo.config.capture_dynamic_output_shape_ops = True`
+from user code:
+  _x, _i = torch.unique(x, sorted=True, return_inverse=True)
+```
+
+### Versions
+
+```
+PyTorch version:  2.8.0a0+gitba56102 
+Is debug build: True
+CUDA used to build PyTorch: 12.6
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.4 LTS (x86_64)
+GCC version: (Ubuntu 12.3.0-1ubuntu1~22.04) 12.3.0
+Clang version: Could not collect
+CMake version: version 3.22.1
+Libc version: glibc-2.35
+
+Python version: 3.10.16 (main, Dec 11 2024, 16:24:50) [GCC 11.2.0] (64-bit runtime)
+Python platform: Linux-6.8.0-59-generic-x86_64-with-glibc2.35
+Is CUDA available: True
+```
+
+cc @chauhang @penguinwu
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

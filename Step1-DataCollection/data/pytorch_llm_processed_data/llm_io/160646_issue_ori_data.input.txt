@@ -1,0 +1,147 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: AOT compilation of Triton op fails in PyTorch 2.8
+    - issue_id: 160646
+    - bug_description: ### 🐛 Describe the bug
+
+I have a model that works fine with `aoti_compile_and_package` in PyTorch 2.7, but after updating to PyTorch 2.8 compilation fails. I managed to distil the issue into a small repro:
+
+```python
+import tempfile
+
+import torch
+import triton
+import triton.language as tl
+from torch.library import triton_op, wrap_triton
+
+
+@triton.jit
+def my_kernel(
+    out1,
+    out2,
+):
+    # the actual kernel does something more meaningful of course
+    tl.store(out1, 1.0)
+    tl.store(out2, 1.0)
+
+
+@triton_op("repro::my_triton_op", mutates_args={})
+def my_triton_op(
+    q: torch.Tensor,
+    block_size: int = 128,
+) -> torch.Tensor:
+    out1 = torch.empty((1,), device=q.device)
+    out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)
+
+    wrap_triton(my_kernel)[(1, 1)](
+        out1,
+        out2,
+    )
+
+    return out1
+
+
+class MyModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, q):
+        return my_triton_op(q)
+
+
+def main():
+    model = MyModule().to("cuda")
+    with torch.inference_mode():
+        q = torch.randn(1024, device="cuda")
+        exported_model = torch.export.export(model, (q,), dynamic_shapes=({0: torch.export.Dim("dim")},))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        torch._inductor.aoti_compile_and_package(
+            exported_model,
+            package_path=tmpdir + "/package.pt2",
+        )
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Using PyTorch 2.8 this fails with:
+
+```
+Traceback (most recent call last):
+  File "/home/dthul/repro/repro.py", line 55, in <module>
+    main()
+  File "/home/dthul/repro/repro.py", line 48, in main
+    torch._inductor.aoti_compile_and_package(
+  File "/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/__init__.py", line 151, in aoti_compile_and_package
+    return aot_inductor_minifier_wrapper(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/debug.py", line 961, in aot_inductor_minifier_wrapper
+    raise e
+  File "/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/debug.py", line 931, in aot_inductor_minifier_wrapper
+    return func(
+           ^^^^^
+  File "/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/__init__.py", line 194, in _aoti_compile_and_package_inner
+    aoti_files = aot_compile(gm, args, kwargs, options=inductor_configs)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/__init__.py", line 301, in aot_compile
+    return compile_fx_aot(
+           ^^^^^^^^^^^^^^^
+  File "/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 1820, in compile_fx_aot
+    compiled_artifacts = compile_fx(
+                         ^^^^^^^^^^^
+  File "/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 2002, in compile_fx
+    return compile_fx(
+           ^^^^^^^^^^^
+  File "/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 2059, in compile_fx
+    return compile_fx(
+           ^^^^^^^^^^^
+  File "/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 2409, in compile_fx
+    return inference_compiler(unlifted_gm, example_inputs_)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_functorch/aot_autograd.py", line 483, in __call__
+    return self.compiler_fn(gm, example_inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 2250, in fw_compiler_base
+    return inner_compile(
+           ^^^^^^^^^^^^^^
+  File "/home/dthul/.local/share/uv/python/cpython-3.12.8-linux-x86_64-gnu/lib/python3.12/contextlib.py", line 81, in inner
+    return func(*args, **kwds)
+  
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

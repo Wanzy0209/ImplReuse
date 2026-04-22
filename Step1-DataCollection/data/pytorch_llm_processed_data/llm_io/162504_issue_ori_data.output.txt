@@ -1,0 +1,50 @@
+Let me analyze the GitHub issue and extract the structured information as requested.
+
+From the issue:
+
+1. **title**: "torch.utils.checkpoint.checkpoint does not work under stream capture to a cuda graph"
+
+2. **bug_description**: The issue describes that `torch.utils.checkpoint.checkpoint` doesn't work when used with CUDA graph capture. The problem is that `torch.cuda.get_rng_state()` and `torch.cuda.set_rng_state()` are banned during stream capture due to assertions. Even if those assertions were commented out, the RNG state isn't being tracked correctly. This affects people who want to run training with activation recomputation at high speed.
+
+3. **repro_code**: There's a complete reproducible code snippet provided in the issue.
+
+4. **repro_output**: The issue mentions it "will fail with an assertion error from current_seed" and that "the assertion in my above test case would fail because the rng state isn't being tracked correctly."
+
+5. **trigger_conditions**:
+   - backend: CUDA (mentioned "cuda" multiple times, "CUDAGraph", "CUDAGeneratorImpl")
+   - dtype: Not explicitly mentioned, but uses default float types
+   - input_shape: torch.ones(1, device="cuda") - so shape (1,)
+   - other_conditions: Using `torch.utils.checkpoint.checkpoint` with `use_reentrant=False` and `preserve_rng_state=True` inside a CUDA graph capture context
+
+6. **affected_api**: `torch.utils.checkpoint.checkpoint`, `torch.cuda.get_rng_state()`, `torch.cuda.set_rng_state()`, `torch.cuda.CUDAGraph`
+
+7. **environment**:
+   - pytorch_version: "top of tree" (meaning latest development version)
+   - python_version: Not mentioned
+   - os: Not mentioned
+   - hardware: CUDA/GPU (implied)
+
+8. **labels**: Not explicitly provided in the issue, but based on the content it would likely be related to "cuda", "checkpoint", "graph", etc. However, since I should only extract what's explicitly stated, I'll leave this empty or use what's visible.
+ 
+I'll focus on the key technical details of the issue. The core problem involves a conflict between PyTorch's checkpointing mechanism and CUDA graph capture, specifically around random number generation state tracking. The issue highlights a critical limitation for high-performance training scenarios that require activation recomputation.```json
+{
+  "title": "torch.utils.checkpoint.checkpoint does not work under stream capture to a cuda graph",
+  "error_description": "The following does not work today: torch.utils.checkpoint.checkpoint fails when used inside a CUDA graph capture context. It fails with an assertion error from current_seed. The real problem is that torch.cuda.get_rng_state() and torch.cuda.set_rng_state() are banned during stream capture, due to a variety of other assertions. Even if you were to comment out all of the failing assertions in CUDAGeneratorImpl.cpp, the assertion in the test case would fail because the rng state isn't being tracked correctly. This matters because people who want to run training at speed of light in models that depend upon activation recomputation cannot do it right now if the training is cpu-bound.",
+  "repro_code": "import torch\n\ntorch.cuda.manual_seed(42)\n\ndef fn(x):\n    return x * torch.sigmoid(torch.randn(1, device=\"cuda\"))\n\n# initialize device state\nfn(torch.ones(1, device=\"cuda\"))\n\ntorch.cuda.manual_seed(42)\neager_in = torch.ones(1, device=\"cuda\", requires_grad=True)\neager_out = torch.utils.checkpoint.checkpoint(\n    fn, eager_in,\n    use_reentrant=False,\n    preserve_rng_state=True,\n)\neager_in_grad,  = torch.autograd.grad(eager_out, eager_in)\n\ng = torch.cuda.CUDAGraph()\nwith torch.cuda.graph(g):\n    graph_in = torch.ones(1, device=\"cuda\", requires_grad=True)\n    graph_out = torch.utils.checkpoint.checkpoint(\n        fn, graph_in,\n        use_reentrant=False,\n        preserve_rng_state=True,\n    )\n    graph_in_grad,  = torch.autograd.grad(graph_out, graph_in)\n\ntorch.cuda.manual_seed(42)\ng.replay()\nassert torch.allclose(eager_in_grad, graph_in_grad, rtol=0.0, atol=0.0), \"Mismatch in gradient outputs\"\nprint(eager_in_grad)\nprint(graph_in_grad)",
+  "repro_output": "It will fail with an assertion error from current_seed",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "",
+    "input_shape": "(1,)",
+    "other_conditions": "Using torch.utils.checkpoint.checkpoint with use_reentrant=False and preserve_rng_state=True inside a CUDA graph capture context"
+  },
+  "affected_api": "torch.utils.checkpoint.checkpoint, torch.cuda.get_rng_state(), torch.cuda.set_rng_state(), torch.cuda.CUDAGraph",
+  "environment": {
+    "pytorch_version": "top of tree",
+    "python_version": "",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": []
+}
+```

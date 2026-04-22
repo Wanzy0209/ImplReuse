@@ -1,0 +1,18 @@
+{
+  "title": "[DTensor] Inplace ops preduces wrong result",
+  "issue_id": "163374",
+  "bug_description": "```\nfrom torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate\nimport torch\nfrom torch import distributed as dist\nfrom torch.utils.debug_mode import DebugMode\n\n\nif __name__ == '__main__':\n    dist.init_process_group(backend=\"nccl\", world_size=2)\n    rank = dist.get_rank()\n    mesh = init_device_mesh('cuda', (2,))\n\n    tensor = torch.ones(12, 12, device=\"cuda\")\n    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) \n\n    partial_dt = in_dtensor.sum()\n    with DebugMode(record_torchfunction=False) as debug_mode:\n        out = partial_dt.clamp_(max=2)\n        full = out.full_tensor()\n\n    if rank == 0:\n        print(debug_mode.debug_string())\n        # redistribute_input(0, [P] -> [R])\n        #   _c10d_functional::all_reduce(t: f32[], sum, 0)\n        #   _c10d_functional::wait_tensor(t: f32[])\n        # aten::clamp_(t: f32[], None, 2)\n        # _c10d_functional::all_reduce(t: f32[], sum, 0)\n        # _c10d_functional::wait_tensor(t: f32[])\n        # aten::view(t: f32[], [])\n\n        print(out.placements)\n        # (Partial(sum),)\n        # Expected (Replicate(),)\n\n        print(full)\n        # tensor(144., device='cuda:0')\n        # Expected tensor(2., device='cuda:0')\n``` \n\nPlacement is wrong, it should be replicated, instead of Partial(sum)\nTensor output value is also wrong. \n_local_tensor value is also wrong. \n\n\n\n\n\n\ncc @ezyang @gchanan @zou3519 @kadeng @msaroufim @H-Huang @awgu @wanchaol @fegin @fduwjj @wz337 @wconstab @d4l3k @pragupta @dcci @tianyu-l @XilunWu",
+  "apis": [
+    "out.full_tensor",
+    "partial_dt.clamp_",
+    "torch",
+    "debug_mode.debug_string",
+    "partial_sum_dt.clamp_",
+    "dist.init_process_group"
+  ],
+  "best_code": "from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate\nimport torch\nfrom torch import distributed as dist\nfrom torch.utils.debug_mode import DebugMode\n\n\nif __name__ == '__main__':\n    dist.init_process_group(backend=\"nccl\", world_size=2)\n    rank = dist.get_rank()\n    mesh = init_device_mesh('cuda', (2,))\n\n    tensor = torch.ones(12, 12, device=\"cuda\")\n    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) \n\n    partial_dt = in_dtensor.sum()\n    with DebugMode(record_torchfunction=False) as debug_mode:\n        out = partial_dt.clamp_(max=2)\n        full = out.full_tensor()\n\n    if rank == 0:\n        print(debug_mode.debug_string())\n        # redistribute_input(0, [P] -> [R])\n        #   _c10d_functional::all_reduce(t: f32[], sum, 0)\n        #   _c10d_functional::wait_tensor(t: f32[])\n        # aten::clamp_(t: f32[], None, 2)\n        # _c10d_functional::all_reduce(t: f32[], sum, 0)\n        # _c10d_functional::wait_tensor(t: f32[])\n        # aten::view(t: f32[], [])\n\n        print(out.placements)\n        # (Partial(sum),)\n        # Expected (Replicate(),)\n\n        print(full)\n        # tensor(144., device='cuda:0')\n        # Expected tensor(2., device='cuda:0')",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/164729",
+    "https://github.com/pytorch/pytorch/pull/164728"
+  ]
+}

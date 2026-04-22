@@ -1,0 +1,178 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Multiple definitions error when including <torch/csrc/stable/tensor.h> in extension with both CPU and CUDA
+    - issue_id: 164742
+    - bug_description: ### 🐛 Describe the bug
+
+I’m quite excited about the new stable ABI and am porting a custom extension to it.
+I followed the [libtorch_agnostic](https://github.com/pytorch/pytorch/blob/main/test/cpp_extensions/libtorch_agnostic_extension/libtorch_agnostic/csrc/kernel.cpp) test and attempted to include `<torch/csrc/stable/tensor.h>`.
+When I include that header in both CPU and CUDA sources in the same extension, the link fails with a multiple definitions error for `torch::stable::Tensor::scalar_type() const`:
+```
+...
+/usr/bin/ld: /.../src/example/example.o: in function `void std::__detail::__to_chars_10_impl<unsigned int>(char*, unsigned int, unsigned int)': 
+/.../site-packages/torch/include/torch/csrc/stable/tensor_inl.h:17: multiple definition of `torch::stable::Tensor::scalar_type() const';
+/.../build/temp.linux-x86_64-cpython-313/src/example/cuda/example.o:tmpxft_00011dfa_00000000-6_example.compute_90.cudafe1.cpp:(.text+0x16c): first defined here
+collect2: error: ld returned 1 exit status
+...
+```
+This does not happen if I include it in only one of the sources, or if I include `<torch/csrc/stable/tensor_struct.h>` instead.
+Should `Tensor::scalar_type()` be marked inline?
+
+Complete minimal reproducer in the block below.
+<details>
+
+`src/example/example.cpp`
+```cpp
+#include <Python.h>
+#include <torch/csrc/stable/library.h>
+#include <torch/csrc/stable/tensor.h>
+
+
+extern "C" {
+/* Creates a dummy empty _C module that can be imported from Python.
+   The import from Python will load the .so consisting of this file
+   in this extension, so that the STABLE_TORCH_LIBRARY static initializers
+   below are run. */
+PyObject* PyInit__C(void) {
+  static struct PyModuleDef module_def = {
+      PyModuleDef_HEAD_INIT,
+      "_C", /* name of module */
+      NULL, /* module documentation, may be NULL */
+      -1, /* size of per-interpreter state of the module,
+             or -1 if the module keeps state in global variables. */
+      NULL, /* methods */
+  };
+  return PyModule_Create(&module_def);
+}
+}
+
+namespace example {
+
+torch::stable::Tensor myops(const torch::stable::Tensor x) {
+  return x;
+}
+
+void boxed_myops(StableIValue* stack, uint64_t num_args, uint64_t num_outputs) {
+  stack[0] = from(myops(to<torch::stable::Tensor>(stack[0])));
+}
+
+STABLE_TORCH_LIBRARY(example, m) {
+  m.def("myops(Tensor x) -> Tensor");
+}
+
+STABLE_TORCH_LIBRARY_IMPL(example, CPU, m) {
+  m.impl("myops", &boxed_myops);
+}
+
+} // namespace example
+```
+
+
+`src/example/cuda/example.cu`
+```cuda
+#include <torch/csrc/stable/library.h>
+#include <torch/csrc/stable/tensor.h>
+
+
+namespace example {
+torch::stable::Tensor myops_cuda(const torch::stable::Tensor x) {
+  return x;
+}
+
+void boxed_myops_cuda(StableIValue* stack, uint64_t num_args, uint64_t num_outputs) {
+  stack[0] = from(myops_cuda(to<torch::stable::Tensor>(stack[0])));
+}
+
+STABLE_TORCH_LIBRARY_IMPL(example, CUDA, m) {
+  m.impl("myops", &boxed_myops_cuda);
+}
+
+} // namespace example
+```
+
+`src/example/__init__.py`
+```py
+import torch
+
+from . import _C
+
+
+def my_ops(x: torch.Tensor) -> torch.Tensor:
+    return torch.ops.example.myops.default(x)
+
+
+__all__ = ["my_ops"]
+```
+
+`setup.py`
+```py
+
+import os
+
+from setuptools import setup
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+
+os.environ["TORCH_CUDA_ARCH_LIST"] = "Volta;Turing;Ampere;Ada;Hopper"
+setup(
+    ext_modules=[CUDAExtension("example._C", ["src/example/example.cpp", "src/example/cuda/example.cu"])],
+    cmdclass={"build_ext": BuildExtension},
+)
+```
+
+`pyproject.toml`
+```toml
+[build-system]
+requires = ["setuptools", "torch>=2.9.0", "numpy", "ninja"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "example"
+version = "0.1"
+requires-python = ">=3.12"
+dependencies = ["numpy", "torch>=2.9"]
+```
+
+Build and test the wheel:
+```bash
+  if [ ! -d ".venv" ]; then uv venv -p 3.13 .venv; fi
+  uv pip install torch --index-url https://download.pytorch.org/whl/nightly/cu128
+  uv pip install numpy setuptools ninja
+  uv build --no-build-isolation --verbose
+  uv pip inst
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

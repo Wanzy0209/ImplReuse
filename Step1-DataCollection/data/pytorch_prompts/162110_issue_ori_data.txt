@@ -1,0 +1,125 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: unbacked semantics for _reshape_copy not defined.
+    - issue_id: 162110
+    - bug_description: ### 🐛 Describe the bug
+
+The following script passes in torch 2.8 but not in nightly.
+
+```py
+import numpy as np
+import torch
+import torchvision.models as models
+from diffusers import DiffusionPipeline
+
+from transformers import pipeline
+from transformers import AutoModelForCausalLM
+from transformers.models.qwen3_moe.configuration_qwen3_moe import Qwen3MoeConfig
+from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeModel
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+seq_len = torch.export.Dim("seq_len", min=1, max=128)
+
+
+
+def view_decomposition(x: torch.Tensor, size: List[torch.SymInt]) -> torch.Tensor:
+    return torch.ops.aten._reshape_copy.default(x, size)
+
+with torch.no_grad():
+    config = Qwen3MoeConfig(num_hidden_layers=1, num_experts=4, use_cache=False, num_experts_per_tok=2)
+    model = Qwen3MoeModel(config=config).half().cuda()
+    inputs = {
+        "input_ids": torch.randint(0, 128, (1, 12)).cuda(),
+        "position_ids": torch.arange(12).unsqueeze(0).cuda(),
+    }
+    
+    ep = torch.export.export(
+                model,
+                args=(inputs["input_ids"],),
+                kwargs={"position_ids": inputs["position_ids"]},
+                dynamic_shapes=({1: seq_len}, {1: seq_len}),
+                strict=False,
+                # allow_complex_guards_as_runtime_asserts=True,
+            )
+    decomp_table = torch.export.default_decompositions()
+    decomp_table[torch.ops.aten.view.default] = view_decomposition
+
+    after_decomp = ep.run_decompositions(decomp_table=decomp_table)
+    print("Success")
+```
+Output:
+...
+  File "/usr/local/lib/python3.12/dist-packages/torch/fx/experimental/symbolic_shapes.py", line 7885, in run_node
+    result = super().run_node(n)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/fx/interpreter.py", line 256, in run_node
+    return getattr(self, n.op)(n.target, args, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/fx/interpreter.py", line 336, in call_function
+    return target(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/_ops.py", line 841, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/fx/experimental/proxy_tensor.py", line 1406, in __torch_function__
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/_ops.py", line 841, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/_subclasses/functional_tensor.py", line 511, in __torch_dispatch__
+    outs_unwrapped = func._op_dk(
+                     ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/utils/_stats.py", line 28, in wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/fx/experimental/proxy_tensor.py", line 1531, in __torch_dispatch__
+    return proxy_call(self, func, self.pre_dispatch, args, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/fx/experimental/proxy_tensor.py", line 890, in proxy_call
+    r = maybe_handle_decomp(proxy_mode, func, args, kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/fx/experimental/proxy_tensor.py", line 2480, in maybe_handle_decomp
+    out = CURRENT_DECOMPOSITION_TABLE[op](*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/TensorRT/py/torch_tensorrt/dynamo/lowering/_decompositions.py", line 447, in view_decomposition
+    return aten._reshape_copy.default(x, size)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/_ops.py", line 841,
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

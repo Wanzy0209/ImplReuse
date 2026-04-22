@@ -1,0 +1,56 @@
+Let me analyze the GitHub issue to extract the structured information.
+
+**Title**: torch.compile miscompilation when copying from and saving to a state tensor in the same fused kernel
+
+**Issue ID**: 164701
+
+**Bug Description**: The issue describes a miscompilation bug with `torch.compile`. There are three versions of a function that rotates new rows into a state tensor:
+- `slide_to_the_left1`: reference implementation
+- `slide_to_the_left2`: same behavior as slide_to_the_left1
+- `slide_to_the_left3`: a `torch.compile`d copy of `slide_to_the_left2` that exhibits a miscompilation bug
+
+The bug is that when using the compiled version (`slide_to_the_left3`), the state tensor incorrectly has non-zero values in positions that should remain zero. The issue mentions that torch.compile generates a kernel that simultaneously reads from `in_ptr1` and `out_ptr1`, and then invokes that kernel passing `arg1_1` for both `in_ptr1` and `out_ptr1`, creating a race condition.
+
+**Repro Code**: The Python code is provided in the issue.
+
+**Repro Output**: The output would show that `state[:, :-2, :]` contains non-zero values when it should be all zeros.
+
+**Trigger Conditions**:
+- Backend: CUDA (mentioned `device = "cuda"`)
+- dtype: Not explicitly specified for the main tensors, but `torch.int32` is used for indices
+- Input shape: state tensor is `[4, 2048, 1024]`, new_events is `[4, 2, 1024]`
+- Other conditions: Using `torch.compile`, the bug is a race condition that may take multiple attempts to exhibit
+
+**Affected API**: `torch.compile`
+
+**Environment**:
+- PyTorch version: Not explicitly stated
+- Python version: Not explicitly stated
+- OS: Not explicitly stated
+- Hardware: CUDA (mentioned T4, NVIDIA chips)
+
+**Labels**: Based on the issue, likely labels would be: "bug", "torch:compile", "cuda", "miscompilation"
+
+
+I'll focus on the key details of the miscompilation issue. The problem occurs specifically with `torch.compile` on CUDA devices, where a race condition emerges during tensor manipulation. The bug manifests when rotating rows in a state tensor, causing unexpected non-zero values in regions that should remain zero. The core issue involves kernel generation that incorrectly handles input and output pointers, leading to potential data corruption.```json
+{
+  "title": "torch.compile miscompilation when copying from and saving to a state tensor in the same fused kernel",
+  "error_description": "torch.compile generates a kernel for the copy step that simultaneously reads from in_ptr1 and out_ptr1, and then invokes that kernel passing arg1_1 for both in_ptr1 and out_ptr1. This creates a race condition whereby sometimes a block can be read after a different part of the GPU has already written the rotated data, causing the state tensor to incorrectly have non-zero values in positions that should remain zero.",
+  "repro_code": "import os\n\nos.environ[\"TORCH_LOGS\"] = \"output_code\"\n\nimport torch\nimport torch.nn\n\ndevice = \"cuda\"\n\ndef slide_to_the_left1(state, new_events, arange, dev_null):\n    _ = arange\n    _ = dev_null\n\n    concatenated = torch.cat([state, new_events], dim=1)\n    state[:, :, :] = concatenated[:, -2048:, :]\n\ndef slide_to_the_left2(state, new_events, arange, dev_null):\n    batch_size, _, _ = new_events.shape\n\n    concatenated = torch.cat([state, new_events], dim=1)\n\n    # these three lines are a very complicated identity transformation:\n    batch_idx = torch.arange(batch_size, dtype=torch.int32, device=device)[:, None]\n    arange = arange[None, :]\n    concatenated = concatenated[batch_idx, arange]\n\n    state[:, :, :] = concatenated[:, -2048:, :]\n    dev_null[:, :, :] = concatenated[:, :, :]\n\nslide_to_the_left3 = torch.compile(slide_to_the_left2)\n\nstate = torch.zeros([4, 2048, 1024], device=device)\nslide_to_the_left1(\n    state,\n    torch.arange(start=1, end=3, device=device)[None, :, None].expand(4, 2, 1024).contiguous(),\n    torch.arange(2050, dtype=torch.int32, device=device),\n    torch.zeros([4, 2050, 1024], device=device),\n)\ndisplay(\"slide_to_the_left1\", state)\nassert (state[:, :-2, :] == 0).all(), torch.nonzero(state[:, :-2, :])\n\nstate = torch.zeros([4, 2048, 1024], device=device)\nslide_to_the_left2(\n    state,\n    torch.arange(start=1, end=3, device=device)[None, :, None].expand(4, 2, 1024).contiguous(),\n    torch.arange(2050, dtype=torch.int32, device=device),\n    torch.zeros([4, 2050, 1024], device=device),\n)\ndisplay(\"slide_to_the_left2\", state)\nassert (state[:, :-2, :] == 0).all(), torch.nonzero(state[:, :-2, :])\n\nfor attempt in range(1, 1000):\n    state = torch.zeros([4, 2048, 1024], device=device)\n    slide_to_the_left3(\n        state,\n        torch.arange(start=1, end=3, device=device)[None, :, None].expand(4, 2, 1024).contiguous(),\n        torch.arange(2050, dtype=torch.int32, device=device),\n        torch.zeros([4, 2050, 1024], device=device),\n    )\n\n    if not (state[:, :-2, :] == 0).all():\n        display(f\"slide_to_the_left3 attempt {attempt}\", state, torch.nonzero(state[:, :-2, :]))\n        break",
+  "repro_output": "The state tensor has non-zero values in positions state[:, :-2, :] when they should all be zero. The display would show the state tensor and the non-zero indices found by torch.nonzero(state[:, :-2, :]).",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.int32 for indices, default for main tensors",
+    "input_shape": "state tensor [4, 2048, 1024], new_events [4, 2, 1024], dev_null [4, 2050, 1024]",
+    "other_conditions": "Using torch.compile, the bug is a race condition that may take multiple attempts to exhibit (mentioned T4 and NVIDIA chips)"
+  },
+  "affected_api": "torch.compile",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "CUDA (T4, NVIDIA chips mentioned)"
+  },
+  "labels": ["bug", "torch:compile", "cuda", "miscompilation", "race condition"]
+}
+```

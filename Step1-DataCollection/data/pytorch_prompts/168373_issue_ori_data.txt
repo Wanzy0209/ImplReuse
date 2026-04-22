@@ -1,0 +1,156 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [compile] Recompilations due to backend mismatch
+    - issue_id: 168373
+    - bug_description: ### 🐛 Describe the bug
+
+
+Consider this code where a fresh backend function is created on every instance of `torch.compile` call. This leads to a recompilation issue because `torch.compile` guards on the backend function to check if it can reuse the previously compiled artifact. This is **intentional** because if user want to use two different backends, we want to give two different compiled artifacts. 
+
+However, in this example this seems accidental on the user side. So, this issue gives you a workaround. 
+
+```
+import torch
+from torch._dynamo.backends.common import aot_autograd
+from functorch.compile import nop
+
+
+def torch_compile_with_custom_backend(
+    module: torch.nn.Module,
+):
+    opt_layer = torch.compile(
+        module, backend=aot_autograd(fw_compiler=nop, bw_compiler=nop), fullgraph=True
+    )
+
+    return opt_layer
+
+
+class SubMod(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return torch.sin(x)
+
+
+class Mod(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.mod_a = SubMod()
+        self.mod_b = SubMod()
+
+        self.mod_a = torch_compile_with_custom_backend(self.mod_a)
+        self.mod_b = torch_compile_with_custom_backend(self.mod_b)
+
+    def forward(self, x):
+        return self.mod_a(x) + self.mod_b(x)
+
+
+mod = Mod()
+x = torch.randn(4)
+mod(x)
+```
+
+After PR https://github.com/pytorch/pytorch/pull/168387 - you will see this type of recompilation message
+```
+BACKEND_MATCH failure: torch.compile detected different backend callables. If this is unexpected, wrap your backend in functools.partial (or reuse the same cached backend) to avoid creating a new backend function each time. More details: https://github.com/pytorch/pytorch/issues/168373
+```
+
+
+**Workaround** - In the above example, the fresh creation of backend function seems accidental. We can fix it by using functools partial. 
+
+```
+import torch
+from torch._dynamo.backends.common import aot_autograd
+from functorch.compile import nop
+import functools
+
+
+@functools.lru_cache
+def get_backend(fw_compiler, bw_compiler):
+    return aot_autograd(fw_compiler=nop, bw_compiler=nop)
+
+
+def torch_compile_with_custom_backend(
+    module: torch.nn.Module,
+):
+    opt_layer = torch.compile(module, backend=get_backend(nop, nop), fullgraph=True)
+
+    return opt_layer
+
+
+class SubMod(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return torch.sin(x)
+
+
+class Mod(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.mod_a = SubMod()
+        self.mod_b = SubMod()
+
+        self.mod_a = torch_compile_with_custom_backend(self.mod_a)
+        self.mod_b = torch_compile_with_custom_backend(self.mod_b)
+
+    def forward(self, x):
+        return self.mod_a(x) + self.mod_b(x)
+
+
+mod = Mod()
+x = torch.randn(4)
+mod(x)
+
+```
+
+
+
+### Error logs
+
+_No response_
+
+### Versions
+
+NA
+
+cc @chauhang @penguinwu @voznesenskym @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @chenyang78 @kadeng @amjames @Lucaskabela
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

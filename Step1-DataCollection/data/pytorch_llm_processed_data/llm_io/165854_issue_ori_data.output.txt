@@ -1,0 +1,55 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: "New flex flash path breaks w/ dynamic buffers"
+
+**Issue ID**: 165854
+
+**Bug Description**: The issue involves a `KeyError: 'tensor_meta'` occurring in the flex attention implementation when using dynamic buffers. The error happens in the `_can_use_flex_flash_attention` function when checking `input_buffers_require_grads`. The error trace shows:
+- The error occurs in `torch._inductor.kernel.flex.flex_flash_attention.py`
+- Specifically at line 53: `if n.meta["tensor_meta"].requires_grad:`
+- The error message is: `torch._inductor.exc.InductorError: LoweringException: KeyError: 'tensor_meta'`
+
+**Repro Code**: The issue includes a complete Python script that:
+1. Creates a `flex_attention` function compiled with `torch.compile` using `fullgraph=True` and `dynamic=True`
+2. Runs with dynamic head counts (4, 8, 4, 16, 4)
+3. Creates a captured buffer (`head_scale`) that depends on the dynamic head count H
+4. Uses this buffer in a `score_mod` function
+5. Runs multiple iterations with the same head_scale
+
+**Repro Output**: The error traceback showing:
+```
+torch._inductor.exc.InductorError: LoweringException: KeyError: 'tensor_meta'
+```
+With details about the TensorBox arguments including InputBuffer with dynamic sizes like `s5`, `s37`, etc.
+
+**Trigger Conditions**:
+- Backend: CUDA (from `device = "cuda"`)
+- dtype: torch.float16
+- Input shape: Dynamic shapes with batch size 2, sequence length 256, dimension 64, and dynamic head count H (4, 8, 4, 16, 4)
+- Other conditions: Using `torch.compile` with `fullgraph=True` and `dynamic=True`, using flex_attention with dynamic buffers (captured buffers that change size with dynamic dimensions)
+
+
+- Affected API: `flex_attention` from `torch.nn.attention.flex_attention`
+
+I'll focus on the specific API and environment details. The issue involves the `flex_attention` function from PyTorch's neural network attention module, with no specific version or system information provided. The error occurs during compilation with dynamic graph settings, suggesting a complex interaction between the attention mechanism and PyTorch's compilation process.```json
+{
+  "title": "New flex flash path breaks w/ dynamic buffers",
+  "error_description": "A KeyError: 'tensor_meta' occurs in the flex attention implementation when using dynamic buffers. The error happens in torch._inductor.kernel.flex.flex_flash_attention.py at line 53 when checking input_buffers_require_grads, specifically when accessing n.meta['tensor_meta'].requires_grad. This occurs when running flex_attention with torch.compile using fullgraph=True and dynamic=True, with captured buffers that change size with dynamic dimensions.",
+  "repro_code": "import torch\nfrom torch.nn.attention.flex_attention import flex_attention, create_block_mask, noop_mask\n\n\ndef run_with_head_count(compiled_fa, H, device, dtype):\n    \"\"\"Run flex attention with a specific head count, creating a captured buffer sized by H.\"\"\"\n    B, S, D = 2, 256, 64\n\n    # Create captured buffer that depends on dynamic H\n    head_scale = torch.randn(H, device=device, dtype=dtype, requires_grad=True)\n\n    def score_mod(score, batch, head, token_q, token_kv):\n        return score * head_scale[head]\n\n    print(f\"  Running with H={H}, head_scale.shape={head_scale.shape}\")\n\n    # Run multiple iterations with the same head_scale\n    for i in range(5):\n        q = torch.randn(B, H, S, D, device=device, dtype=dtype, requires_grad=True)\n        k = torch.randn_like(q, requires_grad=True)\n        v = torch.randn_like(q, requires_grad=True)\n\n        block_mask = create_block_mask(noop_mask, B, 1, S, S, device=device)\n\n        outputs = compiled_fa(q, k, v, score_mod=score_mod, block_mask=block_mask)\n        loss = outputs.sum()\n        loss.backward()\n\n    print(f\"  ✓ Completed {i+1} iterations\")\n\n\ndef main():\n    device = \"cuda\"\n    dtype = torch.float16\n    torch.manual_seed(0)\n\n    # Test with different head counts - this makes H a dynamic dimension\n    # and the captured buffer (head_scale) changes size with H\n    head_counts = [4, 8, 4, 16, 4]\n\n    compiled_fa = torch.compile(flex_attention, fullgraph=True, dynamic=True)\n\n    print(f\"Running flex-attention with dynamic head counts on {device}, dtype={dtype}\")\n    print(f\"Testing head counts: {head_counts}\\n\")\n\n    for iteration, H in enumerate(head_counts, start=1):\n        print(f\"Iteration {iteration}:\")\n        run_with_head_count(compiled_fa, H, device, dtype)\n\n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "torch._inductor.exc.InductorError: LoweringException: KeyError: 'tensor_meta'\n  target: flex_attention\n  args[0]: TensorBox(StorageBox(\n    InputBuffer(name='primals_3', layout=FixedLayout('cuda:0', torch.float16, size=[s5, 8, s37, 64], stride=[512*s37, 64*s37, 64, 1]))\n  ))\n  args[1]: TensorBox(StorageBox(\n    InputBuffer(name='primals_4', layout=FixedLayout('cuda:0', torch.float16, size=[s5, 8, s37, 64], stride=[512*s37, 64*s37, 64, 1]))\n  ))\n  args[2]: TensorBox(StorageBox(\n    InputBuffer(name='primals_5', layout=FixedLayout('cuda:0', torch.float16, size=[s5, 8, s37, 64], stride=[512*s37, 64*s37, 64, 1]))\n  ))\n  args[3]: Subgraph(name='sdpa_score0', graph_module=<lambda>(), graph=None)\n  args[4]: (s37, s71, TensorBox(StorageBox(\n    InputBuffer(name='primals_10', layout=FixedLayout('cuda:0', torch.int32, size=[s5, 1, s5], stride=[s5, s5, 1]))\n  )), TensorBox(StorageBox(\n    InputBuffer(name='primals_7', layout=FixedLayout('cuda:0', torch.int32, size=[s5, 1, s5, s5], stride=[s5**2, s5**2, s5, 1]))\n  )), TensorBox(StorageBox(\n    InputBuffer(name='primals_13', layout=FixedLayout('cuda:0', torch.int32, size=[s5, 1, s5], stride=[s5, s5, 1]))\n  )), TensorBox(StorageBox(\n    Inpu",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.float16",
+    "input_shape": "Batch size 2, sequence length 256, dimension 64, dynamic head count H (4, 8, 4, 16, 4)",
+    "other_conditions": "Using torch.compile with fullgraph=True and dynamic=True, using flex_attention with dynamic buffers (captured buffers that change size with dynamic dimensions)"
+  },
+  "affected_api": "flex_attention from torch.nn.attention.flex_attention",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "CUDA"
+  },
+  "labels": []
+}
+```

@@ -1,0 +1,139 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Symmetric memory seems broken for AMD GPUs in Pytorch nightly: "RuntimeError: handle_type_ != Expandable_Segments_Handle_Type::UNSPECIFIED"
+    - issue_id: 161722
+    - bug_description: ### 🐛 Describe the bug
+
+Any code using symmetric memory would be able to reproduce this error. For example:
+
+`import os
+import torch.distributed as dist
+import torch.distributed._symmetric_memory as symm_mem
+import torch
+
+rank = int(os.environ["RANK"])
+world_size = int(os.environ["WORLD_SIZE"])
+torch.cuda.set_device(f"cuda:{rank}")
+dist.init_process_group("nccl")
+
+prev_rank = (rank - 1) % world_size
+next_rank = (rank + 1) % world_size
+
+t = symm_mem.empty(4096, device="cuda")
+
+hdl = symm_mem.rendezvous(t, dist.group.WORLD)
+peer_buf = hdl.get_buffer(next_rank, t.shape, t.dtype)
+
+t.fill_(rank)
+hdl.barrier(channel=0)
+pulled = torch.empty_like(t)
+pulled.copy_(peer_buf)
+hdl.barrier(channel=0)
+assert pulled.eq(next_rank).all()
+
+hdl.barrier(channel=0)
+to_push = torch.full_like(t, rank)
+peer_buf.copy_(to_push)
+hdl.barrier(channel=0)
+assert t.eq(prev_rank).all()
+
+t.fill_(rank)
+hdl.barrier(channel=0)
+torch.add(peer_buf, rank, out=peer_buf)
+hdl.barrier(channel=0)
+assert t.eq(rank + prev_rank).all()`
+
+
+The full stack trace:
+
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "/workspace/test.py", line 18, in <module>
+[rank1]:     hdl = symm_mem.rendezvous(t, dist.group.WORLD)
+[rank1]:   File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/distributed/_symmetric_memory/__init__.py", line 1739, in rendezvous
+[rank1]:     return _SymmetricMemory.rendezvous(tensor, group_name)
+[rank1]: RuntimeError: handle_type_ != Expandable_Segments_Handle_Type::UNSPECIFIED INTERNAL ASSERT FAILED at "/pytorch/torch/csrc/distributed/c10d/symm_mem/CUDASymmetricMemory.cu":847, please report a bug to PyTorch.
+
+
+The symmetric memory works fine with Pytorch stable 2.8.0. I guess it was broken only recently.
+
+### Versions
+
+Collecting environment information...
+PyTorch version: 2.9.0.dev20250828+rocm6.4
+Is debug build: False
+CUDA used to build PyTorch: N/A
+ROCM used to build PyTorch: 6.4.43484-123eb5128
+
+OS: Ubuntu 22.04.5 LTS (x86_64)
+GCC version: (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0
+Clang version: 18.0.0git (https://github.com/RadeonOpenCompute/llvm-project roc-6.3.4 25012 e5bf7e55c91490b07c49d8960fa7983d864936c4)
+CMake version: version 3.31.0
+Libc version: glibc-2.35
+
+Python version: 3.10.16 (main, Dec 11 2024, 16:24:50) [GCC 11.2.0] (64-bit runtime)
+Python platform: Linux-5.15.0-1086-azure-x86_64-with-glibc2.35
+Is CUDA available: True
+CUDA runtime version: Could not collect
+CUDA_MODULE_LOADING set to:
+GPU models and configuration: AMD Instinct MI300X VF (gfx942:sramecc+:xnack-)
+Nvidia driver version: Could not collect
+cuDNN version: Could not collect
+Is XPU available: False
+HIP runtime version: 6.4.43484
+MIOpen runtime version: 3.4.0
+Is XNNPACK available: True
+
+CPU:
+Architecture:                         x86_64
+CPU op-mode(s):                       32-bit, 64-bit
+Address sizes:                        46 bits physical, 57 bits virtual
+Byte Order:                           Little Endian
+CPU(s):                               96
+On-line CPU(s) list:                  0-95
+Vendor ID:                            GenuineIntel
+Model name:                           Intel(R) Xeon(R) Platinum 8480C
+CPU family:                           6
+Model:                                143
+Thread(s) per core:                   1
+Core(s) per socket:                   48
+Socket(s):                            2
+Stepping:                             8
+BogoMIPS:                             4000.00
+Flags:                                fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl xtopology tsc_reliable nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq ssse3 fma cx16 pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch invpcid_single fsgsbase tsc_adjust bmi1 hle avx2 smep bmi2 erms invpcid rtm avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_n
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

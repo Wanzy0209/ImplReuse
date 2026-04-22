@@ -1,0 +1,119 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Memory leak when in-place op is applied to non-leaf tensor with requires_grad=True
+    - issue_id: 161391
+    - bug_description: ### 🐛 Describe the bug
+
+### **Description:**
+ When an in-place operation is applied to a non-leaf tensor with requires_grad=True, and the tensor subsequently loses its backward graph node because of Python arithmetic operators, the process’s resident memory keeps growing, indicating a memory leak caused by unreleased reference counts.
+### To Reproduce
+```
+import torch
+import unittest
+import gc, psutil
+
+def mem_mb_print():
+    gc.collect()
+    mem = psutil.virtual_memory()
+    process = psutil.Process().memory_info().rss
+
+    print(f"used: {mem.used // 1024**1} KB,"
+       f"process: {process // 1024**1} KB,"
+       f"percent: {mem.percent} %,"
+       f"PyTorch tensors: {sum(1 for o in gc.get_objects() if torch.is_tensor(o))}")
+
+class TestLeafGradMaxCUDA(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_cross_grad_max_cuda(self):
+        device = torch.device("cuda")
+
+        # leaf GPU tensor
+        leaf = torch.randn(8, 1, 24, device=device, requires_grad=True)
+        no_leaf= leaf * 1.0
+
+        for _ in range(100):
+            window_left = no_leaf[:, :, :-1]          # [8, 1, 23]
+            # inplace operators
+            no_leaf[:, :, 1:] = torch.max( 
+                no_leaf[:, :, 1:],  
+                window_left   
+            )
+            # Python arithmetic operators
+            mask = (no_leaf >= 0)
+            mem_mb_print()
+
+        loss = mask.sum()
+
+if __name__ == "__main__":
+      unittest.main()  
+```
+
+### running:
+`python mem_leak.py`
+
+### result:
+> When running the above program, the Python object count and memory usage keep rising after each in-place operation.
+
+<img width="1208" height="852" alt="Image" src="https://github.com/user-attachments/assets/8ce6090e-e7f7-4b5e-b73a-5300b19a6a9b" />
+
+> However, if I detach the no_leaf tensor before performing the in-place operation, the memory leak does not occur.
+```
+        no_leaf= leaf * 1.0
+        no_leaf = no_leaf.detach()
+        for _ in range(100):
+            window_left = no_leaf[:, :, :-1]          # [8, 1, 23]
+            # inplace operators
+            no_leaf[:, :, 1:] = torch.max( 
+                no_leaf[:, :, 1:],  
+                window_left   
+            )
+```
+<img width="1208" height="806" alt="Image" src="https://github.com/user-attachments/assets/641eed64-cc54-4ad9-83a1-9739eee67314" />
+
+### Versions
+
+**Environment:**
+
+- PyTorch Version: 2.6.0+cu126
+- OS (e.g., Linux):
+- How you installed PyTorch ( pip):
+
+
+cc @ezyang @albanD @gqchen @nikitaved @soulitzer @Varal7 @xmfan
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

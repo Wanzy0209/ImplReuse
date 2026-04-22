@@ -1,0 +1,84 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Memory leak when using mark_dirty in Python custom autograd.Function
+    - issue_id: 160317
+    - bug_description: ### 🐛 Describe the bug
+
+I'm observing a memory leak when using a custom torch.autograd.Function with an in-place operation marked by ctx.mark_dirty(...). The following minimal repro highlights the issue:
+
+
+```python
+import torch
+
+class ReluOps(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        x.relu_()
+        ctx.mark_dirty(x)
+        ctx.save_for_backward(x)
+        return x
+
+    @staticmethod
+    def backward(ctx, grad):
+        x = ctx.saved_tensors
+        return (grad * x[0])
+
+def run():
+    for i in range(100):
+        x = torch.rand((100, 100, 1000), requires_grad=True)
+        z = x + 1.0
+        z_view = z[0]
+        ReluOps.apply(z_view)
+
+if __name__ == "__main__":
+    run()
+
+```
+
+Memory usage increases over iterations, and is not released between invocations.
+
+The cycle looks like this:
+CopySlices -> PyNode -> THPFunction -> SavedVariable -> AsStridedBackward -> CopySlices
+
+### Versions
+torch master
+run above code
+
+cc @ezyang @gchanan @zou3519 @kadeng @msaroufim @albanD @gqchen @nikitaved @soulitzer @Varal7 @xmfan @chauhang @penguinwu
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

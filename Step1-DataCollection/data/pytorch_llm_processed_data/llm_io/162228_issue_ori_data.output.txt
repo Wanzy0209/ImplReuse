@@ -1,0 +1,54 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: Backpropagation to flex_attentionscore_modbiases fails based on presence of graph breaks
+
+**Issue ID**: 162228
+
+**Bug Description**: The issue describes a problem where backpropagation to `flex_attention`'s `score_mod` biases fails depending on the presence of graph breaks. Specifically, gradients are not properly backpropagated to the `y` tensor (used for bias values) when using `torch.compile()`, but adding a `torch._dynamo.graph_break()` fixes the issue.
+
+**Repro Code**: The issue provides a minimal reproducible code snippet that demonstrates the problem.
+
+**Repro Output**: The output shows:
+```
+2.8.0a0+34c6371d24.nv25.08
+x: True, y: False
+Traceback (most recent call last):
+  File "/home/hpc/v104dd/v104dd11/dev/diffusion-video-pixel-diffusion-fsdp2/weird_shit.py", line 33, in <module>
+    assert y.grad.norm() > 0
+           ^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'norm'
+```
+
+**Trigger Conditions**:
+- Backend: The issue mentions testing with `backend="eager"` (works), `backend="aot_eager"` (fails), `backend="aot_eager_decomp_partition"` (fails), `backend="inductor"` (fails)
+- Device: CUDA (specifically mentions H100s & H200s)
+- Input shape: B=2, L=16, D=64
+- Other conditions: The bug occurs when using `torch.compile()` without a graph break. Adding `torch._dynamo.graph_break()` fixes it.
+
+**Affected API**: `torch.nn.attention.flex_attention.flex_attention`
+
+
+I'll investigate the specific environment details for this PyTorch issue. The problem occurs across multiple PyTorch versions, including stable 2.8.0, nightly builds, and a specific NVIDIA container version. The testing environment involves Ubuntu 22.04.5 LTS, Python 3.11.11, and CUDA 12.8, running on NVIDIA H200 GPUs. These details suggest a complex interaction between PyTorch's compilation, flex attention, and specific hardware configurations.
+
+The issue appears to involve compilation and attention mechanisms, with potential implications for model performance and gradient computation.```json
+{
+  "title": "Backpropagation to flex_attentionscore_modbiases fails based on presence of graph breaks",
+  "error_description": "Backpropagation to flex_attention's score_mod biases fails depending on the presence of graph breaks. Gradients are not properly backpropagated to the y tensor (used for bias values) when using torch.compile(), but adding a torch._dynamo.graph_break() fixes the issue. Gradients are always successfully propagated to x.",
+  "repro_code": "import torch\nfrom torch.nn.attention.flex_attention import flex_attention\n\n@torch.compile()\ndef test(x, y):\n    # Materialize a bias matrix\n    B, L, device = x.shape[0], x.shape[1], x.device\n    b = torch.arange(B, device=device, dtype=torch.long).view(B, 1, 1)\n    q_idx = torch.arange(L, device=device, dtype=torch.long).view(1, L, 1)\n    kv_idx = torch.arange(L, device=device, dtype=torch.long).view(1, 1, L)\n    bias_mat = y[b, q_idx] + y[b, kv_idx] # (B, L, L)\n\n    # Dummy score_mod retrieving bias values\n    def score_mod(score, b, h, q_idx, kv_idx):\n        return score + bias_mat[b, q_idx, kv_idx]\n\n    x_ = x[:, :, None].repeat(1, 1, 16, 1)\n    # torch._dynamo.graph_break()\n    return flex_attention(x_, x_, x_, score_mod=score_mod)\n\n\nDEVICE = \"cuda\"\nB, L, D = 2, 16, 64\n\nx = torch.randn(B, L, D, device=DEVICE, requires_grad=True)\ny = torch.randn(B, L, device=DEVICE, requires_grad=True)\n\nout = test(x, y).mean().backward()\n\nprint(torch.__version__)\nprint(f\"x: {(x.grad is not None) and (x.grad.norm() > 0)}, y: {(y.grad is not None) and (y.grad.norm() > 0)}\")\nassert x.grad.norm() > 0\nassert y.grad.norm() > 0",
+  "repro_output": "2.8.0a0+34c6371d24.nv25.08\nx: True, y: False\nTraceback (most recent call last):\n  File \"/home/hpc/v104dd/v104dd11/dev/diffusion-video-pixel-diffusion-fsdp2/weird_shit.py\", line 33, in <module>\n    assert y.grad.norm() > 0\n           ^^^^^^^^^^^\nAttributeError: 'NoneType' object has no attribute 'norm'",
+  "trigger_conditions": {
+    "backend": "eager (works), aot_eager (fails), aot_eager_decomp_partition (fails), inductor (fails)",
+    "dtype": "torch.long, torch.float32 (implied from randn)",
+    "input_shape": "B=2, L=16, D=64",
+    "other_conditions": "Occurs when using torch.compile() without a graph break. Adding torch._dynamo.graph_break() fixes the issue. Device is CUDA."
+  },
+  "affected_api": "torch.nn.attention.flex_attention.flex_attention",
+  "environment": {
+    "pytorch_version": "2.8.0+cu128, 2.8.0a0+34c6371d24.nv25.08, current nightly",
+    "python_version": "3.11.11",
+    "os": "Ubuntu 22.04.5 LTS (x86_64)",
+    "hardware": "NVIDIA H100, NVIDIA H200"
+  },
+  "labels": ["module: flex_attention", "compilation"]
+}
+```

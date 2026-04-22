@@ -1,0 +1,107 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: FSDPMemTracker fails with KeyError for RMSNorm during backward
+    - issue_id: 164663
+    - bug_description: ### 🐛 Describe the bug
+
+When sharding a model that uses nn.RMSNorm, FSDPMemTracker raises KeyError during pre-backward. The failure happens when RMSNorm is wrapped with another Linear module in a single fully_sharded().
+
+Repro
+```
+import os
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.tensor.experimental import implicit_replication
+from torch.distributed._tools.fsdp2_mem_tracker import FSDPMemTracker
+
+
+class TestModule(nn.Module):
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.norm = nn.RMSNorm(d_model)
+        self.output = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = self.output(x)
+        return x
+
+
+def main():
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+
+    dist.init_process_group(backend="nccl")
+
+    d_model = 128
+
+    model = TestModule(d_model)
+    model = model.to('cuda:0')
+    mesh = init_device_mesh("cuda", (dist.get_world_size(),))
+
+    fully_shard([model.norm, model.output], mesh=mesh)   # shards the RMSNorm's parameters/state across ranks
+    fully_shard(model, mesh=mesh)  # shards the Linear's parameters/state across ranks
+    print(model)
+
+    tracker = FSDPMemTracker(model)
+
+    with tracker, implicit_replication():
+        x = torch.randn(16, d_model, device='cuda:0')
+        y = model(x)
+        loss = y.sum()
+        loss.backward()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+### Versions
+
+PyTorch version: 2.10.0.dev20251003+cu126
+Is debug build: False
+CUDA used to build PyTorch: 12.6
+ROCM used to build PyTorch: N/A
+
+cc @H-Huang @awgu @wanchaol @fegin @fduwjj @wz337 @wconstab @d4l3k @pragupta @msaroufim @dcci
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

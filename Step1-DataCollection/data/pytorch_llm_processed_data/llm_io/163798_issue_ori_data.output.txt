@@ -1,0 +1,83 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: tolist() does not graph when capture_scalar_outputs = False
+
+**Issue ID**: 163798
+
+**Bug Description**: The issue describes a problem where `tolist()` doesn't cause a graph break when `capture_scalar_outputs = False`, while `item()` does. This is problematic because having `item()` in the graphs can cause re-tracing in autograd to fail when `capture_scalar_outputs=False`, and it's too late to know where to graph break. The issue also mentions that with the inductor backend, it fails to compile.
+
+**Repro Code**: There are two code snippets provided:
+
+1. The problematic code with `tolist()`:
+```python
+@torch.compile(fullgraph=False, backend="eager")
+def func(a):
+    u0, u1 = a.tolist()
+    return a*u0*u1
+func(torch.tensor([1,2]))
+```
+
+2. The comparison code with `item()` that does graph break:
+```python
+@torch.compile(fullgraph=False, backend="eager")
+def func2(a):
+    u0 = a.item()
+    return a*u0
+func2(torch.tensor([1]))
+```
+
+3. The code that fails with inductor backend:
+```python
+@torch.compile(fullgraph=False, backend="inductor")
+def func(a):
+    u0, u1 = a.tolist()
+    return a*u0*u1
+func(torch.tensor([1,2]))
+```
+
+**Repro Output**: The output graph for the first code snippet is provided:
+```
+class GraphModule(torch.nn.Module):
+    def forward(self, L_a_: "i64[2][1]cpu"):
+        l_a_ = L_a_
+        
+         # File: /home/lsakka/pytorch/pytorch/example.py:7 in func, code: u0, u1 = a.tolist()
+        getitem = l_a_[0]
+        item: "Sym(u0)" = getitem.item();  getitem = None
+        getitem_1 = l_a_[1]
+        item_1: "Sym(u1)" = getitem_1.item();  getitem = None
+        
+         # File: /home/lsakka/pytorch/pytorch/example.py:8 in func, code: return a*u0*u1
+        mul: "i64[2][1]cpu" = l_a_ * item;  l_a_ = item = None
+        mul_1: "i64[2][1]cpu" = mul * item_1;  mul = item_1 = None
+        return (mul_1,)
+```
+
+I notice the graph contains `item()` operations, which contradicts the expected behavior when `capture_scalar_outputs=False`. This suggests a potential issue with how scalar outputs are handled during graph compilation.
+
+The problem involves inconsistent graph breaking behavior between `tolist()` and `item()` methods, with specific backend implications. The issue highlights a nuanced interaction between scalar output capture and graph generation in PyTorch's compilation process.
+
+The core concern centers on how different methods trigger graph breaks, particularly when scalar output capture is disabled. This reveals a subtle complexity in PyTorch's graph compilation mechanism that could lead to unexpected behavior in certain computational scenarios.
+
+The investigation points to potential inconsistencies in how PyTorch handles scalar extraction methods during graph tracing, which might impact performance and computational predictability.```json
+{
+  "title": "tolist() does not graph when capture_scalar_outputs = False",
+  "error_description": "tolist() does not cause a graph break when capture_scalar_outputs = False, while item() does. This is problematic because having item() in the graphs can cause re-tracing in autograd to fail when capture_scalar_outputs=False, and it's too late to know where to graph break. With inductor backend, it fails to compile.",
+  "repro_code": "@torch.compile(fullgraph=False, backend=\"eager\")\ndef func(a):\n    u0, u1 = a.tolist()\n    return a*u0*u1\nfunc(torch.tensor([1,2]))",
+  "repro_output": "class GraphModule(torch.nn.Module):\n    def forward(self, L_a_: \"i64[2][1]cpu\"):\n        l_a_ = L_a_\n        \n         # File: /home/lsakka/pytorch/pytorch/example.py:7 in func, code: u0, u1 = a.tolist()\n        getitem = l_a_[0]\n        item: \"Sym(u0)\" = getitem.item();  getitem = None\n        getitem_1 = l_a_[1]\n        item_1: \"Sym(u1)\" = getitem_1.item();  getitem = None\n        \n         # File: /home/lsakka/pytorch/pytorch/example.py:8 in func, code: return a*u0*u1\n        mul: \"i64[2][1]cpu\" = l_a_ * item;  l_a_ = item = None\n        mul_1: \"i64[2][1]cpu\" = mul * item_1;  mul = item_1 = None\n        return (mul_1,)",
+  "trigger_conditions": {
+    "backend": "eager, inductor",
+    "dtype": "unknown",
+    "input_shape": "unknown",
+    "other_conditions": "capture_scalar_outputs = False, fullgraph=False"
+  },
+  "affected_api": "tolist(), item()",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "unknown"
+  },
+  "labels": []
+}
+```

@@ -1,0 +1,62 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: Dynamo graph break on flex attention code
+
+**Issue ID**: 164247
+
+**Bug Description**: The issue describes a graph break that occurs when using `torch.compile` with `flex_attention` and `create_block_mask`. The error message indicates that Dynamo doesn't know how to trace `id()` call with `NestedUserFunctionVariable()` args.
+
+**Repro Code**: The issue provides a complete reproducible code snippet that:
+1. Creates a `MixedFakeModeModel` class
+2. Uses `create_block_mask` with a dynamic mask function
+3. Attempts to compile `flex_attention` with `torch.compile`
+4. Shows that `flex_attention` alone works but `torch.compile(flex_attention)` doesn't
+
+**Repro Output**: The error message shows:
+```
+Unsupported: id() with unsupported args
+  Explanation: Dynamo doesn't know how to trace id() call with args (NestedUserFunctionVariable(),)
+  ...
+```
+
+**Trigger Conditions**:
+- Backend: Not explicitly mentioned
+- dtype: Not explicitly mentioned (uses default float32 for torch.randn)
+- input_shape: (2, 128, 64) - batch_size=2, seq_len=128, dim=64
+- other_conditions: Using `fullgraph=True` in `torch.compile`, using `create_block_mask` with a dynamic mask function
+
+**Affected API**: 
+- `torch.nn.attention.flex_attention.create_block_mask`
+- `torch.nn.attention.flex_attention.flex_attention`
+- `torch.compile`
+
+**Environment**:
+- pytorch_version: Not explicitly mentioned (but path suggests a development version)
+- python_version: 3.12 (from the path `/runtime/lib/python3.12/`)
+- os: Not explicitly mentioned
+- hardware: Not explicitly mentioned
+
+**Labels**: Not explicitly provided in the issue
+
+Let me format this as JSON:```json
+{
+  "title": "Dynamo graph break on flex attention code",
+  "error_description": "When tracing through create_block_mask, dynamo graph breaks with 'Unsupported: id() with unsupported args' error. Dynamo doesn't know how to trace id() call with args (NestedUserFunctionVariable(),). The error occurs in _get_mod_type function when calling inspect.signature(fn).",
+  "repro_code": "import torch\nimport torch.nn as nn\nfrom torch.nn.attention.flex_attention import create_block_mask, flex_attention\n\n\nclass MixedFakeModeModel(nn.Module):\n    def __init__(self, dim=64):\n        super().__init__()\n        self.dim = dim\n        self.lin = torch.nn.Linear(64, 64)\n\n    def forward(self, x):\n        batch_size, seq_len, _ = x.shape\n\n        # Process input first - this creates fake tensors in export's fake mode\n        processed = self.lin(x)\n\n        # Create some computation that depends on processed tensor\n        intermediate = processed.sum(dim=-1).detach()  # Shape: (batch, seq_len)\n\n        def dynamic_mask_function(batch_idx, head_idx, q_idx, kv_idx):\n            threshold = intermediate[\n                batch_idx, q_idx % seq_len\n            ]  # Access the captured tensor\n            return (kv_idx <= q_idx) & (threshold > 0)\n\n        block_mask = create_block_mask(\n            mask_mod=dynamic_mask_function,\n            B=batch_size,\n            H=None,\n            Q_LEN=seq_len,\n            KV_LEN=seq_len,\n            device=x.device,\n            _compile=False,  # HF sets this to True, which runs into the issue i am talking below\n        )\n        q = processed.view(batch_size, 1, seq_len, self.dim)\n        k = processed.view(batch_size, 1, seq_len, self.dim)\n        v = processed.view(batch_size, 1, seq_len, self.dim)\n\n        # this doesn't work\n        out = torch.compile(flex_attention)(q, k, v, block_mask=block_mask)\n        # this works (flex attention internally calls torch.compile(backend=eager) which\n        # has special handling similar to torch.cond\n        out = flex_attention(q, k, v, block_mask=block_mask)\n\n        return out\n\ntorch.compile(MixedFakeModeModel(), fullgraph=True)(torch.randn(2, 128, 64))",
+  "repro_output": "Unsupported: id() with unsupported args\n  Explanation: Dynamo doesn't know how to trace id() call with args (NestedUserFunctionVariable(),)\n  Hint: Supported args are Tensors, and functions/nn.Modules/user-defined objects from outside the compiled region.\n  Hint: It may be possible to write Dynamo tracing rules for this code. Please report an issue to PyTorch if you encounter this graph break often and it is causing performance issues.\n\n  Developer debug context: (NestedUserFunctionVariable(),)\n\n For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb0191.html\n\nfrom user code:\n   File \"/tmp/ipykernel_2970620/3759915601.py\", line 27, in forward\n    block_mask = create_block_mask(\n  File \"/data/users/tmanlaibaatar/.bento/kernels/bento_kernel_pytorch/2670/bento_kernel_pytorch_binary-inplace#link-tree/torch/nn/attention/flex_attention.py\", line 1067, in create_block_mask\n    mod_type = _get_mod_type(mask_mod)\n  File \"/data/users/tmanlaibaatar/.bento/kernels/bento_kernel_pytorch/2670/bento_kernel_pytorch_binary-inplace#link-tree/torch/nn/attention/flex_attention.py\", line 244, in _get_mod_type\n    for param in inspect.signature(fn).parameters.values()\n  File \"/data/users/tmanlaibaatar/.bento/kernels/bento_kernel_pytorch/2670/bento_kernel_pytorch_binary-inplace#link-tree/runtime/lib/python3.12/inspect.py\", line 3348, in signature\n    return Signature.from_callable(obj, follow_wrapped=follow_wrapped,\n  File \"/data/users/tmanlaibaatar/.bento/kernels/bento_kernel_pytorch/2670/bento_kernel_pytorch_binary-inplace#link-tree/runtime/lib/python3.12/inspect.py\", line 3085, in from_callable\n    return _signature_from_callable(obj, sigcls=cls,\n  File \"/data/users/tmanlaibaatar/.bento/kernels/bento_kernel_pytorch/2670/bento_kernel_pytorch_binary-inplace#link-tree/runtime/lib/python3.12/inspect.py\", line 2538, in _signature_from_callable\n    obj = unwrap(obj, stop=(lambda f: hasattr(f, \"__signature__\")\n  File \"/data/users/tmanlaibaatar/.bento/kernels/bento_kernel_pytorch/2670/bento_kernel_pytorch_binary-inplace#link-tree/runtime/lib/",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "(2, 128, 64)",
+    "other_conditions": "Using fullgraph=True in torch.compile, using create_block_mask with a dynamic mask function that captures intermediate tensor"
+  },
+  "affected_api": "torch.nn.attention.flex_attention.create_block_mask, torch.nn.attention.flex_attention.flex_attention, torch.compile",
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "3.12",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": []
+}
+```

@@ -1,0 +1,127 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: torch.compile don't work with searchsorted
+
+**Issue ID**: 163528
+
+**Bug Description**: The user reports that `torch.searchsorted` is not working correctly when used with `torch.compile` on GPU. It works fine on CPU.
+
+**Repro Code**: The user provided a complete reproducible script:
+```python
+import torch
+from torch import nn
+
+class Foo(nn.Module):
+    def __init__(
+        self,
+        quantiles: torch.Tensor,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        self.q = nn.Parameter(quantiles, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.searchsorted(self.q, x.T).T
+    
+
+def test_device(device, x, quantiles):
+    x = x.to(device)
+    quantiles = quantiles.to(device)
+    foo = Foo(quantiles).to(device)
+    foo_compiled = torch.compile(Foo(quantiles).to(device), fullgraph=True)
+
+    # warm up
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+
+    # proper inference
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    print(f'device: {device}, diff: {torch.max(torch.abs(y_original - y_compiled)).item()}')
+    print('orignal',y_original[:5, :5])
+    print('compiled',y_compiled[:5, :5])
+    
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    quantile_size = 100
+    torch.manual_seed(42)
+    x = torch.randn(batch_size, feature_dim, dtype=torch.float32)
+    quantiles = torch.randn(quantile_size, feature_dim, dtype=torch.float32)
+    quantiles = torch.sort(quantiles, dim=0)[0]
+    test_device('cpu', x, quantiles)
+    test_device('cuda', x, quantiles)
+
+main()
+```
+
+**Repro Output**: The user provided the output showing the difference between CPU and CUDA:
+```
+device: cpu, diff: 0
+orignal tensor([[99, 91, 77,  3, 77],
+        [35,  9, 20, 31, 20],
+        [23, 84, 74, 94, 95],
+        [44, 83,  2, 23, 39],
+        [ 7, 84, 12, 29, 15]])
+compiled tensor([[99, 91, 77,  3, 77],
+        [35,  9, 20, 31, 20],
+        [23, 84, 74, 94, 95],
+        [44, 83,  2, 23, 39],
+        [ 7, 84, 12, 29, 15]])
+device: cuda, diff: 99
+orignal tensor([[99, 91, 77,  3, 77],
+        [35,  9, 20, 31, 20],
+        [23, 84, 74, 94, 95],
+        [44, 83,  2, 23, 39],
+        [ 7, 84, 12, 29, 15]], device='cuda:0')
+compiled tensor([[0, 0, 0, 1, 0],
+        [1, 1, 1, 1, 1],
+        [1, 0, 0, 0, 0],
+        [1, 0, 1, 1, 1],
+        [1, 0, 1, 1, 1]], device='cuda:0')
+```
+
+**Trigger Conditions**:
+- backend: CUDA (GPU)
+- dtype: torch.float32
+- input_shape: batch_size=32, feature_dim=10, quantile_size=100
+- other_conditions: Using torch.compile with fullgraph=True
+
+**Affected API**: torch.searchsorted
+
+**Environment**:
+- pytorch_version: 2.8.0
+- python_version: unknown
+- os: unknown
+- hardware: CUDA (GPU)
+
+**Labels**: Based on the issue, this is a bug related to torch.compile and CUDA, so likely labels would be "bug", "module: cuda", "module: compile"
+
+Let me format this as JSON:```json
+{
+  "title": "torch.compile don't work with searchsorted",
+  "error_description": "torch.searchsorted is not working correctly when used with torch.compile on gpu. Everything looks like working fine on cpu.",
+  "repro_code": "import torch\nfrom torch import nn\n\nclass Foo(nn.Module):\n    def __init__(\n        self,\n        quantiles: torch.Tensor,\n    ) -> None:\n        super().__init__()\n        assert quantiles.shape[0] > 0\n        quantiles = quantiles.T\n        self.q = nn.Parameter(quantiles, requires_grad=False)\n\n    def forward(self, x: torch.Tensor) -> torch.Tensor:\n        return torch.searchsorted(self.q, x.T).T\n    \n\ndef test_device(device, x, quantiles):\n    x = x.to(device)\n    quantiles = quantiles.to(device)\n    foo = Foo(quantiles).to(device)\n    foo_compiled = torch.compile(Foo(quantiles).to(device), fullgraph=True)\n\n    # warm up\n    with torch.no_grad():\n        y_original = foo(x)\n        y_compiled = foo_compiled(x)\n\n\n    # proper inference\n    with torch.no_grad():\n        y_original = foo(x)\n        y_compiled = foo_compiled(x)\n\n    print(f'device: {device}, diff: {torch.max(torch.abs(y_original - y_compiled)).item()}')\n    print('orignal',y_original[:5, :5])\n    print('compiled',y_compiled[:5, :5])\n    \n\ndef main():\n    batch_size = 32\n    feature_dim = 10\n    quantile_size = 100\n    torch.manual_seed(42)\n    x = torch.randn(batch_size, feature_dim, dtype=torch.float32)\n    quantiles = torch.randn(quantile_size, feature_dim, dtype=torch.float32)\n    quantiles = torch.sort(quantiles, dim=0)[0]\n    test_device('cpu', x, quantiles)\n    test_device('cuda', x, quantiles)\n\nmain()",
+  "repro_output": "device: cpu, diff: 0\norignal tensor([[99, 91, 77,  3, 77],\n        [35,  9, 20, 31, 20],\n        [23, 84, 74, 94, 95],\n        [44, 83,  2, 23, 39],\n        [ 7, 84, 12, 29, 15]])\ncompiled tensor([[99, 91, 77,  3, 77],\n        [35,  9, 20, 31, 20],\n        [23, 84, 74, 94, 95],\n        [44, 83,  2, 23, 39],\n        [ 7, 84, 12, 29, 15]])\ndevice: cuda, diff: 99\norignal tensor([[99, 91, 77,  3, 77],\n        [35,  9, 20, 31, 20],\n        [23, 84, 74, 94, 95],\n        [44, 83,  2, 23, 39],\n        [ 7, 84, 12, 29, 15]], device='cuda:0')\ncompiled tensor([[0, 0, 0, 1, 0],\n        [1, 1, 1, 1, 1],\n        [1, 0, 0, 0, 0],\n        [1, 0, 1, 1, 1],\n        [1, 0, 1, 1, 1]], device='cuda:0')",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.float32",
+    "input_shape": "batch_size=32, feature_dim=10, quantile_size=100",
+    "other_conditions": "torch.compile with fullgraph=True"
+  },
+  "affected_api": "torch.searchsorted",
+  "environment": {
+    "pytorch_version": "2.8.0",
+    "python_version": "",
+    "os": "",
+    "hardware": "CUDA (GPU)"
+  },
+  "labels": ["bug", "module: cuda", "module: compile"]
+}
+```

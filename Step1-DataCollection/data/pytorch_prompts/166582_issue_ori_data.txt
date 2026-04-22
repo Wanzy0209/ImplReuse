@@ -1,0 +1,127 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Backend Compiler Graph Break
+    - issue_id: 166582
+    - bug_description: ### 🐛 Describe the bug
+
+I discovered the bug when building a custom Torch compiler backend for a custom AI ASIC, and ran it on a simulated hardware platform.
+
+The structure is meant to be simple, as the backend replaces `nn.Linear` calls with matmuls through my own chip.
+However, the complex part is that the chip is super small and can only do `int8` matmuls, with `int16` output, so there is some quantization lowering that appears to be breaking, as I am training the model for the chip using Quantization Aware Training (QAT).
+
+Previously, I used legacy torch `QuantStub` and `DeQuantStub` but have now used TorchAO to manage the QAT workflow with an XNNPack quantizer backend. Both approaches have encountered this issue.
+
+To reproduce, register a backend like:
+```python
+import torch
+import torch._dynamo
+from test_tpu import matmul
+from torch._inductor.compile_fx import compile_fx
+from torch._dynamo import register_backend, disable
+import numpy as np
+import asyncio
+
+@disable
+async def dut_matmul_async(dut, a: torch.Tensor, b: torch.Tensor, bias=None):
+    # Now safe to quantize
+    a_q = a.clamp(-128, 127).to(torch.int8)
+    b_q = b.clamp(-128, 127).to(torch.int8)
+
+    c = await matmul(dut, a_q, b_q, transpose=True, is_torch=True)
+    if bias is not None:
+        c = c + bias.round().to(torch.int32)
+    return c.to(torch.int32)
+
+def dut_matmul_sync(dut, a, b, bias=None):
+    """Synchronous wrapper – torch.compile expects a normal function."""
+    return asyncio.run(dut_matmul_async(dut, a, b, bias))
+
+def make_backend(dut):
+    """
+    Returns a *registered* backend that has the DUT baked in.
+    The FX graph is the first argument.
+    """
+    @register_backend(name=f"tpu_net")
+    def _backend(gm: torch.fx.GraphModule, example_inputs):
+        print("\n=== FX graph received ===")
+        gm.graph.print_tabular()
+
+        # ---- replace every linear ----
+        for node in list(gm.graph.nodes):
+            if node.target == torch.ops.aten.linear.default:
+                x, weight, bias = node.args
+                with gm.graph.inserting_before(node):
+                    new_node = gm.graph.call_function(
+                        dut_matmul_sync,
+                        args=(dut, x, weight, bias),
+                    )
+                    node.replace_all_uses_with(new_node)
+                    gm.graph.erase_node(node)
+
+        gm.recompile()
+        print("\n=== Modified graph ===")
+        gm.graph.print_tabular()
+
+        # Let Inductor compile the rest
+        return compile_fx(gm, example_inputs)
+
+    return _backend
+```
+Then call with the following on any model
+```python
+from torch_backend import make_backend
+backend = make_backend(dut) 
+
+# torch.compile compiles the resulting GraphModule/quantized module
+compiled_model = torch.compile(model, backend=backend)
+```
+
+### Error logs
+
+W1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1] Backend compiler exception
+W1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1]   Explanation: Backend compiler `_backend` failed with aten._local_scalar_dense.default
+W1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1] 
+W1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1]     While executing %dut_matmul_sync : [num_users=1] = call_function[target=torch_backend.dut_matmul_sync](args = (tb, %dequantize_per_tensor_default_2, %dequantize_per_tensor_default, %l_self_modules_fc1_parameters_bias_), kwargs = {})
+W1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1]     Original traceback:
+W1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1]     None
+W1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1]     Use tlparse to see full graph. (https://github.com/pytorch/tlparse?tab=readme-ov-file#tlparse-parse-structured-pt2-logs). Adding a graph break.
+W1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1]   Hint: Report an issue to the backend compiler repo.
+W1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1] 
+W1
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

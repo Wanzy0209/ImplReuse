@@ -1,0 +1,66 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: [Fuzzer][Eager/Compile Divergence] 8+% numerical difference between eager and compile
+
+**Issue ID**: 163449
+
+**Bug Description**: The issue describes a numerical divergence between eager mode and compiled mode (using torch.compile) in PyTorch. The relative difference in output sums is about 8.25%, which exceeds the 5% threshold considered significant.
+
+**Repro Code**: The issue includes a complete Python script that:
+1. Defines a function `foo` that performs various tensor operations including addmm, norm, var, relu, pow, etc.
+2. Creates random input tensors with specific shapes and dtypes
+3. Runs the function in eager mode and compiled mode
+4. Compares the outputs and reports a significant numerical difference
+
+**Repro Output**: 
+```
+Eager Success! ✅
+Compile Success! ✅
+Relative diff (sum): 8.251728%
+❌ Forward output sums differ significantly (relative)!
+out_eager_sum: 11884969328640.0
+out_compiled_sum: 10904254021632.0
+Absolute diff: 980715307008.0
+Relative diff (%): 8.251727706563829
+```
+
+**Trigger Conditions**:
+- Backend: CUDA (device='cuda')
+- dtype: bfloat16 and float32
+- input_shape: Various shapes including (5, 4), (5, 1024), (1024, 4), (3, 4, 5, 2), and scalar ()
+- other_conditions: Using torch.compile with fullgraph=True and dynamic=True
+
+**Affected API**: The issue involves multiple operations: torch.addmm, tensor.norm(), tensor.var(), torch.nn.functional.relu, torch.pow, and torch.compile
+
+**Environment**:
+- pytorch_version: Not specified (N/A)
+- python_version: Not specified
+- os: Not specified (but appears to be Linux based on the path)
+
+
+- hardware: CUDA (devgpu035)
+
+**Labels**: Based on the title, this appears to be related to fuzzer testing and eager/compile divergence.
+
+I'll focus on the CUDA hardware and the specific numerical discrepancy between eager and compiled modes. The issue highlights a significant performance difference when using torch.compile with specific tensor operations.```json
+{
+  "title": "[Fuzzer][Eager/Compile Divergence] 8+% numerical difference between eager and compile",
+  "error_description": "A numerical divergence between eager mode and compiled mode (using torch.compile) in PyTorch. The relative difference in output sums is about 8.25%, which exceeds the 5% threshold considered significant.",
+  "repro_code": "import torch\nimport sys\ntorch._dynamo.config.capture_scalar_outputs = True\ntorch._dynamo.config.capture_dynamic_output_shape_ops = True\ntorch._inductor.config.emulate_precision_casts = True\n\ndef foo(arg0, arg1, arg2, arg3, arg4):\n    t0 = arg0 # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda\n    t1 = arg1 # size=(5, 1024), stride=(1024, 1), dtype=bfloat16, device=cuda\n    t2 = arg2 # size=(1024, 4), stride=(4, 1), dtype=bfloat16, device=cuda\n    t3 = torch.addmm(t0, t1, t2) # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda\n    t4 = t3.norm() # size=(), stride=(), dtype=bfloat16, device=cuda\n    t5 = arg3 # size=(3, 4, 5, 2), stride=(40, 10, 2, 1), dtype=float32, device=cuda\n    t6 = t5.var(dim=0) # size=(4, 5, 2), stride=(10, 2, 1), dtype=float32, device=cuda\n    t7 = t6.var() # size=(), stride=(), dtype=float32, device=cuda\n    t8 = arg4 # size=(), stride=(), dtype=float32, device=cuda\n    t9 = torch.nn.functional.relu(t8) # size=(), stride=(), dtype=float32, device=cuda\n    t10 = t7 + t4 + t9 # size=(), stride=(), dtype=float32, device=cuda\n    t11 = torch.pow(torch.pow(t4, t7), t10) # size=(), stride=(), dtype=float32, device=cuda\n    output = t11  # output tensor\n    return output\n\narg0 = torch.rand([5, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda\narg1 = torch.rand([5, 1024], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5, 1024), stride=(1024, 1), dtype=bfloat16, device=cuda\narg2 = torch.rand([1024, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(1024, 4), stride=(4, 1), dtype=bfloat16, device=cuda\narg3 = torch.rand([3, 4, 5, 2], dtype=torch.float32, device='cuda', requires_grad=True) # size=(3, 4, 5, 2), stride=(40, 10, 2, 1), dtype=float32, device=cuda\narg4 = torch.rand([], dtype=torch.float32, device='cuda', requires_grad=True) # size=(), stride=(), dtype=float32, device=cuda\nif __name__ == '__main__':\n    out_eager = foo(arg0, arg1, arg2, arg3, arg4)\n    out_eager.sum().backward()\n    print('Eager Success! ✅')\n    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)\n    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4)\n    out_compiled.sum().backward()\n    print('Compile Success! ✅')\n    # Compare outputs (forward)\n    out_eager_sum = out_eager.sum()\n    out_compiled_sum = out_compiled.sum()\n    diff = (out_eager_sum - out_compiled_sum).abs().item()\n    rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100\n    print(f'Relative diff (sum): {rel_diff:.6f}%')\n    if rel_diff > 5:\n        print(f'❌ Forward output sums differ significantly (relative)!')\n        print('out_eager_sum:', out_eager_sum.item())\n        print('out_compiled_sum:', out_compiled_sum.item())\n        print('Absolute diff:', diff)\n        print('Relative diff (%):', rel_diff)\n        sys.exit(1)",
+  "repro_output": "Eager Success! ✅\nCompile Success! ✅\nRelative diff (sum): 8.251728%\n❌ Forward output sums differ significantly (relative)!\nout_eager_sum: 11884969328640.0\nout_compiled_sum: 10904254021632.0\nAbsolute diff: 980715307008.0\nRelative diff (%): 8.251727706563829",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "bfloat16, float32",
+    "input_shape": "(5, 4), (5, 1024), (1024, 4), (3, 4, 5, 2), scalar ()",
+    "other_conditions": "torch.compile with fullgraph=True and dynamic=True"
+  },
+  "affected_api": "torch.addmm, tensor.norm(), tensor.var(), torch.nn.functional.relu, torch.pow, torch.compile",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "CUDA"
+  },
+  "labels": ["Fuzzer", "Eager/Compile Divergence"]
+}
+```

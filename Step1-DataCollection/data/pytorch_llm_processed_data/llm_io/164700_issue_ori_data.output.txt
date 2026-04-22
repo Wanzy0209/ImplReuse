@@ -1,0 +1,97 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: torch.compile generates illegal triton tl.broadcast_to and crashes from particular unsqueeze and torch.cat interleaving: 'constexpr_type' object has no attribute 'is_block'
+
+**Issue ID**: 164700
+
+**Bug Description**: The issue describes a bug where `torch.compile` generates illegal Triton code for a fused kernel, specifically producing `tl.broadcast_to(1 + (31), [XBLOCK])`, which causes a `triton.compiler.errors.CompilationError` and `AttributeError: 'constexpr_type' object has no attribute 'is_block'`.
+
+**Repro Code**: There is a minimal reproducer provided in the issue:
+
+```python
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+
+device = "cuda"
+
+def f(x, y):
+    y2 = torch.cat(
+        [
+            x[:, 1:],
+            y[:, None] + 32 * 2048,
+        ],
+        dim=1,
+    )
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    return (
+        torch.cat([x2, y3], dim=1)
+        + torch.arange(-2048, 0, device=device)[None, None, :]
+    ).reshape(1, 32 * 2048)
+
+# This succeeds
+display(
+    f(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+
+# This crashes
+display(
+    torch.compile(f)(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+```
+
+**Repro Output**: The output shows the error logs indicating the compilation error with Triton.
+
+**Trigger Conditions**:
+- Backend: CUDA (device = "cuda")
+- dtype: torch.int64 and torch.int32
+- input_shape: (1, 32) for x and (1,) for y
+- other_conditions: Using torch.compile with specific unsqueeze and torch.cat interleaving
+
+**Affected API**: torch.compile, torch.cat, unsqueeze (via None indexing)
+
+**Environment**:
+- pytorch_version: Not explicitly stated
+- python_version: Not explicitly stated
+- os: Not explicitly stated (but CUDA is used)
+- hardware: V100 (mentioned in error logs: "V1005")
+
+**Labels**: The issue doesn't have explicit labels, but based on the content, it's related to:
+- torch.compile
+- triton
+- bug
+
+Let me format this into the requested JSON structure.```json
+{
+  "title": "torch.compile generates illegal triton tl.broadcast_to and crashes from particular unsqueeze and torch.cat interleaving: 'constexpr_type' object has no attribute 'is_block'",
+  "error_description": "Torch generates illegal Triton for the fused kernel, specifically it produces `tl.broadcast_to(1 + (31), [XBLOCK])`, causing `triton.compiler.errors.CompilationError` and `AttributeError: 'constexpr_type' object has no attribute 'is_block'`.",
+  "repro_code": "import os\n\nos.environ[\"TORCH_LOGS\"] = \"output_code\"\n\nimport torch\nimport torch.nn\n\ndevice = \"cuda\"\n\ndef f(x, y):\n    y2 = torch.cat(\n        [\n            x[:, 1:],\n            y[:, None] + 32 * 2048,\n        ],\n        dim=1,\n    )\n\n    x2 = x[:, 1:, None]\n    y3 = y2[:, -1:, None]\n\n    return (\n        torch.cat([x2, y3], dim=1)\n        + torch.arange(-2048, 0, device=device)[None, None, :]\n    ).reshape(1, 32 * 2048)\n\n# This succeeds\ndisplay(\n    f(\n        torch.zeros(1, 32, dtype=torch.int64, device=device),\n        torch.zeros(1, dtype=torch.int32, device=device),\n    )\n)\n\n# This crashes\ndisplay(\n    torch.compile(f)(\n        torch.zeros(1, 32, dtype=torch.int64, device=device),\n        torch.zeros(1, dtype=torch.int32, device=device),\n    )\n)",
+  "repro_output": "tensor([[-2048, -2047, -2046,  ..., 65533, 65534, 65535]], device='cuda:0')\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] Output code: ...",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.int64, torch.int32",
+    "input_shape": "(1, 32) for x, (1,) for y",
+    "other_conditions": "Using torch.compile with specific unsqueeze and torch.cat interleaving pattern"
+  },
+  "affected_api": "torch.compile, torch.cat, unsqueeze (via None indexing)",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "V100"
+  },
+  "labels": ["torch.compile", "triton", "bug"]
+}
+```

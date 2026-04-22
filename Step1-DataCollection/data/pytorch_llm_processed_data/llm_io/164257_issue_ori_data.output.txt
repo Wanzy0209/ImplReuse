@@ -1,0 +1,118 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: distributed checkpoint errors with unused weights and stateful optimizer
+
+**Issue ID**: 164257
+
+**Bug Description**: The issue describes that when an optimizer is provided parameters which are not used as part of the loss function calculation, they do not get an internal optimization state (e.g., a state used by Adam). This confuses the `torch.distributed.checkpoint.state_dict.set_state_dict` function and it errors. The error happens even if `StateDictOptions(strict=False)` and `DefaultLoadPlanner(allow_partial_load=True)` is used.
+
+**Repro Code**: There's a complete Python code snippet provided that demonstrates the issue.
+
+**Repro Output**: There's a traceback shown, but it's cut off. The key error message mentioned is: "RuntimeError: Missing key in checkpoint state_dict: optimizer.state.bias.step."
+
+**Trigger Conditions**:
+- Backend: Not explicitly mentioned, but the code uses `torch.distributed.checkpoint`
+- dtype: Not explicitly mentioned
+- input_shape: The model is `torch.nn.Linear(4, 2, bias=True)`
+- other_conditions: The issue occurs when optimizer parameters are not used in the loss function calculation
+
+**Affected API**: `torch.distributed.checkpoint.state_dict.set_state_dict`, `torch.distributed.checkpoint.load`
+
+**Environment**:
+- pytorch_version: Not explicitly mentioned, but the path shows `/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/` which suggests Python 3.13
+- python_version: 3.13 (inferred from the path)
+- os: macOS (inferred from `/opt/homebrew/` path)
+- hardware: Not explicitly mentioned
+
+**Labels**: Not explicitly provided in the issue
+
+Let me format this as JSON:
+
+```json
+{
+  "title": "distributed checkpoint errors with unused weights and stateful optimizer",
+  "error_description": "If the optimizer is provided parameters which are not used as part of the loss function calculation, they do not get an internal optimization state (e.g. a state used by in Adam). This confuses the `torch.distributed.checkpoint.state_dict.set_state_dict` function and it errors. The error happens even if `StateDictOptions(strict=False)` and `DefaultLoadPlanner(allow_partial_load=True)` is used.",
+  "repro_code": "import pathlib\nimport shutil\n\nimport torch\nimport torch.optim as optim\nimport torch.distributed.checkpoint as dcp\nfrom torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict, StateDictOptions\nfrom torch.distributed.checkpoint.stateful import Stateful\nfrom torch.distributed.checkpoint import DefaultLoadPlanner\n\nclass AppState(Stateful):\n    def __init__(self, model, optimizer):\n        self.model = model\n        self.optimizer = optimizer\n\n    def state_dict(self):\n        # this line automatically manages FSDP FQN's, as well as sets the default state dict type to FSDP.SHARDED_STATE_DICT\n        model_state_dict, optimizer_state_dict = get_state_dict(self.model, self.optimizer)\n        return {\n            \"model\": model_state_dict,\n            \"optim\": optimizer_state_dict\n        }\n\n    def load_state_dict(self, state_dict):\n        # sets our state dicts on the model and optimizer, now that we've loaded\n        set_state_dict(\n            self.model,\n            self.optimizer,\n            model_state_dict=state_dict[\"model\"],\n            optim_state_dict=state_dict[\"optim\"],\n            options=StateDictOptions(strict=False)\n        )\n\ntmp_dir = pathlib.Path(\"test/tmp/test_dataset_datamodule_resume\")\nshutil.rmtree(tmp_dir, ignore_errors=True)\n\n# Model + optimizer\nmodel = torch.nn.Linear(4, 2, bias=True)\noptimizer = optim.AdamW(model.parameters(), lr=0.01)\n\n# One training step\nloss = torch.mean(model.weight)\nloss.backward()\noptimizer.step()\n\n# Save checkpoint\ndcp.save({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir)\n\n# Recreate model + optimizer and load\nmodel2 = torch.nn.Linear(4, 2, bias=True)\noptimizer2 = optim.AdamW(model2.parameters(), lr=0.01)\n\n# RuntimeError: Missing key in checkpoint state_dict: optimizer.state.bias.step.\ndcp.load({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir,\n         planner=DefaultLoadPlanner(allow_partial_load=True))",
+  "repro_output": "W0930 10:27:20.827000 79300 site-packages/torch/distributed/elastic/multiprocessing/redirects.py:29] NOTE: Redirects are currently not supported in Windows or MacOs.\n/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/state_dict_saver.py:167: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to save in a single process.\n  warnings.warn(\n/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/filesystem.py:131: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()\n  if tensor.storage().size() != tensor.numel():\n/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/state_dict_loader.py:153: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.\n  warnings.warn(\nTraceback (most recent call last):\n  File \"test3.py\", line 54, in <module>\n    dcp.load({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir,\n    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n             planner=DefaultLoadPlanner(allow_partial_load=True))\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "torch.nn.Linear(4, 2, bias=True)",
+    "other_conditions": "optimizer parameters not used in loss function calculation"
+  },
+  "affected_api": "torch.distributed.checkpoint.state_dict.set_state_dict",
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "3.13",
+    "os": "macOS",
+    "hardware": ""
+  },
+  "labels": []
+}
+```
+
+Wait, I need to be more careful. The instructions say "Do NOT infer, speculate, or generate explanations." Let me re-examine what's explicitly stated:
+
+1. Python version: The path shows `/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/` - this is explicitly in the error output, so I can include it.
+
+2. OS: The path shows `/opt/homebrew/` which suggests macOS, and the warning says "Redirects are currently not supported in Windows or MacOs." This is explicitly mentioned.
+
+3. PyTorch version: Not explicitly mentioned.
+
+4. Hardware: Not explicitly mentioned.
+
+5. Backend: Not explicitly mentioned.
+
+6. dtype: Not explicitly mentioned.
+
+Let me revise the JSON to be more accurate:
+
+```json
+{
+  "title": "distributed checkpoint errors with unused weights and stateful optimizer",
+  "error_description": "If the optimizer is provided parameters which are not used as part of the loss function calculation, they do not get an internal optimization state (e.g. a state used by in Adam). This confuses the `torch.distributed.checkpoint.state_dict.set_state_dict` function and it errors. The error happens even if `StateDictOptions(strict=False)` and `DefaultLoadPlanner(allow_partial_load=True)` is used.",
+  "repro_code": "import pathlib\nimport shutil\n\nimport torch\nimport torch.optim as optim\nimport torch.distributed.checkpoint as dcp\nfrom torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict, StateDictOptions\nfrom torch.distributed.checkpoint.stateful import Stateful\nfrom torch.distributed.checkpoint import DefaultLoadPlanner\n\nclass AppState(Stateful):\n    def __init__(self, model, optimizer):\n        self.model = model\n        self.optimizer = optimizer\n\n    def state_dict(self):\n        # this line automatically manages FSDP FQN's, as well as sets the default state dict type to FSDP.SHARDED_STATE_DICT\n        model_state_dict, optimizer_state_dict = get_state_dict(self.model, self.optimizer)\n        return {\n            \"model\": model_state_dict,\n            \"optim\": optimizer_state_dict\n        }\n\n    def load_state_dict(self, state_dict):\n        # sets our state dicts on the model and optimizer, now that we've loaded\n        set_state_dict(\n            self.model,\n            self.optimizer,\n            model_state_dict=state_dict[\"model\"],\n            optim_state_dict=state_dict[\"optim\"],\n            options=StateDictOptions(strict=False)\n        )\n\ntmp_dir = pathlib.Path(\"test/tmp/test_dataset_datamodule_resume\")\nshutil.rmtree(tmp_dir, ignore_errors=True)\n\n# Model + optimizer\nmodel = torch.nn.Linear(4, 2, bias=True)\noptimizer = optim.AdamW(model.parameters(), lr=0.01)\n\n# One training step\nloss = torch.mean(model.weight)\nloss.backward()\noptimizer.step()\n\n# Save checkpoint\ndcp.save({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir)\n\n# Recreate model + optimizer and load\nmodel2 = torch.nn.Linear(4, 2, bias=True)\noptimizer2 = optim.AdamW(model2.parameters(), lr=0.01)\n\n# RuntimeError: Missing key in checkpoint state_dict: optimizer.state.bias.step.\ndcp.load({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir,\n         planner=DefaultLoadPlanner(allow_partial_load=True))",
+  "repro_output": "W0930 10:27:20.827000 79300 site-packages/torch/distributed/elastic/multiprocessing/redirects.py:29] NOTE: Redirects are currently not supported in Windows or MacOs.\n/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/state_dict_saver.py:167: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to save in a single process.\n  warnings.warn(\n/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/filesystem.py:131: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()\n  if tensor.storage().size() != tensor.numel():\n/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/state_dict_loader.py:153: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.\n  warnings.warn(\nTraceback (most recent call last):\n  File \"test3.py\", line 54, in <module>\n    dcp.load({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir,\n    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n             planner=DefaultLoadPlanner(allow_partial_load=True))\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "torch.nn.Linear(4, 2, bias=True)",
+    "other_conditions": "optimizer parameters not used in loss function calculation"
+  },
+  "affected_api": "torch.distributed.checkpoint.state_dict.set_state_dict",
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "3.13",
+    "os": "MacOs",
+    "hardware": ""
+  },
+  "labels": []
+}
+```
+
+Actually, looking at the warning message again: "NOTE: Redirects are currently not supported in Windows or MacOs." - this explicitly mentions MacOs, so I can use that.
+
+Also, I should note that the error message "RuntimeError: Missing key in checkpoint state_dict: optimizer.state.bias.step." is explicitly mentioned in the code comment, so that's the key error.
+
+Let me finalize the JSON:```json
+{
+  "title": "distributed checkpoint errors with unused weights and stateful optimizer",
+  "error_description": "If the optimizer is provided parameters which are not used as part of the loss function calculation, they do not get an internal optimization state (e.g. a state used by in Adam). This confuses the `torch.distributed.checkpoint.state_dict.set_state_dict` function and it errors. The error happens even if `StateDictOptions(strict=False)` and `DefaultLoadPlanner(allow_partial_load=True)` is used.",
+  "repro_code": "import pathlib\nimport shutil\n\nimport torch\nimport torch.optim as optim\nimport torch.distributed.checkpoint as dcp\nfrom torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict, StateDictOptions\nfrom torch.distributed.checkpoint.stateful import Stateful\nfrom torch.distributed.checkpoint import DefaultLoadPlanner\n\nclass AppState(Stateful):\n    def __init__(self, model, optimizer):\n        self.model = model\n        self.optimizer = optimizer\n\n    def state_dict(self):\n        # this line automatically manages FSDP FQN's, as well as sets the default state dict type to FSDP.SHARDED_STATE_DICT\n        model_state_dict, optimizer_state_dict = get_state_dict(self.model, self.optimizer)\n        return {\n            \"model\": model_state_dict,\n            \"optim\": optimizer_state_dict\n        }\n\n    def load_state_dict(self, state_dict):\n        # sets our state dicts on the model and optimizer, now that we've loaded\n        set_state_dict(\n            self.model,\n            self.optimizer,\n            model_state_dict=state_dict[\"model\"],\n            optim_state_dict=state_dict[\"optim\"],\n            options=StateDictOptions(strict=False)\n        )\n\ntmp_dir = pathlib.Path(\"test/tmp/test_dataset_datamodule_resume\")\nshutil.rmtree(tmp_dir, ignore_errors=True)\n\n# Model + optimizer\nmodel = torch.nn.Linear(4, 2, bias=True)\noptimizer = optim.AdamW(model.parameters(), lr=0.01)\n\n# One training step\nloss = torch.mean(model.weight)\nloss.backward()\noptimizer.step()\n\n# Save checkpoint\ndcp.save({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir)\n\n# Recreate model + optimizer and load\nmodel2 = torch.nn.Linear(4, 2, bias=True)\noptimizer2 = optim.AdamW(model2.parameters(), lr=0.01)\n\n# RuntimeError: Missing key in checkpoint state_dict: optimizer.state.bias.step.\ndcp.load({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir,\n         planner=DefaultLoadPlanner(allow_partial_load=True))",
+  "repro_output": "W0930 10:27:20.827000 79300 site-packages/torch/distributed/elastic/multiprocessing/redirects.py:29] NOTE: Redirects are currently not supported in Windows or MacOs.\n/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/state_dict_saver.py:167: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to save in a single process.\n  warnings.warn(\n/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/filesystem.py:131: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()\n  if tensor.storage().size() != tensor.numel():\n/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/state_dict_loader.py:153: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.\n  warnings.warn(\nTraceback (most recent call last):\n  File \"test3.py\", line 54, in <module>\n    dcp.load({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir,\n    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n             planner=DefaultLoadPlanner(allow_partial_load=True))\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "torch.nn.Linear(4, 2, bias=True)",
+    "other_conditions": "optimizer parameters not used in loss function calculation"
+  },
+  "affected_api": "torch.distributed.checkpoint.state_dict.set_state_dict",
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "3.13",
+    "os": "MacOs",
+    "hardware": ""
+  },
+  "labels": []
+}
+```

@@ -1,0 +1,94 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: tolist() does not graph when capture_scalar_outputs = False
+    - issue_id: 163798
+    - bug_description: repo:
+```
+@torch.compile(fullgraph=False, backend="eager")
+def func(a):
+    u0, u1 = a.tolist()
+    return a*u0*u1
+func(torch.tensor([1,2]))
+```
+
+
+output graph:
+```
+class GraphModule(torch.nn.Module):
+    def forward(self, L_a_: "i64[2][1]cpu"):
+        l_a_ = L_a_
+        
+         # File: /home/lsakka/pytorch/pytorch/example.py:7 in func, code: u0, u1 = a.tolist()
+        getitem = l_a_[0]
+        item: "Sym(u0)" = getitem.item();  getitem = None
+        getitem_1 = l_a_[1]
+        item_1: "Sym(u1)" = getitem_1.item();  getitem_1 = None
+        
+         # File: /home/lsakka/pytorch/pytorch/example.py:8 in func, code: return a*u0*u1
+        mul: "i64[2][1]cpu" = l_a_ * item;  l_a_ = item = None
+        mul_1: "i64[2][1]cpu" = mul * item_1;  mul = item_1 = None
+        return (mul_1,)
+        
+```
+in contrast, the following program does graph break.
+```
+@torch.compile(fullgraph=False, backend="eager")
+def func2(a):
+    u0 = a.item()
+    return a*u0
+```
+func2(torch.tensor([1]))
+
+
+
+This is problematic because now we have item() in the graphs then we might re-trace 
+in autograd and fail because capture_scalar_outputs=False and its too late to know where to graph break!
+seen this recently with Ads cc @chauhang @penguinwu @ezyang @bobrenjc93 @pianpwk 
+
+Note that with inductor backend fails to compile !
+```
+@torch.compile(fullgraph=False, backend="inductor")
+def func(a):
+    u0, u1 = a.tolist()
+    return a*u0*u1
+func(torch.tensor([1,2]))
+```
+a proposed [fix](https://github.com/pytorch/pytorch/pull/163807) but need to wait for CI and add unit test. 
+cc @chauhang @penguinwu @ezyang @bobrenjc93
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

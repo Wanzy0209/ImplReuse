@@ -1,0 +1,106 @@
+Let me analyze this GitHub issue to extract structured information.
+
+From the input, I can see:
+
+1. **title**: "[Fuzzer][Eager/Compile Divergence] torch._inductor.exc.InductorError: ImportError:"
+
+2. **issue_id**: 164486
+
+3. **bug_description**: The issue describes a bug where there's a divergence between eager and compiled execution. The code runs successfully in eager mode but fails during the backward pass when compiled.
+
+4. **repro_code**: There's a complete reproducible code snippet provided.
+
+5. **repro_output**: The output shows "Eager Success! ✅" followed by a traceback ending with an error.
+
+6. **trigger_conditions**:
+   - backend: CUDA (from `device=cuda` in comments)
+   - dtype: torch.int16
+   - input_shape: scalar tensors (size=())
+   - other_conditions: Using `torch.compile` with `fullgraph=True` and `dynamic=True`
+
+7. **affected_api**: torch._inductor (from the error), torch.compile, torch.div
+
+8. **environment**: Not explicitly stated in the issue
+
+9. **labels**: Not explicitly stated in the issue
+
+Let me extract the information more carefully:
+
+From the traceback, the error occurs in:
+- `torch._inductor/compile_fx.py` at line 792 in `compile_fx_inner`
+- The error is `torch._inductor.exc.InductorError: ImportError:`
+
+The code uses:
+- `torch.full` with dtype=torch.int16
+- `torch.add`
+- `torch.squeeze`
+- `torch.div`
+- `torch.compile` with `fullgraph=True, dynamic=True`
+
+The device is CUDA (from comments like `device=cuda`).
+
+Let me structure this properly:
+
+```json
+{
+  "title": "[Fuzzer][Eager/Compile Divergence] torch._inductor.exc.InductorError: ImportError:",
+  "error_description": "A divergence between eager and compiled execution where the program runs successfully in eager mode but fails during the backward pass when compiled with torch.compile using fullgraph=True and dynamic=True.",
+  "repro_code": "import torch\ntorch._dynamo.config.capture_scalar_outputs = True\n\ntorch.manual_seed(238)\n\ndef fuzzed_program(arg_0, sentinel):\n    var_node_2 = torch.full((), 1, dtype=torch.int16) # size=(), stride=(), dtype=int16, device=cuda\n    var_node_3 = arg_0 # size=(), stride=(), dtype=int16, device=cuda\n    var_node_1 = torch.add(var_node_2, var_node_3) # size=(), stride=(), dtype=int16, device=cuda\n    var_node_5 = torch.full((1,), 3, dtype=torch.int16) # size=(1,), stride=(1,), dtype=int16, device=cuda\n    var_node_4 = torch.squeeze(var_node_5) # size=(), stride=(), dtype=int16, device=cuda\n    var_node_0 = torch.div(var_node_1, var_node_4) # size=(), stride=(), dtype=int16, device=cuda\n    # Ensure gradient computation by multiplying with sentinel and taking real part\n    result = var_node_0 * sentinel\n    if result.is_complex():\n        result = result.real\n    return result\n\n# Sentinel tensor to ensure gradient computation\nsentinel = torch.tensor(1.0, requires_grad=True)\n\narg_0 = torch.as_strided(torch.randn(1).to(torch.int16), (), ())\n\nargs = (arg_0,) + (sentinel,)\nout_eager = fuzzed_program(*args)\nout_eager.sum().backward()\nprint('Eager Success! ✅')\ncompiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)\nout_compiled = compiled_program(*args)\nout_compiled.sum().backward()\nprint('Compile Success! ✅')\nout_eager_sum = out_eager.sum()\nout_compiled_sum = out_compiled.sum()\ndiff = (out_eager_sum - out_compiled_sum).abs().item()\nrel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100\nprint(f'Relative diff (sum): {rel_diff:.6f}%')\nif rel_diff > 5 and diff > 1:\n    print(f'❌ Forward output sums differ significantly (relative and absolute)!')\n    print('out_eager_sum:', out_eager_sum.item())\n    print('out_compiled_sum:', out_compiled_sum.item())\n    print('Absolute diff:', diff)\n    print('Relative diff (%):', rel_diff)\n    import sys; sys.exit(1)",
+  "repro_output": "Eager Success! ✅\nTraceback (most recent call last):\n  File \"/tmp/torchfuzz/fuzz_b614f1af.py\", line 30, in <module>\n    out_compiled.sum().backward()\n  File \"/home/bobren/local/a/pytorch/torch/_tensor.py\", line 626, in backward\n    torch.autograd.backward(\n  File \"/home/bobren/local/a/pytorch/torch/autograd/__init__.py\", line 354, in backward\n    _engine_run_backward(\n  File \"/home/bobren/local/a/pytorch/torch/autograd/graph.py\", line 847, in _engine_run_backward\n    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass\n  File \"/home/bobren/local/a/pytorch/torch/autograd/function.py\", line 316, in apply\n    return user_fn(self, *args)\n  File \"/home/bobren/local/a/pytorch/torch/_functorch/_aot_autograd/runtime_wrappers.py\", line 2334, in backward\n    return impl_fn()\n  File \"/home/bobren/local/a/pytorch/torch/_functorch/_aot_autograd/runtime_wrappers.py\", line 2320, in impl_fn\n    out = CompiledFunction._backward_impl(ctx, all_args)\n  File \"/home/bobren/local/a/pytorch/torch/_functorch/_aot_autograd/runtime_wrappers.py\", line 2463, in _backward_impl\n    CompiledFunction.compiled_bw = aot_config.bw_compiler(\n  File \"/home/bobren/local/a/pytorch/torch/_functorch/_aot_autograd/schemas.py\", line 1242, in __call__\n    return self.compiler_fn(gm, example_inputs)\n  File \"/home/bobren/local/a/pytorch/torch/_dynamo/backends/common.py\", line 82, in _wrapped_bw_compiler\n    disable(\n  File \"/home/bobren/local/a/pytorch/torch/_dynamo/eval_frame.py\", line 1098, in _fn\n    return fn(*args, **kwargs)\n  File \"/home/bobren/local/a/pytorch/torch/_utils_internal.py\", line 93, in wrapper_function\n    return function(*args, **kwargs)\n  File \"/home/bobren/local/a/pytorch/torch/_inductor/compile_fx.py\", line 2641, in bw_compiler\n    return compile_fx_backward(\n  File \"/home/bobren/local/a/pytorch/torch/_inductor/compile_fx.py\", line 2329, in compile_fx_backward\n    return inner_compile(\n  File \"/home/bobren/local/a/pytorch/torch/_inductor/compile_fx.py\", line 792, in compile_fx_inner\n    return wrap_compile",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.int16",
+    "input_shape": "scalar tensors (size=())",
+    "other_conditions": "torch.compile with fullgraph=True and dynamic=True"
+  },
+  "affected_api": "torch._inductor, torch.compile, torch.div",
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": []
+}
+```
+
+Wait, I need to be more careful. The title mentions "ImportError:" but the traceback doesn't show the actual error message - it just shows the path where the error occurs. The traceback ends at `return wrap_compile` without showing the actual error.
+
+Let me re-read the issue more carefully. The title says "torch._inductor.exc.InductorError: ImportError:" but the actual error message isn't shown in the traceback provided. The traceback just shows the call stack leading up to the error.
+
+For the error_description, I should describe what's explicitly stated: the program runs successfully in eager mode but fails during the backward pass when compiled.
+
+Let me also check if there are any other details I might have missed...
+
+Looking at the code again:
+- `torch._dynamo.config.capture_scalar_outputs = True` is set
+- `torch.manual_seed(238)` is set
+- The function uses `torch.full`, `torch.add`, `torch.squeeze`, `torch.div`
+- The device is CUDA (from comments)
+- The dtype is torch.int16
+- The shapes are scalar (size=())
+
+The traceback shows the error occurs in `torch._inductor/compile_fx.py` at line 792 in `compile_fx_inner`.
+
+I think my extraction is correct. Let me finalize the JSON.```json
+{
+  "title": "[Fuzzer][Eager/Compile Divergence] torch._inductor.exc.InductorError: ImportError:",
+  "error_description": "A divergence between eager and compiled execution where the program runs successfully in eager mode but fails during the backward pass when compiled with torch.compile using fullgraph=True and dynamic=True.",
+  "repro_code": "import torch\ntorch._dynamo.config.capture_scalar_outputs = True\n\ntorch.manual_seed(238)\n\ndef fuzzed_program(arg_0, sentinel):\n    var_node_2 = torch.full((), 1, dtype=torch.int16) # size=(), stride=(), dtype=int16, device=cuda\n    var_node_3 = arg_0 # size=(), stride=(), dtype=int16, device=cuda\n    var_node_1 = torch.add(var_node_2, var_node_3) # size=(), stride=(), dtype=int16, device=cuda\n    var_node_5 = torch.full((1,), 3, dtype=torch.int16) # size=(1,), stride=(1,), dtype=int16, device=cuda\n    var_node_4 = torch.squeeze(var_node_5) # size=(), stride=(), dtype=int16, device=cuda\n    var_node_0 = torch.div(var_node_1, var_node_4) # size=(), stride=(), dtype=int16, device=cuda\n    # Ensure gradient computation by multiplying with sentinel and taking real part\n    result = var_node_0 * sentinel\n    if result.is_complex():\n        result = result.real\n    return result\n\n# Sentinel tensor to ensure gradient computation\nsentinel = torch.tensor(1.0, requires_grad=True)\n\narg_0 = torch.as_strided(torch.randn(1).to(torch.int16), (), ())\n\nargs = (arg_0,) + (sentinel,)\nout_eager = fuzzed_program(*args)\nout_eager.sum().backward()\nprint('Eager Success! ✅')\ncompiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)\nout_compiled = compiled_program(*args)\nout_compiled.sum().backward()\nprint('Compile Success! ✅')\nout_eager_sum = out_eager.sum()\nout_compiled_sum = out_compiled.sum()\ndiff = (out_eager_sum - out_compiled_sum).abs().item()\nrel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100\nprint(f'Relative diff (sum): {rel_diff:.6f}%')\nif rel_diff > 5 and diff > 1:\n    print(f'❌ Forward output sums differ significantly (relative and absolute)!')\n    print('out_eager_sum:', out_eager_sum.item())\n    print('out_compiled_sum:', out_compiled_sum.item())\n    print('Absolute diff:', diff)\n    print('Relative diff (%):', rel_diff)\n    import sys; sys.exit(1)",
+  "repro_output": "Eager Success! ✅\nTraceback (most recent call last):\n  File \"/tmp/torchfuzz/fuzz_b614f1af.py\", line 30, in <module>\n    out_compiled.sum().backward()\n  File \"/home/bobren/local/a/pytorch/torch/_tensor.py\", line 626, in backward\n    torch.autograd.backward(\n  File \"/home/bobren/local/a/pytorch/torch/autograd/__init__.py\", line 354, in backward\n    _engine_run_backward(\n  File \"/home/bobren/local/a/pytorch/torch/autograd/graph.py\", line 847, in _engine_run_backward\n    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass\n  File \"/home/bobren/local/a/pytorch/torch/autograd/function.py\", line 316, in apply\n    return user_fn(self, *args)\n  File \"/home/bobren/local/a/pytorch/torch/_functorch/_aot_autograd/runtime_wrappers.py\", line 2334, in backward\n    return impl_fn()\n  File \"/home/bobren/local/a/pytorch/torch/_functorch/_aot_autograd/runtime_wrappers.py\", line 2320, in impl_fn\n    out = CompiledFunction._backward_impl(ctx, all_args)\n  File \"/home/bobren/local/a/pytorch/torch/_functorch/_aot_autograd/runtime_wrappers.py\", line 2463, in _backward_impl\n    CompiledFunction.compiled_bw = aot_config.bw_compiler(\n  File \"/home/bobren/local/a/pytorch/torch/_functorch/_aot_autograd/schemas.py\", line 1242, in __call__\n    return self.compiler_fn(gm, example_inputs)\n  File \"/home/bobren/local/a/pytorch/torch/_dynamo/backends/common.py\", line 82, in _wrapped_bw_compiler\n    disable(\n  File \"/home/bobren/local/a/pytorch/torch/_dynamo/eval_frame.py\", line 1098, in _fn\n    return fn(*args, **kwargs)\n  File \"/home/bobren/local/a/pytorch/torch/_utils_internal.py\", line 93, in wrapper_function\n    return function(*args, **kwargs)\n  File \"/home/bobren/local/a/pytorch/torch/_inductor/compile_fx.py\", line 2641, in bw_compiler\n    return compile_fx_backward(\n  File \"/home/bobren/local/a/pytorch/torch/_inductor/compile_fx.py\", line 2329, in compile_fx_backward\n    return inner_compile(\n  File \"/home/bobren/local/a/pytorch/torch/_inductor/compile_fx.py\", line 792, in compile_fx_inner\n    return wrap_compile",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.int16",
+    "input_shape": "scalar tensors (size=())",
+    "other_conditions": "torch.compile with fullgraph=True and dynamic=True, torch._dynamo.config.capture_scalar_outputs = True"
+  },
+  "affected_api": "torch._inductor, torch.compile, torch.div",
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": []
+}
+```

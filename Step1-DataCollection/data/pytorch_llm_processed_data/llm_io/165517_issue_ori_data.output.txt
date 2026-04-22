@@ -1,0 +1,55 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: torch.func.jvp does not support flash_attn
+
+**Issue ID**: 165517
+
+**Bug Description**: The user is trying to use `torch.func.jvp` to compute gradients in their loss function, and their model includes flash attention. They get a RuntimeError indicating that in order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod.
+
+**Error Message**:
+```
+RuntimeError: In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html
+```
+
+**Repro Code**: The user provided a function `qwen_image_flash_attention` that uses `flash_attn_interface.flash_attn_func`. The error occurs when calling this function within a model that's being differentiated using `torch.func.jvp`.
+
+**Repro Output**: The RuntimeError mentioned above.
+
+**Trigger Conditions**:
+- Backend: CUDA (since flash_attn is being used)
+- dtype: The code mentions `origin_dtype`, `torch.float8_e4m3fn`, and `.to(joint_q.dtype)`
+- input_shape: Not explicitly specified, but the code uses rearrange with patterns like "b n s d -> b s n d"
+- other_conditions: Using `torch.func.jvp` with flash attention
+
+**Affected API**: `torch.func.jvp` and `flash_attn_interface.flash_attn_func`
+
+**Environment**:
+- PyTorch version: 2.6.0+cu124
+- Python version: 3.10.18
+- OS: Ubuntu 20.04.6 LTS (x86_64)
+
+
+- Hardware: A100 GPU (indicated by the path "/home/t2vg-a100-G4-42/")
+
+I'll focus on the key details of the issue, highlighting the specific error and environment constraints. The problem stems from incompatibility between `torch.func.jvp` and flash attention's autograd function implementation.```json
+{
+  "title": "torch.func.jvp does not support flash_attn",
+  "error_description": "When using torch.func.jvp to compute grad in a loss function with a model that includes flash attention, a RuntimeError is raised: 'In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod.' The error occurs at flash_attn_interface.flash_attn_func when called within a model being differentiated using torch.func.jvp.",
+  "repro_code": "def qwen_image_flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads: int, attention_mask = None, enable_fp8_attention: bool = False):\n    if FLASH_ATTN_3_AVAILABLE and attention_mask is None:\n        if not enable_fp8_attention:\n            q = rearrange(q, \"b n s d -> b s n d\", n=num_heads)\n            k = rearrange(k, \"b n s d -> b s n d\", n=num_heads)\n            v = rearrange(v, \"b n s d -> b s n d\", n=num_heads)\n            x = flash_attn_interface.flash_attn_func(q, k, v)\n            if isinstance(x, tuple):\n                x = x[0]\n            x = rearrange(x, \"b s n d -> b s (n d)\", n=num_heads)\n        else:\n            origin_dtype = q.dtype\n            q_std, k_std, v_std = q.std(), k.std(), v.std()\n            q, k, v = (q / q_std).to(torch.float8_e4m3fn), (k / k_std).to(torch.float8_e4m3fn), (v / v_std).to(torch.float8_e4m3fn)\n            q = rearrange(q, \"b n s d -> b s n d\", n=num_heads)\n            k = rearrange(k, \"b n s d -> b s n d\", n=num_heads)\n            v = rearrange(v, \"b n s d -> b s n d\", n=num_heads)\n            x = flash_attn_interface.flash_attn_func(q, k, v, softmax_scale=q_std * k_std / math.sqrt(q.size(-1)))\n            if isinstance(x, tuple):\n                x = x[0]\n            x = x.to(origin_dtype) * v_std\n            x = rearrange(x, \"b s n d -> b s (n d)\", n=num_heads)\n    else:\n        x = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attention_mask)\n        x = rearrange(x, \"b n s d -> b s (n d)\", n=num_heads)\n    return x",
+  "repro_output": "RuntimeError: In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod. For more details, please see https://pytorch.org/docs/main/notes/extending.func.html",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.float8_e4m3fn, origin_dtype",
+    "input_shape": "b n s d (batch, num_heads, sequence, dimension)",
+    "other_conditions": "Using torch.func.jvp with flash_attn_interface.flash_attn_func when FLASH_ATTN_3_AVAILABLE is True and attention_mask is None"
+  },
+  "affected_api": "torch.func.jvp, flash_attn_interface.flash_attn_func",
+  "environment": {
+    "pytorch_version": "2.6.0+cu124",
+    "python_version": "3.10.18",
+    "os": "Ubuntu 20.04.6 LTS (x86_64)",
+    "hardware": "A100 GPU"
+  },
+  "labels": ["functorch", "flash-attn", "jvp"]
+}
+```

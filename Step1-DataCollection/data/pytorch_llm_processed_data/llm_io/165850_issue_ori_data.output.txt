@@ -1,0 +1,71 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: torch.linalg.inv breaks down when used on mps.
+
+**Issue ID**: 165850
+
+**Bug Description**: The user is computing rolling multiple linear regression in PyTorch. When running on CPU, results are close to numpy.linalg.lstsq. When running on MPS, the result is completely wrong. The user traced the function and found that while XTX_conv has a small mismatch between CPU and MPS (order of 1e-7), the computation completely breaks down when computing the inverse. The matrix being inverted has full rank, but the computation seems to explode on MPS.
+
+**Repro Code**: The user provided a snippet of the relevant part of the function:
+```python
+# Reshape for batch matrix multiplication
+# x_conv: [B, D, N] -> [B, N, D, 1]
+x_expanded = (x*mask).unsqueeze(3)  # [B, N, D, 1]
+x_expanded_T = x_expanded.transpose(2, 3)            # [B, N, 1, D]
+
+# Batch matrix multiply: [B, N, D, 1] @ [B, N, 1, D] -> [B, N, D, D]
+# only last two dims are matrix-multiplied
+XTX = torch.matmul(x_expanded, x_expanded_T)      # [B, N, D, D]
+
+#we need to convolve each element of [D, D] matrix with fitler
+# Reshape XTX from [B, N, D, D] to [B, D*D, N] for convolution
+# Each element of the D×D matrix becomes a separate channel
+XTX_flat = XTX.permute(0, 2, 3, 1).reshape(B, D * D, N)  # [B, D*D, N]
+
+# Apply convolution to sum over windows
+XTX_conv = F.conv1d(XTX_flat, filters_XTX, groups=1)  # [B, D*D, out_len]
+
+
+```
+
+I'll continue reshaping the convolution output to prepare for matrix inversion. The code transforms the tensor back to a 4D shape, allowing batch-wise matrix inversion of the XTX_conv tensor. This step is crucial for computing the rolling regression coefficients efficiently.
+
+The reshaping involves converting the flattened convolution output back to a matrix-like structure, enabling the subsequent matrix inversion operation across batches and output lengths.
+
+```
+
+python
+XTX_conv = XTX_conv.reshape(B, D, D, out_len).permute(0, 3, 1, 2)  # [B, out_len, D, D]
+
+#inverse of x.T x
+XTX_inv = torch.linalg.inv(XTX_conv)                       # [B, out_len, D, D]
+```
+
+The computation reveals significant numerical instability on MPS, with extreme values diverging dramatically from expected results. The matrix inversion process appears to break down, generating astronomically large and inconsistent numerical outputs.
+
+The discrepancy suggests a fundamental computational issue when performing matrix operations on the MPS backend, potentially related to floating-point precision or numerical stability in the linear algebra implementation.
+
+Key observations include the specific PyTorch version, macOS environment, and the unexpected behavior of `torch.linalg.inv` on the MPS backend. The problem manifests with 4-dimensional inputs, indicating a potential systematic computational limitation.
+
+The investigation points to a targeted issue with matrix inversion operations on Apple Silicon's Metal Performance Shaders, requiring careful examination of numerical precision and computational methods.```json
+{
+  "title": "torch.linalg.inv breaks down when used on mps.",
+  "error_description": "When computing rolling multiple linear regression in PyTorch, results on CPU are very close to numpy.linalg.lstsq, but on MPS the result is completely wrong. While XTX_conv has a mismatch between CPU and MPS on order of 1e-7, the computation completely breaks down when computing the inverse. The matrix being inverted has full rank, but the computation seems to explode on MPS.",
+  "repro_code": "# Reshape for batch matrix multiplication\n# x_conv: [B, D, N] -> [B, N, D, 1]\nx_expanded = (x*mask).unsqueeze(3)  # [B, N, D, 1]\nx_expanded_T = x_expanded.transpose(2, 3)            # [B, N, 1, D]\n\n# Batch matrix multiply: [B, N, D, 1] @ [B, N, 1, D] -> [B, N, D, D]\n# only last two dims are matrix-multiplied\nXTX = torch.matmul(x_expanded, x_expanded_T)      # [B, N, D, D]\n\n#we need to convolve each element of [D, D] matrix with fitler\n# Reshape XTX from [B, N, D, D] to [B, D*D, N] for convolution\n# Each element of the D×D matrix becomes a separate channel\nXTX_flat = XTX.permute(0, 2, 3, 1).reshape(B, D * D, N)  # [B, D*D, N]\n\n# Apply convolution to sum over windows\nXTX_conv = F.conv1d(XTX_flat, filters_XTX, groups=1)  # [B, D*D, out_len]\n\n# Reshape back to [B, out_len, D, D]\nXTX_conv = XTX_conv.reshape(B, D, D, out_len).permute(0, 3, 1, 2)  # [B, out_len, D, D]\n\n#inverse of x.T x\nXTX_inv = torch.linalg.inv(XTX_conv)                       # [B, out_len, D, D]",
+  "repro_output": "numpy: [1.00035739, 0.29986116, 0.19779432, 0.46009004]\ncpu: [1.00035691, 0.29986125, 0.19779432, 0.46008980]\nmps: [ 2.56928920e+07,  4.40364003e+14, -4.40364037e+14,  1.34075220e+07]",
+  "trigger_conditions": {
+    "backend": "MPS",
+    "dtype": "unknown",
+    "input_shape": "4 dimensional input",
+    "other_conditions": "rolling multiple linear regression with full rank matrix inversion"
+  },
+  "affected_api": "torch.linalg.inv",
+  "environment": {
+    "pytorch_version": "2.7.1",
+    "python_version": "3.13.5",
+    "os": "macOS 15.6.1 (arm64)",
+    "hardware": "Apple M1 Pro"
+  },
+  "labels": []
+}
+```

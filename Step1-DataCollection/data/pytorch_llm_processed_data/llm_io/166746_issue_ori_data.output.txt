@@ -1,0 +1,80 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: Keras with torch MPS: binary_crossentropy crashes with mps.multiply broadcast ((B,T,1) × (B,T))
+
+**Issue ID**: 166746
+
+**Bug Description**: The user is experiencing an assertion failure when using the torch backend with MPS with Keras. The error message indicates that 'mps.multiply' op operands don't have broadcast-compatible shapes. Specifically, it's trying to multiply tensors with shapes (32x50x1xf32) and (32x50xf32).
+
+**Repro Code**: The user provided a minimal reproducible example:
+```python
+#!/usr/bin/env python3
+import os
+os.environ["KERAS_BACKEND"] = "torch"
+
+import numpy as np
+import keras
+from keras import layers, Model
+import torch
+
+print("Keras:", keras.__version__)
+print("PyTorch:", torch.__version__)
+print("MPS available:", torch.backends.mps.is_available())
+
+B, T, F = 32, 50, 10
+
+inp = layers.Input(shape=(T, F))
+x = layers.Dense(1, activation=None)(inp)  # (B,T,1)
+x = layers.Activation("sigmoid")(x)
+model = Model(inp, x)
+model.compile(optimizer="adam", loss="binary_crossentropy")
+
+X = np.random.randn(B, T, F).astype(np.float32)
+y = np.random.randint(0, 2, (B, T, 1)).astype(np.float32)
+
+print("X:", X.shape, "y:", y.shape)
+model.fit(X, y, epochs=1, batch_size=32, verbose=1)
+```
+
+**Repro Output**: The error output shows:
+```
+(mpsFileLoc): /AppleInternal/Library/BuildRoots/4~B5vFugC00QBfsSa38UwjlpDhP2WeLxB3cTjDRaE/Library/Caches/com.apple.xbs/Sources/MetalPerformanceShadersGraph/mpsgraph/MetalPerformanceShadersGraph/Core/Files/MPSGraphUtilities.mm:233:0: error: 'mps.multiply' op operands don't have broadcast-compatible shapes
+
+
+```
+
+I see the error is related to tensor shape incompatibility during multiplication. The MPS backend is struggling with broadcasting between tensors of different dimensions, specifically when trying to multiply a 3D tensor with a 2D tensor.
+
+The crash occurs in the Metal Performance Shaders Graph library, indicating a low-level compatibility issue with tensor operations on Apple's Metal framework.
+
+```
+I'm investigating a Keras and PyTorch compatibility issue on an Apple Silicon platform. The problem involves a binary cross-entropy loss calculation that triggers a crash during model training. The environment uses specific versions of Keras and PyTorch, with MPS (Metal Performance Shaders) enabled. The error occurs when attempting to multiply tensors with incompatible shapes, specifically (32, 50, 1) and (32, 50), which prevents proper broadcasting during the loss computation.
+
+The key technical details involve a Dense layer with sigmoid activation, using float32 data types, and a specific input shape of (32, 50, 10). The crash suggests a fundamental incompatibility in tensor operations within the MPS backend.
+``````json
+{
+  "title": "Keras with torch MPS: binary_crossentropy crashes with mps.multiply broadcast ((B,T,1) × (B,T))",
+  "error_description": "When using the torch backend with MPS with Keras, an assertion failure occurs. The error message indicates that 'mps.multiply' op operands don't have broadcast-compatible shapes. Specifically, it's trying to multiply tensors with shapes (32x50x1xf32) and (32x50xf32). The crash occurs in MetalPerformanceShadersGraph with the error: 'mps.multiply' op operands don't have broadcast-compatible shapes.",
+
+  "repro_code": "#!/usr/bin/env python3\nimport os\nos.environ[\"KERAS_BACKEND\"] = \"torch\"\n\nimport numpy as np\nimport keras\nfrom keras import layers, Model\nimport torch\n\nprint(\"Keras:\", keras.__version__)\nprint(\"PyTorch:\", torch.__version__)\nprint(\"MPS available:\", torch.backends.mps.is_available())\n\nB, T, F = 32, 50, 10\n\ninp = layers.Input(shape=(T, F))\nx = layers.Dense(1, activation=None)(inp)  # (B,T,1)\nx = layers.Activation(\"sigmoid\")(x)\nmodel = Model(inp, x)\nmodel.compile(optimizer=\"adam\", loss=\"binary_crossentropy\")\n\nX = np.random.randn(B, T, F).astype(np.float32)\ny = np.random.randint(0, 2, (B, T, 1)).astype(np.float32)\n\nprint(\"X:\", X.shape, \"y:\", y.shape)\nmodel.fit(X, y, epochs=1, batch_size=32, verbose=1)",
+  "repro_output": "(mpsFileLoc): /AppleInternal/Library/BuildRoots/4~B5vFugC00QBfsSa38UwjlpDhP2WeLxB3cTjDRaE/Library/Caches/com.apple.xbs/Sources/MetalPerformanceShadersGraph/mpsgraph/MetalPerformanceShadersGraph/Core/Files/MPSGraphUtilities.mm:233:0: error: 'mps.multiply' op operands don't have broadcast-compatible shapes\n(mpsFileLoc): /AppleInternal/Library/BuildRoots/4~B5vFugC00QBfsSa38UwjlpDhP2WeLxB3cTjDRaE/Library/Caches/com.apple.xbs/Sources/MetalPerformanceShadersGraph/mpsgraph/MetalPerformanceShadersGraph/Core/Files/MPSGraphUtilities.mm:233:0: note: see current operation: %10 = \"mps.multiply\"(%arg2, %9) : (tensor<32x50x1xf32>, tensor<32x50xf32>) -> tensor<*xf32>\n/AppleInternal/Library/BuildRoots/4~B5vFugC00QBfsSa38UwjlpDhP2WeLxB3cTjDRaE/Library/Caches/com.apple.xbs/Sources/MetalPerformanceShadersGraph/mpsgraph/MetalPerformanceShadersGraph/Core/Files/MPSGraphExecutable.mm:1232: failed assertion `original module failed verification'\nAbort",
+
+  "trigger_conditions": {
+    "backend": "MPS (Metal Performance Shaders) with PyTorch backend for Keras",
+    "dtype": "float32",
+    "input_shape": "(32, 50, 10) for X, (32, 50, 1) for y",
+    "other_conditions": "Using Keras 3.11.3 with PyTorch 2.9.0, model with Dense layer outputting shape (B,T,1) and binary_crossentropy loss"
+  },
+
+  "affected_api": "binary_crossentropy loss function with MPS backend",
+
+  "environment": {
+    "pytorch_version": "2.9.0",
+    "python_version": "unknown",
+    "os": "macOS (Apple Silicon)",
+    "hardware": "Apple Silicon GPU (MPS)"
+  },
+
+  "labels": ["bug", "MPS", "Keras", "binary_crossentropy"]
+}
+```

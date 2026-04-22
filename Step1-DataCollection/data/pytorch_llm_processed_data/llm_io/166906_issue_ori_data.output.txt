@@ -1,0 +1,60 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: fx_traceback.annotate doesn't get added to assert nodes
+
+**Issue ID**: 166906
+
+**Bug Description**: The issue is about `fx_traceback.annotate` not being added to assert nodes. The user provides a test case where they use `torch.fx.traceback.annotate({"moo": 0})` to annotate code, and then export the module. The output shows that the annotation `{'moo': 0}` is present on nodes like `cat`, `item`, and `mul`, but NOT on the assert nodes (`ge_1`, `_assert_scalar_default`, `le`, `_assert_scalar_default_1`).
+
+**Repro Code**: The Python code provided in the issue:
+```python
+def test_dynamic_annotate(self):
+    class M(torch.nn.Module):
+        def forward(self, x, y):
+            with torch.fx.traceback.annotate({"moo": 0}):
+                x = torch.cat([x, x])
+                b = y.item()
+                torch._check(b >= x.shape[0])
+                return x * b
+    
+    with torch.fx.traceback.preserve_node_meta():
+        ep = torch.export.export(M(), (torch.randn(3), torch.tensor(6)), dynamic_shapes={"x": {0: Dim("b")}, "y": None})
+    print(ep)
+    for node in ep.graph.nodes:
+        print(node, node.meta.get("custom"))
+```
+
+**Repro Output**: The output shows the ExportedProgram with annotations on some nodes but not on assert nodes. Specifically:
+- `cat` has annotation `{'moo': 0}`
+- `item` has annotation `{'moo': 0}`
+- `mul` has annotation `{'moo': 0}`
+- But `ge_1`, `_assert_scalar_default`, `le`, `_assert_scalar_default_1` have `None` for custom metadata
+
+
+- The issue is on the `main` branch, with no specific backend, dtype, input shape, or other conditions mentioned
+- The affected API is `torch.fx.traceback.annotate`
+- The environment is PyTorch main branch, with no specific Python version, OS, or hardware mentioned
+- The labels are not explicitly provided in the issue
+
+I'll focus on the key observation: the annotation is inconsistently applied across different nodes, particularly missing on assert-related nodes. This suggests a potential bug in how `fx_traceback.annotate` handles metadata propagation during graph export.```json
+{
+  "title": "fx_traceback.annotate doesn't get added to assert nodes",
+  "error_description": "The fx_traceback.annotate context manager does not add annotations to assert nodes. When using torch.fx.traceback.annotate({'moo': 0}) within a context, the annotation is correctly added to nodes like cat, item, and mul, but NOT to assert nodes (ge_1, _assert_scalar_default, le, _assert_scalar_default_1). These assert nodes show None for their custom metadata instead of the expected {'moo': 0}.",
+  "repro_code": "def test_dynamic_annotate(self):\n    class M(torch.nn.Module):\n        def forward(self, x, y):\n            with torch.fx.traceback.annotate({\"moo\": 0}):\n                x = torch.cat([x, x])\n                b = y.item()\n                torch._check(b >= x.shape[0])\n                return x * b\n\n    with torch.fx.traceback.preserve_node_meta():\n        ep = torch.export.export(M(), (torch.randn(3), torch.tensor(6)), dynamic_shapes={\"x\": {0: Dim(\"b\")}, \"y\": None})\n    print(ep)\n    for node in ep.graph.nodes:\n        print(node, node.meta.get(\"custom\"))",
+  "repro_output": "ExportedProgram:\n    class GraphModule(torch.nn.Module):\n        def forward(self, x: \"f32[s77]\", y: \"i64[]\"):\n            # No stacktrace found for following nodes\n            sym_size_int_1: \"Sym(s77)\" = torch.ops.aten.sym_size.int(x, 0)\n            \n            # Annotation: {'moo': 0} File: /data/users/angelayi/pytorch/moo.py:70 in forward, code: x = torch.cat([x, x])\n            cat: \"f32[2*s77]\" = torch.ops.aten.cat.default([x, x]);  x = None\n            \n            # Annotation: {'moo': 0} File: /data/users/angelayi/pytorch/moo.py:71 in forward, code: b = y.item()\n            item: \"Sym(u0)\" = torch.ops.aten.item.default(y);  y = None\n            \n            # File: /data/users/angelayi/pytorch/moo.py:71 in forward, code: b = y.item()\n            ge_1: \"Sym(u0 >= 4)\" = item >= 4\n            _assert_scalar_default = torch.ops.aten._assert_scalar.default(ge_1, \"Runtime assertion failed for expression u0 >= 4 on node 'ge_1'\");  ge_1 = _assert_scalar_default = None\n            \n            # No stacktrace found for following nodes\n            mul_1: \"Sym(2*s77)\" = 2 * sym_size_int_1;  sym_size_int_1 = None\n            le: \"Sym(2*s77 <= u0)\" = mul_1 <= item;  mul_1 = None\n            _assert_scalar_default_1 = torch.ops.aten._assert_scalar.default(le, \"Runtime assertion failed for expression 2*s77 <= u0 on node 'le'\");  le = _assert_scalar_default_1 = None\n            \n            # Annotation: {'moo': 0} File: /data/users/angelayi/pytorch/moo.py:73 in forward, code: return x * b\n            mul: \"f32[2*s77]\" = torch.ops.aten.mul.Tensor(cat, item);  cat = item = None\n            return (mul,)\n            \nx None\ny None\nsym_size_int_1 None\ncat {'moo': 0}\nitem {'moo': 0}\nge_1 None\n_assert_scalar_default None\nmul_1 None\nle None\n_assert_scalar_default_1 None\nmul {'moo': 0}",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "x: f32[s77], y: i64[]",
+    "other_conditions": "Using torch.fx.traceback.annotate context manager with torch.export.export and dynamic_shapes"
+  },
+  "affected_api": "torch.fx.traceback.annotate",
+  "environment": {
+    "pytorch_version": "main",
+    "python_version": "",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": []
+}
+```

@@ -1,0 +1,94 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [MPS] On MacOS-26 torch.full  fails for 4+Gb tensors
+    - issue_id: 161265
+    - bug_description: ### 🐛 Describe the bug
+
+If one runs following example on macOS Tahoe
+```python
+import torch
+a = torch.ones(2, (1 << 31) + 5, dtype=torch.int8, device='mps')
+print(a[1, -2])
+print(a[:, -2])
+```
+
+result will be
+```
+tensor(0, device='mps:0', dtype=torch.int8)
+tensor([1, 1], device='mps:0', dtype=torch.int8)
+```
+But should have been 1 in both cases 
+Reason for that are relying on unsupported use of `fillBuffer` that for some reason stopped working for length exceeding 4Gb
+https://github.com/pytorch/pytorch/blob/639b8cc51ddebf10361f3840a6b0a244eb6092a1/aten/src/ATen/mps/MPSStream.mm#L161
+
+
+I.e. following Swift script returns non-unfirom values on MacOS Tahoe
+```swift
+import Metal
+
+let bufferSize = 1<<32 + 4
+
+guard let device = MTLCreateSystemDefaultDevice() else { fatalError("No Metal device found") }
+guard let buffer = device.makeBuffer(length: bufferSize, options: .storageModeShared) else { fatalError("Failed to create buffer") }
+
+guard let cmdQueue = device.makeCommandQueue() else { fatalError("Failed to create command queue") }
+guard let cmdBuffer = cmdQueue.makeCommandBuffer() else { fatalError("Failed to create command buffer") }
+guard let blitEncoder = cmdBuffer.makeBlitCommandEncoder() else { fatalError("Failed to create blit encoder") }
+
+blitEncoder.fill(buffer: buffer, range: 0..<bufferSize, value: 0x42)
+blitEncoder.endEncoding()
+
+cmdBuffer.commit()
+cmdBuffer.waitUntilCompleted()
+
+let tailOffs = 8
+let hostPtr = buffer.contents().bindMemory(to: UInt8.self, capacity: bufferSize)
+let tail = Array(UnsafeBufferPointer(start: hostPtr + (bufferSize - tailOffs), count: tailOffs))
+
+for (idx, val) in tail.enumerated() {
+    print("Offs 0x\(String(bufferSize - tailOffs + idx, radix: 16)): 0x\(String(val, radix: 16))")
+}
+```
+
+### Versions
+
+2.8.0, nightly
+
+cc @kulinseth @albanD @DenisVieriu97 @jhavukainen
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

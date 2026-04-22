@@ -1,0 +1,55 @@
+Let me analyze this GitHub issue and extract the structured information as requested.
+
+**Title**: torch.compilefails withaten.complex.defaultsize/stride assertion when using STFT output recombined into complex tensor
+
+**Issue ID**: 161906
+
+**Bug Description**: The issue describes a bug where a model using `torch.stft` followed by recombination of real/imag parts into a complex tensor works in eager mode but fails with `torch.compile` (Inductor backend) due to a stride assertion inside `aten.complex.default`.
+
+**Repro Code**: There's a minimal reproduction script provided in the issue.
+
+**Repro Output**: The error message shows:
+```
+assert_size_stride(buf10, (1, 257, 101), (25957, 101, 1), 'torch.ops.aten.complex.default')
+AssertionError: expected size 257==257, stride 1==101 at dim=1; expected size 101==101, stride 257==1 at dim=2
+Error in op: torch.ops.aten.complex.default
+```
+
+**Trigger Conditions**:
+- Backend: Inductor (from `torch.compile`)
+- dtype: Complex tensors (implied from `torch.stft` with `return_complex=True` and `torch.complex`)
+- input_shape: (1, 16000) for input x
+- other_conditions: Using `torch.stft` followed by operations on real/imag parts and recombining with `torch.complex`
+
+**Affected API**: `torch.complex`, `torch.stft`, `torch.ops.aten.complex.default`
+
+**Environment**:
+- PyTorch version: 2.8.0a0+gitba56102
+- Python version: 3.10.16
+- OS: Ubuntu 22.04.4 LTS (x86_64)
+- Hardware: CUDA 12.6 (GPU)
+
+**Labels**: Not explicitly provided in the issue, so I'll leave this empty.
+
+Let me format this into the requested JSON schema:```json
+{
+  "title": "torch.compilefails withaten.complex.defaultsize/stride assertion when using STFT output recombined into complex tensor",
+  "error_description": "A simple model using torch.stft followed by recombination of real/imag parts into a complex tensor works fine in eager mode. However, when compiled with torch.compile (Inductor backend), runtime fails with a stride assertion inside aten.complex.default.",
+  "repro_code": "import torch\nimport torch.nn as nn\n\nclass M(nn.Module):\n    def __init__(self, n_fft=512, hop=160, win=320):\n        super().__init__()\n        self.n_fft, self.hop, self.win = n_fft, hop, win\n        # Register window as buffer so it moves with .to(device)\n        self.register_buffer(\"window\", torch.hann_window(win))\n        # Introduce parameter for broadcasting / stride ops\n        self.p = nn.Parameter(torch.tensor(2.0))\n\n    def forward(self, x: torch.Tensor) -> torch.Tensor:\n        S = torch.stft(\n            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,\n            return_complex=True, window=self.window, pad_mode=\"constant\"\n        )\n        R = torch.abs(S.real)   # unary op on real\n        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)\n        Z = torch.complex(R, I) # recombine -> triggers aten.complex.default\n        return Z\n\ndef main():\n    device = \"cuda\" if torch.cuda.is_available() else \"cpu\"\n    torch.manual_seed(0)\n\n    x = torch.randn(1, 16000, device=device)\n    m = M().to(device)\n\n    # Eager: works fine\n    z_eager = m(x)\n    assert z_eager.is_complex()\n    print(\"eager mode OK:\", z_eager.shape, z_eager.is_complex())\n\n    # Compile: runtime stride assertion in aten.complex.default\n    m_c = torch.compile(m)\n    z_compiled = m_c(x)\n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "eager mode OK: torch.Size([1, 257, 101]) True\n......\nassert_size_stride(buf10, (1, 257, 101), (25957, 101, 1), 'torch.ops.aten.complex.default')\nAssertionError: expected size 257==257, stride 1==101 at dim=1; expected size 101==101, stride 257==1 at dim=2\nError in op: torch.ops.aten.complex.default\nThis error most often comes from a incorrect fake (aka meta) kernel for a custom op.\nUse torch.library.opcheck to test your custom op.\nSee https://pytorch.org/docs/stable/library.html#torch.library.opcheck",
+  "trigger_conditions": {
+    "backend": "Inductor",
+    "dtype": "complex",
+    "input_shape": "(1, 16000)",
+    "other_conditions": "Using torch.stft with return_complex=True followed by operations on real/imag parts and recombining with torch.complex"
+  },
+  "affected_api": "torch.complex, torch.stft, torch.ops.aten.complex.default",
+  "environment": {
+    "pytorch_version": "2.8.0a0+gitba56102",
+    "python_version": "3.10.16",
+    "os": "Ubuntu 22.04.4 LTS (x86_64)",
+    "hardware": "CUDA 12.6"
+  },
+  "labels": []
+}
+```

@@ -1,0 +1,65 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: [DTensor] gaps in uneven strided shard
+
+**Issue ID**: 168134
+
+**Bug Description**: The issue describes a bug in DTensor's strided sharding functionality. For a full tensor [0, 1, 2, 3, 4] with _StridedShard(0, split=2) and mesh (2,), the expected local tensors should be:
+- rank0: [0, 1, 3, 4]
+- rank1: [2, pad]
+
+But the actual (incorrect) result is:
+- rank0: [0, 1, 3]
+- rank1: [2, 4]
+
+The bug is caused by specific lines in the placement_types.py file. The recommended fix approach is to transform (5,) -> unflatten -> (2, 3,) -> S(1) -> flatten.
+
+**Repro Code**: There's a test function provided:
+```python
+@with_comms
+def test_strided_shard_bug(self):
+    assert self.world_size == 2
+    device_mesh = init_device_mesh(self.device_type, (2, ))
+    global_tensor = torch.Tensor([0, 1, 2, 3, 4])
+    dtensor = distribute_tensor(global_tensor, device_mesh, (Replicate(), )).redistribute(device_mesh, (_StridedShard(0, split_factor=2),))
+    import time
+    time.sleep(torch.distributed.get_rank())
+    print(f"{torch.distributed.get_rank()=} {dtensor._local_tensor=}")
+```
+
+**Repro Output**:
+```
+torch.distributed.get_rank()=0 dtensor._local_tensor=tensor([0., 1., 3.], device='cuda:0')
+torch.distributed.get_rank()=1 dtensor._local_tensor=tensor([2., 4.], device='cuda:1')
+
+
+```
+
+I'll investigate the specific conditions triggering this bug. The issue involves a distributed tensor scenario with a 2-rank setup, using CUDA devices. The problem occurs during tensor redistribution with a specific strided sharding configuration.
+
+The key factors include a 5-element tensor, a 2-rank device mesh, and a specific sharding strategy that seems to produce unexpected results. The bug appears to be related to how the tensor is split and redistributed across the device mesh.
+
+The affected API involves distributed tensor operations, specifically the `distribute_tensor` and `redistribute` methods with a `_StridedShard` placement strategy.
+
+``````json
+{
+  "title": "[DTensor] gaps in uneven strided shard",
+  "error_description": "for full tensor [0, 1, 2, 3, 4] over _StridedShard(0, split=2),  mesh (2,), we should have following local tensor * rank0: [0, 1, 3, 4] * rank1: [2, pad] right now the result is wrong (see following repro) * rank0: [0, 1, 3] * rank2: [2, 4]",
+  "repro_code": "@with_comms\ndef test_strided_shard_bug(self):\n    assert self.world_size == 2\n    device_mesh = init_device_mesh(self.device_type, (2, ))\n    global_tensor = torch.Tensor([0, 1, 2, 3, 4])\n    dtensor = distribute_tensor(global_tensor, device_mesh, (Replicate(), )).redistribute(device_mesh, (_StridedShard(0, split_factor=2),))\n    import time\n    time.sleep(torch.distributed.get_rank())\n    print(f\"{torch.distributed.get_rank()=} {dtensor._local_tensor=}\")",
+  "repro_output": "torch.distributed.get_rank()=0 dtensor._local_tensor=tensor([0., 1., 3.], device='cuda:0')\ntorch.distributed.get_rank()=1 dtensor._local_tensor=tensor([2., 4.], device='cuda:1')",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "unknown",
+    "input_shape": "(5,)",
+    "other_conditions": "world_size == 2, mesh (2,), _StridedShard(0, split_factor=2)"
+  },
+  "affected_api": "distribute_tensor, redistribute, _StridedShard",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "CUDA"
+  },
+  "labels": ["bug", "dtensor"]
+}
+```

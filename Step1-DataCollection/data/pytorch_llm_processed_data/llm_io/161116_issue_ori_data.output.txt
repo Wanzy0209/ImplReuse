@@ -1,0 +1,74 @@
+Let me analyze this GitHub issue and extract the structured information as requested.
+
+**Title**: NCCL Segfault when initializing a process group on an NVL72
+
+**Issue ID**: 161116
+
+**Bug Description**: The user is trying to run distributed training with Torchtitan on a GB200 NVL72 cluster. Using more than 10 trays (40 GPUs) fails with an NCCL segmentation fault, while using 10 or fewer trays works fine. The issue occurs during process group creation. The error log shows a segmentation fault in `ncclTopoSearchRecGpu` function. After recompiling NCCL with debug symbols, it appears to be a stack overflow issue (0x0 addresses and all threads being in `ncclTopoSearchRecGpu`). The user has verified that `ulimit -s` is set to unlimited.
+
+**Repro Code**:
+```python
+import torch
+import torch.distributed as dist
+import os
+def main():
+    gpu_id = int(os.environ["LOCAL_RANK"])
+    
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+    dist.init_process_group(backend='nccl',
+                            device_id=gpu_id,
+                            )
+    dist.barrier()
+    
+if __name__ == "__main__":
+    main()
+```
+
+**Repro Output**: The error log shows a segmentation fault in `ncclTopoSearchRecGpu` function with 0x0 addresses, indicating a stack overflow.
+
+**Trigger Conditions**:
+- Backend: NCCL
+- Data type: Not specified
+- Input shape: Not specified
+- Other conditions: Running on GB200 NVL72 cluster with more than 10 trays (40 GPUs). Using 13 nodes with 4 GPUs per task.
+
+**Affected API**: `torch.distributed.init_process_group` with backend='nccl'
+
+**Environment**:
+- PyTorch version: Not specified
+- Python version: Not specified
+- OS: Linux (based on SLURM job file and error log showing aarch64)
+
+
+- Hardware: GB200 NVL72 cluster with 13 nodes, 4 GPUs per task
+
+**Labels**: Based on the issue, I'll add relevant labels: distributed, nccl, segfault, nvlink
+
+I'll focus on the key details of the distributed training issue on the GB200 NVL72 cluster, highlighting the specific conditions causing the segmentation fault during process group initialization.```json
+{
+  "title": "NCCL Segfault when initializing a process group on an NVL72",
+  "error_description": "We are trying to run distributed training with Torchtitan on a GB200 NVL72 cluster but using more than 10 trays (40 GPUs) fails with a NCCL segmentation fault. Using 10 and less trays works fine. We boiled it down to the creation of the process group, so even this simple example crashes when we increase the number of trays to 11. According to @sjeaugey from the NCCL team: \"the 0x0 addresses (and all threads being in ncclTopoSearchRecGpu) are likely because of the stack overflow which corrupted the stack of all threads.\" which points to that we're hitting the stack limit. We already verified that \"ulimit -s\" is set to unlimited by running it right before python is executed.",
+
+  "repro_code": "import torch\nimport torch.distributed as dist\nimport os\ndef main():\n    gpu_id = int(os.environ[\"LOCAL_RANK\"])\n    \n    device = f\"cuda:{gpu_id}\"\n    torch.cuda.set_device(device)\n    dist.init_process_group(backend='nccl',\n                            device_id=gpu_id,\n                            )\n    dist.barrier()\n    \nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "Thread 6 \"python3\" received signal SIGSEGV, Segmentation fault.\n[Switching to Thread 0x4000e3e9a8c0 (LWP 1496391)]\n0x00004000001272c0 in ncclTopoSearchRecGpu (system=0x0, graph=0x0, saveGraph=0x0, gpu=0x0, step=0, backToNet=0, backToFirstRank=0, forcedOrder=0, time=0x4000e3e7540c) at graph/search.cc:545\n545\tncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, struct ncclTopoNode* gpu, int step, int backToNet, int backToFirstRank, int forcedOrder, int *time) {",
+
+  "trigger_conditions": {
+    "backend": "nccl",
+    "dtype": "unknown",
+    "input_shape": "unknown",
+    "other_conditions": "Running on GB200 NVL72 cluster with more than 10 trays (40 GPUs). Using 13 nodes with 4 GPUs per task. NCCL_NVLS_ENABLE=0, NCCL_MIN_P2P_NCHANNELS=32, NCCL_MIN_CTAS=64, NCCL_MIN_NCHANNELS=32, NCCL_CUMEM_ENABLE=1"
+  },
+
+  "affected_api": "torch.distributed.init_process_group",
+
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "Linux (aarch64)",
+    "hardware": "GB200 NVL72 cluster with 13 nodes, 4 GPUs per task"
+  },
+
+  "labels": ["distributed", "nccl", "segfault"]
+}
+```

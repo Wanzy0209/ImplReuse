@@ -1,0 +1,110 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Stack trace and annotation on node is "wrong" afteraot_export_joint_with_descriptorsbecause of regenerate_from_base
+    - issue_id: 165810
+    - bug_description: ### 🐛 Describe the bug
+
+Run the repro below, the output graph is like below. Note that the stack trace for `slice_2` is wrong. This is a small repro for the same issue in torchtiton deepseek v3
+
+
+```
+class inner_f(torch.nn.Module):
+    def forward(self, primals, tangents):
+        primals_1: "f32[256, 256]"; primals_2: "f32[15, 256]"; tangents_1: "f32[15, 256]"; 
+    
+        primals_1, primals_2, tangents_1, = fx_pytree.tree_flatten_spec([primals, tangents], self._in_spec)
+        # File: /home/shangdiy/test_module_a2a_exact_op.py:82 in forward, code: routed_output = self.projection(x)
+        t: "f32[256, 256]" = torch.ops.aten.t.default(primals_1);  primals_1 = None
+        mm: "f32[15, 256]" = torch.ops.aten.mm.default(primals_2, t);  primals_2 = t = None
+        
+        # File: /home/shangdiy/test_module_a2a_exact_op.py:27 in _unpermute, code: out_unpermuted = out.new_empty(input_shape)
+        new_empty: "f32[16, 256]" = torch.ops.aten.new_empty.default(mm, [16, 256], pin_memory = False)
+        
+        # File: /home/shangdiy/test_module_a2a_exact_op.py:28 in _unpermute, code: out_unpermuted[permuted_indices, :] = out
+        _tensor_constant0: "i64[15]" = self._tensor_constant0
+        index_put: "f32[16, 256]" = torch.ops.aten.index_put.default(new_empty, [_tensor_constant0], mm);  new_empty = _tensor_constant0 = mm = None
+        
+        # Annotation: {'EP': 'combine'} File: /data/users/shangdiy/pytorch/torch/distributed/_functional_collectives.py:484 in all_to_all_single, code: tensor = torch.ops._c10d_functional.all_to_all_single(  # type: ignore[attr-defined]
+        slice_2: "f32[15, 256]" = torch.ops.aten.slice.Tensor(index_put, 0, 0, -1);  index_put = None
+        all_to_all_single: "f32[15, 256]" = torch.ops._c10d_functional.all_to_all_single.default(slice_2, [4, 4, 4, 3], [4, 4, 4, 3], '0');  slice_2 = None
+        
+        # Annotation: {'EP': 'combine'} File: /data/users/shangdiy/pytorch/torch/distributed/_functional_collectives.py:135 in wait_tensor, code: return torch.ops._c10d_functional.wait_tensor(tensor)  # type: ignore[attr-defined]
+        wait_tensor: "f32[15, 256]" = torch.ops._c10d_functional.wait_tensor.default(all_to_all_single);  all_to_all_single = None
+        return pytree.tree_unflatten([wait_tensor, None, None], self._out_spec)
+```
+
+if we look at the graph before [`dead_code_eliminate`](https://github.com/pytorch/pytorch/blob/main/torch/_functorch/_aot_autograd/graph_capture.py#L471), we see there are two slice nodes:
+
+```
+    %index_put : [num_users=2] = call_function[target=torch.ops.aten.index_put.default](args = (%new_empty, [%_tensor_constant0], %mm), kwargs = {})
+    %slice_1 : [num_users=0] = call_function[target=torch.ops.aten.slice.Tensor](args = (%index_put, 0, 0, -1), kwargs = {})
+    %slice_2 : [num_users=1] = call_function[target=torch.ops.aten.slice.Tensor](args = (%index_put, 0, 0, -1), kwargs = {})
+    %all_to_all_single : [num_users=1] = call_function[target=torch.ops._c10d_functional.all_to_all_single.default](args = (%slice_2, [4, 4, 4, 3], [4, 4, 4, 3], 0), kwargs = {})
+```
+
+`slice_1` has the correct stack trace. But it's not used. Somehow `all_to_all_single` created a new `slice_2` node that is used. 
+
+
+Also the annotation is wrong. `slice_2` should not be annotated.
+
+
+```
+"""
+nn.Module with the exact ops from the torchtitan trace:
+1. out_unpermuted[:-1]
+2. torch.ops._c10d_functional_autograd.all_to_all_single
+
+This module can be traced with graph_capture_and_aot_export_joint_with_descriptors.
+"""
+
+import contextlib
+import torch
+import torch.nn as nn
+from torch._dynamo.functional_export import _dynamo_graph_capture_for_export
+from torch._functorch.aot_autograd import aot_export_joint_with_descriptors
+from torch._guards import tracing, TracingContext
+import torch.distributed as dist
+from torch.distributed._functional_collectives import all_to_all_single
+
+
+def _unpermute(out, input_shape, permuted_indices):
+    """
+    Unpermute operation from torchtitan MoE utils.
+  
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

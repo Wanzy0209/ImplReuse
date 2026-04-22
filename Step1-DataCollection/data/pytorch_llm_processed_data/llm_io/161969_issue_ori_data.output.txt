@@ -1,0 +1,83 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: [MPS] Inconsistency/Strange behaviour with claimed lack of contiguousness in complied function.
+
+**Issue ID**: 161969
+
+**Bug Description**: The user is experiencing a RuntimeError when running a compiled function on MPS (Metal Performance Shaders) backend. The error states "A_t.is_contiguous() INTERNAL ASSERT FAILED". Interestingly, if they uncomment a print statement that checks `matrix.is_contiguous()`, the code runs fine and prints `True`. The issue occurs with `torch.compile()` on MPS but works fine on CPU or without `torch.compile()`.
+
+**Repro Code**: The user provided a complete reproducible example:
+```python
+import torch
+
+def example_function():
+
+    def logp(x, matrix):
+        # print(matrix.is_contiguous()) # Uncomment this line to make the code run
+        p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+        p_mat_sqrt_inv = p_mat_sqrt.inverse()
+        val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+        return -val/2
+
+    score_func = torch.vmap(torch.func.grad(logp, 0), (0, None))
+
+    return score_func
+
+if __name__ == "__main__":
+
+    device = torch.device("mps")
+    dtype = torch.float32
+    data = torch.zeros((2, 5, 3), device=device, dtype=dtype)
+    compiled_function = torch.compile(example_function())
+
+    p = torch.diag(torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)**2)
+    res = compiled_function(data, p)
+```
+
+**Repro Output**: The error traceback shows:
+```
+RuntimeError: A_t.is_contiguous() INTERNAL ASSERT FAILED at "/Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/native/mps/operations/LinearAlgebra.mm":331, please report a bug to PyTorch. 
+
+
+```
+
+The error occurs during the `torch.ops.aten.linalg_inv_ex.default` operation, indicating a problem with matrix inversion in the MPS backend.
+
+**Trigger Conditions**:
+- Backend: MPS (Metal Performance Shaders)
+- dtype: float32
+- Input shape: data is (2, 5, 3), matrix is 3x3 diagonal
+- Other conditions: Using torch.compile(), torch.vmap(), torch.func.grad(), torch.linalg.cholesky()
+
+**Affected API**: torch.linalg.cholesky, torch.linalg.inv (or inverse), torch.compile, torch.vmap, torch.func.grad
+
+**Environment**:
+- PyTorch version: Not explicitly stated, but the traceback shows paths suggesting a recent version
+- Python version: 3.13 (from traceback path)
+- OS: macOS (indicated by MPS backend and file paths)
+- Hardware: Apple Silicon (MPS backend)
+
+**Labels**: mps, compile, bug
+
+I notice the error is specifically related to matrix inversion on the MPS backend, with a peculiar behavior where adding a print statement somehow resolves the issue. This suggests a potential memory or compilation optimization problem specific to the MPS implementation.```json
+{
+  "title": "[MPS] Inconsistency/Strange behaviour with claimed lack of contiguousness in complied function.",
+  "error_description": "RuntimeError: A_t.is_contiguous() INTERNAL ASSERT FAILED at \"/Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/native/mps/operations/LinearAlgebra.mm\":331, please report a bug to PyTorch. The error occurs when running a compiled function on MPS. Interestingly, uncommenting a print statement that checks matrix.is_contiguous() makes the code run fine and prints True. The issue does not occur on CPU or without torch.compile().",
+  "repro_code": "import torch\n\ndef example_function():\n\n    def logp(x, matrix):\n        # print(matrix.is_contiguous()) # Uncomment this line to make the code run\n        p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()\n        p_mat_sqrt_inv = p_mat_sqrt.inverse()\n        val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)\n        return -val/2\n\n    score_func = torch.vmap(torch.func.grad(logp, 0), (0, None))\n\n    return score_func\n\nif __name__ == \"__main__\":\n\n    device = torch.device(\"mps\")\n    dtype = torch.float32\n    data = torch.zeros((2, 5, 3), device=device, dtype=dtype)\n    compiled_function = torch.compile(example_function())\n\n    p = torch.diag(torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)**2)\n    res = compiled_function(data, p)",
+  "repro_output": "Traceback (most recent call last):\n  File \"/Users/braddoyle/IdeaProjects/PyTorchIssue/issue.py\", line 24, in <module>\n    res = compiled_function(data, p)\n  File \"/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_dynamo/eval_frame.py\", line 736, in compile_wrapper\n    return fn(*args, **kwargs)\n  File \"/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_functorch/apis.py\", line 201, in wrapped\n    def wrapped(*args, **kwargs):\n  File \"/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_dynamo/eval_frame.py\", line 929, in _fn\n    return fn(*args, **kwargs)\n  File \"/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_functorch/aot_autograd.py\", line 1241, in forward\n    return compiled_fn(full_args)\n  File \"/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py\", line 384, in runtime_wrapper\n    all_outs = call_func_at_runtime_with_args(\n        compiled_fn, args, disable_amp=disable_amp, steal_args=True\n    )\n  File \"/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_functorch/_aot_autograd/utils.py\", line 126, in call_func_at_runtime_with_args\n    out = normalize_as_list(f(args))\n                            ~^^^^^^\n  File \"/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py\", line 750, in inner_fn\n    outs = compiled_fn(args)\n  File \"/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py\", line 556, in wrapper\n    return compiled_fn(runtime_args)\n  File \"/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_inductor/output_code.py\", line 584, in __call__\n    return self.current_callable(inputs)\n           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^\n  File \"/Users/braddoyle/IdeaProjects/PyTorchIssue/venv/lib/python3.13/site-packages/torch/_inductor/utils.py\", line 2716, in run\n    out = model(new_inputs)\n  File \"/var/folders/1h/xb_4xr7s3tn15_twsvjf4n840000gn/T/torchinductor_braddoyle/md/cmdvwtct4oz77pyf26i2dhickdd7tnzyq3yy2krnp25eyhasiygq.py\", line 131, in call\n    buf4 = torch.ops.aten.linalg_inv_ex.default",
+  "trigger_conditions": {
+    "backend": "MPS",
+    "dtype": "float32",
+    "input_shape": "data: (2, 5, 3), matrix: 3x3 diagonal",
+    "other_conditions": "Using torch.compile(), torch.vmap(), torch.func.grad(), torch.linalg.cholesky()"
+  },
+  "affected_api": "torch.linalg.cholesky, torch.linalg.inv, torch.compile, torch.vmap, torch.func.grad",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "3.13",
+    "os": "macOS",
+    "hardware": "Apple Silicon (MPS)"
+  },
+  "labels": ["mps", "compile", "bug"]
+}
+```

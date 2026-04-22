@@ -1,0 +1,101 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title:** Memory leak when in-place op is applied to non-leaf tensor with requires_grad=True
+
+**Issue ID:** 161391
+
+**Bug Description:**
+When an in-place operation is applied to a non-leaf tensor with requires_grad=True, and the tensor subsequently loses its backward graph node because of Python arithmetic operators, the process's resident memory keeps growing, indicating a memory leak caused by unreleased reference counts.
+
+**Repro Code:**
+```python
+import torch
+import unittest
+import gc, psutil
+
+def mem_mb_print():
+    gc.collect()
+    mem = psutil.virtual_memory()
+    process = psutil.Process().memory_info().rss
+
+    print(f"used: {mem.used // 1024**1} KB,"
+       f"process: {process // 1024**1} KB,"
+       f"percent: {mem.percent} %,"
+       f"PyTorch tensors: {sum(1 for o in gc.get_objects() if torch.is_tensor(o))}")
+
+class TestLeafGradMaxCUDA(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_cross_grad_max_cuda(self):
+        device = torch.device("cuda")
+
+        # leaf GPU tensor
+        leaf = torch.randn(8, 1, 24, device=device, requires_grad=True)
+        no_leaf= leaf * 1.0
+
+        for _ in range(100):
+            window_left = no_leaf[:, :, :-1]          # [8, 1, 23]
+            # inplace operators
+            no_leaf[:, :, 1:] = torch.max( 
+                no_leaf[:, :, 1:],  
+                window_left   
+            )
+            # Python arithmetic operators
+            mask = (no_leaf >= 0)
+            mem_mb_print()
+
+        loss = mask.sum()
+
+if __name__ == "__main__":
+      unittest.main()  
+```
+
+**Repro Output:**
+The issue states that "When running the above program, the Python object count and memory usage keep rising after each in-place operation." There's also an image showing the memory growth.
+
+**Trigger Conditions:**
+- Backend: CUDA (the test uses `torch.device("cuda")` and has `@unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")`)
+- dtype: Not explicitly mentioned, but `torch.randn` creates float32 by default
+- input_shape: [8, 1, 24] for the leaf tensor
+- other_conditions: 
+  - Non-leaf tensor with requires_grad=True
+  - In-place operation applied to the non-leaf tensor
+  - Python arithmetic operators used after in-place operation
+
+**Affected API:**
+- `torch.max` (used in-place)
+- In-place operations on non-leaf tensors
+
+**Environment:**
+- PyTorch Version: 2.6.0+cu126
+- Python Version: Not mentioned
+- OS: Not mentioned
+- Hardware: CUDA (GPU)
+
+**Labels:**
+The issue doesn't have explicit labels, but based on the content, it could be:
+- memory leak
+- CUDA
+- in-place operations
+
+Let me format this into the required JSON schema.```json
+{
+  "title": "Memory leak when in-place op is applied to non-leaf tensor with requires_grad=True",
+  "error_description": "When an in-place operation is applied to a non-leaf tensor with requires_grad=True, and the tensor subsequently loses its backward graph node because of Python arithmetic operators, the process's resident memory keeps growing, indicating a memory leak caused by unreleased reference counts.",
+  "repro_code": "import torch\nimport unittest\nimport gc, psutil\n\ndef mem_mb_print():\n    gc.collect()\n    mem = psutil.virtual_memory()\n    process = psutil.Process().memory_info().rss\n\n    print(f\"used: {mem.used // 1024**1} KB,\"\n       f\"process: {process // 1024**1} KB,\"\n       f\"percent: {mem.percent} %,\"\n       f\"PyTorch tensors: {sum(1 for o in gc.get_objects() if torch.is_tensor(o))}\")\n\nclass TestLeafGradMaxCUDA(unittest.TestCase):\n    @unittest.skipIf(not torch.cuda.is_available(), \"CUDA not available\")\n    def test_cross_grad_max_cuda(self):\n        device = torch.device(\"cuda\")\n\n        # leaf GPU tensor\n        leaf = torch.randn(8, 1, 24, device=device, requires_grad=True)\n        no_leaf= leaf * 1.0\n\n        for _ in range(100):\n            window_left = no_leaf[:, :, :-1]          # [8, 1, 23]\n            # inplace operators\n            no_leaf[:, :, 1:] = torch.max( \n                no_leaf[:, :, 1:],  \n                window_left   \n            )\n            # Python arithmetic operators\n            mask = (no_leaf >= 0)\n            mem_mb_print()\n\n        loss = mask.sum()\n\nif __name__ == \"__main__\":\n      unittest.main()",
+  "repro_output": "When running the above program, the Python object count and memory usage keep rising after each in-place operation.",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "unknown",
+    "input_shape": "[8, 1, 24]",
+    "other_conditions": "Non-leaf tensor with requires_grad=True; in-place operation applied to non-leaf tensor; Python arithmetic operators used after in-place operation"
+  },
+  "affected_api": "torch.max",
+  "environment": {
+    "pytorch_version": "2.6.0+cu126",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "CUDA"
+  },
+  "labels": []
+}
+```

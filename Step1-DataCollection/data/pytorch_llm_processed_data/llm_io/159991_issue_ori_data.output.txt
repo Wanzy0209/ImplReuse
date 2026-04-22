@@ -1,0 +1,70 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: [DTensor] Decide / Document RNG semantics
+
+**Issue ID**: 159991
+
+**Bug Description**: This is actually a design question/discussion rather than a traditional bug report. The issue is about deciding the semantics of RNG (Random Number Generator) behavior in DTensor. Specifically, whether the state-offset advancement should be visible to the user when they pass their own RNG to DTensor random ops.
+
+The key points are:
+1. DTensor will utilize a 'generator' passed as kwarg to random ops instead of using its own built-in generator
+2. The question is whether the passed-in RNG object should advance after being used
+3. Currently, DTensor keeps an alternate copy of the original default RNG and only advances that copy
+4. There are two problems identified:
+   - Users need to call a hidden API `torch.distributed.tensor._random._rng_tracker._manual_seed` to affect DTensor's RNG state after init
+   - Re-seeding the passed-in RNG object is ineffective
+
+**Repro Code**: There is a test example provided in the issue:
+```python
+def test_init_with_user_generator(self):
+    device_mesh = self.build_device_mesh()
+    torch.manual_seed(42)
+    rng = torch.Generator(device="cuda").manual_seed(42)
+    t1 = torch.distributed.tensor.empty(
+        (2, 3), device_mesh=device_mesh, placements=[Shard(0)]
+    )
+    t2 = torch.distributed.tensor.empty(
+        (2, 3), device_mesh=device_mesh, placements=[Shard(0)]
+    )
+    for i in range(2):
+        print(f"{i=}")
+        # run a second time, to make sure that `rng`'s offset-state is advancing on the second usage
+        torch.nn.init.uniform_(t1, 0.0, 1.0)
+        torch.nn.init.uniform_(t2, 0.0, 1.0, rng)
+        self.assertEqual(t1.full_tensor(), t2.full_tensor(), f"Failed at {i=}")
+
+    # Problem area:
+    # (1)
+    # torch.distributed.tensor._random._rng_tracker._manual_seed(55)
+    # torch.manual_seed(55)
+    # (2)
+    # rng.manual_seed(55)
+    torch.nn.init.uniform_(t1, 0.0, 1.0)
+    torch.nn.init.uniform_(t2, 0.0, 1.0, rng)
+    self.assertEqual(t1.full_tensor(), t2.full_tensor())
+```
+
+I'll focus on the key challenges with DTensor's random number generation. The test reveals two critical issues: managing RNG state and ensuring consistent behavior across different initialization methods. The proposed solution involves updating global RNG state and making passed-in RNG state updates transparent.
+
+The core problem centers on how DTensor handles random number generation, particularly around state management and user expectations. By addressing these nuances, the team aims to create a more predictable and intuitive random number generation process.```json
+{
+  "title": "[DTensor] Decide / Document RNG semantics",
+  "error_description": "Following the work in https://github.com/pytorch/pytorch/pull/159933, DTensor will utilize a 'generator' passed as kwarg to random ops instead of using its own built-in generator. This exposed a question of semantics: If a user passes their own RNG to DTensor random ops, should the state-offset advancement be visible to the user on that RNG object? Currently, DTensor keeps an alternate copy of the original default RNG, and only advances that copy. Problems: (1) If someone wants to affect the state of DTensor's RNG after init, they have to know to call this hidden manual_seed API `torch.distributed.tensor._random._rng_tracker._manual_seed` instead of calling `torch.manual_seed` which worked in the first place. (2) If someone wanted to re-seed the passed-in RNG object, it was made ineffective in #159933 so that it is consistent with the behavior of the default RNG. Also made it so `rng.get_state()` is consistent with `torch.cuda.get_rng_state()` (e.g. both will show the initial state, not reflecting any activity from DTensor).",
+  "repro_code": "def test_init_with_user_generator(self):\n    device_mesh = self.build_device_mesh()\n    torch.manual_seed(42)\n    rng = torch.Generator(device=\"cuda\").manual_seed(42)\n    t1 = torch.distributed.tensor.empty(\n        (2, 3), device_mesh=device_mesh, placements=[Shard(0)]\n    )\n    t2 = torch.distributed.tensor.empty(\n        (2, 3), device_mesh=device_mesh, placements=[Shard(0)]\n    )\n    for i in range(2):\n        print(f\"{i=}\")\n        # run a second time, to make sure that `rng`'s offset-state is advancing on the second usage\n        torch.nn.init.uniform_(t1, 0.0, 1.0)\n        torch.nn.init.uniform_(t2, 0.0, 1.0, rng)\n        self.assertEqual(t1.full_tensor(), t2.full_tensor(), f\"Failed at {i=}\")\n\n    # Problem area:\n    # (1)\n    # torch.distributed.tensor._random._rng_tracker._manual_seed(55)\n    # torch.manual_seed(55)\n    # (2)\n    # rng.manual_seed(55)\n    torch.nn.init.uniform_(t1, 0.0, 1.0)\n    torch.nn.init.uniform_(t2, 0.0, 1.0, rng)\n    self.assertEqual(t1.full_tensor(), t2.full_tensor())",
+  "repro_output": "",
+  "trigger_conditions": {
+    "backend": "cuda",
+    "dtype": "",
+    "input_shape": "(2, 3)",
+    "other_conditions": "Using DTensor with Shard(0) placement and passing a user-provided Generator to random ops"
+  },
+  "affected_api": "torch.distributed.tensor.empty, torch.nn.init.uniform_, torch.distributed.tensor._random._rng_tracker._manual_seed, torch.Generator",
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": []
+}
+```

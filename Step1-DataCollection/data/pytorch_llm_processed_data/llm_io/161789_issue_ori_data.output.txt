@@ -1,0 +1,115 @@
+1.  **Analyze the Request:**
+    *   **Goal:** Extract structured information from a GitHub issue.
+    *   **Constraints:** Only extract explicitly stated information. No inference, speculation, or explanations. Missing fields = empty string. Return JSON only.
+    *   **Input:** A GitHub issue text containing a title, bug description, code, traceback, and environment info.
+
+2.  **Analyze the Input Data:**
+    *   **Title:** `"cudaErrorIllegalAddress" in unique_consecutive (with return_inverse and RMM)`
+    *   **Issue ID:** 161789
+    *   **Bug Description:** The user reports that repeated `unique_consecutive` with `return_inverse=True` on a 2D Cuda Tensor triggers an illegal memory access when using the Rapids Memory Manager (RMM).
+    *   **Repro Code:** A Python script is provided. It imports `torch`, `rmm`, sets up an RMM allocator, creates a 2D tensor, and loops 100 times calling `torch.unique_consecutive(tensor, return_inverse=True, dim=0)`.
+    *   **Repro Output:** A traceback showing `RuntimeError: inclusive_scan failed to synchronize: cudaErrorIllegalAddress: an illegal memory access was encountered`.
+    *   **Trigger Conditions:**
+        *   Backend: CUDA (implied by `torch.cuda.Stream`, `cudaErrorIllegalAddress`, `target_device = "cuda:0"`).
+        *   Dtype: `torch.int64` (explicitly in code: `dtype=torch.int64`).
+        *   Input Shape: 2D Tensor, specifically `(SIZE, 2)` where `SIZE = 1024`.
+        *   Other Conditions: Using Rapids Memory Manager (RMM) with `pool_allocator=True`. Using `return_inverse=True`. Using `dim=0`. Repeated calls in a loop.
+    *   **Affected API:** `torch.unique_consecutive`.
+    *   **Environment:**
+        *   PyTorch version: 2.7.1+cu128.
+        *   Python version: 3.13 (inferred from traceback path `lib/python3.13/` and `cuda12_py313` in conda list).
+        *   OS: Ubuntu 22.04.3 LTS (x86_64).
+        *   Hardware: CUDA 12.8 (used to build PyTorch), GPU (implied by CUDA).
+    *   **Labels:** Not explicitly listed in the input text, so empty list.
+
+3.  **Drafting the JSON Fields:**
+
+    *   `title`: "cudaErrorIllegalAddress" in unique_consecutive (with return_inverse and RMM)
+    *   `error_description`: The combination of repeated unique_consecutive with "return_inverse=True" on a 2D Cuda Tensor when using the Rapids Memory Manager triggers an illegal memory access.
+    *   `repro_code`: (The python code block provided).
+    *   `repro_output`: (The traceback block provided).
+    *   `trigger_conditions`:
+        *   `backend`: CUDA
+        *   `dtype`: torch.int64
+        *   `input_shape`: (1024, 2) (derived from SIZE=1024 and dim=1 stack of two aranges, or the commented out ones((SIZE,2))). Let's stick to the explicit code: `torch.stack([...], dim=1)` creates shape (1024, 2).
+        *   `other_conditions`: Using Rapids Memory Manager (RMM) with pool_allocator=True; return_inverse=True; dim=0; repeated calls in a loop.
+    *   `affected_api`: torch.unique_consecutive
+    *   `environment`:
+        *   `pytorch_version`: 2.7.1+cu128
+        *   `python_version`: 3.13 (from traceback path `lib/python3.13/` and `cuda12_py313` in conda list).
+        *   `os`: Ubuntu 22.04.3 LTS (x86_64)
+        *   `hardware`: CUDA 12.8 (used to build PyTorch)
+    *   `labels`: []
+
+4.  **Refining the Output:**
+    *   Ensure no extra text.
+    *   Ensure JSON format is correct.
+    *   Check for "explicitly stated" constraint.
+        *   Python version: The traceback shows `lib/python3.13/` and the conda list shows `cuda12_py313`. This is explicit enough.
+        *   Hardware: The traceback shows `cudaErrorIllegalAddress`. The versions section says "CUDA used to build PyTorch: 12.8". It doesn't explicitly name the GPU model (e.g., A100), but "CUDA 12.8" is the hardware context provided. I will use "CUDA 12.8" or "GPU (CUDA 12.8)". The prompt asks for "cpu/gpu info". "CUDA 12.8" is the specific info given.
+
+5.  **Final JSON Construction:**
+
+    ```json
+    {
+      "title": "\"cudaErrorIllegalAddress\" in unique_consecutive (with return_inverse and RMM)",
+      "error_description": "The combination of repeated unique_consecutive with \"return_inverse=True\" on a 2D Cuda Tensor when using the Rapids Memory Manager triggers an illegal memory access.",
+      "repro_code": "import os\nimport torch\nimport rmm\nfrom rmm.allocators.torch import rmm_torch_allocator\n\ndef bug(target_device):\n    SIZE = 1024\n    stream = torch.cuda.Stream(device=target_device)\n    with torch.cuda.stream(stream):\n        tensor = torch.stack([\n                         torch.arange(SIZE, dtype=torch.int64, device=target_device),\n                         torch.arange(SIZE, dtype=torch.int64, device=target_device)], dim=1)\n        # tensor = torch.ones((SIZE,2),device=target_device) # same problem\n        stream.synchronize()\n        for i in range(100):\n            # groups_unique = torch.unique_consecutive(tensor, dim=0) # this works\n            print(f\"{i}\",end=\",\")\n            groups_unique, group_idx = torch.unique_consecutive(tensor, return_inverse=True, dim=0)\n            # produces RuntimeError: inclusive_scan failed to synchronize: cudaErrorIllegalAddress: an illegal memory access was encountered \n    stream.synchronize()\n\nif __name__ == \"__main__\":\n    if os.environ.get(\"USE_RMM\", \"False\") == \"True\":\n        rmm.reinitialize(pool_allocator=True, initial_pool_size = \"4GiB\")\n        torch.cuda.memory.change_current_allocator(rmm_torch_allocator)\n        print(\"With RMM\")\n\n    target_device = \"cuda:0\"\n    bug(target_device)",
+      "repro_output": "Traceback (most recent call last):\n  File \"<FOLDER>/repro_bug.py\", line 32, in <module>\n    bug(target_device)\n    ~~~^^^^^^^^^^^^^^^\n  File \"<FOLDER>/repro_bug.py\", line 18, in bug\n    groups_unique, group_idx = torch.unique_consecutive(tensor, return_inverse=True, dim=0)\n                               ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<CONDA_FOLDER>/lib/python3.13/site-packages/torch/_jit_internal.py\", line 620, in fn\n    return if_true(*args, **kwargs)\n  File \"<CONDA_FOLDER>/lib/python3.13/site-packages/torch/_jit_internal.py\", line 622, in fn\n    return if_false(*args, **kwargs)\n  File \"<CONDA_FOLDER>/lib/python3.13/site-packages/torch/functional.py\", line 1202, in _consecutive_return_inverse\n    output, inverse_indices, _ = _unique_consecutive_impl(\n                                 ~~~~~~~~~~~~~~~~~~~~~~~~^\n        input, return_inverse, return_counts, dim\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<CONDA_FOLDER>/lib/python3.13/site-packages/torch/functional.py\", line 1068, in _unique_consecutive_impl\n    output, inverse_indices, counts = _VF.unique_consecutive(  # type: ignore[attr-defined]\n                                      ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        input, return_inverse=return_inverse, return_counts=return_counts, dim=dim\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\nRuntimeError: inclusive_scan failed to synchronize: cudaErrorIllegalAddress: an illegal memory access was encountered",
+      "trigger_conditions": {
+        "backend": "CUDA",
+        "dtype": "torch.int64",
+        "input_shape": "(1024, 2)",
+        "other_conditions": "Using Rapids Memory Manager (RMM) with pool_allocator=True; return_inverse=True; dim=0; repeated calls in a loop"
+      },
+      "affected_api": "torch.unique_consecutive",
+      "environment": {
+        "pytorch_version": "2.7.1+cu128",
+        "python_version": "3.13",
+        "os": "Ubuntu 22.04.3 LTS (x86_64)",
+        "hardware": "CUDA 12.8"
+      },
+      "labels": []
+    }
+    ```
+
+6.  **Final Review:**
+    *   Did I infer anything? No.
+    *   Did I include the code? Yes.
+    *   Did I include the traceback? Yes.
+    *   Are the versions correct? Yes.
+    *   Is the JSON valid? Yes.
+
+    One small detail: The input title has quotes inside it. I need to escape them in JSON.
+    Title: `"cudaErrorIllegalAddress" in unique_consecutive (with return_inverse and RMM)` -> `\"cudaErrorIllegalAddress\" in unique_consecutive (with return_inverse and RMM)`
+
+    The `repro_code` and `repro_output` are long. I will include them as strings.
+
+    The `input_shape`: The code creates `torch.stack([arange, arange], dim=1)`. `arange` is size 1024. Stack on dim 1 makes it (1024, 2). This is explicit.
+
+    The `hardware`: The text says "CUDA used to build PyTorch: 12.8". It doesn't say "NVIDIA A100". So "CUDA 12.8" is the most accurate hardware info available.
+
+    The `python_version`: The traceback path `lib/python3.13/` and the conda list `cuda12_py313` confirm 3.13.
+
+    Ready to output.```json
+{
+  "title": "\"cudaErrorIllegalAddress\" in unique_consecutive (with return_inverse and RMM)",
+  "error_description": "The combination of repeated unique_consecutive with \"return_inverse=True\" on a 2D Cuda Tensor when using the Rapids Memory Manager triggers an illegal memory access.",
+  "repro_code": "import os\nimport torch\nimport rmm\nfrom rmm.allocators.torch import rmm_torch_allocator\n\ndef bug(target_device):\n    SIZE = 1024\n    stream = torch.cuda.Stream(device=target_device)\n    with torch.cuda.stream(stream):\n        tensor = torch.stack([\n                         torch.arange(SIZE, dtype=torch.int64, device=target_device),\n                         torch.arange(SIZE, dtype=torch.int64, device=target_device)], dim=1)\n        # tensor = torch.ones((SIZE,2),device=target_device) # same problem\n        stream.synchronize()\n        for i in range(100):\n            # groups_unique = torch.unique_consecutive(tensor, dim=0) # this works\n            print(f\"{i}\",end=\",\")\n            groups_unique, group_idx = torch.unique_consecutive(tensor, return_inverse=True, dim=0)\n            # produces RuntimeError: inclusive_scan failed to synchronize: cudaErrorIllegalAddress: an illegal memory access was encountered \n    stream.synchronize()\n\nif __name__ == \"__main__\":\n    if os.environ.get(\"USE_RMM\", \"False\") == \"True\":\n        rmm.reinitialize(pool_allocator=True, initial_pool_size = \"4GiB\")\n        torch.cuda.memory.change_current_allocator(rmm_torch_allocator)\n        print(\"With RMM\")\n\n    target_device = \"cuda:0\"\n    bug(target_device)",
+  "repro_output": "Traceback (most recent call last):\n  File \"<FOLDER>/repro_bug.py\", line 32, in <module>\n    bug(target_device)\n    ~~~^^^^^^^^^^^^^^^\n  File \"<FOLDER>/repro_bug.py\", line 18, in bug\n    groups_unique, group_idx = torch.unique_consecutive(tensor, return_inverse=True, dim=0)\n                               ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<CONDA_FOLDER>/lib/python3.13/site-packages/torch/_jit_internal.py\", line 620, in fn\n    return if_true(*args, **kwargs)\n  File \"<CONDA_FOLDER>/lib/python3.13/site-packages/torch/_jit_internal.py\", line 622, in fn\n    return if_false(*args, **kwargs)\n  File \"<CONDA_FOLDER>/lib/python3.13/site-packages/torch/functional.py\", line 1202, in _consecutive_return_inverse\n    output, inverse_indices, _ = _unique_consecutive_impl(\n                                 ~~~~~~~~~~~~~~~~~~~~~~~~^\n        input, return_inverse, return_counts, dim\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<CONDA_FOLDER>/lib/python3.13/site-packages/torch/functional.py\", line 1068, in _unique_consecutive_impl\n    output, inverse_indices, counts = _VF.unique_consecutive(  # type: ignore[attr-defined]\n                                      ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        input, return_inverse=return_inverse, return_counts=return_counts, dim=dim\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\nRuntimeError: inclusive_scan failed to synchronize: cudaErrorIllegalAddress: an illegal memory access was encountered",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.int64",
+    "input_shape": "(1024, 2)",
+    "other_conditions": "Using Rapids Memory Manager (RMM) with pool_allocator=True; return_inverse=True; dim=0; repeated calls in a loop"
+  },
+  "affected_api": "torch.unique_consecutive",
+  "environment": {
+    "pytorch_version": "2.7.1+cu128",
+    "python_version": "3.13",
+    "os": "Ubuntu 22.04.3 LTS (x86_64)",
+    "hardware": "CUDA 12.8"
+  },
+  "labels": []
+}
+```

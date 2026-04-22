@@ -1,0 +1,66 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: "cryptic symbolic shape error with FSDP2 and torch.compile"
+
+**Issue ID**: 165177
+
+**Bug Description**: The user is experiencing an AssertionError when using FSDP2 and torch.compile together with Llama3 (and other generative models on HuggingFace). The error message shows a symbolic shape assertion failure. The user notes that without `fully_shard` and with `torch.compile()` there is no error, suggesting the issue is related to the interaction between torch.compile and FSDP2.
+
+**Repro Code**: The user provided a complete Python script that reproduces the error. The code:
+1. Sets up distributed training
+2. Loads a Llama3 model
+3. Applies `fully_shard` to decoder layers and the model
+4. Compiles the model with `torch.compile`
+5. Runs inference on sample inputs
+
+**Repro Output**: The error message:
+```
+AssertionError: s52 (could be from ["L['position_ids']._base.size()[0]"]) not in {
+s53: ["L['attention_mask'].size()[1]", "L['attention_mask'].stride()[0]"],
+s58: ["L['cache_position'].size()[0]", "L['position_ids']._base.size()[0]"],
+s55: ["L['input_embeds'].size()[1]"],
+s9: ["L['position_ids'].size()[1]", "L['position_ids'].stride()[0]"],
+s52: []
+}.  If this assert is failing, it could be due to the issue described in https://github.com/pytorch/pytorch/pull/90665
+```
+
+**Trigger Conditions**:
+- Backend: NCCL (from `torch.distributed.init_process_group(backend="nccl", ...)`)
+- dtype: torch.bfloat16 (from `dtype=torch.bfloat16`)
+
+
+- Input shape: Variable batch sizes with different sequence lengths
+- Specific conditions: Requires FSDP2 with `fully_shard` and `torch.compile` together
+
+**Affected API**: The issue involves `torch.distributed.fsdp.fully_shard` and `torch.compile` APIs.
+
+**Environment**:
+- PyTorch version: Not explicitly stated
+- Python version: 3.13.7 (from the error output)
+- OS: Not explicitly stated
+- Hardware: GPU (CUDA), tested with 1 GPU, 2 GPUs, 2x8 GPUs
+
+**Labels**: Based on the issue, relevant labels would be: "bug", "fsdp", "torch.compile", "distributed"
+
+I'll focus on the key interaction between FSDP2 and torch.compile that's causing the symbolic shape assertion error. The problem appears to be specific to how these two components interact when processing variable-length input sequences.```json
+{
+  "title": "cryptic symbolic shape error with FSDP2 and torch.compile",
+  "error_description": "Using FSDP2 and torch.compile with Llama3 (and most other generative models on HuggingFace) results in an AssertionError related to symbolic shapes. The error states that s52 (could be from [\"L['position_ids']._base.size()[0]\"]) is not in the expected set of symbolic shapes. Without the `fully_shard` and with `torch.compile()` there is no error, suggesting the issue is related to the interaction between torch.compile and FSDP2.",
+  "repro_code": "import os\nimport numpy as np\n\nimport torch\nfrom torch.distributed.fsdp import fully_shard\nimport torch.nn.functional as F\n\nfrom transformers import AutoModelForCausalLM\nfrom transformers.models.llama.modeling_llama import LlamaDecoderLayer\n\ndef init_distributed() -> tuple[int,torch.device]:\n    world_size = int(os.environ.get(\"WORLD_SIZE\", 1))\n    rank = int(os.environ.get(\"RANK\", 0))\n    local_rank = int(os.environ.get(\"LOCAL_RANK\", 0))\n\n    if \"SLURM_NTASKS\" in os.environ:\n        world_size = int(os.environ[\"SLURM_NTASKS\"])\n        rank = int(os.environ.get(\"SLURM_PROCID\", os.environ.get(\"SLURM_TASK_PID\", 0)))\n        local_rank = int(os.environ.get(\"SLURM_LOCALID\", int(os.environ.get(\"SLURM_PROCID\", 0)) % (torch.cuda.device_count() or 1)))\n\n    torch.cuda.set_device(local_rank)\n    init_method = os.environ.get(\"INIT_METHOD\", \"env://\")\n    torch.distributed.init_process_group(\n        backend=\"nccl\",\n        init_method=init_method,\n        world_size=world_size,\n        rank=rank\n    )\n    return rank, torch.device(f\"cuda:{local_rank}\")\n\ndef main():\n    # Setup distributed + device\n    rank, device = init_distributed()\n\n    # Only rank 0 downloads/prepares model weights; others wait.\n    gen_model = AutoModelForCausalLM.from_pretrained(\n        'meta-llama/Meta-Llama-3-8B-Instruct',\n        use_safetensors=True,\n        dtype=torch.bfloat16,\n        pad_token_id=0,\n        use_cache=False\n    )\n\n    torch.distributed.barrier()\n\n    if gen_model is None:\n        gen_model = AutoModelForCausalLM.from_pretrained(\n            'meta-llama/Meta-Llama-3-8B-Instruct',\n            use_safetensors=True,\n            pad_token_id=0,\n            use_cache=False\n        )\n\n    gen_model.to(device)\n\n    for submodule in gen_model.model.layers:\n        if isinstance(submodule, LlamaDecoderLayer):\n            fully_shard(submodule)\n    fully_shard(gen_model)\n\n    gen_model = torch.compile(gen_model)  # type: ignore\n\n    torch.distributed.barrier()\n\n    dataset = [\n        np.array([[1, 27, 91, 882, 91, 397]], dtype=np.int64),\n        np.array([[1, 27, 91, 882, 91, 397, 45, 45, 45, 45, 45, 45]], dtype=np.int64)\n    ]\n    assert gen_model is not None\n\n    for input_ids in dataset:\n        batch = torch.from_numpy(input_ids).to(device)\n        # padding changes the issue to a crash with no error.\n        # batch = F.pad(torch.from_numpy(input_ids), (0, 200 - input_ids.shape[1]), value=0).to(device)\n\n        logits = gen_model(input_ids=batch,\n                           attention_mask=torch.ones_like(batch)).logits # AssertionError\n\n    print('SUCCESS')\n\nif __name__ == \"__main__\":\n    torch.set_float32_matmul_precision('high')\n    main()",
+  "repro_output": "AssertionError: s52 (could be from [\"L['position_ids']._base.size()[0]\"]) not in {\ns53: [\"L['attention_mask'].size()[1]\", \"L['attention_mask'].stride()[0]\"],\ns58: [\"L['cache_position'].size()[0]\", \"L['position_ids']._base.size()[0]\"],\ns55: [\"L['input_embeds'].size()[1]\"],\ns9: [\"L['position_ids'].size()[1]\", \"L['position_ids'].stride()[0]\"],\ns52: []\n}.  If this assert is failing, it could be due to the issue described in https://github.com/pytorch/pytorch/pull/90665",
+  "trigger_conditions": {
+    "backend": "NCCL",
+    "dtype": "torch.bfloat16",
+    "input_shape": "Variable sequence lengths (6 and 12 tokens)",
+    "other_conditions": "Requires both FSDP2 with fully_shard and torch.compile together. Reproduces with 1 GPU, 2 GPUs, 2x8 GPUs. Model: meta-llama/Meta-Llama-3-8B-Instruct"
+  },
+  "affected_api": "torch.distributed.fsdp.fully_shard, torch.compile",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "3.13.7",
+    "os": "unknown",
+    "hardware": "GPU (CUDA), tested with 1 GPU, 2 GPUs, 2x8 GPUs"
+  },
+  "labels": ["bug", "fsdp", "torch.compile", "distributed"]
+}
+```

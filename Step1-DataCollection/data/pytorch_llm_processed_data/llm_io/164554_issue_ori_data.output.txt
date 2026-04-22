@@ -1,0 +1,50 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: FSDP2 fails with "Cannot copy out of meta tensor; no data!" when rank is left empty
+
+**Issue ID**: 164554
+
+**Bug Description**: The user describes that a tensor of shape `[X, N]` will cause an error if sharded with FSDP2 with >X GPUs. They believe it's because a rank has an empty local tensor. They note this is different from issue #125738 because this testcase calls `model.to_empty(device=local_rank)`, and `model.to(device=local_rank)` doesn't work.
+
+**Repro Code**: The user provides a complete Python script that reproduces the issue. Let me extract it.
+
+**Repro Output**: The user shows a partial error traceback ending with the error about "Cannot copy out of meta tensor; no data!" (though the full error message isn't shown in the output section, it's in the title).
+
+**Trigger Conditions**:
+- Backend: NCCL (from `dist.init_process_group(backend="nccl")`)
+- dtype: bfloat16 (for input), float32 (for reduce_dtype), bfloat16 (for param_dtype)
+- input_shape: The model has `n_experts=1, hidden_dim=512, ff_dim=128`, and input is `torch.randn(256, 512, ...)`
+- other_conditions: Running on 2 GPUs, using FSDP2 with `to_empty`, using meta device initialization
+
+**Affected API**: The error occurs in `torch.distributed.fsdp._fully_shard` module, specifically in the `pre_forward` and `unshard` methods, and `foreach_all_gather`.
+
+**Environment**:
+- pytorch_version: Not explicitly stated, but the paths suggest it's a recent version
+- python_version: 3.10 (from the traceback path `/usr/local/lib/python3.10/`)
+- os: Linux (from paths like `/usr/local/lib/`)
+
+
+- hardware: 2 GPUs (CUDA)
+
+I'll focus on the key details of the hardware configuration. The issue specifically involves running on a 2-GPU setup using CUDA, which is critical for understanding the FSDP2 sharding problem. The error occurs when attempting to shard a tensor across multiple GPUs, particularly when some ranks end up with empty local tensors.```json
+{
+  "title": "FSDP2 fails with \"Cannot copy out of meta tensor; no data!\" when rank is left empty",
+  "error_description": "A tensor of shape [X, N] will cause an error if sharded with FSDP2 with >X GPUs. This is because a rank has an empty local tensor. This testcase calls model.to_empty(device=local_rank), and model.to(device=local_rank) doesn't work.",
+  "repro_code": "import itertools\nimport os\nimport torch\nimport torch.distributed as dist\nfrom torch import nn\nfrom torch.distributed._tensor import init_device_mesh\nfrom torch.distributed._composable.fsdp import fully_shard, MixedPrecisionPolicy\n\n\nclass TorchGroupedExperts(nn.Module):\n    def __init__(self, n_experts: int, hidden_dim: int, ff_dim: int):\n        super().__init__()\n        self.w1 = nn.Parameter(torch.empty(n_experts, hidden_dim, ff_dim))\n\n    def forward(self, x, tokens_per_expert):\n        raise NotImplementedError()\n\n\n# Init distributed\nmaster_addr = os.environ.get(\"MASTER_ADDR\", \"localhost\")\nmaster_port = os.environ.get(\"MASTER_PORT\", \"29500\")\nos.environ[\"MASTER_ADDR\"] = master_addr\nos.environ[\"MASTER_PORT\"] = master_port\n\nworld_size = int(os.environ[\"WORLD_SIZE\"])\nlocal_rank = int(os.environ[\"LOCAL_RANK\"])\nglobal_rank = int(os.environ[\"RANK\"])\n\ntorch.cuda.set_device(local_rank)\ndist.init_process_group(backend=\"nccl\")\n\n# Create device mesh\nmesh = init_device_mesh(\"cuda\", (world_size,), mesh_dim_names=(\"dp\",))\n\n# Create model on meta device\nwith torch.device(\"meta\"):\n    model = TorchGroupedExperts(n_experts=1, hidden_dim=512, ff_dim=128)\n\n# Apply FSDP2\nmp_policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)\nfully_shard(model, mesh=mesh, mp_policy=mp_policy)\n\n# Verify still on meta\nfor name, param in model.named_parameters():\n    assert param.device == torch.device(\"meta\"), f\"{name}: {param.device}\"\n\n# Move to device\nmodel.to_empty(device=local_rank)\n\nfor name, param in model.named_parameters():\n    print(f\"Rank {global_rank}: {name} -> {param.device}\")\n\n# Forward pass - this is where the bug occurs\nx = torch.randn(256, 512, device=f\"cuda:{local_rank}\", dtype=torch.bfloat16)\ntokens_per_expert = torch.tensor([256], device=f\"cuda:{local_rank}\")\noutput = model(x, tokens_per_expert)\n\ndist.destroy_process_group()",
+  "repro_output": "[rank1]:   File \"/mnt/evalstorage/workspace/kevin/ml-monorepo/basedformer/train_distributed.py\", line 58, in <module>\n[rank1]:     output = model(x, tokens_per_expert)\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py\", line 1777, in _wrapped_call_impl\n[rank1]:     return self._call_impl(*args, **kwargs)\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py\", line 1883, in _call_impl\n[rank1]:     return inner()\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py\", line 1810, in inner\n[rank1]:     args_kwargs_result = hook(self, args, kwargs)  # type: ignore[misc]\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/distributed/fsdp/_fully_shard/_fsdp_state.py\", line 62, in fsdp_hook_wrapper\n[rank1]:     return torch._dynamo.disable(\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/_dynamo/eval_frame.py\", line 1098, in _fn\n[rank1]:     return fn(*args, **kwargs)\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/distributed/fsdp/_fully_shard/_fsdp_state.py\", line 248, in _pre_forward\n[rank1]:     args, kwargs = self._fsdp_param_group.pre_forward(module, args, kwargs)\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/distributed/fsdp/_fully_shard/_fsdp_param_group.py\", line 440, in pre_forward\n[rank1]:     self.unshard(self.unshard_async_op)\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/distributed/fsdp/_fully_shard/_fsdp_param_group.py\", line 333, in unshard\n[rank1]:     self._all_gather_result = foreach_all_gather(\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/distributed/fsdp/_fully_shard/_fsdp_param_group.py\", line 333, in unshard",
+  "trigger_conditions": {
+    "backend": "nccl",
+    "dtype": "bfloat16, float32",
+    "input_shape": "[1, 512, 128] for parameter, [256, 512] for input",
+    "other_conditions": "Running on 2 GPUs, using FSDP2 with to_empty, using meta device initialization, tensor shape [X, N] sharded with >X GPUs causing empty local tensor on some ranks"
+  },
+  "affected_api": "torch.distributed.fsdp._fully_shard, foreach_all_gather",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "3.10",
+    "os": "Linux",
+    "hardware": "2 GPUs (CUDA)"
+  },
+  "labels": ["module: distributed", "module: fsdp"]
+}
+```

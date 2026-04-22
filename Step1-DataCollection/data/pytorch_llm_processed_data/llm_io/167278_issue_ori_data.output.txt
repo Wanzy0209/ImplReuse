@@ -1,0 +1,121 @@
+Let me analyze this GitHub issue and extract the structured information as requested.
+
+**Title**: FakeTensorProp concretizes symbolic dims for aten.polar (regression in 2.9.0)
+
+**Issue ID**: 167278
+
+**Bug Description**: When running `torch.fx.passes.fake_tensor_prop.FakeTensorProp` on a graph containing `aten.polar` with dynamic shapes, the output shapes become concretized to the example input sizes. This is unexpected—symbolic dims should be preserved. This appears to stem from `aten.polar`'s fake/meta behavior. Reverting the change introduced in https://github.com/pytorch/pytorch/pull/160894 fixes the issue.
+
+**Repro Code**: The minimal reproducible code is provided in the issue.
+
+**Repro Output**: The observed output shows that before FakeTensorProp, shapes are symbolic (e.g., "f32[s77, s27, 32]"), but after FakeTensorProp, they become concrete (e.g., "f32[2, 3, 32]").
+
+**Trigger Conditions**:
+- Backend: Not explicitly mentioned, but device is set to "cpu"
+- dtype: f32 and c64 are mentioned in the output
+- input_shape: Dynamic shapes with Dim("s0", min=1, max=1024) and Dim("s1", min=1, max=2048)
+- other_conditions: Using FakeTensorProp on a graph containing aten.polar
+
+**Affected API**: `torch.fx.passes.fake_tensor_prop.FakeTensorProp` and `aten.polar`
+
+**Environment**:
+- PyTorch: 2.9.0
+- Python: 3.12
+- OS: Not mentioned
+- Hardware: Not mentioned (but device is "cpu")
+
+**Labels**: Not explicitly provided in the issue
+
+Let me format this as JSON:
+
+```json
+{
+  "title": "FakeTensorProp concretizes symbolic dims for aten.polar (regression in 2.9.0)",
+  "error_description": "When running `torch.fx.passes.fake_tensor_prop.FakeTensorProp` on a graph containing `aten.polar` with dynamic shapes, the output shapes become concretized to the example input sizes. This is unexpected—symbolic dims should be preserved. This appears to stem from `aten.polar`'s fake/meta behavior. Reverting the change introduced in https://github.com/pytorch/pytorch/pull/160894 fixes the issue.",
+  "repro_code": "import torch\nimport torch.nn as nn\n\nfrom torch.export import export, Dim\nfrom torch.fx import GraphModule\nfrom torch.fx.passes.fake_tensor_prop import FakeTensorProp\nfrom torch._export.utils import _detect_fake_mode_from_gm\n\nclass PolarToy(nn.Module):\n    def __init__(self, head_dim: int = 32):\n        super().__init__()\n        self.head_dim = head_dim\n\n    def forward(self, x):\n        freqs = x.tanh()\n        ones_like = torch.ones_like(freqs)\n        freqs_cis = torch.polar(ones_like, freqs)\n        return freqs_cis.real + freqs_cis.imag\n\n\ndef export_with_2d_dynamic_batch(mod: nn.Module, device: str = \"cpu\") -> GraphModule:\n    mod = mod.to(device).eval()\n    sample = torch.randn(2, 3, 32, device=device)\n    dynamic_shapes = ({0: Dim(\"s0\", min=1, max=1024), 1: Dim(\"s1\", min=1, max=2048)},)\n    ep = export(mod, (sample,), dynamic_shapes=dynamic_shapes, strict=False)\n    gm = ep.module() if hasattr(ep, \"module\") else ep\n    if not isinstance(gm, GraphModule):\n        raise RuntimeError(\"Expected a GraphModule from export().\")\n    return gm\n\n\ndef main():\n    device = \"cpu\"\n    hidden = 7\n    mod = PolarToy(hidden)\n    gm = export_with_2d_dynamic_batch(mod, device=device)\n    gm.print_readable()\n\n    inps = [node.meta.get(\"val\") for node in gm.graph.nodes if node.op == \"placeholder\"]\n    fake_mode = _detect_fake_mode_from_gm(gm)\n    FakeTensorProp(gm, fake_mode).propagate(*inps)\n    gm.print_readable()\n\n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "Before FakeTensorProp:\ntanh:      \"f32[s77, s27, 32]\" = aten.tanh.default(x)\nones_like: \"f32[s77, s27, 32]\" = aten.ones_like.default(tanh, pin_memory = False)\npolar:     \"c64[s77, s27, 32]\" = aten.polar.default(ones_like, tanh)\n\nAfter FakeTensorProp:\ntanh:      \"f32[2, 3, 32]\" = aten.tanh.default(x)\nones_like: \"f32[2, 3, 32]\" = aten.ones_like.default(tanh, pin_memory = False)\npolar:     \"c64[2, 3, 32]\" = aten.polar.default(ones_like, tanh)",
+  "trigger_conditions": {
+    "backend": "cpu",
+    "dtype": "f32, c64",
+    "input_shape": "Dynamic shapes with Dim(\"s0\", min=1, max=1024) and Dim(\"s1\", min=1, max=2048)",
+    "other_conditions": "Using FakeTensorProp on a graph containing aten.polar"
+  },
+  "affected_api": "torch.fx.passes.fake_tensor_prop.FakeTensorProp, aten.polar",
+  "environment": {
+    "pytorch_version": "2.9.0",
+    "python_version": "3.12",
+    "os": "unknown",
+    "hardware": "unknown"
+  },
+  "labels": []
+}
+```
+
+Wait, I need to be more careful about what's explicitly stated. Let me re-read the issue.
+
+For backend, the code uses `device = "cpu"`, so that's explicitly stated.
+For dtype, the output shows "f32" and "c64", so those are explicitly mentioned.
+For input_shape, the code specifies `dynamic_shapes = ({0: Dim("s0", min=1, max=1024), 1: Dim("s1", min=1, max=2048)},)` and the sample is `torch.randn(2, 3, 32, device=device)`.
+For other_conditions, the issue states "When running `torch.fx.passes.fake_tensor_prop.FakeTensorProp` on a graph containing `aten.polar` with dynamic shapes".
+
+For environment:
+- PyTorch: 2.9.0 is explicitly stated
+- Python: 3.12 is explicitly stated
+- OS: Not mentioned
+- Hardware: Not mentioned (though device is "cpu")
+
+For labels, none are explicitly provided in the issue.
+
+Let me revise the JSON to be more accurate:
+
+```json
+{
+  "title": "FakeTensorProp concretizes symbolic dims for aten.polar (regression in 2.9.0)",
+  "error_description": "When running `torch.fx.passes.fake_tensor_prop.FakeTensorProp` on a graph containing `aten.polar` with dynamic shapes, the output shapes become concretized to the example input sizes. This is unexpected—symbolic dims should be preserved. This appears to stem from `aten.polar`'s fake/meta behavior. Reverting the change introduced in https://github.com/pytorch/pytorch/pull/160894 fixes the issue.",
+  "repro_code": "import torch\nimport torch.nn as nn\n\nfrom torch.export import export, Dim\nfrom torch.fx import GraphModule\nfrom torch.fx.passes.fake_tensor_prop import FakeTensorProp\nfrom torch._export.utils import _detect_fake_mode_from_gm\n\nclass PolarToy(nn.Module):\n    def __init__(self, head_dim: int = 32):\n        super().__init__()\n        self.head_dim = head_dim\n\n    def forward(self, x):\n        freqs = x.tanh()\n        ones_like = torch.ones_like(freqs)\n        freqs_cis = torch.polar(ones_like, freqs)\n        return freqs_cis.real + freqs_cis.imag\n\n\ndef export_with_2d_dynamic_batch(mod: nn.Module, device: str = \"cpu\") -> GraphModule:\n    mod = mod.to(device).eval()\n    sample = torch.randn(2, 3, 32, device=device)\n    dynamic_shapes = ({0: Dim(\"s0\", min=1, max=1024), 1: Dim(\"s1\", min=1, max=2048)},)\n    ep = export(mod, (sample,), dynamic_shapes=dynamic_shapes, strict=False)\n    gm = ep.module() if hasattr(ep, \"module\") else ep\n    if not isinstance(gm, GraphModule):\n        raise RuntimeError(\"Expected a GraphModule from export().\")\n    return gm\n\n\ndef main():\n    device = \"cpu\"\n    hidden = 7\n    mod = PolarToy(hidden)\n    gm = export_with_2d_dynamic_batch(mod, device=device)\n    gm.print_readable()\n\n    inps = [node.meta.get(\"val\") for node in gm.graph.nodes if node.op == \"placeholder\"]\n    fake_mode = _detect_fake_mode_from_gm(gm)\n    FakeTensorProp(gm, fake_mode).propagate(*inps)\n    gm.print_readable()\n\n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "Before FakeTensorProp:\ntanh:      \"f32[s77, s27, 32]\" = aten.tanh.default(x)\nones_like: \"f32[s77, s27, 32]\" = aten.ones_like.default(tanh, pin_memory = False)\npolar:     \"c64[s77, s27, 32]\" = aten.polar.default(ones_like, tanh)\n\nAfter FakeTensorProp:\ntanh:      \"f32[2, 3, 32]\" = aten.tanh.default(x)\nones_like: \"f32[2, 3, 32]\" = aten.ones_like.default(tanh, pin_memory = False)\npolar:     \"c64[2, 3, 32]\" = aten.polar.default(ones_like, tanh)",
+  "trigger_conditions": {
+    "backend": "cpu",
+    "dtype": "f32, c64",
+    "input_shape": "Dynamic shapes with Dim(\"s0\", min=1, max=1024) and Dim(\"s1\", min=1, max=2048)",
+    "other_conditions": "Using FakeTensorProp on a graph containing aten.polar"
+  },
+  "affected_api": "torch.fx.passes.fake_tensor_prop.FakeTensorProp, aten.polar",
+  "environment": {
+    "pytorch_version": "2.9.0",
+    "python_version": "3.12",
+    "os": "unknown",
+    "hardware": "unknown"
+  },
+  "labels": []
+}
+```
+
+This looks correct. Let me double-check the format requirements:
+- Extract only what is explicitly present ✓
+- Keep original wording for code and key descriptions when possible ✓
+- Do not summarize away critical technical details ✓
+- Do not include any explanation outside JSON ✓
+
+The JSON is properly formatted and contains only the information explicitly stated in the issue.```json
+{
+  "title": "FakeTensorProp concretizes symbolic dims for aten.polar (regression in 2.9.0)",
+  "error_description": "When running `torch.fx.passes.fake_tensor_prop.FakeTensorProp` on a graph containing `aten.polar` with dynamic shapes, the output shapes become concretized to the example input sizes. This is unexpected—symbolic dims should be preserved. This appears to stem from `aten.polar`'s fake/meta behavior. Reverting the change introduced in https://github.com/pytorch/pytorch/pull/160894 fixes the issue.",
+  "repro_code": "import torch\nimport torch.nn as nn\n\nfrom torch.export import export, Dim\nfrom torch.fx import GraphModule\nfrom torch.fx.passes.fake_tensor_prop import FakeTensorProp\nfrom torch._export.utils import _detect_fake_mode_from_gm\n\nclass PolarToy(nn.Module):\n    def __init__(self, head_dim: int = 32):\n        super().__init__()\n        self.head_dim = head_dim\n\n    def forward(self, x):\n        freqs = x.tanh()\n        ones_like = torch.ones_like(freqs)\n        freqs_cis = torch.polar(ones_like, freqs)\n        return freqs_cis.real + freqs_cis.imag\n\n\ndef export_with_2d_dynamic_batch(mod: nn.Module, device: str = \"cpu\") -> GraphModule:\n    mod = mod.to(device).eval()\n    sample = torch.randn(2, 3, 32, device=device)\n    dynamic_shapes = ({0: Dim(\"s0\", min=1, max=1024), 1: Dim(\"s1\", min=1, max=2048)},)\n    ep = export(mod, (sample,), dynamic_shapes=dynamic_shapes, strict=False)\n    gm = ep.module() if hasattr(ep, \"module\") else ep\n    if not isinstance(gm, GraphModule):\n        raise RuntimeError(\"Expected a GraphModule from export().\")\n    return gm\n\n\ndef main():\n    device = \"cpu\"\n    hidden = 7\n    mod = PolarToy(hidden)\n    gm = export_with_2d_dynamic_batch(mod, device=device)\n    gm.print_readable()\n\n    inps = [node.meta.get(\"val\") for node in gm.graph.nodes if node.op == \"placeholder\"]\n    fake_mode = _detect_fake_mode_from_gm(gm)\n    FakeTensorProp(gm, fake_mode).propagate(*inps)\n    gm.print_readable()\n\n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "Before FakeTensorProp:\ntanh:      \"f32[s77, s27, 32]\" = aten.tanh.default(x)\nones_like: \"f32[s77, s27, 32]\" = aten.ones_like.default(tanh, pin_memory = False)\npolar:     \"c64[s77, s27, 32]\" = aten.polar.default(ones_like, tanh)\n\nAfter FakeTensorProp:\ntanh:      \"f32[2, 3, 32]\" = aten.tanh.default(x)\nones_like: \"f32[2, 3, 32]\" = aten.ones_like.default(tanh, pin_memory = False)\npolar:     \"c64[2, 3, 32]\" = aten.polar.default(ones_like, tanh)",
+  "trigger_conditions": {
+    "backend": "cpu",
+    "dtype": "f32, c64",
+    "input_shape": "Dynamic shapes with Dim(\"s0\", min=1, max=1024) and Dim(\"s1\", min=1, max=2048)",
+    "other_conditions": "Using FakeTensorProp on a graph containing aten.polar"
+  },
+  "affected_api": "torch.fx.passes.fake_tensor_prop.FakeTensorProp, aten.polar",
+  "environment": {
+    "pytorch_version": "2.9.0",
+    "python_version": "3.12",
+    "os": "unknown",
+    "hardware": "unknown"
+  },
+  "labels": []
+}
+```

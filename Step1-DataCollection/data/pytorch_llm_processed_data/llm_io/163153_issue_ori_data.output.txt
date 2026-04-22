@@ -1,0 +1,121 @@
+Let me analyze the GitHub issue to extract the structured information.
+
+**Title**: FSDP2 implicit prefetch does not work
+
+**Issue ID**: 163153
+
+**Bug Description**: The user is using the official FSDP2 example with some modifications. They're setting up a distributed training scenario with FSDP2 and testing prefetching functionality.
+
+**Key Information Extracted**:
+
+1. **Title**: "FSDP2 implicit prefetch does not work"
+
+2. **Error Description**: The issue is about FSDP2 implicit prefetch not working. The user is using the official FSDP2 example with modifications.
+
+3. **Repro Code**: The code provided shows:
+   - Setting up a distributed training environment
+   - Using FSDP2 with `fully_shard`
+   - Setting up explicit prefetching with `set_modules_to_forward_prefetch` and `set_modules_to_backward_prefetch`
+   - The code is cut off at the end, so it's incomplete
+
+4. **Trigger Conditions**:
+   - Backend: Uses `torch.distributed.get_default_backend_for_device(device)`
+   - Device: GPU (checking for at least 2 GPUs)
+   - Mixed precision: Optional (controlled by `args.mixed_precision`)
+   - Model: Transformer with 10 layers, 8 heads, dim 4096, vocab_size 1024, max_seq_len 1024
+   - Batch size: 4
+   - Sequence length: 1024
+
+5. **Affected API**: 
+   - `torch.distributed.fsdp.fully_shard`
+   - `set_modules_to_forward_prefetch`
+   - `set_modules_to_backward_prefetch`
+   - `model.unshard()`
+
+6. **Environment**: Not explicitly specified in the provided text
+
+7. **Labels**: Not explicitly provided in the input
+
+Let me structure this into the required JSON format:
+
+```json
+{
+  "title": "FSDP2 implicit prefetch does not work",
+  "error_description": "I'm using official example of FSDP2 with some small modifications. The issue is about FSDP2 implicit prefetch not working.",
+  "repro_code": "# distributed/FSDP2/example.py\nimport argparse\nimport os\n\nimport torch\nfrom checkpoint import Checkpointer\nfrom model import ModelArgs, Transformer\nfrom torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy\nfrom utils import inspect_mixed_precision, inspect_model\nfrom torch.profiler import profile, record_function, ProfilerActivity\n\ndef verify_min_gpu_count(min_gpus: int = 2) -> bool:\n    \"\"\" verification that we have at least 2 gpus to run dist examples \"\"\"\n    has_gpu = torch.accelerator.is_available()\n    gpu_count = torch.accelerator.device_count()\n    return has_gpu and gpu_count >= min_gpus\n\ndef set_modules_to_forward_prefetch(model, num_to_forward_prefetch):\n    for i, layer in enumerate(model.layers):\n        if i >= len(model.layers) - num_to_forward_prefetch:\n            break\n        layers_to_prefetch = [\n            model.layers[i + j] for j in range(1, num_to_forward_prefetch + 1)\n        ]\n        layer.set_modules_to_forward_prefetch(layers_to_prefetch)\n\n\ndef set_modules_to_backward_prefetch(model, num_to_backward_prefetch):\n    for i, layer in enumerate(model.layers):\n        if i < num_to_backward_prefetch:\n            continue\n        layers_to_prefetch = [\n            model.layers[i - j] for j in range(1, num_to_backward_prefetch + 1)\n        ]\n        layer.set_modules_to_backward_prefetch(layers_to_prefetch)\n\n\ndef main(args):\n    _min_gpu_count = 2\n    if not verify_min_gpu_count(min_gpus=_min_gpu_count):\n        print(f\"Unable to locate sufficient {_min_gpu_count} gpus to run this example. Exiting.\")\n        exit()\n    rank = int(os.environ[\"LOCAL_RANK\"])\n    if torch.accelerator.is_available():\n        device_type = torch.accelerator.current_accelerator()\n        device = torch.device(f\"{device_type}:{rank}\")\n        torch.accelerator.set_device_index(rank)\n        print(f\"Running on rank {rank} on device {device}\")\n    else:\n        device = torch.device(\"cpu\")\n        print(f\"Running on device {device}\")\n\n    backend = torch.distributed.get_default_backend_for_device(device)\n    torch.distributed.init_process_group(backend=backend, device_id=device)\n\n    torch.manual_seed(0)\n    vocab_size = 1024\n    batch_size = 4\n    seq_len = 1024\n    model_args = ModelArgs(\n        n_layers=10,\n        n_heads=8,\n        dim=4096,\n        vocab_size=vocab_size,\n        max_seq_len=seq_len,\n        dropout_p=0,\n    )\n    with torch.device(\"meta\"):\n        model = Transformer(model_args)\n    fsdp_kwargs = {}\n    if args.mixed_precision:\n        fsdp_kwargs[\"mp_policy\"] = MixedPrecisionPolicy(\n            param_dtype=torch.bfloat16,\n            reduce_dtype=torch.float32,\n        )\n    for layer in model.layers:\n        fully_shard(layer, **fsdp_kwargs)\n    fully_shard(model, **fsdp_kwargs)\n\n    inspect_model(model)\n\n    if args.explicit_prefetching:\n        set_modules_to_forward_prefetch(model, num_to_forward_prefetch=2)\n        set_modules_to_backward_prefetch(model, num_to_backward_prefetch=2)\n\n    checkpointer = Checkpointer(\"checkpoints\", dcp_api=args.dcp_api)\n    if checkpointer.last_training_time is None:\n        model.to_empty(device=device)\n        model.reset_parameters()\n    else:\n        checkpointer.load_model(model)\n\n    if args.mixed_precision:\n        inspect_mixed_precision(model)\n\n    optim = torch.optim.Adam(model.parameters(), lr=1e-2)\n    if checkpointer.last_training_time is not None:\n        checkpointer.load_optim(model, optim)\n\n    with profile(\n        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],\n        record_shapes=True,\n        with_stack=True,\n    ) as prof:\n        for _ in range(10):\n            if args.explicit_prefetching:\n                model.unshard()\n            x = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)",
+  "repro_output": "",
+  "trigger_conditions": {
+    "backend": "torch.distributed.get_default_backend_for_device(device)",
+    "dtype": "torch.bfloat16 (param_dtype), torch.float32 (reduce_dtype) when mixed_precision is enabled",
+    "input_shape": "batch_size=4, seq_len=1024, vocab_size=1024",
+    "other_conditions": "Requires at least 2 GPUs, uses FSDP2 with fully_shard, Transformer model with n_layers=10, n_heads=8, dim=4096"
+  },
+  "affected_api": "torch.distributed.fsdp.fully_shard, set_modules_to_forward_prefetch, set_modules_to_backward_prefetch, model.unshard",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "GPU (requires at least 2 GPUs)"
+  },
+  "labels": []
+}
+```
+
+Wait, I need to be more careful. The input is cut off and doesn't show the actual error or expected behavior. Let me re-read the input more carefully.
+
+The input shows:
+1. The title: "FSDP2 implicit prefetch does not work"
+2. The bug description starts with "I'm using official example of FSDP2 with some small modifications"
+3. The code is provided but it's incomplete (cuts off at `x = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)`)
+
+There's no explicit error message, no expected vs actual behavior, no version information, etc. The issue is about "implicit prefetch" not working, but the code shows explicit prefetching functions being called.
+
+Let me revise my extraction to only include what's explicitly stated:
+
+```json
+{
+  "title": "FSDP2 implicit prefetch does not work",
+  "error_description": "I'm using official example of FSDP2 with some small modifications",
+  "repro_code": "# distributed/FSDP2/example.py\nimport argparse\nimport os\n\nimport torch\nfrom checkpoint import Checkpointer\nfrom model import ModelArgs, Transformer\nfrom torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy\nfrom utils import inspect_mixed_precision, inspect_model\nfrom torch.profiler import profile, record_function, ProfilerActivity\n\ndef verify_min_gpu_count(min_gpus: int = 2) -> bool:\n    \"\"\" verification that we have at least 2 gpus to run dist examples \"\"\"\n    has_gpu = torch.accelerator.is_available()\n    gpu_count = torch.accelerator.device_count()\n    return has_gpu and gpu_count >= min_gpus\n\ndef set_modules_to_forward_prefetch(model, num_to_forward_prefetch):\n    for i, layer in enumerate(model.layers):\n        if i >= len(model.layers) - num_to_forward_prefetch:\n            break\n        layers_to_prefetch = [\n            model.layers[i + j] for j in range(1, num_to_forward_prefetch + 1)\n        ]\n        layer.set_modules_to_forward_prefetch(layers_to_prefetch)\n\n\ndef set_modules_to_backward_prefetch(model, num_to_backward_prefetch):\n    for i, layer in enumerate(model.layers):\n        if i < num_to_backward_prefetch:\n            continue\n        layers_to_prefetch = [\n            model.layers[i - j] for j in range(1, num_to_backward_prefetch + 1)\n        ]\n        layer.set_modules_to_backward_prefetch(layers_to_prefetch)\n\n\ndef main(args):\n    _min_gpu_count = 2\n    if not verify_min_gpu_count(min_gpus=_min_gpu_count):\n        print(f\"Unable to locate sufficient {_min_gpu_count} gpus to run this example. Exiting.\")\n        exit()\n    rank = int(os.environ[\"LOCAL_RANK\"])\n    if torch.accelerator.is_available():\n        device_type = torch.accelerator.current_accelerator()\n        device = torch.device(f\"{device_type}:{rank}\")\n        torch.accelerator.set_device_index(rank)\n        print(f\"Running on rank {rank} on device {device}\")\n    else:\n        device = torch.device(\"cpu\")\n        print(f\"Running on device {device}\")\n\n    backend = torch.distributed.get_default_backend_for_device(device)\n    torch.distributed.init_process_group(backend=backend, device_id=device)\n\n    torch.manual_seed(0)\n    vocab_size = 1024\n    batch_size = 4\n    seq_len = 1024\n    model_args = ModelArgs(\n        n_layers=10,\n        n_heads=8,\n        dim=4096,\n        vocab_size=vocab_size,\n        max_seq_len=seq_len,\n        dropout_p=0,\n    )\n    with torch.device(\"meta\"):\n        model = Transformer(model_args)\n    fsdp_kwargs = {}\n    if args.mixed_precision:\n        fsdp_kwargs[\"mp_policy\"] = MixedPrecisionPolicy(\n            param_dtype=torch.bfloat16,\n            reduce_dtype=torch.float32,\n        )\n    for layer in model.layers:\n        fully_shard(layer, **fsdp_kwargs)\n    fully_shard(model, **fsdp_kwargs)\n\n    inspect_model(model)\n\n    if args.explicit_prefetching:\n        set_modules_to_forward_prefetch(model, num_to_forward_prefetch=2)\n        set_modules_to_backward_prefetch(model, num_to_backward_prefetch=2)\n\n    checkpointer = Checkpointer(\"checkpoints\", dcp_api=args.dcp_api)\n    if checkpointer.last_training_time is None:\n        model.to_empty(device=device)\n        model.reset_parameters()\n    else:\n        checkpointer.load_model(model)\n\n    if args.mixed_precision:\n        inspect_mixed_precision(model)\n\n    optim = torch.optim.Adam(model.parameters(), lr=1e-2)\n    if checkpointer.last_training_time is not None:\n        checkpointer.load_optim(model, optim)\n\n    with profile(\n        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],\n        record_shapes=True,\n        with_stack=True,\n    ) as prof:\n        for _ in range(10):\n            if args.explicit_prefetching:\n                model.unshard()\n            x = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)",
+  "repro_output": "",
+  "trigger_conditions": {
+    "backend": "torch.distributed.get_default_backend_for_device(device)",
+    "dtype": "torch.bfloat16 (param_dtype), torch.float32 (reduce_dtype) when mixed_precision is enabled",
+    "input_shape": "batch_size=4, seq_len=1024, vocab_size=1024",
+    "other_conditions": "Requires at least 2 GPUs, uses FSDP2 with fully_shard, Transformer model with n_layers=10, n_heads=8, dim=4096"
+  },
+  "affected_api": "torch.distributed.fsdp.fully_shard, set_modules_to_forward_prefetch, set_modules_to_backward_prefetch, model.unshard",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "GPU (requires at least 2 GPUs)"
+  },
+  "labels": []
+}
+```
+
+Actually, looking at the input again, I see that the code is incomplete and there's no actual error message or output shown. The issue title says "FSDP2 implicit prefetch does not work" but the code shows explicit prefetching functions. The input is truncated, so I should only extract what's explicitly stated.
+
+Let me finalize the JSON with only what's explicitly present:```json
+{
+  "title": "FSDP2 implicit prefetch does not work",
+  "error_description": "I'm using official example of FSDP2 with some small modifications",
+  "repro_code": "# distributed/FSDP2/example.py\nimport argparse\nimport os\n\nimport torch\nfrom checkpoint import Checkpointer\nfrom model import ModelArgs, Transformer\nfrom torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy\nfrom utils import inspect_mixed_precision, inspect_model\nfrom torch.profiler import profile, record_function, ProfilerActivity\n\ndef verify_min_gpu_count(min_gpus: int = 2) -> bool:\n    \"\"\" verification that we have at least 2 gpus to run dist examples \"\"\"\n    has_gpu = torch.accelerator.is_available()\n    gpu_count = torch.accelerator.device_count()\n    return has_gpu and gpu_count >= min_gpus\n\ndef set_modules_to_forward_prefetch(model, num_to_forward_prefetch):\n    for i, layer in enumerate(model.layers):\n        if i >= len(model.layers) - num_to_forward_prefetch:\n            break\n        layers_to_prefetch = [\n            model.layers[i + j] for j in range(1, num_to_forward_prefetch + 1)\n        ]\n        layer.set_modules_to_forward_prefetch(layers_to_prefetch)\n\n\ndef set_modules_to_backward_prefetch(model, num_to_backward_prefetch):\n    for i, layer in enumerate(model.layers):\n        if i < num_to_backward_prefetch:\n            continue\n        layers_to_prefetch = [\n            model.layers[i - j] for j in range(1, num_to_backward_prefetch + 1)\n        ]\n        layer.set_modules_to_backward_prefetch(layers_to_prefetch)\n\n\ndef main(args):\n    _min_gpu_count = 2\n    if not verify_min_gpu_count(min_gpus=_min_gpu_count):\n        print(f\"Unable to locate sufficient {_min_gpu_count} gpus to run this example. Exiting.\")\n        exit()\n    rank = int(os.environ[\"LOCAL_RANK\"])\n    if torch.accelerator.is_available():\n        device_type = torch.accelerator.current_accelerator()\n        device = torch.device(f\"{device_type}:{rank}\")\n        torch.accelerator.set_device_index(rank)\n        print(f\"Running on rank {rank} on device {device}\")\n    else:\n        device = torch.device(\"cpu\")\n        print(f\"Running on device {device}\")\n\n    backend = torch.distributed.get_default_backend_for_device(device)\n    torch.distributed.init_process_group(backend=backend, device_id=device)\n\n    torch.manual_seed(0)\n    vocab_size = 1024\n    batch_size = 4\n    seq_len = 1024\n    model_args = ModelArgs(\n        n_layers=10,\n        n_heads=8,\n        dim=4096,\n        vocab_size=vocab_size,\n        max_seq_len=seq_len,\n        dropout_p=0,\n    )\n    with torch.device(\"meta\"):\n        model = Transformer(model_args)\n    fsdp_kwargs = {}\n    if args.mixed_precision:\n        fsdp_kwargs[\"mp_policy\"] = MixedPrecisionPolicy(\n            param_dtype=torch.bfloat16,\n            reduce_dtype=torch.float32,\n        )\n    for layer in model.layers:\n        fully_shard(layer, **fsdp_kwargs)\n    fully_shard(model, **fsdp_kwargs)\n\n    inspect_model(model)\n\n    if args.explicit_prefetching:\n        set_modules_to_forward_prefetch(model, num_to_forward_prefetch=2)\n        set_modules_to_backward_prefetch(model, num_to_backward_prefetch=2)\n\n    checkpointer = Checkpointer(\"checkpoints\", dcp_api=args.dcp_api)\n    if checkpointer.last_training_time is None:\n        model.to_empty(device=device)\n        model.reset_parameters()\n    else:\n        checkpointer.load_model(model)\n\n    if args.mixed_precision:\n        inspect_mixed_precision(model)\n\n    optim = torch.optim.Adam(model.parameters(), lr=1e-2)\n    if checkpointer.last_training_time is not None:\n        checkpointer.load_optim(model, optim)\n\n    with profile(\n        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],\n        record_shapes=True,\n        with_stack=True,\n    ) as prof:\n        for _ in range(10):\n            if args.explicit_prefetching:\n                model.unshard()\n            x = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)",
+  "repro_output": "",
+  "trigger_conditions": {
+    "backend": "torch.distributed.get_default_backend_for_device(device)",
+    "dtype": "torch.bfloat16 (param_dtype), torch.float32 (reduce_dtype) when mixed_precision is enabled",
+    "input_shape": "batch_size=4, seq_len=1024, vocab_size=1024",
+    "other_conditions": "Requires at least 2 GPUs, uses FSDP2 with fully_shard, Transformer model with n_layers=10, n_heads=8, dim=4096"
+  },
+  "affected_api": "torch.distributed.fsdp.fully_shard, set_modules_to_forward_prefetch, set_modules_to_backward_prefetch, model.unshard",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "GPU (requires at least 2 GPUs)"
+  },
+  "labels": []
+}
+```

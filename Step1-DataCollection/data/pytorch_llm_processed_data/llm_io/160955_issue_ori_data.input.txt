@@ -1,0 +1,180 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: NotImplementedError: 64-bit indexing is not yet implemented for triton templates
+    - issue_id: 160955
+    - bug_description: ### 🐛 Describe the bug
+
+Flex attention (when compiled with torch.compile) currently does not support inputs exceeding the int32 indexing limit. If the script below is run with --batch-size=32 --seq-len=32768 a not implemented error is raised: `NotImplementedError: 64-bit indexing is not yet implemented for triton templates`
+
+```python
+import gc
+import time
+import traceback
+import argparse
+import torch
+from functools import partial
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+
+
+flex_attention_comp = torch.compile(flex_attention)
+#flex_attention_comp = flex_attention
+
+
+def get_block_mask(q_len, kv_len, device, sink_tokens, window_size):
+    offset = kv_len - q_len
+    def sink_local_mask(b, h, q_idx, kv_idx, num_sink_tokens, window_size, offset):
+        q_abs = q_idx + offset
+        causal_condition = q_abs >= kv_idx
+        sink_condition = kv_idx < num_sink_tokens
+        local_condition = q_abs - kv_idx < window_size
+        return causal_condition & (sink_condition | local_condition)
+    mask_fn = partial(sink_local_mask, num_sink_tokens=sink_tokens, 
+                        window_size=window_size, offset=offset)
+    block_mask = create_block_mask(
+        mask_mod=mask_fn,
+        B=None,
+        H=None,
+        Q_LEN=q_len,
+        KV_LEN=kv_len,
+        device=device,
+    )
+    return block_mask
+
+
+def test_flex_attention_compile(
+    batch_size=32,
+    sequence_length=2048,
+    num_heads=32,
+    head_dim=128,
+    window_size=64,
+    num_sink_tokens=4,
+    device="cuda",
+    dtype=torch.float16,
+    use_compile=True,
+    verbose=True,
+):
+    """
+    Test flex_attention with torch.compile on long sequences and large batch sizes.
+
+    Args:
+        batch_size: Batch size to test
+        sequence_length: Sequence length to test
+        num_heads: Number of attention heads
+        head_dim: Head dimension
+        window_size: Window size for local attention
+        num_sink_tokens: Number of sink tokens
+        device: Device to run on
+        dtype: Data type
+        use_compile: Whether to use torch.compile
+        verbose: Whether to print verbose output
+    """
+    print(f"Testing flex_attention with:")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Sequence length: {sequence_length}")
+    print(f"  Num heads: {num_heads}")
+    print(f"  Head dim: {head_dim}")
+    print(f"  Window size: {window_size}")
+    print(f"  Num sink tokens: {num_sink_tokens}")
+    print(f"  Device: {device}")
+    print(f"  Dtype: {dtype}")
+    print(f"  Use compile: {use_compile}")
+    print()
+        
+    q = torch.randn(
+        batch_size,
+        num_heads,
+        sequence_length,
+        head_dim,
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    )
+    k = torch.randn(
+        batch_size,
+        num_heads,
+        sequence_length,
+        head_dim,
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    )
+    v = torch.randn(
+        batch_size,
+        num_heads,
+        sequence_length,
+        head_dim,
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    )
+
+    if verbose:
+        print(f"Created tensors with shapes:")
+        print(f"  q: {q.shape}")
+        print(f"  k: {k.shape}")
+        print(f"  v: {v.shape}")
+        print()
+
+    try:
+        if verbose:
+            print("Creating block mask...")
+
+        block_mask = get_block_mask(
+            q_len=sequence_length,
+            kv_len=sequence_length,
+            device=device,
+            sink_tokens=num_sink_tokens,
+            window_size=window_size,
+        )
+        if verbose:
+            print(f"Block mask created successfully with shape: {block_mask.shape}")
+            print()
+
+    except Exception as e:
+        print(f"Error creating block mask: {e}")
+        traceback.print_exc()
+        return False
+
+    try:
+        print("Testing flex_attention...")
+        if use_compile:
+            attention_fn = flex_attention_comp
+        else:
+            atte
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

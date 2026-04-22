@@ -1,0 +1,55 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: Pattern matcher does not accept bound methods for pattern/replacement tracing
+
+**Issue ID**: 167776
+
+**Bug Description**: The user wants to register patterns/replacements using class instances and pass instance method references (`instance.method`) to the `register_replacement` function. The issue is that the pattern matcher doesn't accept bound methods for pattern/replacement tracing.
+
+The user provides three examples:
+1. `ReluSumPattern` - The ideal form that doesn't work
+2. `ReluSumPattern2` - An attempt to circumvent the issue using `functools.wraps`, which also doesn't work
+3. `ReluSumPatternWorking` - A workaround that works but is clunkier
+
+**Repro Code**: The issue contains a substantial code example that demonstrates the problem. I'll include the minimal reproducible code.
+
+**Repro Output**: The code shows that `ReluSumPatternWorking` works, but `ReluSumPattern2` and `ReluSumPattern` throw exceptions.
+
+**Trigger Conditions**:
+- Backend: CUDA (from `torch.set_default_device("cuda")`)
+- dtype: Not explicitly specified for the bug, but uses bfloat16 and float8_e4m3fn in helper functions
+- Input shape: (5, 5) for pattern inputs, (5, 4) for the test function
+- Other conditions: Using `torch.compile` with custom post-grad pass
+
+**Affected API**: `torch._inductor.pattern_matcher.PatternMatcherPass`, `register_replacement`
+
+**Environment**:
+- PyTorch version: Not explicitly stated
+- Python version: Not explicitly stated
+- OS: Not explicitly stated
+- Hardware: CUDA device is used
+
+**Labels**: The issue doesn't have explicit labels, but based on the content, it's related to pattern matching, inductor, and compilation.
+
+Let me structure this into the required JSON format.```json
+{
+  "title": "Pattern matcher does not accept bound methods for pattern/replacement tracing",
+  "error_description": "It would be nice if we could register patterns/replacement using class instances, and pass the instance method reference (`instance.method`) to the `register_replacement` function. The pattern matcher does not accept bound methods for pattern/replacement tracing.",
+  "repro_code": "import functools\nimport traceback\n\nimport torch\nfrom torch._inductor.pattern_matcher import PatternMatcherPass, register_replacement, fwd_only\nfrom torch._higher_order_ops.auto_functionalize import auto_functionalized\n\ntorch.set_default_device(\"cuda\")\n\n# This would be the ideal form for pattern/replacements in vLLM.\nclass ReluSumPattern:\n    def __init__(self, e: float):\n        self.e = e\n\n    def pattern(self, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor):\n        return x.pow(self.e) + y.pow(self.e) + z.pow(self.e)\n\n    def replacement(self, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor):\n        return (x + y + z).pow(self.e)\n\n    def inputs(self):\n        return [\n            torch.empty(5, 5),  # x\n            torch.empty(5, 5),  # y\n            torch.empty(5, 5),  # z\n        ]\n\n    def register(self, pm: PatternMatcherPass):\n        register_replacement(self.pattern, self.replacement, self.inputs(), fwd_only, pm)\n\n# This was my attempt to circumvent the issue, unsuccessful\nclass ReluSumPattern2(ReluSumPattern):\n    def register(self, pm: PatternMatcherPass):\n        # doesn't matter if using functools or not, doesn't work\n        @functools.wraps(self.pattern)\n        def wrapped_pattern(*args, **kwargs):\n            self.pattern(*args, **kwargs)\n\n        @functools.wraps(self.replacement)\n        def wrapped_replacement(*args, **kwargs):\n            self.pattern(*args, **kwargs)\n\n        register_replacement(wrapped_pattern, wrapped_replacement, self.inputs(), fwd_only, pm)\n\n# This works but it's a little clunkier, not bad for now though\nclass ReluSumPatternWorking(ReluSumPattern):\n    def get_pattern_replacement(self):\n        def pattern(x: torch.Tensor, y: torch.Tensor, z: torch.Tensor):\n            return x.pow(self.e) + y.pow(self.e) + z.pow(self.e)\n        def replacement(x: torch.Tensor, y: torch.Tensor, z: torch.Tensor):\n            return (x + y + z).pow(self.e)\n\n        return pattern, replacement\n\n    def register(self, pm: PatternMatcherPass):\n        pattern, replacement = self.get_pattern_replacement()\n        register_replacement(pattern, replacement, self.inputs(), fwd_only, pm)\n\n\nmy_patterns = PatternMatcherPass()\n\nReluSumPatternWorking(2).register(my_patterns)\nprint(my_patterns.patterns)\n\n# These don't work\ntry:\n    ReluSumPattern2(3).register(my_patterns)\nexcept Exception as e:\n    print(e)\n    traceback.print_exc()\n\nprint(my_patterns.patterns)\n\ntry:\n    ReluSumPattern(4).register(my_patterns)\nexcept Exception as e:\n    print(e)\n    traceback.print_exc()\nprint(my_patterns.patterns)",
+  "repro_output": "",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "unknown",
+    "input_shape": "(5, 5) for pattern inputs, (5, 4) for test function",
+    "other_conditions": "Using torch.compile with custom post-grad pass"
+  },
+  "affected_api": "torch._inductor.pattern_matcher.PatternMatcherPass, register_replacement",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "CUDA"
+  },
+  "labels": []
+}
+```

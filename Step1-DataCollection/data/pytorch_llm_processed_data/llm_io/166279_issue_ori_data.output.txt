@@ -1,0 +1,58 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: [Fuzzer][Eager/Compile Divergence] assert len(input_size) == len(new_size)
+
+**Issue ID**: 166279
+
+**Bug Description**: The issue shows a divergence between eager mode and compiled mode in PyTorch. The code runs successfully in eager mode but fails when compiled with `torch.compile`. The error occurs during the compilation process, specifically in the inductor backend.
+
+**Repro Code**: The code is provided in the issue. It's a fuzzer-generated program that:
+1. Creates several tensors using `torch.full`, `torch.chunk`, `torch.gather`, `torch.squeeze`, and `torch.cat`
+2. Uses a sentinel tensor to ensure gradient computation
+3. Runs successfully in eager mode
+4. Fails when compiled with `torch.compile(fuzzed_program, fullgraph=True, dynamic=True)`
+
+**Repro Output**: The output shows:
+- "✅ eager success" - indicating the program works in eager mode
+- A traceback showing the error occurs during compilation, specifically in the inductor's codegen_and_compile process
+
+**Trigger Conditions**:
+- Backend: The error occurs in the inductor backend (torch._inductor)
+- dtype: bool tensors are used
+- input_shape: Various shapes are used including (12,), (10,), (6, 4), (2,), etc.
+- other_conditions: The issue occurs when using `torch.compile` with `fullgraph=True` and `dynamic=True`
+
+**Affected API**: The issue involves `torch.compile` and the inductor backend. The specific operations in the code include `torch.full`, `torch.chunk`, `torch.gather`, `torch.squeeze`, and `torch.cat`.
+
+**Environment**: 
+- pytorch_version: Not explicitly stated, but the traceback shows paths like "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_dynamo/" suggesting a development environment
+- python_version: 3.10 (from the path)
+
+
+- os: Linux (from the path /tmp/torchfuzz/)
+- hardware: CUDA is mentioned in the comments (device=cuda)
+
+I notice the CUDA device specification in the tensor operations, which suggests the code is running on a CUDA-enabled system. The traceback indicates a complex compilation process involving multiple PyTorch internal components.
+
+The error seems to stem from a mismatch in tensor size handling during the compilation phase, specifically related to input and new size dimensions. This points to a potential issue in the inductor's graph transformation or code generation process.```json
+{
+  "title": "[Fuzzer][Eager/Compile Divergence] assert len(input_size) == len(new_size)",
+  "error_description": "The program runs successfully in eager mode but fails when compiled with torch.compile. The error occurs during the inductor's codegen_and_compile process, specifically when running the graph with example inputs.",
+  "repro_code": "import torch\ntorch._dynamo.config.capture_scalar_outputs = True\n\ntorch.manual_seed(1166094474)\n\ndef fuzzed_program(arg_0, arg_1, arg_2, arg_3, sentinel):\n    var_node_3 = torch.full((12,), False, dtype=torch.bool) # size=(12,), stride=(97,), dtype=bool, device=cuda\n    var_node_2 = torch.chunk(var_node_3, 4, dim=0)[0] # size=(3,), stride=(1,), dtype=bool, device=cuda\n    var_node_6 = arg_0 # size=(12,), stride=(1,), dtype=bool, device=cuda\n    var_node_7 = arg_1 # size=(10,), stride=(1,), dtype=int64, device=cuda\n    _input_size_var_node_5 = var_node_6.size(0)\n    _index_var_node_5 = torch.randint(0, _input_size_var_node_5, (10,), device=var_node_6.device)\n    var_node_5 = torch.gather(var_node_6, 0, _index_var_node_5) # size=(10,), stride=(1,), dtype=bool, device=cuda\n    var_node_4 = torch.chunk(var_node_5, 2, dim=0)[0] # size=(5,), stride=(1,), dtype=bool, device=cuda\n    var_node_10 = arg_2 # size=(6, 4), stride=(4, 1), dtype=bool, device=cuda\n    var_node_9 = torch.chunk(var_node_10, 4, dim=1)[0] # size=(6, 1), stride=(1, 1), dtype=bool, device=cuda\n    var_node_8 = torch.squeeze(var_node_9) # size=(6,), stride=(1,), dtype=bool, device=cuda\n    var_node_1 = torch.cat([var_node_2, var_node_4, var_node_8], dim=0) # size=(14,), stride=(1,), dtype=bool, device=cuda\n    var_node_11 = arg_3 # size=(2,), stride=(1,), dtype=bool, device=cuda\n    var_node_0 = torch.cat([var_node_1, var_node_11], dim=0) # size=(16,), stride=(1,), dtype=bool, device=cuda\n    # Ensure gradient computation by multiplying with sentinel and taking real part\n    result = var_node_0 * sentinel\n    if result.is_complex():\n        result = result.real\n    return result\n\n# Sentinel tensor to ensure gradient computation\nsentinel = torch.tensor(1.0, requires_grad=True)\n\narg_0 = torch.as_strided(torch.randint(0, 2, (12,), dtype=torch.int8).bool(), (12,), (1,))\narg_1 = torch.as_strided(torch.randint(5, 30, (10,)).to(torch.int64), (10,), (1,))\narg_2 = torch.as_strided(torch.randint(0, 2, (24,), dtype=torch.int8).bool(), (6, 4), (4, 1))\narg_3 = torch.as_strided(torch.randint(0, 2, (2,), dtype=torch.int8).bool(), (2,), (1,))\n\nargs = (arg_0, arg_1, arg_2, arg_3) + (sentinel,)\nresult_original = fuzzed_program(*args)\nprint('✅ eager success')\ncompiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)\nresult_compiled = compiled_program(*args)\nprint('✅ compile success')",
+  "repro_output": "✅ eager success\nTraceback (most recent call last):\n  File \"/tmp/torchfuzz/fuzz_682728f5.py\", line 39, in <module>\n    result_compiled = compiled_program(*args)\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py\", line 749, in compile_wrapper\n    raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py\", line 923, in _compile_fx_inner\n    raise InductorError(e, currentframe()).with_traceback(\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py\", line 907, in _compile_fx_inner\n    mb_compiled_graph = fx_codegen_and_compile(\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py\", line 1578, in fx_codegen_and_compile\n    return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py\", line 1377, in codegen_and_compile\n    graph.run(*example_inputs)\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/graph.py\", line 921, in run\n    return super().run(*args)\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/fx/interpreter.py\", line 173, in run\n    self.env[node] = self.run_node(node)\n  File \"/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/graph.py\", line 1599, in ru",
+  "trigger_conditions": {
+    "backend": "inductor",
+    "dtype": "bool, int64",
+    "input_shape": "(12,), (10,), (6, 4), (2,)",
+    "other_conditions": "torch.compile with fullgraph=True and dynamic=True"
+  },
+  "affected_api": "torch.compile, torch.full, torch.chunk, torch.gather, torch.squeeze, torch.cat",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "3.10",
+    "os": "Linux",
+    "hardware": "CUDA"
+  },
+  "labels": ["Fuzzer", "Eager/Compile Divergence"]
+}
+```

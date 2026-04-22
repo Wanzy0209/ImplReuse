@@ -1,0 +1,118 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Invalid __shared__ read of size 16 bytes in torch.conv_transpose3d
+    - issue_id: 163753
+    - bug_description: ### 🐛 Describe the bug
+
+When using `torch.nn.ConvTranspose3d` with certain parameters, a CUDA `__shared__` memory read out-of-bounds error occurs. 
+
+```python
+import torch
+import torch.nn as nn
+import os
+
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
+def main():
+    if not torch.cuda.is_available() or not torch.backends.cudnn.is_available():
+        print("This bug requires a CUDA-enabled GPU with cuDNN.")
+        return
+
+    device = torch.device("cuda")
+    dtype = torch.float32
+
+    try:
+        in_channels = 24
+        
+        model = nn.ConvTranspose3d(
+            in_channels=in_channels,
+            out_channels=1,
+            kernel_size=(15, 3, 10),
+            stride=(2, 1, 1),
+            padding=(23, 0, 1),
+            dilation=(1, 3, 3),
+            groups=1,
+            bias=False
+        ).to(device, dtype=dtype)
+        
+        model.eval()
+
+        input_shape = (1, in_channels, 24, 24, 24)
+        input_tensor = torch.randn(input_shape, device=device, dtype=dtype)
+
+        model(input_tensor)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        import traceback
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    main()
+```
+
+### How to Reproduce
+
+1.  Save the code above as `repro.py`.
+2.  Run the script using `compute-sanitizer`. The `Invalid __shared__ read` error will be reported.
+
+```bash
+compute-sanitizer python repro.py
+```
+
+### Observed Results
+
+```
+========= COMPUTE-SANITIZER
+========= Invalid __shared__ read of size 16 bytes
+=========     at void xmma_cudnn_infer::implicit_gemm::strided_dgrad_indexed::kernel_helper_stage_1<xmma_cudnn_infer::implicit_gemm::strided_dgrad_indexed::Params_pre_hopper>(T1)+0x2710
+=========     by thread (255,0,0) in block (4,0,0)
+=========     Address 0x400 is out of bounds
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x2631a7a] in libcudnn_cnn_infer.so.8
+=========         Host Frame:  [0x268da7a] in libcudnn_cnn_infer.so.8
+=========         Host Frame:  [0x21853e2] in libcudnn_cnn_infer.so.8
+=========         Host Frame:  [0x1928b9b] in libcudnn_cnn_infer.so.8
+=========         Host Frame: cudnn::cnn::infer::InferNdSubEngine<false, (cudnnTensorFormat_t)1, (cudnnTensorFormat_t)1, (cudnnTensorFormat_t)1, (cudnnDataType_t)0, true, 80, (cudnn::cnn::infer::subtree_t)1, cask_cudnn_infer::ConvolutionDgrad, cask_cudnn_infer::ShaderList<cask_cudnn_infer::ConvDgradShader, cask_cudnn_infer::ConvolutionDgrad>, cask_cudnn_infer::ConvDgradShader>::execute_internal_fprop_impl(cudnnContext*, CUstream_st*, void const*, void const*, void const*, void const*, void const*, void const*, unsigned long, void*, void*, unsigned int) [0x1215689] in libcudnn_cnn_infer.so.8
+=========         Host Frame: cudnn::cnn::infer::InferNdSubEngine<false, (cudnnTensorFormat_t)1, (cudnnTensorFormat_t)1, (cudnnTensorFormat_t)1, (cudnnDataType_t)0, true, 80, (cudnn::cnn::infer::subtree_t)1, cask_cudnn_infer::ConvolutionDgrad, cask_cudnn_infer::ShaderList<cask_cudnn_infer::ConvDgradShader, cask_cudnn_infer::ConvolutionDgrad>, cask_cudnn_infer::ConvDgradShader>::execute_internal_impl(cudnn::backend::VariantPack const&, CUstream_st*) [0x1215c7a] in libcudnn_cnn_infer.so.8
+=========         Host Frame: cudnn::cnn::EngineInterface::execute(cudnn::backend::VariantPack const&, CUstream_st*) [0xd8eb04] in libcudnn_cnn_infer.so.8
+=========         Host Frame: cudnn::cnn::EngineContainer<(cudnnBackendEngineName_t)1051>::execute_internal_impl(cudnn::backend::VariantPack const&, CUstream_st*) [0xdc94cf] in libcudnn_cnn_infer.so.8
+=========         Host Frame: cudnn::cnn::EngineInterface::execute(cudnn::backend::VariantPack const&, CUstream_st*) [0xd8eb04] in libcudnn_cnn_infer.so.8
+=========         Host Frame: cudnn::cnn::AutoTransformationExecutor::execute_pipeline(cudnn::cnn::EngineInterface&, cudnn::backend::VariantPack const&, CUstream_st*) const [0xf00e7d] in libcudnn_cnn_infer.so.8
+=========         Host Frame
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

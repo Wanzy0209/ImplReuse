@@ -1,0 +1,43 @@
+{
+  "title": "GIL is not released when calling torch.compile kernels",
+  "issue_id": "163061",
+  "bug_description": "### 🐛 Describe the bug\n\nIn most cases, PyTorch releases GIL when calling CUDA APIs, but I found the GIL is held when calling torch.compile kernels, is this expected? Is it possible to release GIL when calling torch.compile kernels?\n\nTo reproduce, script `torch_compile.py`:\n```python\nimport torch\nimport triton\nimport triton.language as tl\n\ndef torch_add(x: torch.Tensor, y: torch.Tensor):\n    return x + y\n\n@torch.compile\ndef torch_compile_add(x: torch.Tensor, y: torch.Tensor):\n    return x + y\n\n@triton.jit\ndef add_kernel(x_ptr,\n               y_ptr,\n               output_ptr,\n               n_elements,\n               BLOCK_SIZE: tl.constexpr):\n    pid = tl.program_id(axis=0)\n    block_start = pid * BLOCK_SIZE\n    offsets = block_start + tl.arange(0, BLOCK_SIZE)\n    mask = offsets < n_elements\n    x = tl.load(x_ptr + offsets, mask=mask)\n    y = tl.load(y_ptr + offsets, mask=mask)\n    output = x + y\n    tl.store(output_ptr + offsets, output, mask=mask)\n\n\ndef triton_add(x: torch.Tensor, y: torch.Tensor):\n    output = torch.empty_like(x)\n    n_elements = output.numel()\n    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )\n    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)\n    return output\n\n\ndef main():\n    x = torch.randn(4096, 4096, device='cuda')\n    y = torch.randn(4096, 4096, device='cuda')\n    for _ in range(10):\n        torch_add(x, y)\n        torch_compile_add(x, y)\n        triton_add(x, y)\n        \n\nif __name__ == \"__main__\":\n    main()\n```\n\nRun it with \n```bash\nnsys profile -f true --wait primary -t cuda,nvtx,python-gil --cudabacktrace=all --python-backtrace=cuda --python-sampling=true -o torch_compile python torch_compile.py\n```\n\n<img width=\"1539\" height=\"443\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/c6aebdcd-1b25-435e-998a-a7a4208e766b\" />\n\n### Versions\n\nCollecting environment information...\nPyTorch version: 2.8.0a0+34c6371d24.nv25.08\nIs debug build: False\nCUDA used to build PyTorch: 13.0\nROCM used to build PyTorch: N/A\n\nOS: Ubuntu 24.04.2 LTS (x86_64)\nGCC version: (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0\nClang version: 18.1.3 (1ubuntu1)\nCMake version: version 4.0.3\nLibc version: glibc-2.39\n\nPython version: 3.12.3 (main, Jun 18 2025, 17:59:45) [GCC 13.3.0] (64-bit runtime)\nPython platform: Linux-5.15.0-1086-nvidia-x86_64-with-glibc2.39\nIs CUDA available: True\nCUDA runtime version: 13.0.48\nCUDA_MODULE_LOADING set to: LAZY\nGPU models and configuration: \nGPU 0: NVIDIA H200\nGPU 1: NVIDIA H200\n\nNvidia driver version: 575.57.08\ncuDNN version: Probably one of the following:\n/usr/lib/x86_64-linux-gnu/libcudnn.so.9.12.0\n/usr/lib/x86_64-linux-gnu/libcudnn_adv.so.9.12.0\n/usr/lib/x86_64-linux-gnu/libcudnn_cnn.so.9.12.0\n/usr/lib/x86_64-linux-gnu/libcudnn_engines_precompiled.so.9.12.0\n/usr/lib/x86_64-linux-gnu/libcudnn_engines_runtime_compiled.so.9.12.0\n/usr/lib/x86_64-linux-gnu/libcudnn_graph.so.9.12.0\n/usr/lib/x86_64-linux-gnu/libcudnn_heuristic.so.9.12.0\n/usr/lib/x86_64-linux-gnu/libcudnn_ops.so.9.12.0\nIs XPU available: False\nHIP runtime version: N/A\nMIOpen runtime version: N/A\nIs XNNPACK available: True\n\nCPU:\nArchitecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           52 bits physical, 57 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  224\nOn-line CPU(s) list:                     0-223\nVendor ID:                               GenuineIntel\nModel name:                              Intel(R) Xeon(R) Platinum 8480C\nCPU family:                              6\nModel:                                   143\nThread(s) per core:                      2\nCore(s) per socket:                      56\nSocket(s):                               2\nStepping:                                8\nCPU(s) scaling MHz:                      33%\nCPU max MHz:                             3800.0000\nCPU min MHz:                             800.0000\nBogoMIPS:                       ",
+  "apis": [
+    "tl.store",
+    "tl.load",
+    "torch.randn",
+    "numpy",
+    "triton.cdiv",
+    "output.numel"
+  ],
+  "best_code": "import torch\nimport triton\nimport triton.language as tl\n\ndef torch_add(x: torch.Tensor, y: torch.Tensor):\n    return x + y\n\n@torch.compile\ndef torch_compile_add(x: torch.Tensor, y: torch.Tensor):\n    return x + y\n\n@triton.jit\ndef add_kernel(x_ptr,\n               y_ptr,\n               output_ptr,\n               n_elements,\n               BLOCK_SIZE: tl.constexpr):\n    pid = tl.program_id(axis=0)\n    block_start = pid * BLOCK_SIZE\n    offsets = block_start + tl.arange(0, BLOCK_SIZE)\n    mask = offsets < n_elements\n    x = tl.load(x_ptr + offsets, mask=mask)\n    y = tl.load(y_ptr + offsets, mask=mask)\n    output = x + y\n    tl.store(output_ptr + offsets, output, mask=mask)\n\n\ndef triton_add(x: torch.Tensor, y: torch.Tensor):\n    output = torch.empty_like(x)\n    n_elements = output.numel()\n    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )\n    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)\n    return output\n\n\ndef main():\n    x = torch.randn(4096, 4096, device='cuda')\n    y = torch.randn(4096, 4096, device='cuda')\n    for _ in range(10):\n        torch_add(x, y)\n        torch_compile_add(x, y)\n        triton_add(x, y)\n        \n\nif __name__ == \"__main__\":\n    main()",
+  "pull_urls": [
+    "https://github.com/NVIDIA/TensorRT-LLM/pull/7871",
+    "https://github.com/NVIDIA/TensorRT-LLM/pull/7884"
+  ],
+  "_meta": {
+    "file": "163061_issue_ori_data.json",
+    "generated_at": "2026-04-21 02:35:53",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\163061_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\163061_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "In most cases, PyTorch releases GIL when calling CUDA APIs, but I found the GIL is held when calling torch.compile kernels, is this expected? Is it possible to release GIL when calling torch.compile kernels?",
+  "repro_code": "import torch\nimport triton\nimport triton.language as tl\n\ndef torch_add(x: torch.Tensor, y: torch.Tensor):\n    return x + y\n\n@torch.compile\ndef torch_compile_add(x: torch.Tensor, y: torch.Tensor):\n    return x + y\n\n@triton.jit\ndef add_kernel(x_ptr,\n               y_ptr,\n               output_ptr,\n               n_elements,\n               BLOCK_SIZE: tl.constexpr):\n    pid = tl.program_id(axis=0)\n    block_start = pid * BLOCK_SIZE\n    offsets = block_start + tl.arange(0, BLOCK_SIZE)\n    mask = offsets < n_elements\n    x = tl.load(x_ptr + offsets, mask=mask)\n    y = tl.load(y_ptr + offsets, mask=mask)\n    output = x + y\n    tl.store(output_ptr + offsets, output, mask=mask)\n\n\ndef triton_add(x: torch.Tensor, y: torch.Tensor):\n    output = torch.empty_like(x)\n    n_elements = output.numel()\n    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )\n    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)\n    return output\n\n\ndef main():\n    x = torch.randn(4096, 4096, device='cuda')\n    y = torch.randn(4096, 4096, device='cuda')\n    for _ in range(10):\n        torch_add(x, y)\n        torch_compile_add(x, y)\n        triton_add(x, y)\n        \n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "GIL is not released when calling torch.compile kernels",
+  "affected_api": "torch.compile",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "unknown",
+    "input_shape": "(4096, 4096)",
+    "other_conditions": "Using @torch.compile decorator"
+  },
+  "environment": {
+    "pytorch_version": "2.8.0a0+34c6371d24.nv25.08",
+    "python_version": "3.12.3",
+    "os": "Ubuntu 24.04.2 LTS (x86_64)",
+    "hardware": "NVIDIA H200, Intel(R) Xeon(R) Platinum 8480C"
+  },
+  "labels": []
+}

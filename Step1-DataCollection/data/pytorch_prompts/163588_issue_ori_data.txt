@@ -1,0 +1,145 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: Flex Attention Silently Incorrect with bfloat16 and Masks
+    - issue_id: 163588
+    - bug_description: # PyTorch flex_attention Numerical Instability with bfloat16 and Masks
+
+## 🐛 Describe the bug
+
+`flex_attention` produces significantly different results than `F.scaled_dot_product_attention` when using bfloat16 dtype with cross-attention masks with significant masked padding. The error grows to >3% of the output magnitude, which I believe is beyond acceptable numerical precision differences.
+
+### Key findings:
+- **Bug triggers**: When attending to ≤58% of positions with bfloat16
+- **Bug disappears**: When attending to ≥59% of positions
+- **Error magnitude**: Up to 3.4% relative error (vs 0.3% expected tolerance)
+- **Does NOT occur with float32**: Same code with float32 has <0.001% error
+- **Comparison baseline**: Physical array slicing with `F.scaled_dot_product_attention` provides ground truth
+
+This affects production models using bfloat16 for memory efficiency, particularly in autoregressive generation scenarios where cross-attention masks are commonly used to handle variable-length conditioning.
+
+## Minimal Reproduction
+
+```python
+import torch
+from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+import torch.nn.functional as F
+
+B, H, Q, D, KV = 1, 1, 1, 64, 1000
+
+# Test showing error threshold: masking <=58% causes bug, >=59% is OK
+print("PyTorch flex_attention bfloat16 bug demonstration:")
+print("-" * 50)
+
+for mask_amount in [580, 590]:
+    mask = create_block_mask(
+        lambda b, h, q, kv: kv < mask_amount,
+        B, H, Q, KV, "cuda"
+    )
+
+    torch.manual_seed(0)
+    q = torch.randn(B, H, Q, D, dtype=torch.bfloat16, device="cuda") * 5
+    k = torch.randn(B, H, KV, D, dtype=torch.bfloat16, device="cuda") * 5
+    v = torch.randn(B, H, KV, D, dtype=torch.bfloat16, device="cuda") * 5
+
+    flex_out = flex_attention(q, k, v, block_mask=mask)
+    ref_out = F.scaled_dot_product_attention(q, k[:, :, :mask_amount], v[:, :, :mask_amount])
+
+    error = (flex_out - ref_out).abs().max() / ref_out.abs().max()
+    status = "BUG!" if error > 0.01 else "OK"
+    print(f"Mask {mask_amount}/{KV} ({mask_amount/KV:.0%}): Error {error:.1%} ({status})")
+
+print("\nBug triggers when masking ≤58% of positions with bfloat16")
+```
+
+### Output:
+```
+PyTorch flex_attention bfloat16 bug demonstration:
+--------------------------------------------------
+Mask 580/1000 (58%): Error 3.4% (BUG!)
+Mask 590/1000 (59%): Error 0.3% (OK)
+
+Bug triggers when masking ≤58% of positions with bfloat16
+```
+
+## Expected behavior
+
+`flex_attention` with a mask should produce nearly identical results to `F.scaled_dot_product_attention` with physical array slicing (within normal bfloat16 precision tolerance of <1%).
+
+## Actual behavior
+
+Large numerical divergence (>3% error) when using bfloat16 with masks that exclude more than ~42% of positions.
+
+## Versions
+
+```
+Collecting environment information...
+PyTorch version: 2.8.0+cu126
+Is debug build: False
+CUDA used to build PyTorch: 12.6
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.4 LTS (x86_64)
+GCC version: (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0
+Clang version: Could not collect
+CMake version: Could not collect
+Libc version: glibc-2.35
+
+Python version: 3.11.13 (main, Jun  4 2025, 08:57:29) [GCC 11.4.0] (64-bit runtime)
+Python platform: Linux-6.5.0-1023-aws-x86_64-with-glibc2.35
+Is CUDA available: True
+CUDA runtime version: Could not collect
+CUDA_MODULE_LOADING set to: LAZY
+GPU models and configuration: GPU 0: NVIDIA A100-SXM4-80GB
+Nvidia driver version: 535.183.01
+cuDNN version: Could not collect
+Is XPU available: False
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: True
+
+CPU:
+Architecture:                       x86_64
+CPU op-mode(s):                     32-bit, 64-bit
+Address sizes:                      46 bits physical, 57 bits virtual
+Byte Order:                         Little Endian
+CPU(s):                             24
+On-line CPU(s) list:                0-23
+Vendor ID:                          GenuineIntel
+Model name:                         Intel Xeon Processo
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

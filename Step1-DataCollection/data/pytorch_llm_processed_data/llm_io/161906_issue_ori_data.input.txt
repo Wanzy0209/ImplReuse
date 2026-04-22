@@ -1,0 +1,127 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: torch.compilefails withaten.complex.defaultsize/stride assertion when using STFT output recombined into complex tensor
+    - issue_id: 161906
+    - bug_description: ### 🐛 Describe the bug
+
+## Issue Description
+A simple model using `torch.stft` followed by recombination of real/imag parts into a complex tensor works fine in eager mode.
+However, when compiled with `torch.compile` (Inductor backend), runtime fails with a stride assertion inside `aten.complex.default`.
+
++ Eager execution: ok! produces correct complex tensor
+
++ Compiled execution: error! AssertionError in assert_size_stride for torch.ops.aten.complex.default
+
+## Minimal Reproduction Script
+```python
+import torch
+import torch.nn as nn
+
+class M(nn.Module):
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft, self.hop, self.win = n_fft, hop, win
+        # Register window as buffer so it moves with .to(device)
+        self.register_buffer("window", torch.hann_window(win))
+        # Introduce parameter for broadcasting / stride ops
+        self.p = nn.Parameter(torch.tensor(2.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        S = torch.stft(
+            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,
+            return_complex=True, window=self.window, pad_mode="constant"
+        )
+        R = torch.abs(S.real)   # unary op on real
+        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)
+        Z = torch.complex(R, I) # recombine -> triggers aten.complex.default
+        return Z
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(0)
+
+    x = torch.randn(1, 16000, device=device)
+    m = M().to(device)
+
+    # Eager: works fine
+    z_eager = m(x)
+    assert z_eager.is_complex()
+    print("eager mode OK:", z_eager.shape, z_eager.is_complex())
+
+    # Compile: runtime stride assertion in aten.complex.default
+    m_c = torch.compile(m)
+    z_compiled = m_c(x)
+
+if __name__ == "__main__":
+    main()
+```
+
+## Observed Behavior
+```
+eager mode OK: torch.Size([1, 257, 101]) True
+......
+assert_size_stride(buf10, (1, 257, 101), (25957, 101, 1), 'torch.ops.aten.complex.default')
+AssertionError: expected size 257==257, stride 1==101 at dim=1; expected size 101==101, stride 257==1 at dim=2
+Error in op: torch.ops.aten.complex.default
+This error most often comes from a incorrect fake (aka meta) kernel for a custom op.
+Use torch.library.opcheck to test your custom op.
+See https://pytorch.org/docs/stable/library.html#torch.library.opcheck
+```
+
+### Versions
+
+```
+PyTorch version: 2.8.0a0+gitba56102
+Is debug build: True
+CUDA used to build PyTorch: 12.6
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.4 LTS (x86_64)
+GCC version: (Ubuntu 12.3.0-1ubuntu1~22.04) 12.3.0
+Clang version: Could not collect
+CMake version: version 3.22.1
+Libc version: glibc-2.35
+
+Python version: 3.10.16 (main, Dec 11 2024, 16:24:50) [GCC 11.2.0] (64-bit runtime)
+Python platform: Linux-6.8.0-59-generic-x86_64-with-glibc2.35
+Is CUDA available: True
+```
+
+cc @chauhang @penguinwu @voznesenskym @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @ipiszy @chenyang78 @kadeng @muchulee8 @amjames @aakhundov @coconutruben
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

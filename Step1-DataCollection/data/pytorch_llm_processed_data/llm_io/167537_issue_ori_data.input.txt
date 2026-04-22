@@ -1,0 +1,128 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: [CUDA][Distributed][Symmetric Memory] _SymmetricMemory.rendezvous fails on DGX B200
+    - issue_id: 167537
+    - bug_description: ### 🐛 Describe the bug
+
+Torch symmetric memory rendevous fails at initilialization with an error:
+
+```
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/ilia/repos/vllm/rendezvous_script.py", line 44, in <module>
+[rank0]:     run_rendezvous()
+[rank0]:   File "/home/ilia/repos/vllm/rendezvous_script.py", line 32, in run_rendezvous
+[rank0]:     handle = torch_symm_mem.rendezvous(buffer, group_name)
+[rank0]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/ilia/vllm-venv/lib/python3.12/site-packages/torch/distributed/_symmetric_memory/__init__.py", line 1740, in rendezvous
+[rank0]:     return _SymmetricMemory.rendezvous(tensor, group_name)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]: RuntimeError: CUDA driver error: system not yet initialized
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "/home/ilia/repos/vllm/rendezvous_script.py", line 44, in <module>
+[rank1]:     run_rendezvous()
+[rank1]:   File "/home/ilia/repos/vllm/rendezvous_script.py", line 32, in run_rendezvous
+[rank1]:     handle = torch_symm_mem.rendezvous(buffer, group_name)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/ilia/vllm-venv/lib/python3.12/site-packages/torch/distributed/_symmetric_memory/__init__.py", line 1740, in rendezvous
+[rank1]:     return _SymmetricMemory.rendezvous(tensor, group_name)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]: RuntimeError: CUDA driver error: system not yet initialized
+W1111 04:39:05.501000 533012 torch/distributed/elastic/multiprocessing/api.py:908] Sending process 533105 closing signal SIGTERM
+E1111 04:39:05.715000 533012 torch/distributed/elastic/multiprocessing/api.py:882] failed (exitcode: 1) local_rank: 1 (pid: 533106) of binary: /home/ilia/vllm-venv/bin/python3
+Traceback (most recent call last):
+  File "/home/ilia/vllm-venv/bin/torchrun", line 10, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/ilia/vllm-venv/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 357, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/home/ilia/vllm-venv/lib/python3.12/site-packages/torch/distributed/run.py", line 936, in main
+    run(args)
+  File "/home/ilia/vllm-venv/lib/python3.12/site-packages/torch/distributed/run.py", line 927, in run
+    elastic_launch(
+  File "/home/ilia/vllm-venv/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 156, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ilia/vllm-venv/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 293, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+```
+
+Script to reproduce:
+
+``` python
+# torchrun --nproc_per_node=2 rendezvous_script.py
+import os
+import torch
+import torch.distributed as dist
+
+try:
+    import torch.distributed._symmetric_memory as torch_symm_mem
+    symm_mem_available = True
+except ImportError:
+    symm_mem_available = False
+
+def run_rendezvous():
+    rank = int(os.environ["RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+
+    if not symm_mem_available:
+        print(f"Rank {rank}: Symmetric memory is not available.")
+        return
+
+    device = torch.device(f"cuda:{rank}")
+    torch.cuda.set_device(device)
+
+    max_size = 1024
+    dtype = torch.bfloat16
+    buffer = torch_symm_mem.empty(
+        max_size // dtype.itemsize,
+        device=device,
+        dtype=dtype,
+    )
+
+    group_name = dist.group.WORLD.group_name
+    handle = torch_symm_mem.rendezvous(buffer, group_name)
+
+    tensor_to_reduce = torch.ones(4, device=device, dtype=dtype) * (rank + 1)
+    dist.all_reduce(tensor_to_reduce, op=dist.ReduceOp.SUM)
+
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

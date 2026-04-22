@@ -1,0 +1,43 @@
+{
+  "title": "[inductor] RuntimeError on unbacked symints preventing MoE graph reuse",
+  "issue_id": "161276",
+  "bug_description": "### 🐛 Describe the bug\n\nWe're doing per-block compile in torchtitan, so each MoE block would try to reuse the previous' graph. When reusing the graph, we're running into:\n```python\n[rank0]:[rank0]:   File \"/tmp/torchinductor_xmfan/tmp_9ppw8uf/hc/chco2jsc67qahcxcdvpl32u5uc3qsstjkgqudes7qmqiobhvoujk.py\", line 637, in call\n[rank0]:[rank0]:     raise RuntimeError('Eq(u0 + u1, 16384)')\n[rank0]:[rank0]: RuntimeError: Eq(u0 + u1, 16384)  # u0+u1==0\n```\n\nsample prints of u0+u1:\n```python\n[rank0]:u0: 9945, u1: 6439\n[rank1]:u0: 0, u1: 0\n```\n\nThe error can manifest on either rank, `u0 + u1` looks to be related to the token routing logic, where sometimes a rank's experts can receive 0 tokens.\n\ntlparses: \nrank 0: https://manifold.edge.x2p.facebook.net/v0/read/tree/logs/xmfan/3de57b59-f08b-4f11-9c6a-6e32570fa8bd/custom/rank_0/index.html?bucketName=tlparse_reports&apiKey=tlparse_reports-key&withPayload=1&timeoutMsec=10000\nrank 1: https://manifold.edge.x2p.facebook.net/v0/read/tree/logs/xmfan/3de57b59-f08b-4f11-9c6a-6e32570fa8bd/custom/rank_1/index.html?bucketName=tlparse_reports&apiKey=tlparse_reports-key&withPayload=1&timeoutMsec=10000\n\nRepro: see Versions below\n\n### Versions\n\n`LOG_RANK=0,1 TORCHINDUCTOR_COMPILE_THREADS=1 NGPU=2 CONFIG_FILE=\"./torchtitan/experiments/llama4/train_configs/debug_model.toml\" ./run_train.sh --parallelism.data_parallel_shard_degree=2 --parallelism.expert_parallel_degree=2`\n\ntorchtitan: `xmfan/expert_overlap_compile` branch, the compile call is in moe.py\n\nmain + patch to manually schedule MoE hooks\n```python\ndiff --git a/torch/distributed/fsdp/_fully_shard/_fsdp_state.py b/torch/distributed/fsdp/_fully_shard/_fsdp_state.py\nindex 237f5967382..d99e6e96d27 100644\n--- a/torch/distributed/fsdp/_fully_shard/_fsdp_state.py\n+++ b/torch/distributed/fsdp/_fully_shard/_fsdp_state.py\n@@ -101,6 +101,8 @@ class FSDPState(_State):\n         self._mp_policy = mp_policy\n         self._auto_reshard_after_forward = auto_reshard_after_forward\n         if len(modules) == 1:\n+            if \"GroupedExperts()\" == str(modules[0]):\n+                return\n             self._pre_forward_hook_handle = modules[0].register_forward_pre_hook(\n                 self._pre_forward, prepend=True, with_kwargs=True\n             )\n```\n\ncc @ezyang @penguinwu @bobrenjc93 @voznesenskym @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @ipiszy @chenyang78 @kadeng @muchulee8 @amjames @chauhang @aakhundov @coconutruben",
+  "apis": [
+    "Variable._execution_engine.run_backward",
+    "num_tokens_per_expert.view",
+    "self._log_guard",
+    "self.create_arg",
+    "torch._C._set_grad_enabled",
+    "torch.device"
+  ],
+  "best_code": "[rank0]:[rank0]:   File \"/tmp/torchinductor_xmfan/tmp_9ppw8uf/hc/chco2jsc67qahcxcdvpl32u5uc3qsstjkgqudes7qmqiobhvoujk.py\", line 637, in call\n[rank0]:[rank0]:     raise RuntimeError('Eq(u0 + u1, 16384)')\n[rank0]:[rank0]: RuntimeError: Eq(u0 + u1, 16384)  # u0+u1==0",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/162289",
+    "https://github.com/pytorch/pytorch/pull/161925"
+  ],
+  "_meta": {
+    "file": "161276_issue_ori_data.json",
+    "generated_at": "2026-04-20 23:14:22",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\161276_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\161276_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "We're doing per-block compile in torchtitan, so each MoE block would try to reuse the previous' graph. When reusing the graph, we're running into: RuntimeError: Eq(u0 + u1, 16384) # u0+u1==0. The error can manifest on either rank, u0 + u1 looks to be related to the token routing logic, where sometimes a rank's experts can receive 0 tokens.",
+  "repro_code": "LOG_RANK=0,1 TORCHINDUCTOR_COMPILE_THREADS=1 NGPU=2 CONFIG_FILE=\"./torchtitan/experiments/llama4/train_configs/debug_model.toml\" ./run_train.sh --parallelism.data_parallel_shard_degree=2 --parallelism.expert_parallel_degree=2",
+  "repro_output": "[inductor] RuntimeError on unbacked symints preventing MoE graph reuse",
+  "affected_api": "torch.distributed.fsdp._fully_shard._fsdp_state.FSDPState",
+  "trigger_conditions": {
+    "backend": "inductor",
+    "dtype": "",
+    "input_shape": "",
+    "other_conditions": "per-block compile in torchtitan, MoE graph reuse, distributed training with 2 GPUs, expert parallelism degree 2"
+  },
+  "environment": {
+    "pytorch_version": "main",
+    "python_version": "",
+    "os": "",
+    "hardware": "2 GPUs"
+  },
+  "labels": []
+}

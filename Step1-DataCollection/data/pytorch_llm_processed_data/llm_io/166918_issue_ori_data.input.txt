@@ -1,0 +1,149 @@
+You are an assistant that extracts structured information from a GitHub issue.
+    You MUST only extract information explicitly stated in the input.
+    Do NOT infer, speculate, or generate explanations.
+    If a field is missing, use empty string.
+
+    Input fields:
+    - title: torch.cond causes segmentation fault.
+    - issue_id: 166918
+    - bug_description: ```python
+import os
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+import sys
+import time
+from torch.distributed._functional_collectives import broadcast
+from torch.distributed._tensor import DTensor, Replicate, DeviceMesh
+torch._dynamo.config.capture_scalar_outputs = True
+# Hard-coded master information
+MASTER_ADDR = "127.0.0.1"
+MASTER_PORT = "29500"
+
+def init_process():
+    # Rank and World Size are still read from environment variables
+    rank = int(os.environ['RANK'])
+    world_size = int(os.environ['WORLD_SIZE'])
+
+    # Use the hard-coded values for initialization
+    dist.init_process_group(
+        backend='nccl',
+        init_method=f'tcp://{MASTER_ADDR}:{MASTER_PORT}',
+        rank=rank,
+        world_size=world_size
+    )
+
+
+    torch.cuda.set_device(rank)
+    print(f"Initialized process group on rank {dist.get_rank()}, device {torch.cuda.current_device()}")
+
+@torch.compile(dynamic=True)
+def example_compile_with_cond(rank):
+    """
+    torch.cond version - most compile-friendly approach
+    Replaces if-else with torch.cond for better compilation
+    """
+    rank = rank.item()
+    # Using torch.cond for compile-friendly conditional execution
+    # torch.cond requires a tensor predicate
+    pred = torch.tensor(rank == 0)
+
+    # NOTE: Cannot use requires_grad=True inside torch.cond lambdas
+    tensor = torch.cond(
+        pred,
+        lambda: torch.tensor([1, 2, 3, 4, 5], dtype=torch.float32 ,device="cuda"),
+        lambda: torch.zeros(5, dtype=torch.float32, device="cuda")
+    )
+    return broadcast(tensor, src=0, group=dist.group.WORLD)
+
+
+if __name__ == "__main__":
+    try:
+        init_process()
+        rank = dist.get_rank()
+        # Option 3: Functional collectives with torch.cond (most compile-friendly)
+        tensor = example_compile_with_cond(torch.tensor([rank]))
+
+
+    finally:
+        # Clean up the process group to avoid resource leaks
+        if dist.is_initialized():
+            dist.destroy_process_group()
+```
+tlp torchrun --nproc_per_node=2 example1.py 
+
+Result
+```
+
+
+Initialized process group on rank 0, device 0
+Initialized process group on rank 1, device 1
+W1103 16:46:42.764000 760050 /home/lsakka/pytorch10/pytorch/torch/distributed/elastic/multiprocessing/api.py:1004] Sending process 760231 closing signal SIGTERM
+E1103 16:46:42.979000 760050 /home/lsakka/pytorch10/pytorch/torch/distributed/elastic/multiprocessing/api.py:978] failed (exitcode: -11) local_rank: 0 (pid: 760230) of binary: /home/lsakka/.conda/envs/test-env/bin/python
+Traceback (most recent call last):
+  File "/home/lsakka/.conda/envs/test-env/bin/torchrun", line 7, in <module>
+    sys.exit(main())
+  File "/home/lsakka/pytorch10/pytorch/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 362, in wrapper
+    return f(*args, **kwargs)
+  File "/home/lsakka/pytorch10/pytorch/torch/distributed/run.py", line 977, in main
+    run(args)
+  File "/home/lsakka/pytorch10/pytorch/torch/distributed/run.py", line 968, in run
+    elastic_launch(
+  File "/home/lsakka/pytorch10/pytorch/torch/distributed/launcher/api.py", line 165, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+  File "/home/lsakka/pytorch10/pytorch/torch/distributed/launcher/api.py", line 313, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+========================================================
+example1.py FAILED
+--------------------------------------------------------
+Failures:
+[1]:
+  time      : 2025-11-03_16:46:42
+  host      : devgpu009.cco5.facebook.com
+  rank      : 1 (local_rank: 1)
+  exitcode  : -15 (pid: 760231)
+  error_file: <N/A>
+  traceback : Signal 15 (SIGTERM) received by PID 760231
+--------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2025-11-03_16:46:42
+  host      : devgpu009.cco5.facebook.com
+  rank      : 0 (local_rank: 0)
+  exitcode  : -11 (pid: 760230)
+  error_file: <N/A>
+  tra
+
+    Return JSON only (no explanation, no extra text) in this exact schema:
+    {
+      "title": "<original title>",
+      "error_description": "<natural language bug description>",
+
+      "repro_code": "<minimal reproducible code if exists, otherwise empty string>",
+      "repro_output": "<observed incorrect output if exists>",
+
+      "trigger_conditions": {
+        "backend": "<e.g., MPS>",
+        "dtype": "<data types mentioned or unknown>",
+        "input_shape": "<shapes or dimensional constraints if mentioned>",
+        "other_conditions": "<any additional explicit conditions>"
+      },
+
+      "affected_api": "<API/function directly involved, e.g., F.linear>",
+
+      "environment": {
+        "pytorch_version": "<version or unknown>",
+        "python_version": "<version or unknown>",
+        "os": "<os info or unknown>",
+        "hardware": "<cpu/gpu info or unknown>"
+      },
+
+      "labels": ["<label1>", "<label2>"]
+    }
+
+    Requirements:
+    - Extract only what is explicitly present.
+    - Keep original wording for code and key descriptions when possible.
+    - Do not summarize away critical technical details.
+    - Do not include any explanation outside JSON.

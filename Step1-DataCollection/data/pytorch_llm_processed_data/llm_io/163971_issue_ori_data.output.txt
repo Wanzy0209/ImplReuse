@@ -1,0 +1,79 @@
+Let me analyze this GitHub issue to extract the structured information.
+
+**Title**: [Fuzzer][Eager/Compile Divergence] list index out of range
+
+**Issue ID**: 163971
+
+**Bug Description**: The issue describes a bug where running a PyTorch function with `torch.compile` causes an `IndexError: list index out of range`, while the eager execution succeeds. The error occurs in the inductor backend during pattern matching.
+
+**Repro Code**: The code provided is:
+```python
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0):
+    t0 = arg0 # size=(), stride=(), dtype=bfloat16, device=cuda
+    t1 = torch.softmax(t0, dim=0) # size=(), stride=(), dtype=bfloat16, device=cuda
+    t2 = torch.nn.functional.gelu(t1) # size=(), stride=(), dtype=bfloat16, device=cuda
+    t3 = torch.softmax(t2, dim=0) # size=(), stride=(), dtype=bfloat16, device=cuda
+    output = t3  # output tensor
+    return output
+
+arg0 = torch.rand([], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(), stride=(), dtype=bfloat16, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+```
+
+**Repro Output**: The output shows:
+```
+Eager Success! ✅
+
+Traceback (most recent call last):
+  ...
+torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+IndexError: list index out of range
+```
+
+**Trigger Conditions**:
+- Backend: inductor
+- Dtype: bfloat16
+- Input shape: scalar (empty tensor `[]`)
+- Other conditions: `fullgraph=True`, `dynamic=True`, `capture_scalar_outputs=True`, `capture_dynamic_output_shape_ops=True`, `emulate_precision_casts=True`
+
+**Affected API**: The error occurs during pattern matching in the inductor backend, specifically in `_other_is_broadcasted_in_dim` function. The operations involved are `torch.softmax` and `torch.nn.functional.gelu`.
+
+**Environment**: Not explicitly specified in the issue.
+
+**Labels**: Based on the title, this appears to be related to fuzzer, eager/compile divergence.
+
+Let me structure this into the required JSON format.```json
+{
+  "title": "[Fuzzer][Eager/Compile Divergence] list index out of range",
+  "error_description": "Running a function with torch.compile causes an IndexError: list index out of range in the inductor backend during pattern matching, while eager execution succeeds. The error occurs in the _other_is_broadcasted_in_dim function when checking statically_known_true(other_shape[d] == 1).",
+  "repro_code": "import torch\nimport sys\ntorch._dynamo.config.capture_scalar_outputs = True\ntorch._dynamo.config.capture_dynamic_output_shape_ops = True\ntorch._inductor.config.emulate_precision_casts = True\n\ndef foo(arg0):\n    t0 = arg0 # size=(), stride=(), dtype=bfloat16, device=cuda\n    t1 = torch.softmax(t0, dim=0) # size=(), stride=(), dtype=bfloat16, device=cuda\n    t2 = torch.nn.functional.gelu(t1) # size=(), stride=(), dtype=bfloat16, device=cuda\n    t3 = torch.softmax(t2, dim=0) # size=(), stride=(), dtype=bfloat16, device=cuda\n    output = t3  # output tensor\n    return output\n\narg0 = torch.rand([], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(), stride=(), dtype=bfloat16, device=cuda\nif __name__ == '__main__':\n    out_eager = foo(arg0)\n    out_eager.sum().backward()\n    print('Eager Success! ✅')\n    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)\n    out_compiled = compiled_foo(arg0)\n    out_compiled.sum().backward()\n    print('Compile Success! ✅')",
+  "repro_output": "Eager Success! ✅\n\nTraceback (most recent call last):\n  File \"/tmp/torchfuzz/fuzz_3b68a564759ad020.py\", line 21, in <module>\n    out_compiled = compiled_foo(arg0)\n  ...\ntorch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:\nIndexError: list index out of range",
+  "trigger_conditions": {
+    "backend": "inductor",
+    "dtype": "bfloat16",
+    "input_shape": "scalar (empty tensor [])",
+    "other_conditions": "fullgraph=True, dynamic=True, capture_scalar_outputs=True, capture_dynamic_output_shape_ops=True, emulate_precision_casts=True"
+  },
+  "affected_api": "torch.softmax, torch.nn.functional.gelu",
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "cuda"
+  },
+  "labels": ["Fuzzer", "Eager/Compile Divergence"]
+}
+```
