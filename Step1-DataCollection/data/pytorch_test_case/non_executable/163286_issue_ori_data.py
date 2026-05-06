@@ -1,0 +1,27 @@
+[rank0]:(Pdb) [rank0]:JITFunction(torchao.prototype.moe_training.kernels.mxfp8:triton_scale_swizzle_M_groups)
+kwargs
+[rank0]:(Pdb) [rank0]:{'scales_ptr': TensorBox(StorageBox(
+[rank0]:  ComputedBuffer(name='buf93', layout=FixedLayout('cuda:0', torch.uint8, size=[16512, 160], stride=[160, 1]), data=Pointwise(device=device(type='cuda', index=0), dtype=torch.uint8, inner_fn=<function DtypeView.make_loader.<locals>.loader at 0x7fba0df57060>, ranges=[16512, 160]))
+[rank0]:)), 'scales_stride_dim0': 160, 'scales_stride_dim1': 1, 'scale_rows': 16512, 'scale_cols': 160, 'num_groups': 4, 'orig_offsets': TensorBox(StorageBox(
+[rank0]:  ComputedBuffer(name='buf82', layout=FixedLayout('cuda:0', torch.int32, size=[4], stride=[1]), data=Scan(device=device(type='cuda', index=0), dtype=torch.int32, inner_fn=<function make_pointwise.<locals>.inner.<locals>.inner_fn at 0x7fba3202c220>, ranges=[], scan_ranges=[4], size=[4], combine_fn=<function cumsum.<locals>.combine_fn at 0x7fba320732e0>, reindex=<function Scan.create.<locals>.reindex at 0x7fba32073420>, reduction_hint=<ReductionHint.INNER: 0>, output_index=0, dtypes=(torch.int32,), inner_fns=(<function make_pointwise.<locals>.inner.<locals>.inner_fn at 0x7fba3202c220>,)))
+[rank0]:)), 'output_scales_ptr': TensorBox(
+[rank0]:  ReinterpretView(
+[rank0]:    StorageBox(
+[rank0]:      ComputedBuffer(name='buf92', layout=FixedLayout('cuda:0', torch.float8_e8m0fnu, size=[2723840], stride=[1]), data=Pointwise(device=device(type='cuda', index=0), dtype=torch.float8_e8m0fnu, inner_fn=<function ReinterpretView.make_loader.<locals>.loader at 0x7fba0df563e0>, ranges=[2723840]))
+[rank0]:    ),
+[rank0]:    FixedLayout('cuda:0', torch.float8_e8m0fnu, size=[17024, 160], stride=[160, 1]),
+[rank0]:    origins=OrderedSet([as_strided_default_1]),
+[rank0]:    stack_traces = {,
+[rank0]:      File "/home/xmfan/core/torchtitan/torchtitan/experiments/llama4/model/model.py", line 352, in forward,
+[rank0]:        out = h + self.moe(self.ffn_norm(h)),
+[rank0]:      File "/home/xmfan/core/torchtitan/torchtitan/models/moe.py", line 418, in forward,
+[rank0]:        routed_output = self.experts(routed_input, num_tokens_per_expert),
+[rank0]:      File "/home/xmfan/core/torchtitan/torchtitan/models/moe.py", line 148, in forward,
+[rank0]:        return _run_experts_grouped_mm(,
+[rank0]:      File "/home/xmfan/core/torchtitan/torchtitan/distributed/expert_parallel.py", line 282, in wrapper,
+[rank0]:        out = func(w1, w2, w3, x, num_tokens_per_expert),
+[rank0]:      File "/home/xmfan/core/torchtitan/torchtitan/models/moe.py", line 117, in _run_experts_grouped_mm,
+[rank0]:        torch._grouped_mm(x.bfloat16(), w1.bfloat16().transpose(-2, -1), offs=offsets),
+[rank0]:    ,
+[rank0]:    }
+[rank0]:  )

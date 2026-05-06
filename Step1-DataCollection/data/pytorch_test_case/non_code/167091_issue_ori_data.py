@@ -1,0 +1,2 @@
+torch._dynamo.exc.TorchRuntimeError: Dynamo failed to run FX node with fake tensors: call_function <built-in method conv2d ...>
+got RuntimeError('Sharding propagation failed on op Op(op=aten.convolution.default, ...')

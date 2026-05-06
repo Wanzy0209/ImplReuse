@@ -1,0 +1,1 @@
+V0929 08:06:25.203000 1331468 /data/users/ezyang/b/pytorch/torch/_dynamo/convert_frame.py:1968] skipping: forward (reason: non-infra torch dispatch mode present, this is not supported today in torch.compile, file: /data/users/ezyang/b/autoparallel/autoparallel/_testing/models/llama3.py)

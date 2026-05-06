@@ -1,0 +1,1 @@
+torch.mean(torch.tensor([1, 2, 3], dtype=torch.long))

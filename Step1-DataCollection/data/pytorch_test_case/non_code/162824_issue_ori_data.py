@@ -1,0 +1,17 @@
+[2315/2335] Linking CXX executable bin/test_nativert
+FAILED: [code=1] bin/test_nativert  
+...
+test_nativert/CMakeFiles/test_nativert.dir/__/__/__/torch/nativert/executor/DelegateExecutor.cpp.o -o bin/test_nativert  -Wl,-rpath,/pytorch/build/lib::::  lib/libtorch.so  lib/libgtest_main.a  -Wl,--no-as-needed,"/pytorch/build/lib/libtorch_cpu.so" -Wl,--as-needed  lib/libprotobuf.a  lib/libc10.so  lib/libgtest.a  -pthread && /opt/_internal/cpython-3.13.0/lib/python3.13/site-packages/cmake/data/bin/cmake -E __run_co_compile --lwyu="ldd;-u;-r" --source=bin/test_nativert && :
+test_nativert/CMakeFiles/test_nativert.dir/__/__/__/torch/nativert/executor/triton/CpuTritonKernelManager.cpp.o:CpuTritonKernelManager.cpp:function torch::nativert::CpuTritonKernelManager::load(): error: undefined reference to 'dlopen'
+test_nativert/CMakeFiles/test_nativert.dir/__/__/__/torch/nativert/executor/triton/CpuTritonKernelManager.cpp.o:CpuTritonKernelManager.cpp:function torch::nativert::CpuTritonKernelManager::load(): error: undefined reference to 'dlclose'
+test_nativert/CMakeFiles/test_nativert.dir/__/__/__/torch/nativert/executor/triton/CpuTritonKernelManager.cpp.o:CpuTritonKernelManager.cpp:function torch::nativert::CpuTritonKernelManager::load(): error: undefined reference to 'dlopen'
+test_nativert/CMakeFiles/test_nativert.dir/__/__/__/torch/nativert/executor/triton/CpuTritonKernelManager.cpp.o:CpuTritonKernelManager.cpp:function torch::nativert::CpuTritonKernelManager::load(): error: undefined reference to 'dlclose'
+test_nativert/CMakeFiles/test_nativert.dir/__/__/__/torch/nativert/executor/triton/CpuTritonKernelManager.cpp.o:CpuTritonKernelManager.cpp:function torch::nativert::CpuTritonKernelManager::load(): error: undefined reference to 'dlsym'
+test_nativert/CMakeFiles/test_nativert.dir/__/__/__/torch/nativert/executor/triton/CpuTritonKernelManager.cpp.o:CpuTritonKernelManager.cpp:function torch::nativert::CpuTritonKernelManager::load(): error: undefined reference to 'dlsym'
+test_nativert/CMakeFiles/test_nativert.dir/__/__/__/torch/nativert/executor/triton/CpuTritonKernelManager.cpp.o:CpuTritonKernelManager.cpp:function torch::nativert::CpuTritonKernelManager::load(): error: undefined reference to 'dlerror'
+test_nativert/CMakeFiles/test_nativert.dir/__/__/__/torch/nativert/executor/triton/CpuTritonKernelManager.cpp.o:CpuTritonKernelManager.cpp:function torch::nativert::CpuTritonKernelManager::load(): error: undefined reference to 'dlerror'
+test_nativert/CMakeFiles/test_nativert.dir/__/__/__/torch/nativert/executor/triton/CpuTritonKernelManager.cpp.o:CpuTritonKernelManager.cpp:function torch::nativert::CpuTritonKernelManager::load(): error: undefined reference to 'dlerror'
+test_nativert/CMakeFiles/test_nativert.dir/__/__/__/torch/nativert/executor/triton/CpuTritonKernelManager.cpp.o:CpuTritonKernelManager.cpp:function torch::nativert::CpuTritonKernelManager::load(): error: undefined reference to 'dlerror'
+test_nativert/CMakeFiles/test_nativert.dir/__/__/__/torch/nativert/executor/triton/CpuTritonKernelManager.cpp.o:CpuTritonKernelManager.cpp:function torch::nativert::CpuTritonKernelManager::~CpuTritonKernelManager(): error: undefined reference to 'dlclose'
+test_nativert/CMakeFiles/test_nativert.dir/__/__/__/torch/nativert/executor/triton/CpuTritonKernelManager.cpp.o:CpuTritonKernelManager.cpp:function torch::nativert::CpuTritonKernelManager::~CpuTritonKernelManager(): error: undefined reference to 'dlclose'
+collect2: error: ld returned 1 exit status

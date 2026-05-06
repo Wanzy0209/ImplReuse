@@ -1,0 +1,1 @@
+|| !defined(LIBKINETO_NOXPUPTI)

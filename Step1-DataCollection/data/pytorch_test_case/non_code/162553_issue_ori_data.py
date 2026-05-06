@@ -1,0 +1,1 @@
+bmm_B128_M64_N32_K64_cpu_dtypetorch.bfloat16

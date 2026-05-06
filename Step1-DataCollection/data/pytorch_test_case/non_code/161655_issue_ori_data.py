@@ -1,0 +1,1 @@
+@largeTensorTest("38GB", "cuda")  # emperically

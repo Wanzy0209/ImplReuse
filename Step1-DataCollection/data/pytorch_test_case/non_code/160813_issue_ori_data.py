@@ -1,0 +1,3 @@
+csr = ...
+csr = csr.requires_grad_(True)
+torch.sparse.spsolve(csr, b) # <-- Errors

@@ -1,0 +1,2 @@
+/home/irshadcc/Documents/Projects/pytorch/aten/src/ATen/cuda/CUDAGreenContext.cpp:23:54: error: ‘struct c10::cuda::DriverAPI’ has no member named ‘cuCtxGetCurrent_’
+     23 |   C10_CUDA_DRIVER_CHECK(c10::cuda::DriverAPI::get()->cuCtxGetCurrent_(&pctx));

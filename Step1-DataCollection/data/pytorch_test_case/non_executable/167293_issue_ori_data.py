@@ -1,0 +1,1 @@
+git clone https://github.com/huggingface/transformers.git && cd transformers && git fetch origin && git checkout 020e713a && pip install -e .[torch,testing]

@@ -1,0 +1,2 @@
+_/include/google/protobuf/repeated_field.h:127:52: error: static assertion failed: We only support non-string scalars in RepeatedField.
+  127 |                           is_proto_enum<Element>>::value,

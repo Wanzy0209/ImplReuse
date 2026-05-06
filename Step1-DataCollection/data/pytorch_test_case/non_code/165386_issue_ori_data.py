@@ -1,0 +1,256 @@
+Traceback (most recent call last):
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/testing/_internal/common_device_type.py", line 1150, in test_wrapper
+    return test(*args, **kwargs)
+  File "/var/lib/jenkins/pytorch/test/test_ops_fwd_gradients.py", line 44, in test_fn_fwgrad_bwgrad
+    self._check_helper(device, dtype, op, op.get_op(), "fwgrad_bwgrad")
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/testing/_internal/common_utils.py", line 5566, in _check_helper
+    self.assertTrue(gradgradcheck(fn, gradcheck_args, **kwargs))
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/testing/_internal/common_utils.py", line 5151, in gradgradcheck
+    return torch.autograd.gradgradcheck(fn, inputs, grad_outputs, **kwargs)
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/autograd/gradcheck.py", line 2258, in gradgradcheck
+    return gradcheck(
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/autograd/gradcheck.py", line 2056, in gradcheck
+    return _gradcheck_helper(**args)
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/autograd/gradcheck.py", line 2085, in _gradcheck_helper
+    _gradcheck_real_imag(
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/autograd/gradcheck.py", line 1545, in _gradcheck_real_imag
+    gradcheck_fn(
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/autograd/gradcheck.py", line 1929, in _fast_gradcheck
+    _check_analytical_numerical_equal(
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/autograd/gradcheck.py", line 1858, in _check_analytical_numerical_equal
+    raise GradcheckError(
+torch.autograd.gradcheck.GradcheckError: While considering the real part of complex inputs only, Jacobian computed with forward mode mismatch for output 1 with respect to input 1,
+numerical:tensor([-11875.1653-9.0973e-01j,      0.0000+0.0000e+00j,
+             0.0000+0.0000e+00j,      0.0000+0.0000e+00j,
+             0.0000+0.0000e+00j,  -6696.8127-6.3161e+02j,
+          2043.6397+7.2818e+00j,      0.0000+0.0000e+00j,
+             0.0000+0.0000e+00j,      0.0000+0.0000e+00j,
+          2882.9906-1.1543e+04j,    864.4824+9.3608e+02j,
+         15471.2386+3.0659e+00j,      0.0000+0.0000e+00j,
+             0.0000+0.0000e+00j,  -4801.8384+1.5900e+02j,
+        -17802.9581+1.4451e+04j,    182.9779+9.1840e+02j,
+         14571.0425+7.1268e-01j,      0.0000+0.0000e+00j,
+          7235.0278+7.9201e+03j,   3629.4026-4.4032e+03j,
+          -654.5431-3.3106e+03j,    634.7321-2.0655e+03j,
+         -9388.7629-3.0019e-13j, -18858.7515+2.2211e+01j,
+             0.0000+0.0000e+00j,      0.0000+0.0000e+00j,
+             0.0000+0.0000e+00j,      0.0000+0.0000e+00j,
+         -2471.7475+1.2335e+03j,  -1397.2971-2.0175e+00j,
+             0.0000+0.0000e+00j,      0.0000+0.0000e+00j,
+             0.0000+0.0000e+00j, -11685.1011-2.7967e+03j,
+          3927.5911+4.9880e+03j, -13454.6775+6.2609e-01j,
+             0.0000+0.0000e+00j,      0.0000+0.0000e+00j,
+          7761.4873-5.3606e+03j,   1117.8645-4.1181e+03j,
+          4362.6801-4.5005e+03j,   2564.7816-2.0008e-01j,
+             0.0000+0.0000e+00j,  -4297.5693-5.0081e+03j,
+         -2435.8374-4.0966e+03j,   4916.8474-2.8814e+03j,
+           961.7085+6.6014e+03j,   -874.3098-7.7422e-16j], device='cuda:0',
+       dtype=torch.complex128)
+analytical:tensor([  0.7500-2.2684e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   5.1712-4.5113e-02j,
+         23.8274+8.4588e-02j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          0.0000+0.0000e+00j,   4.3658-1.0024e+00j,   4.9997+7.6355e+00j,
+         -7.0209+1.2584e-01j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          0.4062-2.1376e+00j,  12.8544-2.4054e+00j,  -6.5921+4.4811e+00j,
+        -22.4462+1.3217e-02j,   0.0000+0.0000e+00j,   6.9533-3.3746e+00j,
+          6.9866+4.7164e+00j,   3.9273+1.7859e+00j,  -3.8503+5.2434e-01j,
+         16.9020+6.6654e-16j,  17.5182+5.1593e+00j,   0.0000+0.0000e+00j,
+          0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          2.4951+5.8141e+00j,   3.9309+6.8595e-01j,   0.0000+0.0000e+00j,
+          0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.9908+8.4142e+00j,
+          2.8806+4.5599e+00j,  -3.6307-2.1608e+00j,   0.0000+0.0000e+00j,
+          0.0000+0.0000e+00j,  -4.4894+7.5941e+00j,   3.2826+3.2449e+00j,
+         -8.9348+8.1294e-01j, -10.9199+5.2515e-01j,   0.0000+0.0000e+00j,
+          3.4044+8.0313e+00j,   3.3878+1.9872e+00j,  -3.5748+2.3513e-02j,
+         -3.1844-3.0961e+00j,  10.5959+9.6058e-18j], device='cuda:0',
+       dtype=torch.complex128, grad_fn=<CopyBackwards>)
+
+The above quantities relating the numerical and analytical jacobians are computed 
+in fast mode. See: https://github.com/pytorch/pytorch/issues/53876 for more background 
+about fast mode. Below, we recompute numerical and analytical jacobians in slow mode:
+
+Numerical:
+ tensor([[ 51.6836+4.5866e-02j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+           0.0000+0.0000e+00j],
+        [  0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+           0.0000+0.0000e+00j],
+        [  0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+           0.0000+0.0000e+00j],
+        ...,
+        [  0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,   5.2118-1.7764e-09j, -22.1214-6.3325e+00j,
+          -0.1982-1.7555e-19j],
+        [  0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ..., -22.1214+6.3325e+00j, -17.4629-1.9984e-09j,
+          30.9439+2.7409e-17j],
+        [  0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,  -0.1982-3.3361e+01j,  30.9439+6.2280e+00j,
+          53.3606+6.3020e-17j]], device='cuda:0', dtype=torch.complex128)
+Analytical:
+tensor([[ 51.6836+4.5866e-02j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,  -0.0000-0.0000e+00j,  -0.0000-0.0000e+00j,
+          -0.0000-0.0000e+00j],
+        [ -0.0000-0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,  -0.0000-0.0000e+00j,  -0.0000-0.0000e+00j,
+          -0.0000-0.0000e+00j],
+        [ -0.0000-0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,  -0.0000-0.0000e+00j,  -0.0000-0.0000e+00j,
+          -0.0000-0.0000e+00j],
+        ...,
+        [ -0.0000-0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,   5.2118+1.1158e-15j, -22.1214-6.3325e+00j,
+          -0.1982-1.7555e-19j],
+        [ -0.0000-0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ..., -22.1214+6.3325e+00j, -17.4629-8.1119e-16j,
+          30.9439+2.7409e-17j],
+        [ -0.0000-0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,  -0.1982-3.3361e+01j,  30.9439+6.2280e+00j,
+          53.3606+6.3020e-17j]], device='cuda:0', dtype=torch.complex128,
+       grad_fn=<CopySlices>)
+
+The max per-element difference (slow mode) is: 8.994861962710256e-09.
+Fast gradcheck failed but element-wise differences are small. This means that the
+test might've passed in slow_mode!
+
+If you are adding a new operator, please file an issue and then use one of the
+workarounds. The workaround depends on how your test invokes gradcheck/gradgradcheck:
+
+If the test
+- manually invokes gradcheck/gradgradcheck, then call gradcheck/gradgradcheck
+  with `fast_mode=False` as a keyword argument.
+- is OpInfo-based (e.g., in test_ops_gradients.py), then modify the OpInfo for the test
+  to have `gradcheck_fast_mode=False`
+- is a Module test (e.g., in common_nn.py), then modify the corresponding
+  module_test entry to have `gradcheck_fast_mode=False`
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/testing/_internal/common_utils.py", line 3278, in wrapper
+    method(*args, **kwargs)
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/testing/_internal/common_device_type.py", line 427, in instantiated_test
+    result = test(self, **param_kwargs)
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/testing/_internal/common_device_type.py", line 1230, in dep_fn
+    return fn(slf, *args, **kwargs)
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/testing/_internal/common_device_type.py", line 1230, in dep_fn
+    return fn(slf, *args, **kwargs)
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/testing/_internal/common_utils.py", line 1700, in wrapper
+    fn(*args, **kwargs)
+  File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/testing/_internal/common_device_type.py", line 1162, in test_wrapper
+    raise e_tracked from e
+Exception: While considering the real part of complex inputs only, Jacobian computed with forward mode mismatch for output 1 with respect to input 1,
+numerical:tensor([-11875.1653-9.0973e-01j,      0.0000+0.0000e+00j,
+             0.0000+0.0000e+00j,      0.0000+0.0000e+00j,
+             0.0000+0.0000e+00j,  -6696.8127-6.3161e+02j,
+          2043.6397+7.2818e+00j,      0.0000+0.0000e+00j,
+             0.0000+0.0000e+00j,      0.0000+0.0000e+00j,
+          2882.9906-1.1543e+04j,    864.4824+9.3608e+02j,
+         15471.2386+3.0659e+00j,      0.0000+0.0000e+00j,
+             0.0000+0.0000e+00j,  -4801.8384+1.5900e+02j,
+        -17802.9581+1.4451e+04j,    182.9779+9.1840e+02j,
+         14571.0425+7.1268e-01j,      0.0000+0.0000e+00j,
+          7235.0278+7.9201e+03j,   3629.4026-4.4032e+03j,
+          -654.5431-3.3106e+03j,    634.7321-2.0655e+03j,
+         -9388.7629-3.0019e-13j, -18858.7515+2.2211e+01j,
+             0.0000+0.0000e+00j,      0.0000+0.0000e+00j,
+             0.0000+0.0000e+00j,      0.0000+0.0000e+00j,
+         -2471.7475+1.2335e+03j,  -1397.2971-2.0175e+00j,
+             0.0000+0.0000e+00j,      0.0000+0.0000e+00j,
+             0.0000+0.0000e+00j, -11685.1011-2.7967e+03j,
+          3927.5911+4.9880e+03j, -13454.6775+6.2609e-01j,
+             0.0000+0.0000e+00j,      0.0000+0.0000e+00j,
+          7761.4873-5.3606e+03j,   1117.8645-4.1181e+03j,
+          4362.6801-4.5005e+03j,   2564.7816-2.0008e-01j,
+             0.0000+0.0000e+00j,  -4297.5693-5.0081e+03j,
+         -2435.8374-4.0966e+03j,   4916.8474-2.8814e+03j,
+           961.7085+6.6014e+03j,   -874.3098-7.7422e-16j], device='cuda:0',
+       dtype=torch.complex128)
+analytical:tensor([  0.7500-2.2684e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   5.1712-4.5113e-02j,
+         23.8274+8.4588e-02j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          0.0000+0.0000e+00j,   4.3658-1.0024e+00j,   4.9997+7.6355e+00j,
+         -7.0209+1.2584e-01j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          0.4062-2.1376e+00j,  12.8544-2.4054e+00j,  -6.5921+4.4811e+00j,
+        -22.4462+1.3217e-02j,   0.0000+0.0000e+00j,   6.9533-3.3746e+00j,
+          6.9866+4.7164e+00j,   3.9273+1.7859e+00j,  -3.8503+5.2434e-01j,
+         16.9020+6.6654e-16j,  17.5182+5.1593e+00j,   0.0000+0.0000e+00j,
+          0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          2.4951+5.8141e+00j,   3.9309+6.8595e-01j,   0.0000+0.0000e+00j,
+          0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.9908+8.4142e+00j,
+          2.8806+4.5599e+00j,  -3.6307-2.1608e+00j,   0.0000+0.0000e+00j,
+          0.0000+0.0000e+00j,  -4.4894+7.5941e+00j,   3.2826+3.2449e+00j,
+         -8.9348+8.1294e-01j, -10.9199+5.2515e-01j,   0.0000+0.0000e+00j,
+          3.4044+8.0313e+00j,   3.3878+1.9872e+00j,  -3.5748+2.3513e-02j,
+         -3.1844-3.0961e+00j,  10.5959+9.6058e-18j], device='cuda:0',
+       dtype=torch.complex128, grad_fn=<CopyBackwards>)
+
+The above quantities relating the numerical and analytical jacobians are computed 
+in fast mode. See: https://github.com/pytorch/pytorch/issues/53876 for more background 
+about fast mode. Below, we recompute numerical and analytical jacobians in slow mode:
+
+Numerical:
+ tensor([[ 51.6836+4.5866e-02j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+           0.0000+0.0000e+00j],
+        [  0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+           0.0000+0.0000e+00j],
+        [  0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+           0.0000+0.0000e+00j],
+        ...,
+        [  0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,   5.2118-1.7764e-09j, -22.1214-6.3325e+00j,
+          -0.1982-1.7555e-19j],
+        [  0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ..., -22.1214+6.3325e+00j, -17.4629-1.9984e-09j,
+          30.9439+2.7409e-17j],
+        [  0.0000+0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,  -0.1982-3.3361e+01j,  30.9439+6.2280e+00j,
+          53.3606+6.3020e-17j]], device='cuda:0', dtype=torch.complex128)
+Analytical:
+tensor([[ 51.6836+4.5866e-02j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,  -0.0000-0.0000e+00j,  -0.0000-0.0000e+00j,
+          -0.0000-0.0000e+00j],
+        [ -0.0000-0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,  -0.0000-0.0000e+00j,  -0.0000-0.0000e+00j,
+          -0.0000-0.0000e+00j],
+        [ -0.0000-0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,  -0.0000-0.0000e+00j,  -0.0000-0.0000e+00j,
+          -0.0000-0.0000e+00j],
+        ...,
+        [ -0.0000-0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,   5.2118+1.1158e-15j, -22.1214-6.3325e+00j,
+          -0.1982-1.7555e-19j],
+        [ -0.0000-0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ..., -22.1214+6.3325e+00j, -17.4629-8.1119e-16j,
+          30.9439+2.7409e-17j],
+        [ -0.0000-0.0000e+00j,   0.0000+0.0000e+00j,   0.0000+0.0000e+00j,
+          ...,  -0.1982-3.3361e+01j,  30.9439+6.2280e+00j,
+          53.3606+6.3020e-17j]], device='cuda:0', dtype=torch.complex128,
+       grad_fn=<CopySlices>)
+
+The max per-element difference (slow mode) is: 8.994861962710256e-09.
+Fast gradcheck failed but element-wise differences are small. This means that the
+test might've passed in slow_mode!
+
+If you are adding a new operator, please file an issue and then use one of the
+workarounds. The workaround depends on how your test invokes gradcheck/gradgradcheck:
+
+If the test
+- manually invokes gradcheck/gradgradcheck, then call gradcheck/gradgradcheck
+  with `fast_mode=False` as a keyword argument.
+- is OpInfo-based (e.g., in test_ops_gradients.py), then modify the OpInfo for the test
+  to have `gradcheck_fast_mode=False`
+- is a Module test (e.g., in common_nn.py), then modify the corresponding
+  module_test entry to have `gradcheck_fast_mode=False`
+
+Caused by sample input at index 9: SampleInput(input=Tensor[size=(2, 5, 5), device="cuda:0", dtype=torch.complex128], args=TensorList[Tensor[size=(2, 5, 5), device="cuda:0", dtype=torch.complex128, contiguous=False]], kwargs={}, broadcasts_input=False, name='')
+
+To execute this test, run the following from the base repo dir:
+    PYTORCH_OPINFO_SAMPLE_INPUT_INDEX=9 PYTORCH_TEST_WITH_ROCM=1 python test/test_ops_fwd_gradients.py TestFwdGradientsCUDA.test_fn_fwgrad_bwgrad_cholesky_solve_cuda_complex128
+
+This message can be suppressed by setting PYTORCH_PRINT_REPRO_ON_FAILURE=0

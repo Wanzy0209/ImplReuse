@@ -1,0 +1,1 @@
+Optional[Union[Placement, tuple[Optional[Placement], ...]]]

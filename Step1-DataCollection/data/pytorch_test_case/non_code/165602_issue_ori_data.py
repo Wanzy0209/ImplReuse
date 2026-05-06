@@ -1,0 +1,168 @@
+Traceback (most recent call last):
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/testing/_internal/common_device_type.py", line 1151, in test_wrapper
+    return test(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/var/lib/jenkins/pytorch/test/test_ops_fwd_gradients.py", line 44, in test_fn_fwgrad_bwgrad
+    self._check_helper(device, dtype, op, op.get_op(), "fwgrad_bwgrad")
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/testing/_internal/common_utils.py", line 5581, in _check_helper
+    self.assertTrue(gradgradcheck(fn, gradcheck_args, **kwargs))
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/testing/_internal/common_utils.py", line 5166, in gradgradcheck
+    return torch.autograd.gradgradcheck(fn, inputs, grad_outputs, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/autograd/gradcheck.py", line 2258, in gradgradcheck
+    return gradcheck(
+           ^^^^^^^^^^
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/autograd/gradcheck.py", line 2056, in gradcheck
+    return _gradcheck_helper(**args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/autograd/gradcheck.py", line 2085, in _gradcheck_helper
+    _gradcheck_real_imag(
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/autograd/gradcheck.py", line 1562, in _gradcheck_real_imag
+    gradcheck_fn(
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/autograd/gradcheck.py", line 1929, in _fast_gradcheck
+    _check_analytical_numerical_equal(
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/autograd/gradcheck.py", line 1858, in _check_analytical_numerical_equal
+    raise GradcheckError(
+torch.autograd.gradcheck.GradcheckError: Jacobian computed with forward mode mismatch for output 1 with respect to input 2,
+numerical:tensor([ -3667.0758,  -1874.8715,   7771.3622,   -541.5378,  -1718.2970,
+             0.0000,  -3608.1815,   9461.7422,  -2028.7137,  -3550.5474,
+             0.0000,      0.0000,  17526.5478,   8863.7609,  -6063.0140,
+             0.0000,      0.0000,      0.0000,  13856.1687,  -4168.1069,
+             0.0000,      0.0000,      0.0000,      0.0000,    274.0054,
+          7127.8371,  -3974.3610,  18272.6804,   3129.9140,   -886.4141,
+             0.0000,   9062.5665,   4371.2766,   1772.3854,  -8720.1308,
+             0.0000,      0.0000, -11681.1877, -11614.0044,  11789.3365,
+             0.0000,      0.0000,      0.0000, -10557.5379,   3646.2626,
+             0.0000,      0.0000,      0.0000,      0.0000,  -1389.8919],
+       device='cuda:0', dtype=torch.float64)
+analytical:tensor([ 3.0738,  1.0639,  1.5989,  3.0321, -1.2280,  0.0000, -0.6541, -0.5561,
+        -1.9840, -2.2723,  0.0000,  0.0000, -1.3925, -0.3167, -1.7686,  0.0000,
+         0.0000,  0.0000, -1.9975, -2.4021,  0.0000,  0.0000,  0.0000,  0.0000,
+        -1.4540, -1.2036, -1.1942, -0.9177,  0.6084,  1.2749,  0.0000, -3.5087,
+        -0.7539, -0.5021,  0.5747,  0.0000,  0.0000, -0.3648,  0.3398,  4.7629,
+         0.0000,  0.0000,  0.0000, -0.1613,  1.3397,  0.0000,  0.0000,  0.0000,
+         0.0000, -0.5272], device='cuda:0', dtype=torch.float64,
+       grad_fn=<CopyBackwards>)
+
+The above quantities relating the numerical and analytical jacobians are computed 
+in fast mode. See: https://github.com/pytorch/pytorch/issues/53876 for more background 
+about fast mode. Below, we recompute numerical and analytical jacobians in slow mode:
+
+Numerical:
+ tensor([[ 6.7609, -6.3761, -7.3686,  ...,  0.0000,  0.0000,  0.0000],
+        [-7.8728, -3.5359, -3.7481,  ...,  0.0000,  0.0000,  0.0000],
+        [-2.0159,  3.6688,  8.1137,  ...,  0.0000,  0.0000,  0.0000],
+        ...,
+        [ 0.0000,  0.0000,  0.0000,  ...,  0.0000,  0.0000,  2.9225],
+        [ 0.0000,  0.0000,  0.0000,  ...,  0.0000,  0.0000,  3.1499],
+        [ 0.0000,  0.0000,  0.0000,  ...,  0.0000,  0.0000,  5.4587]],
+       device='cuda:0', dtype=torch.float64)
+Analytical:
+tensor([[ 6.7609, -6.3761, -7.3686,  ...,  0.0000,  0.0000, -0.0000],
+        [-7.8728, -3.5359, -3.7481,  ...,  0.0000,  0.0000, -0.0000],
+        [-2.0159,  3.6688,  8.1137,  ...,  0.0000,  0.0000, -0.0000],
+        ...,
+        [-0.0000, -0.0000, -0.0000,  ...,  0.0000,  0.0000,  2.9225],
+        [-0.0000, -0.0000, -0.0000,  ...,  0.0000,  0.0000,  3.1499],
+        [-0.0000, -0.0000, -0.0000,  ...,  0.0000,  0.0000,  5.4587]],
+       device='cuda:0', dtype=torch.float64, grad_fn=<CopySlices>)
+
+The max per-element difference (slow mode) is: 5.108132198478055e-09.
+Fast gradcheck failed but element-wise differences are small. This means that the
+test might've passed in slow_mode!
+
+If you are adding a new operator, please file an issue and then use one of the
+workarounds. The workaround depends on how your test invokes gradcheck/gradgradcheck:
+
+If the test
+- manually invokes gradcheck/gradgradcheck, then call gradcheck/gradgradcheck
+  with `fast_mode=False` as a keyword argument.
+- is OpInfo-based (e.g., in test_ops_gradients.py), then modify the OpInfo for the test
+  to have `gradcheck_fast_mode=False`
+- is a Module test (e.g., in common_nn.py), then modify the corresponding
+  module_test entry to have `gradcheck_fast_mode=False`
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/testing/_internal/common_utils.py", line 3293, in wrapper
+    method(*args, **kwargs)
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/testing/_internal/common_device_type.py", line 428, in instantiated_test
+    result = test(self, **param_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/testing/_internal/common_device_type.py", line 1231, in dep_fn
+    return fn(slf, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/testing/_internal/common_device_type.py", line 1231, in dep_fn
+    return fn(slf, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/testing/_internal/common_utils.py", line 1700, in wrapper
+    fn(*args, **kwargs)
+  File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/testing/_internal/common_device_type.py", line 1163, in test_wrapper
+    raise e_tracked from e
+Exception: Jacobian computed with forward mode mismatch for output 1 with respect to input 2,
+numerical:tensor([ -3667.0758,  -1874.8715,   7771.3622,   -541.5378,  -1718.2970,
+             0.0000,  -3608.1815,   9461.7422,  -2028.7137,  -3550.5474,
+             0.0000,      0.0000,  17526.5478,   8863.7609,  -6063.0140,
+             0.0000,      0.0000,      0.0000,  13856.1687,  -4168.1069,
+             0.0000,      0.0000,      0.0000,      0.0000,    274.0054,
+          7127.8371,  -3974.3610,  18272.6804,   3129.9140,   -886.4141,
+             0.0000,   9062.5665,   4371.2766,   1772.3854,  -8720.1308,
+             0.0000,      0.0000, -11681.1877, -11614.0044,  11789.3365,
+             0.0000,      0.0000,      0.0000, -10557.5379,   3646.2626,
+             0.0000,      0.0000,      0.0000,      0.0000,  -1389.8919],
+       device='cuda:0', dtype=torch.float64)
+analytical:tensor([ 3.0738,  1.0639,  1.5989,  3.0321, -1.2280,  0.0000, -0.6541, -0.5561,
+        -1.9840, -2.2723,  0.0000,  0.0000, -1.3925, -0.3167, -1.7686,  0.0000,
+         0.0000,  0.0000, -1.9975, -2.4021,  0.0000,  0.0000,  0.0000,  0.0000,
+        -1.4540, -1.2036, -1.1942, -0.9177,  0.6084,  1.2749,  0.0000, -3.5087,
+        -0.7539, -0.5021,  0.5747,  0.0000,  0.0000, -0.3648,  0.3398,  4.7629,
+         0.0000,  0.0000,  0.0000, -0.1613,  1.3397,  0.0000,  0.0000,  0.0000,
+         0.0000, -0.5272], device='cuda:0', dtype=torch.float64,
+       grad_fn=<CopyBackwards>)
+
+The above quantities relating the numerical and analytical jacobians are computed 
+in fast mode. See: https://github.com/pytorch/pytorch/issues/53876 for more background 
+about fast mode. Below, we recompute numerical and analytical jacobians in slow mode:
+
+Numerical:
+ tensor([[ 6.7609, -6.3761, -7.3686,  ...,  0.0000,  0.0000,  0.0000],
+        [-7.8728, -3.5359, -3.7481,  ...,  0.0000,  0.0000,  0.0000],
+        [-2.0159,  3.6688,  8.1137,  ...,  0.0000,  0.0000,  0.0000],
+        ...,
+        [ 0.0000,  0.0000,  0.0000,  ...,  0.0000,  0.0000,  2.9225],
+        [ 0.0000,  0.0000,  0.0000,  ...,  0.0000,  0.0000,  3.1499],
+        [ 0.0000,  0.0000,  0.0000,  ...,  0.0000,  0.0000,  5.4587]],
+       device='cuda:0', dtype=torch.float64)
+Analytical:
+tensor([[ 6.7609, -6.3761, -7.3686,  ...,  0.0000,  0.0000, -0.0000],
+        [-7.8728, -3.5359, -3.7481,  ...,  0.0000,  0.0000, -0.0000],
+        [-2.0159,  3.6688,  8.1137,  ...,  0.0000,  0.0000, -0.0000],
+        ...,
+        [-0.0000, -0.0000, -0.0000,  ...,  0.0000,  0.0000,  2.9225],
+        [-0.0000, -0.0000, -0.0000,  ...,  0.0000,  0.0000,  3.1499],
+        [-0.0000, -0.0000, -0.0000,  ...,  0.0000,  0.0000,  5.4587]],
+       device='cuda:0', dtype=torch.float64, grad_fn=<CopySlices>)
+
+The max per-element difference (slow mode) is: 5.108132198478055e-09.
+Fast gradcheck failed but element-wise differences are small. This means that the
+test might've passed in slow_mode!
+
+If you are adding a new operator, please file an issue and then use one of the
+workarounds. The workaround depends on how your test invokes gradcheck/gradgradcheck:
+
+If the test
+- manually invokes gradcheck/gradgradcheck, then call gradcheck/gradgradcheck
+  with `fast_mode=False` as a keyword argument.
+- is OpInfo-based (e.g., in test_ops_gradients.py), then modify the OpInfo for the test
+  to have `gradcheck_fast_mode=False`
+- is a Module test (e.g., in common_nn.py), then modify the corresponding
+  module_test entry to have `gradcheck_fast_mode=False`
+
+Caused by sample input at index 11: SampleInput(input=Tensor[size=(2, 5, 5), device="cuda:0", dtype=torch.float64], args=TensorList[Tensor[size=(2, 5, 5), device="cuda:0", dtype=torch.float64]], kwargs={'upper': 'True'}, broadcasts_input=False, name='')
+
+To execute this test, run the following from the base repo dir:
+    PYTORCH_OPINFO_SAMPLE_INPUT_INDEX=11 PYTORCH_TEST_WITH_ROCM=1 python test/test_ops_fwd_gradients.py TestFwdGradientsCUDA.test_fn_fwgrad_bwgrad_cholesky_solve_cuda_float64
+
+This message can be suppressed by setting PYTORCH_PRINT_REPRO_ON_FAILURE=0

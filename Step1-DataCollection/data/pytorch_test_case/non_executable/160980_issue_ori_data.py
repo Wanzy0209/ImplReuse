@@ -1,0 +1,7 @@
+caffe2/CMakeFiles/torch_nvshmem.dir/cmake_device_link.o -L/usr/local/cuda/targets/x86_64-linux/lib/stubs  -L/usr/local/cuda/targets/x86_64-linux/lib /usr/local/cuda/lib64/libnvshmem_device.a -lcudadevrt -lcudart_static -lrt -lpthread -ldl
+nvlink error   : Undefined reference to '_Z23nvshmemi_transfer_quietIL13threadgroup_t3EEvb' in 'caffe2/CMakeFiles/torch_nvshmem.dir/__/torch/csrc/distributed/c10d/symm_mem/nvshmem_extension.cu.o' (target: sm_75)
+nvlink error   : Undefined reference to '_Z47nvshmemi_transfer_enforce_consistency_at_targetb' in 'caffe2/CMakeFiles/torch_nvshmem.dir/__/torch/csrc/distributed/c10d/symm_mem/nvshmem_extension.cu.o' (target: sm_75)
+nvlink error   : Undefined reference to '_Z30nvshmemi_transfer_amo_nonfetchIlEvPvT_i14nvshmemi_amo_t' in 'caffe2/CMakeFiles/torch_nvshmem.dir/__/torch/csrc/distributed/c10d/symm_mem/nvshmem_extension.cu.o' (target: sm_75)
+nvlink error   : Undefined reference to '_Z23nvshmemi_transfer_rma_pIlEvPvT_i' in 'caffe2/CMakeFiles/torch_nvshmem.dir/__/torch/csrc/distributed/c10d/symm_mem/nvshmem_extension.cu.o' (target: sm_75)
+nvlink error   : Undefined reference to '_Z21nvshmemi_transfer_rmaIL13threadgroup_t3EL13nvshmemi_op_t4EEvPvS2_mi' in 'caffe2/CMakeFiles/torch_nvshmem.dir/__/torch/csrc/distributed/c10d/symm_mem/nvshmem_extension.cu.o' (target: sm_75)
+nvlink error   : Undefined reference to 'nvshmemi_device_state_d' in 'caffe2/CMakeFiles/torch_nvshmem.dir/__/torch/csrc/distributed/c10d/symm_mem/nvshmem_extension.cu.o' (target: sm_75)```

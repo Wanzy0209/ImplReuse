@@ -1,0 +1,1 @@
+std::shared_ptr(std::shared_ptr(), &singleton)

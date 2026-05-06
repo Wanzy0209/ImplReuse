@@ -1,0 +1,27 @@
+2025-09-04T23:50:31.6254905Z Running 1 items in this shard: test/distributed/test_c10d_nccl.py::CommTest::test_intra_node_comm_all_reduce
+2025-09-04T23:50:31.6255163Z 
+2025-09-04T23:50:31.6255539Z distributed/test_c10d_nccl.py::CommTest::test_intra_node_comm_all_reduce I0904 23:49:33.965000 476623 site-packages/torch/testing/_internal/common_distributed.py:741] Started process 0 with pid 476690
+2025-09-04T23:50:31.6256195Z I0904 23:49:33.966000 476623 site-packages/torch/testing/_internal/common_distributed.py:741] Started process 1 with pid 476691
+2025-09-04T23:50:31.6257129Z /opt/conda/envs/py_3.10/lib/python3.10/site-packages/hypothesis/entry_points.py:23: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+2025-09-04T23:50:31.6257849Z   import pkg_resources
+2025-09-04T23:50:31.6258555Z /opt/conda/envs/py_3.10/lib/python3.10/site-packages/hypothesis/entry_points.py:23: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+2025-09-04T23:50:31.6259268Z   import pkg_resources
+2025-09-04T23:50:31.6259502Z terminate called after throwing an instance of 'c10::Error'
+2025-09-04T23:50:31.6259819Z terminate called after throwing an instance of 'c10::Error'
+2025-09-04T23:50:31.6260103Z   what():  CUDA driver error: invalid argument
+2025-09-04T23:50:31.6260615Z Exception raised from ~AllocationRef at /var/lib/jenkins/workspace/torch/csrc/distributed/c10d/symm_mem/CUDASymmetricMemory.cu:71 (most recent call first):
+2025-09-04T23:50:31.6261388Z frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x9c (0x7a950eba0bac in /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/libc10.so)
+2025-09-04T23:50:31.6262251Z frame #1: c10::detail::torchCheckFail(char const*, char const*, unsigned int, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x68 (0x7a950eb2cd7e in /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/libc10.so)
+2025-09-04T23:50:31.6263110Z frame #2: c10d::symmetric_memory::AllocationRef::~AllocationRef() + 0x364 (0x7a950fbfb324 in /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/libtorch_cuda.so)
+2025-09-04T23:50:31.6263859Z frame #3: c10d::symmetric_memory::CUDASymmetricMemory::~CUDASymmetricMemory() + 0xf5 (0x7a950fbfd885 in /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/libtorch_cuda.so)
+2025-09-04T23:50:31.6264593Z frame #4: c10d::intra_node_comm::IntraNodeComm::~IntraNodeComm() + 0x195 (0x7a950fc47be5 in /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/libtorch_cuda.so)
+2025-09-04T23:50:31.6265278Z frame #5: c10d::intra_node_comm::IntraNodeComm::~IntraNodeComm() + 0xd (0x7a950fc47cdd in /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/libtorch_cuda.so)
+2025-09-04T23:50:31.6265958Z frame #6: c10d::ProcessGroupNCCL::~ProcessGroupNCCL() + 0x5ae (0x7a950fb9e10e in /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/libtorch_cuda.so)
+2025-09-04T23:50:31.6266637Z frame #7: c10d::ProcessGroupNCCL::~ProcessGroupNCCL() + 0xd (0x7a950fb9e1ed in /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/libtorch_cuda.so)
+2025-09-04T23:50:31.6267287Z frame #8: c10d::ProcessGroup::~ProcessGroup() + 0x2ed (0x7a95245a102d in /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/libtorch_cpu.so)
+2025-09-04T23:50:31.6267909Z frame #9: c10d::ProcessGroup::~ProcessGroup() + 0xd (0x7a95245a106d in /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/libtorch_cpu.so)
+2025-09-04T23:50:31.6268523Z frame #10: <unknown function> + 0xe09c38 (0x7a953351cc38 in /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/libtorch_python.so)
+2025-09-04T23:50:31.6269117Z frame #11: <unknown function> + 0x3fd171 (0x7a9532b10171 in /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/libtorch_python.so)
+2025-09-04T23:50:31.6269724Z frame #12: <unknown function> + 0x3fd7d5 (0x7a9532b107d5 in /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/libtorch_python.so)
+2025-09-04T23:50:31.6270227Z frame #13: <unknown function> + 0x134be7 (0x5ba879955be7 in /opt/conda/envs/py_3.10/bin/python)
+2025-09-04T23:50:31.6270644Z frame #14: _PyFunction_Vectorcall + 0x9b (0x5ba87995d11b in /opt/conda/envs/py_3.10/bin/python)

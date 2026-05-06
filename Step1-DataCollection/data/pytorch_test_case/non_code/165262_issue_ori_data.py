@@ -1,0 +1,1 @@
+should_delete = detail::atomic_weakcount_decrement(target_->combined_refcount_) == 0;

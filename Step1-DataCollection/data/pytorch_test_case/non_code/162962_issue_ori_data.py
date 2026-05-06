@@ -1,0 +1,1 @@
+[6818/7482] Linking CXX static library lib\torch_xpu_ops_sycl_kernels.lib 2025-09-15T13:40:04.7566715Z Terminate batch job (Y/N)?  2025-09-15T13:40:04.9466469Z ##[error]The operation was canceled.

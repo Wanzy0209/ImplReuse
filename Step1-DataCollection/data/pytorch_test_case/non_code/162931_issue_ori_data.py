@@ -1,0 +1,1 @@
+out paramater of tensor

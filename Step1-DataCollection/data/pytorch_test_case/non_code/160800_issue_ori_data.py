@@ -1,0 +1,1 @@
+torch._dynamo.config.capture_scalar_outputs = True

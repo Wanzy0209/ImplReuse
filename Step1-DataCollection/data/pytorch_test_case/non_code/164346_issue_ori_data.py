@@ -1,0 +1,1 @@
+hipErrorInvalidDeviceFunction' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__HIPRT__TYPES.html for more information. HIP kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect. For debugging consider passing AMD_SERIALIZE_KERNEL=3 Compile with

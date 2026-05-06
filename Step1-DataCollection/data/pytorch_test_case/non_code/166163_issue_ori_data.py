@@ -1,0 +1,3 @@
+torchvision.models.efficientnet_b0
+torchvision.models.mobilenet_v2
+torchvision.models.resnet18

@@ -1,0 +1,1 @@
+weakref.finalize(t, pin_memory_utils.unpin_memory, t)

@@ -1,0 +1,137 @@
+INFO 11-20 19:14:42 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+INFO 11-20 19:14:43 [utils.py:253] non-default args: {'max_model_len': 4096, 'disable_log_stats': True}
+INFO 11-20 19:14:44 [model.py:630] Resolved architecture: Qwen3ForCausalLM
+INFO 11-20 19:14:44 [model.py:1728] Using max model len 4096
+WARNING 11-20 19:14:44 [cpu.py:158] Environment variable VLLM_CPU_KVCACHE_SPACE (GiB) for CPU backend is not set, using 4 by default.
+INFO 11-20 19:14:44 [arg_utils.py:1342] Chunked prefill is not supported for ARM and POWER, S390X and RISC-V CPUs; disabling it for V1 backend.
+INFO 11-20 19:14:44 [arg_utils.py:1348] Prefix caching is not supported for ARM and POWER, S390X and RISC-V CPUs; disabling it for V1 backend.
+INFO 11-20 19:14:48 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m INFO 11-20 19:14:48 [core.py:94] Initializing a V1 LLM engine (v0.11.1rc7.dev72+g314736e34) with config: model='Qwen/Qwen3-0.6B', speculative_config=None, tokenizer='Qwen/Qwen3-0.6B', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=4096, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, disable_custom_all_reduce=True, quantization=None, enforce_eager=False, kv_cache_dtype=auto, device_config=cpu, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_fallback=False, disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None), seed=0, served_model_name=Qwen/Qwen3-0.6B, enable_prefix_caching=False, chunked_prefill_enabled=False, pooler_config=None, compilation_config={'level': None, 'mode': <CompilationMode.DYNAMO_TRACE_ONCE: 2>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['none'], 'splitting_ops': None, 'compile_mm_encoder': True, 'use_inductor': None, 'compile_sizes': None, 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True, 'dce': True, 'size_asserts': False, 'nan_asserts': False, 'epilogue_fusion': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'use_cudagraph': True, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'full_cuda_graph': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {}, 'max_cudagraph_capture_size': None, 'local_cache_dir': None}
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m WARNING 11-20 19:14:49 [cpu.py:394] Pin memory is not supported on CPU.
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m INFO 11-20 19:14:49 [parallel_state.py:1325] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, TP rank 0, EP rank 0
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m INFO 11-20 19:14:49 [cpu_model_runner.py:55] Starting to load model Qwen/Qwen3-0.6B...
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m WARNING 11-20 19:14:49 [rocm.py:34] Failed to import from amdsmi with ModuleNotFoundError("No module named 'amdsmi'")
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m WARNING 11-20 19:14:49 [rocm.py:45] Failed to import from vllm._rocm_C with ModuleNotFoundError("No module named 'vllm._rocm_C'")
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m INFO 11-20 19:14:49 [weight_utils.py:480] No model.safetensors.index.json found in remote.
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m INFO 11-20 19:14:50 [default_loader.py:314] Loading weights took 0.13 seconds
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m INFO 11-20 19:14:50 [kv_cache_utils.py:1229] GPU KV cache size: 37,376 tokens
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m INFO 11-20 19:14:50 [kv_cache_utils.py:1234] Maximum concurrency for 4,096 tokens per request: 9.12x
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m INFO 11-20 19:14:50 [cpu_model_runner.py:65] Warming up model for the compilation...
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 0: NopKernelSchedulerNode(name='op0'), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.NopKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 1: OuterLoopFusedSchedulerNode(nodes=op1_op2), device=cpu, extern=False, type=<class 'torch._inductor.codegen.cpp.OuterLoopFusedSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 2: ExternKernelSchedulerNode(name='op3'), device=cpu, extern=True, type=<class 'torch._inductor.scheduler.ExternKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 3: ForeachKernelSchedulerNode(nodes=op4_op6_op7_op5_op9_op10), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.ForeachKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 4: NopKernelSchedulerNode(name='op8'), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.NopKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 5: NopKernelSchedulerNode(name='op11'), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.NopKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 6: NopKernelSchedulerNode(name='op12'), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.NopKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 7: ExternKernelSchedulerNode(name='op13'), device=cpu, extern=True, type=<class 'torch._inductor.scheduler.ExternKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 8: NopKernelSchedulerNode(name='op14'), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.NopKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 9: ExternKernelSchedulerNode(name='op15'), device=cpu, extern=True, type=<class 'torch._inductor.scheduler.ExternKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 10: NopKernelSchedulerNode(name='op16'), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.NopKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 11: OuterLoopFusedSchedulerNode(nodes=op17_op18), device=cpu, extern=False, type=<class 'torch._inductor.codegen.cpp.OuterLoopFusedSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 12: ExternKernelSchedulerNode(name='op19'), device=cpu, extern=True, type=<class 'torch._inductor.scheduler.ExternKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 13: NopKernelSchedulerNode(name='op20'), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.NopKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 14: SchedulerNode(name='op21'), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.SchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 15: ExternKernelSchedulerNode(name='op22'), device=cpu, extern=True, type=<class 'torch._inductor.scheduler.ExternKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 16: NopKernelSchedulerNode(name='op23'), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.NopKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 17: OuterLoopFusedSchedulerNode(nodes=op24_op25), device=cpu, extern=False, type=<class 'torch._inductor.codegen.cpp.OuterLoopFusedSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 18: ExternKernelSchedulerNode(name='op26'), device=cpu, extern=True, type=<class 'torch._inductor.scheduler.ExternKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 19: ForeachKernelSchedulerNode(nodes=op27_op29_op30_op28_op32_op33), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.ForeachKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 20: NopKernelSchedulerNode(name='op31'), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.NopKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Node 21: NopKernelSchedulerNode(name='op34'), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.NopKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m 
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Scheduling node 0: NopKernelSchedulerNode(name='op0'), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.NopKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Generating code for nop kernel scheduler node
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Scheduling node 1: OuterLoopFusedSchedulerNode(nodes=op1_op2), device=cpu, extern=False, type=<class 'torch._inductor.codegen.cpp.OuterLoopFusedSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Generating code for fused or regular scheduler node
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Scheduling node 2: ExternKernelSchedulerNode(name='op3'), device=cpu, extern=True, type=<class 'torch._inductor.scheduler.ExternKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Generating code for extern node
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Scheduling node 3: ForeachKernelSchedulerNode(nodes=op4_op6_op7_op5_op9_op10), device=cpu, extern=False, type=<class 'torch._inductor.scheduler.ForeachKernelSchedulerNode'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m Generating code for foreach node
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855] EngineCore failed to start.
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855] Traceback (most recent call last):
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 846, in run_engine_core
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     engine_core = EngineCoreProc(*args, **kwargs)
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 619, in __init__
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     super().__init__(
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 110, in __init__
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     num_gpu_blocks, num_cpu_blocks, kv_cache_config = self._initialize_kv_caches(
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 244, in _initialize_kv_caches
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     self.model_executor.initialize_from_config(kv_cache_configs)
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/vllm/v1/executor/abstract.py", line 116, in initialize_from_config
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     self.collective_rpc("compile_or_warm_up_model")
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/vllm/v1/executor/uniproc_executor.py", line 75, in collective_rpc
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     result = run_method(self.driver_worker, method, args, kwargs)
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/vllm/v1/serial_utils.py", line 459, in run_method
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     return func(*args, **kwargs)
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]            ^^^^^^^^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/vllm/v1/worker/cpu_worker.py", line 129, in compile_or_warm_up_model
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     self.model_runner.warming_up_model()
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/vllm/v1/worker/cpu_model_runner.py", line 68, in warming_up_model
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     self._dummy_run(
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     return func(*args, **kwargs)
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]            ^^^^^^^^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/vllm/v1/worker/gpu_model_runner.py", line 3643, in _dummy_run
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     outputs = self.model(
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]               ^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     return self._call_impl(*args, **kwargs)
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     return forward_call(*args, **kwargs)
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/vllm/model_executor/models/qwen3.py", line 319, in forward
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     hidden_states = self.model(
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]                     ^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/vllm/compilation/decorators.py", line 470, in __call__
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     output = self.compiled_callable(*args, **kwargs)
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 845, in compile_wrapper
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 990, in _compile_fx_inner
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     raise InductorError(e, currentframe()).with_traceback(
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 974, in _compile_fx_inner
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     mb_compiled_graph = fx_codegen_and_compile(
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]                         ^^^^^^^^^^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 1695, in fx_codegen_and_compile
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 1505, in codegen_and_compile
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     compiled_module = graph.compile_to_module()
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]                       ^^^^^^^^^^^^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/_inductor/graph.py", line 2319, in compile_to_module
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     return self._compile_to_module()
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]            ^^^^^^^^^^^^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/_inductor/graph.py", line 2325, in _compile_to_module
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     self.codegen_with_cpp_wrapper() if self.cpp_wrapper else self.codegen()
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]                                                              ^^^^^^^^^^^^^^
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/_inductor/graph.py", line 2264, in codegen
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     self.scheduler.codegen()
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/_inductor/scheduler.py", line 5205, in codegen
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     self._codegen_partitions()
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/_inductor/scheduler.py", line 5345, in _codegen_partitions
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     self._codegen(partition)
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]   File "/home/user-r/venv/vllm-312-venv/lib/python3.12/site-packages/torch/_inductor/scheduler.py", line 5450, in _codegen
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]     raise AssertionError(f"{type(self)=}")
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855] torch._inductor.exc.InductorError: AssertionError: type(self)=<class 'torch._inductor.scheduler.Scheduler'>
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855] 
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855] Set TORCHDYNAMO_VERBOSE=1 for the internal stack trace (please do this especially if you're reporting a bug to PyTorch). For even more developer context, set TORCH_LOGS="+dynamo"
+�[1;36m(EngineCore_DP0 pid=58928)�[0;0m ERROR 11-20 19:15:13 [core.py:855]

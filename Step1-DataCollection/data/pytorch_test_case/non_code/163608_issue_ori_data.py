@@ -1,0 +1,1 @@
+python -m benchmark_all_test --device cuda --tag-filter long --use-compile --test-name bmm_B8_M256_N256_K64_cuda_dtypetorch.float32

@@ -1,0 +1,2 @@
++ INSTALLED_DRIVER_VERSION='No devices were found'
++ NVIDIA_SMI_STATUS=6

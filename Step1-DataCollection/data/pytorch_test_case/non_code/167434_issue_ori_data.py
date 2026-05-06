@@ -1,0 +1,1 @@
+test_annotate_on_assert_serdes_nonstrict

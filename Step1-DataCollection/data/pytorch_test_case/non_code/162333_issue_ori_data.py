@@ -1,0 +1,1 @@
+>>> torch._C._cuda_getDeviceCount()

@@ -1,0 +1,5 @@
+W0922 00:45:54.324000 2065324 /data/users/williamwen/pytorch2/torch/_dynamo/convert_frame.py:1364] [0/8] torch._dynamo hit config.recompile_limit (8)
+W0922 00:45:54.324000 2065324 /data/users/williamwen/pytorch2/torch/_dynamo/convert_frame.py:1364] [0/8]    function: 'inner' (/data/users/williamwen/pytorch2/torch/_dynamo/external_utils.py:66)
+W0922 00:45:54.324000 2065324 /data/users/williamwen/pytorch2/torch/_dynamo/convert_frame.py:1364] [0/8]    last reason: 0/1: ___check_obj_id(fn.__code__, 140655353128048)          
+W0922 00:45:54.324000 2065324 /data/users/williamwen/pytorch2/torch/_dynamo/convert_frame.py:1364] [0/8] To log all recompilation reasons, use TORCH_LOGS="recompiles".
+W0922 00:45:54.324000 2065324 /data/users/williamwen/pytorch2/torch/_dynamo/convert_frame.py:1364] [0/8] To diagnose recompilation issues, see https://pytorch.org/docs/main/torch.compiler_troubleshooting.htm

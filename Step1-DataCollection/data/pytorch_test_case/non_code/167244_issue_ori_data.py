@@ -1,0 +1,2 @@
+import torchtorch.cuda.is_available()  # True 
+torch.tensor([1.0], device="cuda")   # -> RuntimeError above Same failure when loading a model and applying LoRA adapters—the first CUDA cast triggers the error.

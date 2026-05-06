@@ -1,0 +1,2 @@
+https://download.pytorch.org/whl/cu126/torch-2.6.0%2Bcu126-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=6bc5b9126daa3ac1e4d920b731da9f9503ff1f56204796de124e080f5cc3570e
+https://download.pytorch.org/whl/cu126/torch-2.8.0%2Bcu126-cp312-cp312-manylinux_2_28_x86_64.whl

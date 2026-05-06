@@ -1,0 +1,6 @@
+...
+/usr/bin/ld: /.../src/example/example.o: in function `void std::__detail::__to_chars_10_impl<unsigned int>(char*, unsigned int, unsigned int)': 
+/.../site-packages/torch/include/torch/csrc/stable/tensor_inl.h:17: multiple definition of `torch::stable::Tensor::scalar_type() const';
+/.../build/temp.linux-x86_64-cpython-313/src/example/cuda/example.o:tmpxft_00011dfa_00000000-6_example.compute_90.cudafe1.cpp:(.text+0x16c): first defined here
+collect2: error: ld returned 1 exit status
+...

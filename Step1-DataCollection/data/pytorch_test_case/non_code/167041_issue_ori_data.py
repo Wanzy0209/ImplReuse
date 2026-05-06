@@ -1,0 +1,7 @@
+[default0]:/tmp/torchinductor_matej/ci/ccikwswrtcsi6cqxqcxkisvl7x5snva3jvdrt5lal6v2ovhzx2w5.py:105: UserWarning: Logical operators 'and' and 'or' are deprecated for non-scalar tensors; please use '&' or '|' instead
+[default0]:  mask = offs_am[:, None] < m_size and offs_bn[None, :] < n_size
+[default0]:UserWarning: Enable tracemalloc to get the object allocation traceback
+[default0]:/tmp/torchinductor_matej/ci/ccikwswrtcsi6cqxqcxkisvl7x5snva3jvdrt5lal6v2ovhzx2w5.py:105: UserWarning: Logical operators 'and' and 'or' are deprecated for non-scalar tensors; please use '&' or '|' instead
+[default0]:  mask = offs_am[:, None] < m_size and offs_bn[None, :] < n_size
+[default0]:UserWarning: Enable tracemalloc to get the object allocation traceback
+[default0]:[rank0]:E1105 06:36:19.331000 2421245 torch/_inductor/select_algorithm.py:2555] [0/1] Exception No valid triton configs. OutOfMemoryError: out of resource: triton_grouped_mm Required: 393216 Hardware limit:232448 Reducing block sizes or `num_stages` may help. for benchmark choice TritonTemplateCaller(/tmp/torchinductor_matej/ci/ccikwswrtcsi6cqxqcxkisvl7x5snva3jvdrt5lal6v2ovhzx2w5.py, A_IS_2D=True, BLOCK_K=128, BLOCK_M=128, BLOCK_N=256, B_IS_2D=False, NUM_CONSUMER_GROUPS=1, NUM_SMS=132, SCALED=False, USE_EXPERIMENTAL_MAKE_TENSOR_DESCRIPTOR=False, USE_FAST_ACCUM=False, USE_TMA_LOAD=False, num_stages=4, num_warps=8)

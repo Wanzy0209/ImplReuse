@@ -1,0 +1,1 @@
+torch.return_types.linalg_qr() takes a 2-sequence (1-sequence given)
