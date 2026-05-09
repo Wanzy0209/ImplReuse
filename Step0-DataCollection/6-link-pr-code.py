@@ -85,7 +85,7 @@ def save_to_cache(pr_url: str, pr_code: Dict[str, List[str]]):
 
 def fetch_pr_files(pr_url: str) -> Dict[str, List[str]]:
     """
-    Fetch PR diff from GitHub web page and parse HTML to extract added/deleted code.
+    Fetch PR diff and extract added/deleted code.
     Returns dict with "add_fix_code" and "sub_fix_code" lists.
     """
     if requests is None:
@@ -109,103 +109,102 @@ def fetch_pr_files(pr_url: str) -> Dict[str, List[str]]:
                 return result
         
         owner, repo, pr_number = m.groups()
-        full_pr_url = f'https://github.com/{owner}/{repo}/pull/{pr_number}/files'
+        
+        # Try GitHub API first (patch format)
+        api_url = f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}'
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/vnd.github.v3.patch'
         }
         
         print(f"  [FETCH] {owner}/{repo}/pull/{pr_number}")
-        print(f"  [URL] {full_pr_url}")
+        print(f"  [URL] {api_url}")
         
-        resp = requests.get(full_pr_url, headers=headers, timeout=15)
+        resp = requests.get(api_url, headers=headers, timeout=15)
         
-        if resp.status_code != 200:
-            print(f"  [HTML-ERR] Status {resp.status_code}")
-            return result
+        if resp.status_code == 200:
+            # Parse patch format
+            patch_content = resp.text
+            add_lines = []
+            sub_lines = []
+            
+            for line in patch_content.split('\n'):
+                if line.startswith('+') and not line.startswith('+++'):
+                    add_lines.append(line[1:])
+                elif line.startswith('-') and not line.startswith('---'):
+                    sub_lines.append(line[1:])
+            
+            result["add_fix_code"] = add_lines
+            result["sub_fix_code"] = sub_lines
+            print(f"  [SUCCESS] {len(add_lines)} added line(s), {len(sub_lines)} deleted line(s)")
         
-        # Debug: Save raw HTML for analysis
-        debug_file = CACHE_DIR / f"{owner}_{repo}_{pr_number}_debug.html"
-        with debug_file.open('w', encoding='utf-8') as f:
-            f.write(resp.text[:5000])  # Save first 5000 chars
-        print(f"  [DEBUG] Saved first 5000 chars to {debug_file.name}")
-        
-        if BeautifulSoup is None:
-            print(f"  [ERR] BeautifulSoup not available. Install with: pip install beautifulsoup4")
-            return result
-        
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        
-        add_lines = []
-        sub_lines = []
-        
-        # Method 1: Check all span elements for diff classes
-        for span in soup.find_all('span'):
-            classes = span.get('class', [])
-            if isinstance(classes, list):
-                class_str = ' '.join(classes)
-                if 'blob-code-addition' in class_str or 'text-green-500' in class_str:
-                    code_text = span.get_text(strip=False) or ''
-                    if code_text.startswith('+'):
-                        code_text = code_text[1:]
-                    if code_text.strip():
-                        add_lines.append(code_text)
-                elif 'blob-code-deletion' in class_str or 'text-red-500' in class_str:
-                    code_text = span.get_text(strip=False) or ''
-                    if code_text.startswith('-'):
-                        code_text = code_text[1:]
-                    if code_text.strip():
-                        sub_lines.append(code_text)
-        
-        # Method 2: Check table rows if Method 1 failed
-        if not add_lines and not sub_lines:
-            for tr in soup.find_all('tr'):
-                tr_classes = tr.get('class', [])
-                if isinstance(tr_classes, list):
-                    if 'blob-code-addition' in tr_classes:
-                        code_span = tr.find('span', class_='blob-code-inner')
-                        if code_span:
-                            code_text = code_span.get_text(strip=False) or ''
-                            if code_text.startswith('+'):
-                                code_text = code_text[1:]
-                            if code_text.strip():
-                                add_lines.append(code_text)
-                    elif 'blob-code-deletion' in tr_classes:
-                        code_span = tr.find('span', class_='blob-code-inner')
-                        if code_span:
-                            code_text = code_span.get_text(strip=False) or ''
-                            if code_text.startswith('-'):
-                                code_text = code_text[1:]
-                            if code_text.strip():
-                                sub_lines.append(code_text)
-        
-        # Method 3: Check for code elements with color indicators
-        if not add_lines and not sub_lines:
-            for td in soup.find_all('td'):
-                td_classes = td.get('class', [])
-                if isinstance(td_classes, list):
-                    class_str = ' '.join(td_classes)
-                    if 'blob-code' in class_str:
-                        code_span = td.find('span')
-                        if code_span:
-                            code_text = code_span.get_text(strip=False) or ''
-                            if code_text.startswith('+'):
-                                add_lines.append(code_text[1:] if len(code_text) > 1 else '')
-                            elif code_text.startswith('-'):
-                                sub_lines.append(code_text[1:] if len(code_text) > 1 else '')
-        
-        # Debug: Check if page requires login
-        if not add_lines and not sub_lines:
-            if 'sign-in' in resp.text.lower() or 'login' in resp.text.lower():
-                print(f"  [WARN] Page may require login")
-        
-        result["add_fix_code"] = add_lines
-        result["sub_fix_code"] = sub_lines
-        
-        print(f"  [SUCCESS] {len(add_lines)} added line(s), {len(sub_lines)} deleted line(s)")
+        else:
+            print(f"  [API-ERR] Status {resp.status_code}, trying HTML...")
+            # Fallback to HTML parsing
+            full_pr_url = f'https://github.com/{owner}/{repo}/pull/{pr_number}/files'
+            headers_html = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            }
+            
+            resp = requests.get(full_pr_url, headers=headers_html, timeout=15)
+            
+            if resp.status_code != 200:
+                print(f"  [HTML-ERR] Status {resp.status_code}")
+                return result
+            
+            if BeautifulSoup is None:
+                print(f"  [ERR] BeautifulSoup not available")
+                return result
+            
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            add_lines = []
+            sub_lines = []
+            
+            for span in soup.find_all('span'):
+                classes = span.get('class', [])
+                if isinstance(classes, list):
+                    class_str = ' '.join(classes)
+                    if 'blob-code-addition' in class_str or 'text-green-500' in class_str:
+                        code_text = span.get_text(strip=False) or ''
+                        if code_text.startswith('+'):
+                            code_text = code_text[1:]
+                        if code_text.strip():
+                            add_lines.append(code_text)
+                    elif 'blob-code-deletion' in class_str or 'text-red-500' in class_str:
+                        code_text = span.get_text(strip=False) or ''
+                        if code_text.startswith('-'):
+                            code_text = code_text[1:]
+                        if code_text.strip():
+                            sub_lines.append(code_text)
+            
+            if not add_lines and not sub_lines:
+                for tr in soup.find_all('tr'):
+                    tr_classes = tr.get('class', [])
+                    if isinstance(tr_classes, list):
+                        if 'blob-code-addition' in tr_classes:
+                            code_span = tr.find('span', class_='blob-code-inner')
+                            if code_span:
+                                code_text = code_span.get_text(strip=False) or ''
+                                if code_text.startswith('+'):
+                                    code_text = code_text[1:]
+                                if code_text.strip():
+                                    add_lines.append(code_text)
+                        elif 'blob-code-deletion' in tr_classes:
+                            code_span = tr.find('span', class_='blob-code-inner')
+                            if code_span:
+                                code_text = code_span.get_text(strip=False) or ''
+                                if code_text.startswith('-'):
+                                    code_text = code_text[1:]
+                                if code_text.strip():
+                                    sub_lines.append(code_text)
+            
+            result["add_fix_code"] = add_lines
+            result["sub_fix_code"] = sub_lines
+            print(f"  [HTML-SUCCESS] {len(add_lines)} added line(s), {len(sub_lines)} deleted line(s)")
     
     except requests.RequestException as e:
         print(f"  [NET-ERR] {e}")
