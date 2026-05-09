@@ -1,0 +1,86 @@
+{
+  "title": "Support Batchsize 0 for flash attention by early return",
+  "issue_id": "165944",
+  "bug_description": "# Summary\n\nWe should support the flashattention backend when bsz = 0 by early returning \n\nWe should ensure that the lse is working correctly as well as bwd -> I guess no grads should flow and bwd should also ealry return 0",
+  "apis": [
+    "torch"
+  ],
+  "best_code": "",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/166318"
+  ],
+  "_meta": {
+    "file": "165944_issue_ori_data.json",
+    "generated_at": "2026-04-21 05:05:20",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\165944_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\165944_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "We should support the flashattention backend when bsz = 0 by early returning. We should ensure that the lse is working correctly as well as bwd -> I guess no grads should flow and bwd should also ealry return 0",
+  "repro_code": "",
+  "repro_output": "Support Batchsize 0 for flash attention by early return",
+  "affected_api": "flashattention backend",
+  "trigger_conditions": {
+    "backend": "flashattention",
+    "dtype": "",
+    "input_shape": "bsz = 0",
+    "other_conditions": ""
+  },
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": [],
+  "add_fix_code": [
+    "#include <ATen/ops/zeros_like.h>",
+    "",
+    "    if (batch_size == 0) {",
+    "        auto opts = q.options();",
+    "        at::Tensor out = at::empty({0, seqlen_q, num_heads, head_size_og}, opts);",
+    "        at::Tensor q_padded = at::empty({0, seqlen_q, num_heads, head_size_og}, opts);",
+    "        at::Tensor k_padded = at::empty({0, seqlen_k, num_heads_k, head_size_og}, opts);",
+    "        at::Tensor v_padded = at::empty({0, seqlen_k, num_heads_k, head_size_og}, opts);",
+    "        at::Tensor softmax_lse = at::empty({0, num_heads, seqlen_q}, opts.dtype(at::kFloat));",
+    "        at::Tensor rng_state = at::empty({2}, at::dtype(c10::kUInt64).device(at::kCUDA));",
+    "        at::Tensor _unused = at::empty({}, at::dtype(c10::kUInt64).device(at::kCUDA));",
+    "        at::Tensor p = at::empty({0}, opts);",
+    "        if (return_softmax) {",
+    "            auto round_multiple = [](int x, int m) { return (x + m - 1) / m * m; };",
+    "            const int seqlen_q_rounded = round_multiple(seqlen_q, 128);",
+    "            const int seqlen_k_rounded = round_multiple(seqlen_k, 128);",
+    "            p = at::empty({0, num_heads, seqlen_q_rounded, seqlen_k_rounded}, opts);",
+    "        }",
+    "        return {std::move(out), std::move(q_padded), std::move(k_padded), std::move(v_padded), std::move(softmax_lse), std::move(rng_state), _unused, std::move(p)};",
+    "    }",
+    "",
+    "    return {std::move(out), std::move(q_padded), std::move(k_padded), std::move(v_padded), std::move(softmax_lse), std::move(rng_state), std::move(_unused), std::move(p)};",
+    "",
+    "    if (batch_size == 0) {",
+    "        auto opts = q.options();",
+    "        at::Tensor dq = at::empty_like(q);",
+    "        at::Tensor dk = at::empty_like(k);",
+    "        at::Tensor dv = at::empty_like(v);",
+    "        auto round_multiple = [](int x, int m) { return (x + m - 1) / m * m; };",
+    "        const int seqlen_q_rounded = round_multiple(seqlen_q, 128);",
+    "        at::Tensor softmax_d = at::empty({0, num_heads, seqlen_q_rounded}, opts.dtype(at::kFloat));",
+    "        return {dq, dk, dv, softmax_d};",
+    "    }",
+    "",
+    "    TORCH_CHECK(dout.stride(-1) == 1, \"dout tensor must have contiguous last dimension\");",
+    "",
+    "    @parametrize(\"batch_size\", [0, 5])",
+    "    def test_scaled_dot_product_attention(self, device, batch_size, input_dim, attn_mask_dim, is_causal, dropout_p):",
+    "            N = batch_size",
+    "            N_prime, L, S, E = 2, 4, 3, 6"
+  ],
+  "sub_fix_code": [
+    "",
+    "    return {out, q_padded, k_padded, v_padded, softmax_lse, rng_state, _unused, p};",
+    "    TORCH_CHECK(dout.stride(-1) == 1, \"dout tensor must have contiguous last dimension\");",
+    "    def test_scaled_dot_product_attention(self, device, input_dim, attn_mask_dim, is_causal, dropout_p):",
+    "            N, N_prime, L, S, E = 5, 2, 4, 3, 6"
+  ]
+}

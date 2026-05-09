@@ -1,0 +1,46 @@
+{
+  "title": "tensordict.nn.dispatch does not have expected behavior",
+  "issue_id": "163849",
+  "bug_description": "### 🐛 Describe the bug\n\nFirst, here is the imports and test function :\n```Python\nimport torch\nimport torch.nn as nn\nfrom tensordict import NonTensorData, TensorDict\nfrom tensordict.nn import dispatch\n\n\ndef test(cls: type[nn.Module]) -> None:\n    instance = cls()\n    tensordict = TensorDict(\n        {\"a\": torch.zeros(3, 5), \"b\": torch.ones(3, 2)}, batch_size=(3,)\n    )\n\n    print(\"Mode 1\")\n    print(\"legacy\\n\", instance(tensordict[\"a\"], tensordict[\"b\"]))\n    print(\"up to date\\n\", instance(tensordict))\n\n    print(\"Mode 2\")\n    instance.mode = \"mode2\"\n    print(\"legacy\\n\", instance(tensordict[\"a\"], tensordict[\"b\"]))\n    print(\"up to date\\n\", instance(tensordict))\n```\n\nI'm working with multimodal models but want them to be retrocompatible with old scripts. To do so, I wanted to use [`dispatch`](https://docs.pytorch.org/tensordict/stable/reference/generated/tensordict.nn.dispatch.html) from `tensordict.nn` which allows to take a module doing computations in a `TensorDict` to still take inputs as positional arguments. I wanted it to map the legacy inputs to different tensordict keys depending on the modality. In terms of code, the logic I wanted to implement was along the line of the following :\n```Python\nclass MyModule1(nn.Module):\n    def __init__(self, *args, **kwargs) -> None:\n        super().__init__(*args, **kwargs)\n        self.mode = \"mode1\"\n        self.key_map = {\n            \"mode1\": [\"a\", \"z\"],\n            \"mode2\": [\"a\", \"b\"],\n            # [...]\n        }\n\n    @dispatch(source=self.key_map[self.mode], dest=[\"c\", \"d\"])\n    def forward(self, tensordict):\n        tensordict[\"c\"] = tensordict[\"a\"] - 1\n        print(\"b in dict : \", \"b\" in tensordict.keys())\n        if \"b\" in tensordict.keys():\n            tensordict[\"d\"] = tensordict[\"b\"] * 2\n        elif \"z\" in tensordict.keys():\n            tensordict[\"d\"] = tensordict[\"z\"] ** 2\n        else:\n            tensordict[\"d\"] = NonTensorData(None)\n        return tensordict\n```\nwhich obviously does not work because `self` cannot be accessed outside of methods (classic python).\n\nSo I moved the forward to another method (inner_forward) and thought that forward would then make use of dispatch, as follow :\n```Python\nclass MyModule2(nn.Module):\n    def __init__(self, *args, **kwargs) -> None:\n        super().__init__(*args, **kwargs)\n        self.mode = \"mode1\"\n        self.key_map = {\n            \"mode1\": [\"a\", \"z\"],\n            \"mode2\": [\"a\", \"b\"],\n            # [...]\n        }\n\n    def inner_forward(self, tensordict):\n        tensordict[\"c\"] = tensordict[\"a\"] - 1\n        print(\"b in dict : \", \"b\" in tensordict.keys())\n        if \"b\" in tensordict.keys():\n            tensordict[\"d\"] = tensordict[\"b\"] * 2\n        elif \"z\" in tensordict.keys():\n            tensordict[\"d\"] = tensordict[\"z\"] ** 2\n        else:\n            tensordict[\"d\"] = NonTensorData(None)\n        return tensordict\n\n    def forward(self, *args, **kwargs):\n        return dispatch(source=self.key_map[self.mode], dest=[\"c\", \"d\"])(\n            self.inner_forward\n        )(*args, **kwargs)\n```\nThis one raised `TypeError: MyModule2.inner_forward() takes 2 positional arguments but 3 were given`\n\nSo I iterated, and did the following to understand :\n```Python\nclass MyModule2_2(nn.Module):\n    def __init__(self, *args, **kwargs) -> None:\n        super().__init__(*args, **kwargs)\n        self.mode = \"mode1\"\n        self.key_map = {\n            \"mode1\": [\"a\", \"z\"],\n            \"mode2\": [\"a\", \"b\"],\n            # [...]\n        }\n\n    def inner_forward(self, whatever, tensordict):\n        print(\"self\", self)\n        print(\"whatever\", whatever)\n        print(\"tensordict\", tensordict)\n        tensordict[\"c\"] = tensordict[\"a\"] - 1\n        print(\"b in dict : \", \"b\" in tensordict.keys())\n        if \"b\" in tensordict.keys():\n            tensordict[\"d\"] = tensordict[\"b\"] * 2\n        elif \"z\" in tensordict.keys():\n            tensordict[\"d\"] = tensordict[\"z\"] ** 2\n        else:\n            tensordict[\"d\"] = NonTensorData(None)\n        retu",
+  "apis": [
+    "MyModule2.inner_forward",
+    "tensordict.keys",
+    "numpy",
+    "torch.ones",
+    "torch.Size",
+    "torch"
+  ],
+  "best_code": "import torch\nimport torch.nn as nn\nfrom tensordict import NonTensorData, TensorDict\nfrom tensordict.nn import dispatch\n\n\ndef test(cls: type[nn.Module]) -> None:\n    instance = cls()\n    tensordict = TensorDict(\n        {\"a\": torch.zeros(3, 5), \"b\": torch.ones(3, 2)}, batch_size=(3,)\n    )\n\n    print(\"Mode 1\")\n    print(\"legacy\\n\", instance(tensordict[\"a\"], tensordict[\"b\"]))\n    print(\"up to date\\n\", instance(tensordict))\n\n    print(\"Mode 2\")\n    instance.mode = \"mode2\"\n    print(\"legacy\\n\", instance(tensordict[\"a\"], tensordict[\"b\"]))\n    print(\"up to date\\n\", instance(tensordict))",
+  "pull_urls": [],
+  "_meta": {
+    "file": "163849_issue_ori_data.json",
+    "generated_at": "2026-04-21 03:30:46",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\163849_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\163849_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "The user is trying to use `dispatch` from `tensordict.nn` to make multimodal models retrocompatible with old scripts by mapping legacy inputs to different tensordict keys depending on the modality. The decorator approach fails because `self` cannot be accessed outside of methods. When attempting to call `dispatch` dynamically in the `forward` method wrapping `inner_forward`, it raises `TypeError: MyModule2.inner_forward() takes 2 positional arguments but 3 were given`.",
+  "repro_code": "import torch\nimport torch.nn as nn\nfrom tensordict import NonTensorData, TensorDict\nfrom tensordict.nn import dispatch\n\ndef test(cls: type[nn.Module]) -> None:\n    instance = cls()\n    tensordict = TensorDict(\n        {\"a\": torch.zeros(3, 5), \"b\": torch.ones(3, 2)}, batch_size=(3,)\n    )\n\n    print(\"Mode 1\")\n    print(\"legacy\\n\", instance(tensordict[\"a\"], tensordict[\"b\"]))\n    print(\"up to date\\n\", instance(tensordict))\n\n    print(\"Mode 2\")\n    instance.mode = \"mode2\"\n    print(\"legacy\\n\", instance(tensordict[\"a\"], tensordict[\"b\"]))\n    print(\"up to date\\n\", instance(tensordict))\n\nclass MyModule2(nn.Module):\n    def __init__(self, *args, **kwargs) -> None:\n        super().__init__(*args, **kwargs)\n        self.mode = \"mode1\"\n        self.key_map = {\n            \"mode1\": [\"a\", \"z\"],\n            \"mode2\": [\"a\", \"b\"],\n        }\n\n    def inner_forward(self, tensordict):\n        tensordict[\"c\"] = tensordict[\"a\"] - 1\n        print(\"b in dict : \", \"b\" in tensordict.keys())\n        if \"b\" in tensordict.keys():\n            tensordict[\"d\"] = tensordict[\"b\"] * 2\n        elif \"z\" in tensordict.keys():\n            tensordict[\"d\"] = tensordict[\"z\"] ** 2\n        else:\n            tensordict[\"d\"] = NonTensorData(None)\n        return tensordict\n\n    def forward(self, *args, **kwargs):\n        return dispatch(source=self.key_map[self.mode], dest=[\"c\", \"d\"])(\n            self.inner_forward\n        )(*args, **kwargs)",
+  "repro_output": "tensordict.nn.dispatch does not have expected behavior",
+  "affected_api": "tensordict.nn.dispatch",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "batch_size=(3,), shapes (3, 5) and (3, 2)",
+    "other_conditions": "Using tensordict.nn.dispatch decorator dynamically in forward method"
+  },
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": [
+    "bug",
+    "tensordict",
+    "dispatch"
+  ],
+  "add_fix_code": [],
+  "sub_fix_code": []
+}

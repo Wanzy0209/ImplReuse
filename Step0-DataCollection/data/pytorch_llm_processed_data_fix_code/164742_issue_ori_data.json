@@ -1,0 +1,52 @@
+{
+  "title": "Multiple definitions error when including <torch/csrc/stable/tensor.h> in extension with both CPU and CUDA",
+  "issue_id": "164742",
+  "bug_description": "### 🐛 Describe the bug\n\nI’m quite excited about the new stable ABI and am porting a custom extension to it.\nI followed the [libtorch_agnostic](https://github.com/pytorch/pytorch/blob/main/test/cpp_extensions/libtorch_agnostic_extension/libtorch_agnostic/csrc/kernel.cpp) test and attempted to include `<torch/csrc/stable/tensor.h>`.\nWhen I include that header in both CPU and CUDA sources in the same extension, the link fails with a multiple definitions error for `torch::stable::Tensor::scalar_type() const`:\n```\n...\n/usr/bin/ld: /.../src/example/example.o: in function `void std::__detail::__to_chars_10_impl<unsigned int>(char*, unsigned int, unsigned int)': \n/.../site-packages/torch/include/torch/csrc/stable/tensor_inl.h:17: multiple definition of `torch::stable::Tensor::scalar_type() const';\n/.../build/temp.linux-x86_64-cpython-313/src/example/cuda/example.o:tmpxft_00011dfa_00000000-6_example.compute_90.cudafe1.cpp:(.text+0x16c): first defined here\ncollect2: error: ld returned 1 exit status\n...\n```\nThis does not happen if I include it in only one of the sources, or if I include `<torch/csrc/stable/tensor_struct.h>` instead.\nShould `Tensor::scalar_type()` be marked inline?\n\nComplete minimal reproducer in the block below.\n<details>\n\n`src/example/example.cpp`\n```cpp\n#include <Python.h>\n#include <torch/csrc/stable/library.h>\n#include <torch/csrc/stable/tensor.h>\n\n\nextern \"C\" {\n/* Creates a dummy empty _C module that can be imported from Python.\n   The import from Python will load the .so consisting of this file\n   in this extension, so that the STABLE_TORCH_LIBRARY static initializers\n   below are run. */\nPyObject* PyInit__C(void) {\n  static struct PyModuleDef module_def = {\n      PyModuleDef_HEAD_INIT,\n      \"_C\", /* name of module */\n      NULL, /* module documentation, may be NULL */\n      -1, /* size of per-interpreter state of the module,\n             or -1 if the module keeps state in global variables. */\n      NULL, /* methods */\n  };\n  return PyModule_Create(&module_def);\n}\n}\n\nnamespace example {\n\ntorch::stable::Tensor myops(const torch::stable::Tensor x) {\n  return x;\n}\n\nvoid boxed_myops(StableIValue* stack, uint64_t num_args, uint64_t num_outputs) {\n  stack[0] = from(myops(to<torch::stable::Tensor>(stack[0])));\n}\n\nSTABLE_TORCH_LIBRARY(example, m) {\n  m.def(\"myops(Tensor x) -> Tensor\");\n}\n\nSTABLE_TORCH_LIBRARY_IMPL(example, CPU, m) {\n  m.impl(\"myops\", &boxed_myops);\n}\n\n} // namespace example\n```\n\n\n`src/example/cuda/example.cu`\n```cuda\n#include <torch/csrc/stable/library.h>\n#include <torch/csrc/stable/tensor.h>\n\n\nnamespace example {\ntorch::stable::Tensor myops_cuda(const torch::stable::Tensor x) {\n  return x;\n}\n\nvoid boxed_myops_cuda(StableIValue* stack, uint64_t num_args, uint64_t num_outputs) {\n  stack[0] = from(myops_cuda(to<torch::stable::Tensor>(stack[0])));\n}\n\nSTABLE_TORCH_LIBRARY_IMPL(example, CUDA, m) {\n  m.impl(\"myops\", &boxed_myops_cuda);\n}\n\n} // namespace example\n```\n\n`src/example/__init__.py`\n```py\nimport torch\n\nfrom . import _C\n\n\ndef my_ops(x: torch.Tensor) -> torch.Tensor:\n    return torch.ops.example.myops.default(x)\n\n\n__all__ = [\"my_ops\"]\n```\n\n`setup.py`\n```py\n\nimport os\n\nfrom setuptools import setup\nfrom torch.utils.cpp_extension import BuildExtension, CUDAExtension\n\nos.environ[\"TORCH_CUDA_ARCH_LIST\"] = \"Volta;Turing;Ampere;Ada;Hopper\"\nsetup(\n    ext_modules=[CUDAExtension(\"example._C\", [\"src/example/example.cpp\", \"src/example/cuda/example.cu\"])],\n    cmdclass={\"build_ext\": BuildExtension},\n)\n```\n\n`pyproject.toml`\n```toml\n[build-system]\nrequires = [\"setuptools\", \"torch>=2.9.0\", \"numpy\", \"ninja\"]\nbuild-backend = \"setuptools.build_meta\"\n\n[project]\nname = \"example\"\nversion = \"0.1\"\nrequires-python = \">=3.12\"\ndependencies = [\"numpy\", \"torch>=2.9\"]\n```\n\nBuild and test the wheel:\n```bash\n  if [ ! -d \".venv\" ]; then uv venv -p 3.13 .venv; fi\n  uv pip install torch --index-url https://download.pytorch.org/whl/nightly/cu128\n  uv pip install numpy setuptools ninja\n  uv build --no-build-isolation --verbose\n  uv pip inst",
+  "apis": [
+    "torch.ops.example.myops.default",
+    "numpy",
+    "m.impl",
+    "torch",
+    "m.def"
+  ],
+  "best_code": "...\n/usr/bin/ld: /.../src/example/example.o: in function `void std::__detail::__to_chars_10_impl<unsigned int>(char*, unsigned int, unsigned int)': \n/.../site-packages/torch/include/torch/csrc/stable/tensor_inl.h:17: multiple definition of `torch::stable::Tensor::scalar_type() const';\n/.../build/temp.linux-x86_64-cpython-313/src/example/cuda/example.o:tmpxft_00011dfa_00000000-6_example.compute_90.cudafe1.cpp:(.text+0x16c): first defined here\ncollect2: error: ld returned 1 exit status\n...",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/164871"
+  ],
+  "_meta": {
+    "file": "164742_issue_ori_data.json",
+    "generated_at": "2026-04-21 04:13:39",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\164742_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\164742_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "When including <torch/csrc/stable/tensor.h> in both CPU and CUDA sources in the same extension, the link fails with a multiple definitions error for torch::stable::Tensor::scalar_type() const. This does not happen if the header is included in only one of the sources, or if <torch/csrc/stable/tensor_struct.h> is included instead.",
+  "repro_code": "src/example/example.cpp:\n#include <Python.h>\n#include <torch/csrc/stable/library.h>\n#include <torch/csrc/stable/tensor.h>\n\nextern \"C\" {\nPyObject* PyInit__C(void) {\n  static struct PyModuleDef module_def = {\n      PyModuleDef_HEAD_INIT,\n      \"_C\",\n      NULL,\n      -1,\n      NULL,\n  };\n  return PyModule_Create(&module_def);\n}\n}\n\nnamespace example {\n\ntorch::stable::Tensor myops(const torch::stable::Tensor x) {\n  return x;\n}\n\nvoid boxed_myops(StableIValue* stack, uint64_t num_args, uint64_t num_outputs) {\n  stack[0] = from(myops(to<torch::stable::Tensor>(stack[0])));\n}\n\nSTABLE_TORCH_LIBRARY(example, m) {\n  m.def(\"myops(Tensor x) -> Tensor\");\n}\n\nSTABLE_TORCH_LIBRARY_IMPL(example, CPU, m) {\n  m.impl(\"myops\", &boxed_myops);\n}\n\n} // namespace example\n\nsrc/example/cuda/example.cu:\n#include <torch/csrc/stable/library.h>\n#include <torch/csrc/stable/tensor.h>\n\nnamespace example {\ntorch::stable::Tensor myops_cuda(const torch::stable::Tensor x) {\n  return x;\n}\n\nvoid boxed_myops_cuda(StableIValue* stack, uint64_t num_args, uint64_t num_outputs) {\n  stack[0] = from(myops_cuda(to<torch::stable::Tensor>(stack[0])));\n}\n\nSTABLE_TORCH_LIBRARY_IMPL(example, CUDA, m) {\n  m.impl(\"myops\", &boxed_myops_cuda);\n}\n\n} // namespace example",
+  "repro_output": "Multiple definitions error when including <torch/csrc/stable/tensor.h> in extension with both CPU and CUDA",
+  "affected_api": "torch::stable::Tensor::scalar_type() const",
+  "trigger_conditions": {
+    "backend": "CUDA, CPU",
+    "dtype": "",
+    "input_shape": "",
+    "other_conditions": "Including <torch/csrc/stable/tensor.h> in both CPU and CUDA sources in the same extension"
+  },
+  "environment": {
+    "pytorch_version": "2.9.0 (nightly)",
+    "python_version": "3.13",
+    "os": "linux-x86_64",
+    "hardware": "CUDA compute capability 90"
+  },
+  "labels": [
+    "bug",
+    "stable ABI",
+    "CUDA extension",
+    "linking error"
+  ],
+  "add_fix_code": [
+    "inline ScalarType Tensor::scalar_type() const {"
+  ],
+  "sub_fix_code": [
+    "ScalarType Tensor::scalar_type() const {"
+  ]
+}

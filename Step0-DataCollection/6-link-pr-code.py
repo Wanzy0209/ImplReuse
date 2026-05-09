@@ -84,7 +84,7 @@ def save_to_cache(pr_url: str, pr_code: Dict[str, List[str]]):
             print(f"  [CACHE-SAVE-ERR] {e}")
 
 
-def fetch_pr_files(pr_url: str, retry_count: int = 3, retry_delay: int = 60) -> Dict[str, List[str]]:
+def fetch_pr_files(pr_url: str, retry_count: int = 3, retry_delay: int = 60, token: str = '') -> Dict[str, List[str]]:
     """
     Fetch PR diff and extract added/deleted code.
     Returns dict with "add_fix_code" and "sub_fix_code" lists.
@@ -117,6 +117,8 @@ def fetch_pr_files(pr_url: str, retry_count: int = 3, retry_delay: int = 60) -> 
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/vnd.github.v3.patch'
         }
+        if token:
+            headers['Authorization'] = f'token {token}'
         
         print(f"  [FETCH] {owner}/{repo}/pull/{pr_number}")
         print(f"  [URL] {api_url}")
@@ -242,7 +244,7 @@ def fetch_pr_files(pr_url: str, retry_count: int = 3, retry_delay: int = 60) -> 
     return result
 
 
-def process_issue_file(input_path: Path, output_path: Path):
+def process_issue_file(input_path: Path, output_path: Path, token: str = ''):
     """
     Read issue JSON, fetch PR code for all pull_urls, add add_fix_code and sub_fix_code fields, save to output.
     """
@@ -265,7 +267,7 @@ def process_issue_file(input_path: Path, output_path: Path):
     for url in pull_urls:
         if not url or not isinstance(url, str):
             continue
-        pr_code = fetch_pr_files(url)
+        pr_code = fetch_pr_files(url, token=token)
         if pr_code:
             all_add_lines.extend(pr_code.get("add_fix_code", []))
             all_sub_lines.extend(pr_code.get("sub_fix_code", []))
@@ -311,6 +313,12 @@ def main():
         default=0.5,
         help='Delay in seconds between requests to avoid rate limiting (default: 0.5)'
     )
+    parser.add_argument(
+        '--token',
+        type=str,
+        default='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',
+        help='GitHub personal access token for authenticated requests (optional)'
+    )
     args = parser.parse_args()
     
     input_dir = Path(args.input_dir)
@@ -340,7 +348,7 @@ def main():
         output_path = output_dir / input_path.name
         
         print(f"[{idx:4d}/{len(json_files):4d}] {input_path.name}")
-        if process_issue_file(input_path, output_path):
+        if process_issue_file(input_path, output_path, token=args.token):
             success_count += 1
         else:
             fail_count += 1

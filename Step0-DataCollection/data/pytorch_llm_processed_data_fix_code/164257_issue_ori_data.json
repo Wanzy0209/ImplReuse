@@ -1,0 +1,55 @@
+{
+  "title": "distributed checkpoint errors with unused weights and stateful optimizer",
+  "issue_id": "164257",
+  "bug_description": "### 🐛 Describe the bug\n\nIf the optimizer is provided parameters which are not used as part of the loss function calculation, they do not get an internal optimization state (e.g. a state used by in Adam). This confuses the `torch.distributed.checkpoint.state_dict.set_state_dict` function and it errors. The error happens even if `StateDictOptions(strict=False)` and `DefaultLoadPlanner(allow_partial_load=True)` is used.\n\n```python\nimport pathlib\nimport shutil\n\nimport torch\nimport torch.optim as optim\nimport torch.distributed.checkpoint as dcp\nfrom torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict, StateDictOptions\nfrom torch.distributed.checkpoint.stateful import Stateful\nfrom torch.distributed.checkpoint import DefaultLoadPlanner\n\nclass AppState(Stateful):\n    def __init__(self, model, optimizer):\n        self.model = model\n        self.optimizer = optimizer\n\n    def state_dict(self):\n        # this line automatically manages FSDP FQN's, as well as sets the default state dict type to FSDP.SHARDED_STATE_DICT\n        model_state_dict, optimizer_state_dict = get_state_dict(self.model, self.optimizer)\n        return {\n            \"model\": model_state_dict,\n            \"optim\": optimizer_state_dict\n        }\n\n    def load_state_dict(self, state_dict):\n        # sets our state dicts on the model and optimizer, now that we've loaded\n        set_state_dict(\n            self.model,\n            self.optimizer,\n            model_state_dict=state_dict[\"model\"],\n            optim_state_dict=state_dict[\"optim\"],\n            options=StateDictOptions(strict=False)\n        )\n\ntmp_dir = pathlib.Path(\"test/tmp/test_dataset_datamodule_resume\")\nshutil.rmtree(tmp_dir, ignore_errors=True)\n\n# Model + optimizer\nmodel = torch.nn.Linear(4, 2, bias=True)\noptimizer = optim.AdamW(model.parameters(), lr=0.01)\n\n# One training step\nloss = torch.mean(model.weight)\nloss.backward()\noptimizer.step()\n\n# Save checkpoint\ndcp.save({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir)\n\n# Recreate model + optimizer and load\nmodel2 = torch.nn.Linear(4, 2, bias=True)\noptimizer2 = optim.AdamW(model2.parameters(), lr=0.01)\n\n# RuntimeError: Missing key in checkpoint state_dict: optimizer.state.bias.step.\ndcp.load({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir,\n         planner=DefaultLoadPlanner(allow_partial_load=True))\n```\n\n```\nW0930 10:27:20.827000 79300 site-packages/torch/distributed/elastic/multiprocessing/redirects.py:29] NOTE: Redirects are currently not supported in Windows or MacOs.\n/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/state_dict_saver.py:167: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to save in a single process.\n  warnings.warn(\n/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/filesystem.py:131: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()\n  if tensor.storage().size() != tensor.numel():\n/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed/checkpoint/state_dict_loader.py:153: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.\n  warnings.warn(\nTraceback (most recent call last):\n  File \"test3.py\", line 54, in <module>\n    dcp.load({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir,\n    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n             planner=DefaultLoadPlanner(allow_partial_load=True))\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/homebrew/Caskroom/miniforge/base/envs/py313/lib/python3.13/site-packages/torch/distributed",
+  "apis": [
+    "shutil.rmtree",
+    "ndcp.save",
+    "u003etorch.distributed.checkpoint.state_dict.set_state_dict",
+    "nshutil.rmtree",
+    "model.parameters",
+    "loss.backward"
+  ],
+  "best_code": "import pathlib\nimport shutil\n\nimport torch\nimport torch.optim as optim\nimport torch.distributed.checkpoint as dcp\nfrom torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict, StateDictOptions\nfrom torch.distributed.checkpoint.stateful import Stateful\nfrom torch.distributed.checkpoint import DefaultLoadPlanner\n\nclass AppState(Stateful):\n    def __init__(self, model, optimizer):\n        self.model = model\n        self.optimizer = optimizer\n\n    def state_dict(self):\n        # this line automatically manages FSDP FQN's, as well as sets the default state dict type to FSDP.SHARDED_STATE_DICT\n        model_state_dict, optimizer_state_dict = get_state_dict(self.model, self.optimizer)\n        return {\n            \"model\": model_state_dict,\n            \"optim\": optimizer_state_dict\n        }\n\n    def load_state_dict(self, state_dict):\n        # sets our state dicts on the model and optimizer, now that we've loaded\n        set_state_dict(\n            self.model,\n            self.optimizer,\n            model_state_dict=state_dict[\"model\"],\n            optim_state_dict=state_dict[\"optim\"],\n            options=StateDictOptions(strict=False)\n        )\n\ntmp_dir = pathlib.Path(\"test/tmp/test_dataset_datamodule_resume\")\nshutil.rmtree(tmp_dir, ignore_errors=True)\n\n# Model + optimizer\nmodel = torch.nn.Linear(4, 2, bias=True)\noptimizer = optim.AdamW(model.parameters(), lr=0.01)\n\n# One training step\nloss = torch.mean(model.weight)\nloss.backward()\noptimizer.step()\n\n# Save checkpoint\ndcp.save({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir)\n\n# Recreate model + optimizer and load\nmodel2 = torch.nn.Linear(4, 2, bias=True)\noptimizer2 = optim.AdamW(model2.parameters(), lr=0.01)\n\n# RuntimeError: Missing key in checkpoint state_dict: optimizer.state.bias.step.\ndcp.load({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir,\n         planner=DefaultLoadPlanner(allow_partial_load=True))",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/165228"
+  ],
+  "_meta": {
+    "file": "164257_issue_ori_data.json",
+    "generated_at": "2026-04-21 03:57:38",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\164257_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\164257_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "If the optimizer is provided parameters which are not used as part of the loss function calculation, they do not get an internal optimization state (e.g. a state used by in Adam). This confuses the `torch.distributed.checkpoint.state_dict.set_state_dict` function and it errors. The error happens even if `StateDictOptions(strict=False)` and `DefaultLoadPlanner(allow_partial_load=True)` is used.",
+  "repro_code": "import pathlib\nimport shutil\n\nimport torch\nimport torch.optim as optim\nimport torch.distributed.checkpoint as dcp\nfrom torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict, StateDictOptions\nfrom torch.distributed.checkpoint.stateful import Stateful\nfrom torch.distributed.checkpoint import DefaultLoadPlanner\n\nclass AppState(Stateful):\n    def __init__(self, model, optimizer):\n        self.model = model\n        self.optimizer = optimizer\n\n    def state_dict(self):\n        # this line automatically manages FSDP FQN's, as well as sets the default state dict type to FSDP.SHARDED_STATE_DICT\n        model_state_dict, optimizer_state_dict = get_state_dict(self.model, self.optimizer)\n        return {\n            \"model\": model_state_dict,\n            \"optim\": optimizer_state_dict\n        }\n\n    def load_state_dict(self, state_dict):\n        # sets our state dicts on the model and optimizer, now that we've loaded\n        set_state_dict(\n            self.model,\n            self.optimizer,\n            model_state_dict=state_dict[\"model\"],\n            optim_state_dict=state_dict[\"optim\"],\n            options=StateDictOptions(strict=False)\n        )\n\ntmp_dir = pathlib.Path(\"test/tmp/test_dataset_datamodule_resume\")\nshutil.rmtree(tmp_dir, ignore_errors=True)\n\n# Model + optimizer\nmodel = torch.nn.Linear(4, 2, bias=True)\noptimizer = optim.AdamW(model.parameters(), lr=0.01)\n\n# One training step\nloss = torch.mean(model.weight)\nloss.backward()\noptimizer.step()\n\n# Save checkpoint\ndcp.save({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir)\n\n# Recreate model + optimizer and load\nmodel2 = torch.nn.Linear(4, 2, bias=True)\noptimizer2 = optim.AdamW(model2.parameters(), lr=0.01)\n\n# RuntimeError: Missing key in checkpoint state_dict: optimizer.state.bias.step.\ndcp.load({'app': AppState(model, optimizer)}, checkpoint_id=tmp_dir,\n         planner=DefaultLoadPlanner(allow_partial_load=True))",
+  "repro_output": "distributed checkpoint errors with unused weights and stateful optimizer",
+  "affected_api": "torch.distributed.checkpoint.state_dict.set_state_dict",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "torch.nn.Linear(4, 2, bias=True)",
+    "other_conditions": "optimizer parameters not used in loss function calculation"
+  },
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "3.13",
+    "os": "macOS",
+    "hardware": ""
+  },
+  "labels": [],
+  "add_fix_code": [
+    "                    if fqn in cast(DictValueType, optim_state_dict[_STATE]):",
+    "                        state[fqn] = cast(DictValueType, optim_state_dict[_STATE])[fqn]",
+    "                    elif info.strict:",
+    "                        raise RuntimeError(",
+    "                            f\"Missing optimizer state for parameter '{fqn}' in checkpoint. \"",
+    "                            \"The parameter requires gradients but has no saved optimizer state. \"",
+    "                            \"To load anyway, use StateDictOptions(strict=False).\"",
+    "                        )"
+  ],
+  "sub_fix_code": [
+    "                    state[fqn] = cast(DictValueType, optim_state_dict[_STATE])[fqn]"
+  ]
+}

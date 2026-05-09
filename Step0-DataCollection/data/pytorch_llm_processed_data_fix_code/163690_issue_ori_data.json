@@ -1,0 +1,46 @@
+{
+  "title": "Recomputed values for the following tensors have different metadata than during the forward pass.",
+  "issue_id": "163690",
+  "bug_description": "### 🐛 Describe the bug\n\nhi I have a model with linear layers which i wrap with LoRA layers applied as following \n\n\n\n```\n(attn): Attention(\n          (q_proj): LoRALinear(\n            (original_layer): Linear(in_features=4096, out_features=4096, bias=False)\n            (dropout): Identity()\n          )\n          (k_proj): LoRALinear(\n            (original_layer): Linear(in_features=4096, out_features=4096, bias=False)\n            (dropout): Identity()\n          )\n          (v_proj): LoRALinear(\n            (original_layer): Linear(in_features=4096, out_features=4096, bias=False)\n            (dropout): Identity()\n          )\n          (proj): LoRALinear(\n            (original_layer): Linear(in_features=4096, out_features=4096, bias=True)\n            (dropout): Identity()\n          )\n          (proj_drop): Dropout(p=0.0, inplace=False)\n        )\n```\n```\nclass LoRALinear(nn.Module):\n    def __init__(\n        self,\n        original_layer: nn.Linear,\n        rank: int,\n        init_lora_weights=\"gaussian\",\n        dropout: float = 0.0,\n    ):\n        super().__init__(\n            original_layer=original_layer,\n            rank=rank,\n            init_lora_weights=init_lora_weights,\n            dropout=dropout,\n        )\n        self.reset_weights(init_lora_weights)\n\n    def forward(self, x: torch.Tensor) -> torch.Tensor:\n        lora_x = self.dropout(x) @ self.lora_A @ self.lora_B\n        output = self.original_layer(x) + lora_x\n        return output\n```\n\n\ni wrap the model's linear layers with LoRA layers and then wrap the model blocks with FSDP2 and AC. see this error when i call backwards on the model. why would there be a mismatch here?how can i debug/solve this \n\n```\n[rank0]:     loss.backward()\n[rank0]:   File \"/usr/local/lib/python3.12/site-packages/torch/_tensor.py\", line 648, in backward\n[rank0]:     torch.autograd.backward(\n[rank0]:   File \"/usr/local/lib/python3.12/site-packages/torch/autograd/__init__.py\", line 353, in backward\n[rank0]:     _engine_run_backward(\n[rank0]:   File \"/usr/local/lib/python3.12/site-packages/torch/autograd/graph.py\", line 824, in _engine_run_backward\n[rank0]:     return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass\n[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n[rank0]:   File \"/usr/local/lib/python3.12/site-packages/torch/utils/checkpoint.py\", line 1128, in unpack_hook\n[rank0]:     frame.check_recomputed_tensors_match(gid)\n[rank0]:   File \"/usr/local/lib/python3.12/site-packages/torch/utils/checkpoint.py\", line 902, in check_recomputed_tensors_match\n[rank0]:     raise CheckpointError(\n[rank0]: torch.utils.checkpoint.CheckpointError: torch.utils.checkpoint: Recomputed values for the following tensors have different metadata than during the forward pass.\n[rank0]: tensor at position 58:\n[rank0]: saved metadata: {'shape': torch.Size([4096, 4096]), 'dtype': torch.bfloat16, 'device': device(type='cuda', index=0)}\n[rank0]: recomputed metadata: {'shape': torch.Size([1, 4096, 4096]), 'dtype': torch.bfloat16, 'device': device(type='cuda', index=0)}\n```\n\n### Versions\n\n[rank0]: saved metadata: {'shape': torch.Size([4096, 4096]), 'dtype': torch.bfloat16, 'device': device(type='cuda', index=0)}\n[rank0]: recomputed metadata: {'shape': torch.Size([1, 4096, 4096]), 'dtype': torch.bfloat16, 'device': device(type='cuda', index=0)}\n\ncc @soulitzer",
+  "apis": [
+    "Variable._execution_engine.run_backward",
+    "torch._ops.aten.bmm.default",
+    "self.dropout",
+    "torch._ops.aten.add.Tensor",
+    "torch._ops.aten.expand.default",
+    "self.original_layer"
+  ],
+  "best_code": "(attn): Attention(\n          (q_proj): LoRALinear(\n            (original_layer): Linear(in_features=4096, out_features=4096, bias=False)\n            (dropout): Identity()\n          )\n          (k_proj): LoRALinear(\n            (original_layer): Linear(in_features=4096, out_features=4096, bias=False)\n            (dropout): Identity()\n          )\n          (v_proj): LoRALinear(\n            (original_layer): Linear(in_features=4096, out_features=4096, bias=False)\n            (dropout): Identity()\n          )\n          (proj): LoRALinear(\n            (original_layer): Linear(in_features=4096, out_features=4096, bias=True)\n            (dropout): Identity()\n          )\n          (proj_drop): Dropout(p=0.0, inplace=False)\n        )",
+  "pull_urls": [],
+  "_meta": {
+    "file": "163690_issue_ori_data.json",
+    "generated_at": "2026-04-21 03:25:48",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\163690_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\163690_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "When using a model with linear layers wrapped with LoRA layers, and wrapping model blocks with FSDP2 and AC (Activation Checkpointing), calling loss.backward() raises a CheckpointError. The error indicates that recomputed values have different metadata than during the forward pass, specifically a shape mismatch: saved metadata shows torch.Size([4096, 4096]) while recomputed metadata shows torch.Size([1, 4096, 4096]).",
+  "repro_code": "class LoRALinear(nn.Module):\n    def __init__(\n        self,\n        original_layer: nn.Linear,\n        rank: int,\n        init_lora_weights=\"gaussian\",\n        dropout: float = 0.0,\n    ):\n        super().__init__(\n            original_layer=original_layer,\n            rank=rank,\n            init_lora_weights=init_lora_weights,\n            dropout=dropout,\n        )\n        self.reset_weights(init_lora_weights)\n\n    def forward(self, x: torch.Tensor) -> torch.Tensor:\n        lora_x = self.dropout(x) @ self.lora_A @ self.lora_B\n        output = self.original_layer(x) + lora_x\n        return output",
+  "repro_output": "Recomputed values for the following tensors have different metadata than during the forward pass.",
+  "affected_api": "torch.utils.checkpoint",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.bfloat16",
+    "input_shape": "unknown",
+    "other_conditions": "Using FSDP2 and AC (Activation Checkpointing) with LoRA layers"
+  },
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "3.12",
+    "os": "unknown",
+    "hardware": "CUDA device (GPU)"
+  },
+  "labels": [
+    "checkpointing",
+    "FSDP",
+    "distributed"
+  ],
+  "add_fix_code": [],
+  "sub_fix_code": []
+}

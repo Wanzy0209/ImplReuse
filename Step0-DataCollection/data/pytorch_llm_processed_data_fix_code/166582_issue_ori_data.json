@@ -1,0 +1,50 @@
+{
+  "title": "Backend Compiler Graph Break",
+  "issue_id": "166582",
+  "bug_description": "### 🐛 Describe the bug\n\nI discovered the bug when building a custom Torch compiler backend for a custom AI ASIC, and ran it on a simulated hardware platform.\n\nThe structure is meant to be simple, as the backend replaces `nn.Linear` calls with matmuls through my own chip.\nHowever, the complex part is that the chip is super small and can only do `int8` matmuls, with `int16` output, so there is some quantization lowering that appears to be breaking, as I am training the model for the chip using Quantization Aware Training (QAT).\n\nPreviously, I used legacy torch `QuantStub` and `DeQuantStub` but have now used TorchAO to manage the QAT workflow with an XNNPack quantizer backend. Both approaches have encountered this issue.\n\nTo reproduce, register a backend like:\n```python\nimport torch\nimport torch._dynamo\nfrom test_tpu import matmul\nfrom torch._inductor.compile_fx import compile_fx\nfrom torch._dynamo import register_backend, disable\nimport numpy as np\nimport asyncio\n\n@disable\nasync def dut_matmul_async(dut, a: torch.Tensor, b: torch.Tensor, bias=None):\n    # Now safe to quantize\n    a_q = a.clamp(-128, 127).to(torch.int8)\n    b_q = b.clamp(-128, 127).to(torch.int8)\n\n    c = await matmul(dut, a_q, b_q, transpose=True, is_torch=True)\n    if bias is not None:\n        c = c + bias.round().to(torch.int32)\n    return c.to(torch.int32)\n\ndef dut_matmul_sync(dut, a, b, bias=None):\n    \"\"\"Synchronous wrapper – torch.compile expects a normal function.\"\"\"\n    return asyncio.run(dut_matmul_async(dut, a, b, bias))\n\ndef make_backend(dut):\n    \"\"\"\n    Returns a *registered* backend that has the DUT baked in.\n    The FX graph is the first argument.\n    \"\"\"\n    @register_backend(name=f\"tpu_net\")\n    def _backend(gm: torch.fx.GraphModule, example_inputs):\n        print(\"\\n=== FX graph received ===\")\n        gm.graph.print_tabular()\n\n        # ---- replace every linear ----\n        for node in list(gm.graph.nodes):\n            if node.target == torch.ops.aten.linear.default:\n                x, weight, bias = node.args\n                with gm.graph.inserting_before(node):\n                    new_node = gm.graph.call_function(\n                        dut_matmul_sync,\n                        args=(dut, x, weight, bias),\n                    )\n                    node.replace_all_uses_with(new_node)\n                    gm.graph.erase_node(node)\n\n        gm.recompile()\n        print(\"\\n=== Modified graph ===\")\n        gm.graph.print_tabular()\n\n        # Let Inductor compile the rest\n        return compile_fx(gm, example_inputs)\n\n    return _backend\n```\nThen call with the following on any model\n```python\nfrom torch_backend import make_backend\nbackend = make_backend(dut) \n\n# torch.compile compiles the resulting GraphModule/quantized module\ncompiled_model = torch.compile(model, backend=backend)\n```\n\n### Error logs\n\nW1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1] Backend compiler exception\nW1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1]   Explanation: Backend compiler `_backend` failed with aten._local_scalar_dense.default\nW1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1] \nW1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1]     While executing %dut_matmul_sync : [num_users=1] = call_function[target=torch_backend.dut_matmul_sync](args = (tb, %dequantize_per_tensor_default_2, %dequantize_per_tensor_default, %l_self_modules_fc1_parameters_bias_), kwargs = {})\nW1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1]     Original traceback:\nW1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1]     None\nW1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1]     Use tlparse to see full graph. (https://github.com/pytorch/tlparse?tab=readme-ov-file#tlparse-parse-structured-pt2-logs). Adding a graph break.\nW1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1]   Hint: Report an issue to the backend compiler repo.\nW1029 18:26:40.182000 156731 torch/_dynamo/exc.py:593] [24/0_1] \nW1",
+  "apis": [
+    "gm.graph.call_function",
+    "np",
+    "gm.graph.inserting_before",
+    "a.clamp",
+    "gm.recompile",
+    "numpy"
+  ],
+  "best_code": "import torch\nimport torch._dynamo\nfrom test_tpu import matmul\nfrom torch._inductor.compile_fx import compile_fx\nfrom torch._dynamo import register_backend, disable\nimport numpy as np\nimport asyncio\n\n@disable\nasync def dut_matmul_async(dut, a: torch.Tensor, b: torch.Tensor, bias=None):\n    # Now safe to quantize\n    a_q = a.clamp(-128, 127).to(torch.int8)\n    b_q = b.clamp(-128, 127).to(torch.int8)\n\n    c = await matmul(dut, a_q, b_q, transpose=True, is_torch=True)\n    if bias is not None:\n        c = c + bias.round().to(torch.int32)\n    return c.to(torch.int32)\n\ndef dut_matmul_sync(dut, a, b, bias=None):\n    \"\"\"Synchronous wrapper – torch.compile expects a normal function.\"\"\"\n    return asyncio.run(dut_matmul_async(dut, a, b, bias))\n\ndef make_backend(dut):\n    \"\"\"\n    Returns a *registered* backend that has the DUT baked in.\n    The FX graph is the first argument.\n    \"\"\"\n    @register_backend(name=f\"tpu_net\")\n    def _backend(gm: torch.fx.GraphModule, example_inputs):\n        print(\"\\n=== FX graph received ===\")\n        gm.graph.print_tabular()\n\n        # ---- replace every linear ----\n        for node in list(gm.graph.nodes):\n            if node.target == torch.ops.aten.linear.default:\n                x, weight, bias = node.args\n                with gm.graph.inserting_before(node):\n                    new_node = gm.graph.call_function(\n                        dut_matmul_sync,\n                        args=(dut, x, weight, bias),\n                    )\n                    node.replace_all_uses_with(new_node)\n                    gm.graph.erase_node(node)\n\n        gm.recompile()\n        print(\"\\n=== Modified graph ===\")\n        gm.graph.print_tabular()\n\n        # Let Inductor compile the rest\n        return compile_fx(gm, example_inputs)\n\n    return _backend",
+  "pull_urls": [
+    "https://github.com/meta-pytorch/compile-graph-break-site/pull/36"
+  ],
+  "_meta": {
+    "file": "166582_issue_ori_data.json",
+    "generated_at": "2026-04-21 05:34:27",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\166582_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\166582_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "Backend compiler exception: Backend compiler `_backend` failed with aten._local_scalar_dense.default while executing %dut_matmul_sync. Adding a graph break.",
+  "repro_code": "import torch\nimport torch._dynamo\nfrom test_tpu import matmul\nfrom torch._inductor.compile_fx import compile_fx\nfrom torch._dynamo import register_backend, disable\nimport numpy as np\nimport asyncio\n\n@disable\nasync def dut_matmul_async(dut, a: torch.Tensor, b: torch.Tensor, bias=None):\n    # Now safe to quantize\n    a_q = a.clamp(-128, 127).to(torch.int8)\n    b_q = b.clamp(-128, 127).to(torch.int8)\n\n    c = await matmul(dut, a_q, b_q, transpose=True, is_torch=True)\n    if bias is not None:\n        c = c + bias.round().to(torch.int32)\n    return c.to(torch.int32)\n\ndef dut_matmul_sync(dut, a, b, bias=None):\n    \"\"\"Synchronous wrapper – torch.compile expects a normal function.\"\"\"\n    return asyncio.run(dut_matmul_async(dut, a, b, bias))\n\ndef make_backend(dut):\n    \"\"\"\n    Returns a *registered* backend that has the DUT baked in.\n    The FX graph is the first argument.\n    \"\"\"\n    @register_backend(name=f\"tpu_net\")\n    def _backend(gm: torch.fx.GraphModule, example_inputs):\n        print(\"\\n=== FX graph received ===\")\n        gm.graph.print_tabular()\n\n        # ---- replace every linear ----\n        for node in list(gm.graph.nodes):\n            if node.target == torch.ops.aten.linear.default:\n                x, weight, bias = node.args\n                with gm.graph.inserting_before(node):\n                    new_node = gm.graph.call_function(\n                        dut_matmul_sync,\n                        args=(dut, x, weight, bias),\n                    )\n                    node.replace_all_uses_with(new_node)\n                    gm.graph.erase_node(node)\n\n        gm.recompile()\n        print(\"\\n=== Modified graph ===\")\n        gm.graph.print_tabular()\n\n        # Let Inductor compile the rest\n        return compile_fx(gm, example_inputs)\n\n    return _backend\n\nfrom torch_backend import make_backend\nbackend = make_backend(dut) \n\n# torch.compile compiles the resulting GraphModule/quantized module\ncompiled_model = torch.compile(model, backend=backend)",
+  "repro_output": "Backend Compiler Graph Break",
+  "affected_api": "torch.compile, torch._dynamo.register_backend, torch.ops.aten.linear.default, torch._inductor.compile_fx",
+  "trigger_conditions": {
+    "backend": "tpu_net",
+    "dtype": "int8, int16, int32",
+    "input_shape": "",
+    "other_conditions": "Custom AI ASIC, Quantization Aware Training (QAT), TorchAO with XNNPack quantizer backend"
+  },
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "",
+    "hardware": "Custom AI ASIC (simulated hardware platform)"
+  },
+  "labels": [],
+  "add_fix_code": [
+    "- Replace the section with a [custom PyTorch operator](https://docs.pytorch.org/tutorials/advanced/custom_ops_landing_page.html). ",
+    "- Replace the problematic code causing the backend error with a [custom PyTorch operator](https://docs.pytorch.org/tutorials/advanced/custom_ops_landing_page.html). "
+  ],
+  "sub_fix_code": [
+    "",
+    "- Replace the section with a [custom PyTorch operator](https://docs.pytorch.org/tutorials/advanced/custom_ops_landing_page.html). "
+  ]
+}

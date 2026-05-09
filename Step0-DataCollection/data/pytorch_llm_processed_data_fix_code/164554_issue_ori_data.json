@@ -1,0 +1,52 @@
+{
+  "title": "FSDP2 fails with \"Cannot copy out of meta tensor; no data!\" when rank is left empty",
+  "issue_id": "164554",
+  "bug_description": "### 🐛 Describe the bug\n\nA tensor of shape `[X, N]` will cause an error if sharded with FSDP2 with >X GPUs. I think it's because a rank has an empty local tensor, which is quite common.\n\nI think it's not the same as #125738: this testcase calls `model.to_empty(device=local_rank)`, and `model.to(device=local_rank)` doesn't work.\n\nRun on a 2 GPU machine: `torchrun --start-method=forkserver --nproc_per_node=2 script.py`:\n\n```\nimport itertools\nimport os\nimport torch\nimport torch.distributed as dist\nfrom torch import nn\nfrom torch.distributed._tensor import init_device_mesh\nfrom torch.distributed._composable.fsdp import fully_shard, MixedPrecisionPolicy\n\n\nclass TorchGroupedExperts(nn.Module):\n    def __init__(self, n_experts: int, hidden_dim: int, ff_dim: int):\n        super().__init__()\n        self.w1 = nn.Parameter(torch.empty(n_experts, hidden_dim, ff_dim))\n\n    def forward(self, x, tokens_per_expert):\n        raise NotImplementedError()\n\n\n# Init distributed\nmaster_addr = os.environ.get(\"MASTER_ADDR\", \"localhost\")\nmaster_port = os.environ.get(\"MASTER_PORT\", \"29500\")\nos.environ[\"MASTER_ADDR\"] = master_addr\nos.environ[\"MASTER_PORT\"] = master_port\n\nworld_size = int(os.environ[\"WORLD_SIZE\"])\nlocal_rank = int(os.environ[\"LOCAL_RANK\"])\nglobal_rank = int(os.environ[\"RANK\"])\n\ntorch.cuda.set_device(local_rank)\ndist.init_process_group(backend=\"nccl\")\n\n# Create device mesh\nmesh = init_device_mesh(\"cuda\", (world_size,), mesh_dim_names=(\"dp\",))\n\n# Create model on meta device\nwith torch.device(\"meta\"):\n    model = TorchGroupedExperts(n_experts=1, hidden_dim=512, ff_dim=128)\n\n# Apply FSDP2\nmp_policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)\nfully_shard(model, mesh=mesh, mp_policy=mp_policy)\n\n# Verify still on meta\nfor name, param in model.named_parameters():\n    assert param.device == torch.device(\"meta\"), f\"{name}: {param.device}\"\n\n# Move to device\nmodel.to_empty(device=local_rank)\n\nfor name, param in model.named_parameters():\n    print(f\"Rank {global_rank}: {name} -> {param.device}\")\n\n# Forward pass - this is where the bug occurs\nx = torch.randn(256, 512, device=f\"cuda:{local_rank}\", dtype=torch.bfloat16)\ntokens_per_expert = torch.tensor([256], device=f\"cuda:{local_rank}\")\noutput = model(x, tokens_per_expert)\n\ndist.destroy_process_group()\n```\n\n(Thanks to Claude for minifying my codebase!)\n\nOutput:\n```\n[rank1]:   File \"/mnt/evalstorage/workspace/kevin/ml-monorepo/basedformer/train_distributed.py\", line 58, in <module>\n[rank1]:     output = model(x, tokens_per_expert)\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py\", line 1777, in _wrapped_call_impl\n[rank1]:     return self._call_impl(*args, **kwargs)\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py\", line 1883, in _call_impl\n[rank1]:     return inner()\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py\", line 1810, in inner\n[rank1]:     args_kwargs_result = hook(self, args, kwargs)  # type: ignore[misc]\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/distributed/fsdp/_fully_shard/_fsdp_state.py\", line 62, in fsdp_hook_wrapper\n[rank1]:     return torch._dynamo.disable(\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/_dynamo/eval_frame.py\", line 1098, in _fn\n[rank1]:     return fn(*args, **kwargs)\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/distributed/fsdp/_fully_shard/_fsdp_state.py\", line 248, in _pre_forward\n[rank1]:     args, kwargs = self._fsdp_param_group.pre_forward(module, args, kwargs)\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/distributed/fsdp/_fully_shard/_fsdp_param_group.py\", line 440, in pre_forward\n[rank1]:     self.unshard(self.unshard_async_op)\n[rank1]:   File \"/usr/local/lib/python3.10/dist-packages/torch/distributed/fsdp/_fully_shard/_fsdp_param_group.py\", line 333, in unshard\n[rank1]:     self._all_gather_result = foreach_all_gather(\n[rank1]:   File \"/usr/local/lib/py",
+  "apis": [
+    "os.environ.get",
+    "dist.init_process_group",
+    "torch.device",
+    "torch.tensor",
+    "ndist.init_process_group",
+    "torch._dynamo.disable"
+  ],
+  "best_code": "import itertools\nimport os\nimport torch\nimport torch.distributed as dist\nfrom torch import nn\nfrom torch.distributed._tensor import init_device_mesh\nfrom torch.distributed._composable.fsdp import fully_shard, MixedPrecisionPolicy\n\n\nclass TorchGroupedExperts(nn.Module):\n    def __init__(self, n_experts: int, hidden_dim: int, ff_dim: int):\n        super().__init__()\n        self.w1 = nn.Parameter(torch.empty(n_experts, hidden_dim, ff_dim))\n\n    def forward(self, x, tokens_per_expert):\n        raise NotImplementedError()\n\n\n# Init distributed\nmaster_addr = os.environ.get(\"MASTER_ADDR\", \"localhost\")\nmaster_port = os.environ.get(\"MASTER_PORT\", \"29500\")\nos.environ[\"MASTER_ADDR\"] = master_addr\nos.environ[\"MASTER_PORT\"] = master_port\n\nworld_size = int(os.environ[\"WORLD_SIZE\"])\nlocal_rank = int(os.environ[\"LOCAL_RANK\"])\nglobal_rank = int(os.environ[\"RANK\"])\n\ntorch.cuda.set_device(local_rank)\ndist.init_process_group(backend=\"nccl\")\n\n# Create device mesh\nmesh = init_device_mesh(\"cuda\", (world_size,), mesh_dim_names=(\"dp\",))\n\n# Create model on meta device\nwith torch.device(\"meta\"):\n    model = TorchGroupedExperts(n_experts=1, hidden_dim=512, ff_dim=128)\n\n# Apply FSDP2\nmp_policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)\nfully_shard(model, mesh=mesh, mp_policy=mp_policy)\n\n# Verify still on meta\nfor name, param in model.named_parameters():\n    assert param.device == torch.device(\"meta\"), f\"{name}: {param.device}\"\n\n# Move to device\nmodel.to_empty(device=local_rank)\n\nfor name, param in model.named_parameters():\n    print(f\"Rank {global_rank}: {name} -> {param.device}\")\n\n# Forward pass - this is where the bug occurs\nx = torch.randn(256, 512, device=f\"cuda:{local_rank}\", dtype=torch.bfloat16)\ntokens_per_expert = torch.tensor([256], device=f\"cuda:{local_rank}\")\noutput = model(x, tokens_per_expert)\n\ndist.destroy_process_group()",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/164595"
+  ],
+  "_meta": {
+    "file": "164554_issue_ori_data.json",
+    "generated_at": "2026-04-21 04:06:49",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\164554_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\164554_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "A tensor of shape [X, N] will cause an error if sharded with FSDP2 with >X GPUs. This is because a rank has an empty local tensor. This testcase calls model.to_empty(device=local_rank), and model.to(device=local_rank) doesn't work.",
+  "repro_code": "import itertools\nimport os\nimport torch\nimport torch.distributed as dist\nfrom torch import nn\nfrom torch.distributed._tensor import init_device_mesh\nfrom torch.distributed._composable.fsdp import fully_shard, MixedPrecisionPolicy\n\n\nclass TorchGroupedExperts(nn.Module):\n    def __init__(self, n_experts: int, hidden_dim: int, ff_dim: int):\n        super().__init__()\n        self.w1 = nn.Parameter(torch.empty(n_experts, hidden_dim, ff_dim))\n\n    def forward(self, x, tokens_per_expert):\n        raise NotImplementedError()\n\n\n# Init distributed\nmaster_addr = os.environ.get(\"MASTER_ADDR\", \"localhost\")\nmaster_port = os.environ.get(\"MASTER_PORT\", \"29500\")\nos.environ[\"MASTER_ADDR\"] = master_addr\nos.environ[\"MASTER_PORT\"] = master_port\n\nworld_size = int(os.environ[\"WORLD_SIZE\"])\nlocal_rank = int(os.environ[\"LOCAL_RANK\"])\nglobal_rank = int(os.environ[\"RANK\"])\n\ntorch.cuda.set_device(local_rank)\ndist.init_process_group(backend=\"nccl\")\n\n# Create device mesh\nmesh = init_device_mesh(\"cuda\", (world_size,), mesh_dim_names=(\"dp\",))\n\n# Create model on meta device\nwith torch.device(\"meta\"):\n    model = TorchGroupedExperts(n_experts=1, hidden_dim=512, ff_dim=128)\n\n# Apply FSDP2\nmp_policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)\nfully_shard(model, mesh=mesh, mp_policy=mp_policy)\n\n# Verify still on meta\nfor name, param in model.named_parameters():\n    assert param.device == torch.device(\"meta\"), f\"{name}: {param.device}\"\n\n# Move to device\nmodel.to_empty(device=local_rank)\n\nfor name, param in model.named_parameters():\n    print(f\"Rank {global_rank}: {name} -> {param.device}\")\n\n# Forward pass - this is where the bug occurs\nx = torch.randn(256, 512, device=f\"cuda:{local_rank}\", dtype=torch.bfloat16)\ntokens_per_expert = torch.tensor([256], device=f\"cuda:{local_rank}\")\noutput = model(x, tokens_per_expert)\n\ndist.destroy_process_group()",
+  "repro_output": "FSDP2 fails with \"Cannot copy out of meta tensor; no data!\" when rank is left empty",
+  "affected_api": "torch.distributed.fsdp._fully_shard, foreach_all_gather",
+  "trigger_conditions": {
+    "backend": "nccl",
+    "dtype": "bfloat16, float32",
+    "input_shape": "[1, 512, 128] for parameter, [256, 512] for input",
+    "other_conditions": "Running on 2 GPUs, using FSDP2 with to_empty, using meta device initialization, tensor shape [X, N] sharded with >X GPUs causing empty local tensor on some ranks"
+  },
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "3.10",
+    "os": "Linux",
+    "hardware": "2 GPUs (CUDA)"
+  },
+  "labels": [
+    "module: distributed",
+    "module: fsdp"
+  ],
+  "add_fix_code": [
+    "                self._sharded_param_data.untyped_storage().data_ptr() > 0",
+    "                and self._sharded_param_data.untyped_storage().data_ptr()"
+  ],
+  "sub_fix_code": [
+    "                self._sharded_param_data.untyped_storage().data_ptr()"
+  ]
+}

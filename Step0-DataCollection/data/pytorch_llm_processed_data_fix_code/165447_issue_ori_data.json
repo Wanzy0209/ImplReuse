@@ -1,0 +1,86 @@
+{
+  "title": "[precompile] AOT Precompile serialization failed when running mutliple times",
+  "issue_id": "165447",
+  "bug_description": "### 🐛 Describe the bug\n\nCreate a simple python script `precompile_repro.py`\n\n```python\n\nimport torch\n\nclass M(torch.nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.linear1 = torch.nn.Linear(2, 4)\n        self.relu = torch.nn.ReLU()\n        self.linear2 = torch.nn.Linear(4, 8)\n    def forward(self, x):\n        return self.linear2(self.relu(self.linear1(x)))\n\ndevice = \"cuda\"\nm = M().to(device)\nsample_inputs = (torch.randn(2, 2, device=device),)\neager_out = m(*sample_inputs)\n\nwith torch._dynamo.config.patch(\"enable_aot_compile\", True):\n    compiled_fn_path = \"./m.pt\"\n    compiled_fn = torch.compile(\n        m,\n        fullgraph=True\n    ).forward.aot_compile((sample_inputs, {}))\n\n    compiled_fn.save_compiled_function(compiled_fn_path)\n    torch._dynamo.reset()\n    with torch.compiler.set_stance(\"fail_on_recompile\"):\n        with open(compiled_fn_path, \"rb\") as f:\n            loaded_fn = torch.compiler.load_compiled_function(f)\n\nassert loaded_fn is not None\n\ncompiled_out = loaded_fn(m, *sample_inputs).\n\nassert torch.allclose(eager_out, compiled_out)\n```\n\nThen in terminal run `python precompile_repro.py`. It works the first time. Then if running this script again, we will get\n\n```\n File \"/data/users/yimingzhou/pytorch/torch/_dynamo/aot_compile.py\", line 118, in save_compiled_function\n    f.write(type(self).serialize(self))\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/data/users/yimingzhou/pytorch/torch/_dynamo/aot_compile.py\", line 130, in serialize\n    type(compiled_fn).serialize_compile_artifacts(compiled_fn),\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/data/users/yimingzhou/pytorch/torch/_dynamo/aot_compile.py\", line 181, in serialize_compile_artifacts\n    result = pickle.dumps(fn.compiled_fn.serialize())\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: Can't get local object 'align_inputs_from_check_idxs.<locals>.run'\n```\n\nIf the device is `cpu`, then running the script the second will get the following error\n```\n  File \"/data/users/yimingzhou/pytorch/precompile-repro.py\", line 25, in <module>\n    compiled_fn.save_compiled_function(compiled_fn_path)\n  File \"/data/users/yimingzhou/pytorch/torch/_dynamo/aot_compile.py\", line 118, in save_compiled_function\n    f.write(type(self).serialize(self))\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/data/users/yimingzhou/pytorch/torch/_dynamo/aot_compile.py\", line 130, in serialize\n    type(compiled_fn).serialize_compile_artifacts(compiled_fn),\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/data/users/yimingzhou/pytorch/torch/_dynamo/aot_compile.py\", line 181, in serialize_compile_artifacts\n    result = pickle.dumps(fn.compiled_fn.serialize())\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: Can't get local object 'WeakValueDictionary.__init__.<locals>.remove'\n```\n\nThe error is gone when adding `fresh_cache()` context manager  from `torch._inductor.utils` \n\n```python\nwith fresh_cache(), torch._dynamo.config.patch(\"enable_aot_compile\", True):\n     ....aot_compile...\n```\nThen we can the script multiple times and it always works on both cpu and cuda.\n\n### Versions\n\nmain\n\ncc @chauhang @penguinwu @avikchaudhuri @gmagogsfm @zhxchen17 @tugsbayasgalan @angelayi @suo @ydwu4 @desertfire @chenyang78 @yushangdi @benjaminglass1 @jamesjwu",
+  "apis": [
+    "pickle.dumps",
+    "self.linear2",
+    "torch.allclose",
+    "torch.nn.ReLU",
+    "compiled_fn.save_compiled_function",
+    "torch._dynamo.reset"
+  ],
+  "best_code": "import torch\n\nclass M(torch.nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.linear1 = torch.nn.Linear(2, 4)\n        self.relu = torch.nn.ReLU()\n        self.linear2 = torch.nn.Linear(4, 8)\n    def forward(self, x):\n        return self.linear2(self.relu(self.linear1(x)))\n\ndevice = \"cuda\"\nm = M().to(device)\nsample_inputs = (torch.randn(2, 2, device=device),)\neager_out = m(*sample_inputs)\n\nwith torch._dynamo.config.patch(\"enable_aot_compile\", True):\n    compiled_fn_path = \"./m.pt\"\n    compiled_fn = torch.compile(\n        m,\n        fullgraph=True\n    ).forward.aot_compile((sample_inputs, {}))\n\n    compiled_fn.save_compiled_function(compiled_fn_path)\n    torch._dynamo.reset()\n    with torch.compiler.set_stance(\"fail_on_recompile\"):\n        with open(compiled_fn_path, \"rb\") as f:\n            loaded_fn = torch.compiler.load_compiled_function(f)\n\nassert loaded_fn is not None\n\ncompiled_out = loaded_fn(m, *sample_inputs).\n\nassert torch.allclose(eager_out, compiled_out)",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/165474"
+  ],
+  "_meta": {
+    "file": "165447_issue_ori_data.json",
+    "generated_at": "2026-04-21 04:46:54",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\165447_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\165447_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "AOT Precompile serialization fails when running a script multiple times. The first run works correctly, but subsequent runs fail with an AttributeError during pickle serialization of compiled artifacts. The error differs between CUDA and CPU devices.",
+  "repro_code": "import torch\n\nclass M(torch.nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.linear1 = torch.nn.Linear(2, 4)\n        self.relu = torch.nn.ReLU()\n        self.linear2 = torch.nn.Linear(4, 8)\n    def forward(self, x):\n        return self.linear2(self.relu(self.linear1(x)))\n\ndevice = \"cuda\"\nm = M().to(device)\nsample_inputs = (torch.randn(2, 2, device=device),)\neager_out = m(*sample_inputs)\n\nwith torch._dynamo.config.patch(\"enable_aot_compile\", True):\n    compiled_fn_path = \"./m.pt\"\n    compiled_fn = torch.compile(\n        m,\n        fullgraph=True\n    ).forward.aot_compile((sample_inputs, {}))\n\n    compiled_fn.save_compiled_function(compiled_fn_path)\n    torch._dynamo.reset()\n    with torch.compiler.set_stance(\"fail_on_recompile\"):\n        with open(compiled_fn_path, \"rb\") as f:\n            loaded_fn = torch.compiler.load_compiled_function(f)\n\nassert loaded_fn is not None\n\ncompiled_out = loaded_fn(m, *sample_inputs)\n\nassert torch.allclose(eager_out, compiled_out)",
+  "repro_output": "[precompile] AOT Precompile serialization failed when running mutliple times",
+  "affected_api": "torch.compile, aot_compile, save_compiled_function, load_compiled_function",
+  "trigger_conditions": {
+    "backend": "CUDA and CPU",
+    "dtype": "unknown",
+    "input_shape": "unknown",
+    "other_conditions": "Running the script multiple times (second run onwards), using torch._dynamo.config.patch(\"enable_aot_compile\", True), using fullgraph=True in torch.compile"
+  },
+  "environment": {
+    "pytorch_version": "main",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "CPU and CUDA"
+  },
+  "labels": [
+    "precompile",
+    "aot",
+    "serialization",
+    "dynamo"
+  ],
+  "add_fix_code": [
+    "from copy import copy, deepcopy",
+    "    # We need to make a clean copy of the cache entry",
+    "    # in case it needs to be serialized again",
+    "    serializable_copy = deepcopy(entry)",
+    "    # Ensure the deserialized cache entry is still serializable",
+    "    compiled_fn = SerializableCompiledFunction(compiled_fn, lambda: serializable_copy)",
+    "                result: Optional[tuple[GenericAOTAutogradCacheEntry, bytes]] = (",
+    "                if result is not None:",
+    "                    (entry, pickled_content) = result",
+    "                    # Make the compiled_fn serializable, where the serialize function just",
+    "                    # makes a copy of the original entry before post compile via the pickled content",
+    "                    compiled_fn = SerializableCompiledFunction(",
+    "                        compiled_fn, lambda: pickle.loads(pickled_content)",
+    "                    )",
+    "    ) -> Optional[tuple[GenericAOTAutogradCacheEntry, bytes]]:",
+    "        pickled_content = None",
+    "        if entry is not None:",
+    "            assert pickled_content is not None",
+    "            return (entry, pickled_content)",
+    "        else:",
+    "            return None",
+    "                    result = AOTAutogradCache._lookup(",
+    "                assert result is not None",
+    "                (entry, _) = result"
+  ],
+  "sub_fix_code": [
+    "from copy import copy",
+    "        compiled_function = SerializableCompiledFunction(",
+    "            compiled_function, lambda: self",
+    "        )",
+    "",
+    "                entry: Optional[GenericAOTAutogradCacheEntry] = (",
+    "                if entry is not None:",
+    "    ) -> Optional[GenericAOTAutogradCacheEntry]:",
+    "        return entry",
+    "                    entry = AOTAutogradCache._lookup(",
+    "                assert entry is not None"
+  ]
+}

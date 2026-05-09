@@ -1,0 +1,68 @@
+{
+  "title": "FakeTensorProp concretizes symbolic dims for aten.polar (regression in 2.9.0)",
+  "issue_id": "167278",
+  "bug_description": "### 🐛 Describe the bug\n\nWhen running `torch.fx.passes.fake_tensor_prop.FakeTensorProp` on a graph containing `aten.polar` with dynamic  shapes, the output shapes become concretized to the example input sizes. This is unexpected—symbolic dims should be preserved. This appears to stem from `aten.polar`’s fake/meta behavior. Reverting the change introduced in https://github.com/pytorch/pytorch/pull/160894\n fixes the issue.\n\n**Minimal repo:**\n\n```\nimport torch\nimport torch.nn as nn\n\nfrom torch.export import export, Dim\nfrom torch.fx import GraphModule\nfrom torch.fx.passes.fake_tensor_prop import FakeTensorProp\nfrom torch._export.utils import _detect_fake_mode_from_gm\n\nclass PolarToy(nn.Module):\n    def __init__(self, head_dim: int = 32):\n        super().__init__()\n        self.head_dim = head_dim\n\n    def forward(self, x):\n        freqs = x.tanh()\n        ones_like = torch.ones_like(freqs)\n        freqs_cis = torch.polar(ones_like, freqs)\n        return freqs_cis.real + freqs_cis.imag\n\n\ndef export_with_2d_dynamic_batch(mod: nn.Module, device: str = \"cpu\") -> GraphModule:\n    mod = mod.to(device).eval()\n    sample = torch.randn(2, 3, 32, device=device)\n    dynamic_shapes = ({0: Dim(\"s0\", min=1, max=1024), 1: Dim(\"s1\", min=1, max=2048)},)\n    ep = export(mod, (sample,), dynamic_shapes=dynamic_shapes, strict=False)\n    gm = ep.module() if hasattr(ep, \"module\") else ep\n    if not isinstance(gm, GraphModule):\n        raise RuntimeError(\"Expected a GraphModule from export().\")\n    return gm\n\n\ndef main():\n    device = \"cpu\"\n    hidden = 7\n    mod = PolarToy(hidden)\n    gm = export_with_2d_dynamic_batch(mod, device=device)\n    gm.print_readable()\n\n    inps = [node.meta.get(\"val\") for node in gm.graph.nodes if node.op == \"placeholder\"]\n    fake_mode = _detect_fake_mode_from_gm(gm)\n    FakeTensorProp(gm, fake_mode).propagate(*inps)\n    gm.print_readable()\n\n\nif __name__ == \"__main__\":\n    main()\n\n```\n\n**Observed output**\n\nBefore FakeTensorProp :\n```\ntanh:      \"f32[s77, s27, 32]\" = aten.tanh.default(x)\nones_like: \"f32[s77, s27, 32]\" = aten.ones_like.default(tanh, pin_memory = False)\npolar:     \"c64[s77, s27, 32]\" = aten.polar.default(ones_like, tanh)\n```\nAfter FakeTensorProp:\n\n```\ntanh:      \"f32[2, 3, 32]\" = aten.tanh.default(x)\nones_like: \"f32[2, 3, 32]\" = aten.ones_like.default(tanh, pin_memory = False)\npolar:     \"c64[2, 3, 32]\" = aten.polar.default(ones_like, tanh)\n```\n\nNotably, the concretization starts at the aten.polar site and then propagates.\n\n\n### Versions\n\nPyTorch: 2.9.0\nPython: 3.12\n\ncc @ezyang @EikanWang @jgong5 @wenzhe-nrv",
+  "apis": [
+    "aten.polar",
+    "x.tanh",
+    "torch.randn",
+    "aten.ones_like.default",
+    "mod.to",
+    "gm.print_readable"
+  ],
+  "best_code": "import torch\nimport torch.nn as nn\n\nfrom torch.export import export, Dim\nfrom torch.fx import GraphModule\nfrom torch.fx.passes.fake_tensor_prop import FakeTensorProp\nfrom torch._export.utils import _detect_fake_mode_from_gm\n\nclass PolarToy(nn.Module):\n    def __init__(self, head_dim: int = 32):\n        super().__init__()\n        self.head_dim = head_dim\n\n    def forward(self, x):\n        freqs = x.tanh()\n        ones_like = torch.ones_like(freqs)\n        freqs_cis = torch.polar(ones_like, freqs)\n        return freqs_cis.real + freqs_cis.imag\n\n\ndef export_with_2d_dynamic_batch(mod: nn.Module, device: str = \"cpu\") -> GraphModule:\n    mod = mod.to(device).eval()\n    sample = torch.randn(2, 3, 32, device=device)\n    dynamic_shapes = ({0: Dim(\"s0\", min=1, max=1024), 1: Dim(\"s1\", min=1, max=2048)},)\n    ep = export(mod, (sample,), dynamic_shapes=dynamic_shapes, strict=False)\n    gm = ep.module() if hasattr(ep, \"module\") else ep\n    if not isinstance(gm, GraphModule):\n        raise RuntimeError(\"Expected a GraphModule from export().\")\n    return gm\n\n\ndef main():\n    device = \"cpu\"\n    hidden = 7\n    mod = PolarToy(hidden)\n    gm = export_with_2d_dynamic_batch(mod, device=device)\n    gm.print_readable()\n\n    inps = [node.meta.get(\"val\") for node in gm.graph.nodes if node.op == \"placeholder\"]\n    fake_mode = _detect_fake_mode_from_gm(gm)\n    FakeTensorProp(gm, fake_mode).propagate(*inps)\n    gm.print_readable()\n\n\nif __name__ == \"__main__\":\n    main()",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/160894"
+  ],
+  "_meta": {
+    "file": "167278_issue_ori_data.json",
+    "generated_at": "2026-04-21 05:55:46",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\167278_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\167278_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "When running `torch.fx.passes.fake_tensor_prop.FakeTensorProp` on a graph containing `aten.polar` with dynamic shapes, the output shapes become concretized to the example input sizes. This is unexpected—symbolic dims should be preserved. This appears to stem from `aten.polar`'s fake/meta behavior. Reverting the change introduced in https://github.com/pytorch/pytorch/pull/160894 fixes the issue.",
+  "repro_code": "import torch\nimport torch.nn as nn\n\nfrom torch.export import export, Dim\nfrom torch.fx import GraphModule\nfrom torch.fx.passes.fake_tensor_prop import FakeTensorProp\nfrom torch._export.utils import _detect_fake_mode_from_gm\n\nclass PolarToy(nn.Module):\n    def __init__(self, head_dim: int = 32):\n        super().__init__()\n        self.head_dim = head_dim\n\n    def forward(self, x):\n        freqs = x.tanh()\n        ones_like = torch.ones_like(freqs)\n        freqs_cis = torch.polar(ones_like, freqs)\n        return freqs_cis.real + freqs_cis.imag\n\n\ndef export_with_2d_dynamic_batch(mod: nn.Module, device: str = \"cpu\") -> GraphModule:\n    mod = mod.to(device).eval()\n    sample = torch.randn(2, 3, 32, device=device)\n    dynamic_shapes = ({0: Dim(\"s0\", min=1, max=1024), 1: Dim(\"s1\", min=1, max=2048)},)\n    ep = export(mod, (sample,), dynamic_shapes=dynamic_shapes, strict=False)\n    gm = ep.module() if hasattr(ep, \"module\") else ep\n    if not isinstance(gm, GraphModule):\n        raise RuntimeError(\"Expected a GraphModule from export().\")\n    return gm\n\n\ndef main():\n    device = \"cpu\"\n    hidden = 7\n    mod = PolarToy(hidden)\n    gm = export_with_2d_dynamic_batch(mod, device=device)\n    gm.print_readable()\n\n    inps = [node.meta.get(\"val\") for node in gm.graph.nodes if node.op == \"placeholder\"]\n    fake_mode = _detect_fake_mode_from_gm(gm)\n    FakeTensorProp(gm, fake_mode).propagate(*inps)\n    gm.print_readable()\n\n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "FakeTensorProp concretizes symbolic dims for aten.polar (regression in 2.9.0)",
+  "affected_api": "torch.fx.passes.fake_tensor_prop.FakeTensorProp, aten.polar",
+  "trigger_conditions": {
+    "backend": "cpu",
+    "dtype": "f32, c64",
+    "input_shape": "Dynamic shapes with Dim(\"s0\", min=1, max=1024) and Dim(\"s1\", min=1, max=2048)",
+    "other_conditions": "Using FakeTensorProp on a graph containing aten.polar"
+  },
+  "environment": {
+    "pytorch_version": "2.9.0",
+    "python_version": "3.12",
+    "os": "unknown",
+    "hardware": "unknown"
+  },
+  "labels": [],
+  "add_fix_code": [
+    "    def test_complex_from_real_imag(self):",
+    "        def fn(x, y):",
+    "            return aten.complex.default(x, y)",
+    "",
+    "        a = torch.randn([5, 3]).permute(1, 0)",
+    "",
+    "        self.common(",
+    "            fn,",
+    "            (a, a),",
+    "            exact_stride=True,",
+    "            reference_in_float=False,",
+    "        )",
+    "",
+    "    result = elementwise_meta(",
+    "        real.to(corresponding_complex_dtype(real.dtype)),",
+    "        imag.to(corresponding_complex_dtype(imag.dtype)),",
+    "        type_promotion=ELEMENTWISE_TYPE_PROMOTION_KIND.DEFAULT,",
+    "    )",
+    "    return result",
+    "    \"test_complex_from_real_imag_dynamic_shapes\": TestFailure((\"cpu\", \"cuda\", \"xpu\")),"
+  ],
+  "sub_fix_code": [
+    "    out_shape = _broadcast_shapes(real.shape, imag.shape)",
+    "    return real.new_empty(out_shape, dtype=corresponding_complex_dtype(real.dtype))"
+  ]
+}

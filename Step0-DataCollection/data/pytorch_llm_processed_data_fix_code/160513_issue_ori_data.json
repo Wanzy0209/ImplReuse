@@ -1,0 +1,50 @@
+{
+  "title": "Forward autodiff : Multiplying by python float changes the dual dtype in some situations",
+  "issue_id": "160513",
+  "bug_description": "Hello !\nThis bug report is based on a discussion from the pytorch forum : [https://discuss.pytorch.org/t/forward-autodiff-multiplying-by-python-float-changes-the-dual-dtype-in-some-situations/222163]\n\n## Bug Description\nWhen using `torch.func.jacfwd` (forward-mode automatic differentiation) on a 0‑dimensional dual tensor multiplied by a Python float literal (e.g., `0.5 * x[0]`), the primal retains its declared dtype (e.g. `float32`), but the tangent component is unexpectedly promoted to `float64`. This mismatch causes runtime errors in subsequent tensor operations requiring consistent dtypes, like `torch.tensordot` even though there is no dtype mismatch without autodiff.\n\n## Minimal Repro Example\n\n```python\nimport torch\nprint(torch.version.__version__)\n\nfargs = {'dtype': torch.float32, 'device': 'cuda'}\nA = torch.rand((5, 3, 100), **fargs)\n\ndef test(x):\n    a = 0.5 * x[0]\n    p, t = torch.autograd.forward_ad.unpack_dual(a)\n    print(f\"a dtype : {p.dtype}, a.tangent dtype : {t.dtype}\")\n    v = torch.stack([a, *x[1:]])\n    p, t = torch.autograd.forward_ad.unpack_dual(v)\n    print(f\"v dtype : {p.dtype}, v.tangent dtype : {t.dtype}\")\n    return torch.tensordot(v, A, dims=1)\n\ntorch.func.jacfwd(test)(torch.rand(5, **fargs))\n```\n\n### Output\n```\n2.7.1+cu128\na dtype : torch.float32, a.tangent dtype : torch.float64\nv dtype : torch.float32, v.tangent dtype : torch.float64\n\nTraceback (most recent call last):\n\n[...]\n\nRuntimeError: expected mat1 and mat2 to have the same dtype, but got: double != float\n```\n\nThis results in a dtype mismatch (`float64` vs `float32`) in the tangent part, triggering a runtime error during `tensordot`.\n\n## K. Frank’s Diagnostic Example (Clarifying Scope of Bug)\n\n```python\nimport torch\nprint(torch.__version__)\n\nprimal1d = torch.ones(1)\ntangent1d = torch.ones(1)\nprimal0d = torch.ones(1)[0]\ntangent0d = torch.ones(1)[0]\n\nwith torch.autograd.forward_ad.dual_level():\n    # 1‑D tensor, no scalar multiplication — ok\n    dual1d = torch.autograd.forward_ad.make_dual(primal1d, tangent1d)\n    p1d, t1d = torch.autograd.forward_ad.unpack_dual(dual1d)\n    print(p1d.dtype, t1d.dtype, t1d.dtype == p1d.dtype)\n\n    # 1‑D tensor × Python scalar — still ok\n    dual1db = 1.0 * dual1d\n    p1db, t1db = torch.autograd.forward_ad.unpack_dual(dual1db)\n    print(p1db.dtype, t1db.dtype, t1db.dtype == p1db.dtype)\n\n    # 0‑D tensor, no scalar multiplication — ok\n    dual0d = torch.autograd.forward_ad.make_dual(primal0d, tangent0d)\n    p0d, t0d = torch.autograd.forward_ad.unpack_dual(dual0d)\n    print(p0d.dtype, t0d.dtype, t0d.dtype == p0d.dtype)\n\n    # 0‑D tensor × Python scalar — **BUG**: tangent gets promoted\n    dual0db = 1.0 * dual0d\n    p0db, t0db = torch.autograd.forward_ad.unpack_dual(dual0db)\n    print(p0db.dtype, t0db.dtype, t0db.dtype == p0db.dtype)\n```\n\n**Output summary:**\n\n- **1‑D tensor (no scalar)**: primal/tangent both `float32` → OK  \n- **1‑D tensor × Python float**: both still `float32` → OK  \n- **0‑D tensor (no scalar)**: both `float32` → OK  \n- **0‑D tensor × Python float**: primal = `float32`, tangent = **`float64`** → **BUG**\n\n## Workarounds\n\n- Use a tensor when scaling:  \n  ```python\n  a = torch.tensor(0.5, **fargs) * x[0]\n  ```\n- Or apply the scalar before slicing:  \n  ```python\n  a = (0.5 * x)[0]\n  ```\nBoth preserve matching primal and tangent dtypes (`float32`) and avoid the bug.\n\n**Maybe torch can raise a warning if primal and dual values have different dtype during forward autodiff to help debugging ?**\n\n### Versions\n\nCollecting environment information...\nPyTorch version: 2.7.1+cu128\nIs debug build: False\nCUDA used to build PyTorch: 12.8\nROCM used to build PyTorch: N/A\n\nOS: Ubuntu 24.04.2 LTS (x86_64)\nGCC version: (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0\nClang version: Could not collect\nCMake version: Could not collect\nLibc version: glibc-2.39\n\nPython version: 3.13.5 (main, Jul 23 2025, 00:37:22) [Clang 20.1.4 ] (64-bit runtime)\nPython platform: Linux-6.14.0-27-generic-x86_64-with-glibc2.39\nIs CUDA available: True\nCUDA",
+  "apis": [
+    "torch.autograd.forward_ad.unpack_dual",
+    "torch.autograd.forward_ad.dual_level",
+    "numpy",
+    "torch.func.jacfwd",
+    "u003etorch.get_default_dtype",
+    "torch.get_default_dtype"
+  ],
+  "best_code": "import torch\nprint(torch.version.__version__)\n\nfargs = {'dtype': torch.float32, 'device': 'cuda'}\nA = torch.rand((5, 3, 100), **fargs)\n\ndef test(x):\n    a = 0.5 * x[0]\n    p, t = torch.autograd.forward_ad.unpack_dual(a)\n    print(f\"a dtype : {p.dtype}, a.tangent dtype : {t.dtype}\")\n    v = torch.stack([a, *x[1:]])\n    p, t = torch.autograd.forward_ad.unpack_dual(v)\n    print(f\"v dtype : {p.dtype}, v.tangent dtype : {t.dtype}\")\n    return torch.tensordot(v, A, dims=1)\n\ntorch.func.jacfwd(test)(torch.rand(5, **fargs))",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/165784",
+    "https://github.com/pytorch/pytorch/pull/164784"
+  ],
+  "_meta": {
+    "file": "160513_issue_ori_data.json",
+    "generated_at": "2026-04-20 21:35:31",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\160513_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\160513_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "When using `torch.func.jacfwd` (forward-mode automatic differentiation) on a 0‑dimensional dual tensor multiplied by a Python float literal (e.g., `0.5 * x[0]`), the primal retains its declared dtype (e.g. `float32`), but the tangent component is unexpectedly promoted to `float64`. This mismatch causes runtime errors in subsequent tensor operations requiring consistent dtypes, like `torch.tensordot` even though there is no dtype mismatch without autodiff.",
+  "repro_code": "import torch\nprint(torch.version.__version__)\n\nfargs = {'dtype': torch.float32, 'device': 'cuda'}\nA = torch.rand((5, 3, 100), **fargs)\n\ndef test(x):\n    a = 0.5 * x[0]\n    p, t = torch.autograd.forward_ad.unpack_dual(a)\n    print(f\"a dtype : {p.dtype}, a.tangent dtype : {t.dtype}\")\n    v = torch.stack([a, *x[1:]])\n    p, t = torch.autograd.forward_ad.unpack_dual(v)\n    print(f\"v dtype : {p.dtype}, v.tangent dtype : {t.dtype}\")\n    return torch.tensordot(v, A, dims=1)\n\ntorch.func.jacfwd(test)(torch.rand(5, **fargs))",
+  "repro_output": "Forward autodiff : Multiplying by python float changes the dual dtype in some situations",
+  "affected_api": "torch.func.jacfwd, torch.autograd.forward_ad.make_dual, torch.autograd.forward_ad.unpack_dual, torch.autograd.forward_ad.dual_level",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "float32 (primal), float64 (tangent - incorrectly promoted)",
+    "input_shape": "0-dimensional tensor (scalar)",
+    "other_conditions": "Multiplying a 0-dimensional dual tensor by a Python float literal"
+  },
+  "environment": {
+    "pytorch_version": "2.7.1+cu128",
+    "python_version": "3.13.5",
+    "os": "Ubuntu 24.04.2 LTS (x86_64)",
+    "hardware": "CUDA available, CUDA 12.8"
+  },
+  "labels": [
+    "bug",
+    "autodiff",
+    "forward-mode",
+    "dtype"
+  ],
+  "add_fix_code": [],
+  "sub_fix_code": []
+}
