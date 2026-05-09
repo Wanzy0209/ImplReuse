@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parent / 'data' / 'pytorch-code'
-DEFAULT_API_DEF = Path(__file__).resolve().parent / 'pytorch' / 'API_def.txt'
+DEFAULT_API_DEF = Path(__file__).resolve().parent / 'data' / 'pytorch_API_def.txt'
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / 'data' / 'pytorch-api-extracted'
 CACHE_FILE = Path(__file__).resolve().parent / 'pytorch_extraction_cache.json'
 CPP_EXTENSIONS = ('.cpp', '.c', '.h', '.cuh', '.cu', '.cc')
