@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Dict, Optional, List
 
@@ -83,7 +84,7 @@ def save_to_cache(pr_url: str, pr_code: Dict[str, List[str]]):
             print(f"  [CACHE-SAVE-ERR] {e}")
 
 
-def fetch_pr_files(pr_url: str) -> Dict[str, List[str]]:
+def fetch_pr_files(pr_url: str, retry_count: int = 3, retry_delay: int = 60) -> Dict[str, List[str]]:
     """
     Fetch PR diff and extract added/deleted code.
     Returns dict with "add_fix_code" and "sub_fix_code" lists.
@@ -122,8 +123,100 @@ def fetch_pr_files(pr_url: str) -> Dict[str, List[str]]:
         
         resp = requests.get(api_url, headers=headers, timeout=15)
         
+        if resp.status_code == 403:
+            for attempt in range(retry_count):
+                print(f"  [API-RATE-LIMIT] Status 403, waiting {retry_delay}s before retry ({attempt + 1}/{retry_count})...")
+                time.sleep(retry_delay)
+                resp = requests.get(api_url, headers=headers, timeout=15)
+                if resp.status_code == 200:
+                    break
+                elif resp.status_code == 403:
+                    continue
+                else:
+                    break
+            
+            if resp.status_code != 200:
+                print(f"  [API-ERR] Status {resp.status_code}, falling back to HTML...")
+                full_pr_url = f'https://github.com/{owner}/{repo}/pull/{pr_number}/files'
+                headers_html = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1'
+                }
+                
+                resp = requests.get(full_pr_url, headers=headers_html, timeout=15)
+                
+                if resp.status_code == 403:
+                    for attempt in range(retry_count):
+                        print(f"  [HTML-RATE-LIMIT] Status 403, waiting {retry_delay}s before retry ({attempt + 1}/{retry_count})...")
+                        time.sleep(retry_delay)
+                        resp = requests.get(full_pr_url, headers=headers_html, timeout=15)
+                        if resp.status_code == 200:
+                            break
+                        elif resp.status_code == 403:
+                            continue
+                        else:
+                            break
+                
+                if resp.status_code != 200:
+                    print(f"  [HTML-ERR] Status {resp.status_code}")
+                    return result
+                
+                if BeautifulSoup is None:
+                    print(f"  [ERR] BeautifulSoup not available")
+                    return result
+                
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                add_lines = []
+                sub_lines = []
+                
+                for span in soup.find_all('span'):
+                    classes = span.get('class', [])
+                    if isinstance(classes, list):
+                        class_str = ' '.join(classes)
+                        if 'blob-code-addition' in class_str or 'text-green-500' in class_str:
+                            code_text = span.get_text(strip=False) or ''
+                            if code_text.startswith('+'):
+                                code_text = code_text[1:]
+                            if code_text.strip():
+                                add_lines.append(code_text)
+                        elif 'blob-code-deletion' in class_str or 'text-red-500' in class_str:
+                            code_text = span.get_text(strip=False) or ''
+                            if code_text.startswith('-'):
+                                code_text = code_text[1:]
+                            if code_text.strip():
+                                sub_lines.append(code_text)
+                
+                if not add_lines and not sub_lines:
+                    for tr in soup.find_all('tr'):
+                        tr_classes = tr.get('class', [])
+                        if isinstance(tr_classes, list):
+                            if 'blob-code-addition' in tr_classes:
+                                code_span = tr.find('span', class_='blob-code-inner')
+                                if code_span:
+                                    code_text = code_span.get_text(strip=False) or ''
+                                    if code_text.startswith('+'):
+                                        code_text = code_text[1:]
+                                    if code_text.strip():
+                                        add_lines.append(code_text)
+                            elif 'blob-code-deletion' in tr_classes:
+                                code_span = tr.find('span', class_='blob-code-inner')
+                                if code_span:
+                                    code_text = code_span.get_text(strip=False) or ''
+                                    if code_text.startswith('-'):
+                                        code_text = code_text[1:]
+                                    if code_text.strip():
+                                        sub_lines.append(code_text)
+                
+                result["add_fix_code"] = add_lines
+                result["sub_fix_code"] = sub_lines
+                print(f"  [HTML-SUCCESS] {len(add_lines)} added line(s), {len(sub_lines)} deleted line(s)")
+                save_to_cache(cleaned_url, result)
+                return result
+        
         if resp.status_code == 200:
-            # Parse patch format
             patch_content = resp.text
             add_lines = []
             sub_lines = []
@@ -137,74 +230,8 @@ def fetch_pr_files(pr_url: str) -> Dict[str, List[str]]:
             result["add_fix_code"] = add_lines
             result["sub_fix_code"] = sub_lines
             print(f"  [SUCCESS] {len(add_lines)} added line(s), {len(sub_lines)} deleted line(s)")
-        
         else:
-            print(f"  [API-ERR] Status {resp.status_code}, trying HTML...")
-            # Fallback to HTML parsing
-            full_pr_url = f'https://github.com/{owner}/{repo}/pull/{pr_number}/files'
-            headers_html = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
-            }
-            
-            resp = requests.get(full_pr_url, headers=headers_html, timeout=15)
-            
-            if resp.status_code != 200:
-                print(f"  [HTML-ERR] Status {resp.status_code}")
-                return result
-            
-            if BeautifulSoup is None:
-                print(f"  [ERR] BeautifulSoup not available")
-                return result
-            
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            add_lines = []
-            sub_lines = []
-            
-            for span in soup.find_all('span'):
-                classes = span.get('class', [])
-                if isinstance(classes, list):
-                    class_str = ' '.join(classes)
-                    if 'blob-code-addition' in class_str or 'text-green-500' in class_str:
-                        code_text = span.get_text(strip=False) or ''
-                        if code_text.startswith('+'):
-                            code_text = code_text[1:]
-                        if code_text.strip():
-                            add_lines.append(code_text)
-                    elif 'blob-code-deletion' in class_str or 'text-red-500' in class_str:
-                        code_text = span.get_text(strip=False) or ''
-                        if code_text.startswith('-'):
-                            code_text = code_text[1:]
-                        if code_text.strip():
-                            sub_lines.append(code_text)
-            
-            if not add_lines and not sub_lines:
-                for tr in soup.find_all('tr'):
-                    tr_classes = tr.get('class', [])
-                    if isinstance(tr_classes, list):
-                        if 'blob-code-addition' in tr_classes:
-                            code_span = tr.find('span', class_='blob-code-inner')
-                            if code_span:
-                                code_text = code_span.get_text(strip=False) or ''
-                                if code_text.startswith('+'):
-                                    code_text = code_text[1:]
-                                if code_text.strip():
-                                    add_lines.append(code_text)
-                        elif 'blob-code-deletion' in tr_classes:
-                            code_span = tr.find('span', class_='blob-code-inner')
-                            if code_span:
-                                code_text = code_span.get_text(strip=False) or ''
-                                if code_text.startswith('-'):
-                                    code_text = code_text[1:]
-                                if code_text.strip():
-                                    sub_lines.append(code_text)
-            
-            result["add_fix_code"] = add_lines
-            result["sub_fix_code"] = sub_lines
-            print(f"  [HTML-SUCCESS] {len(add_lines)} added line(s), {len(sub_lines)} deleted line(s)")
+            print(f"  [API-ERR] Status {resp.status_code}")
     
     except requests.RequestException as e:
         print(f"  [NET-ERR] {e}")
@@ -278,6 +305,12 @@ def main():
         default=0,
         help='Process only first N files (0 for all)'
     )
+    parser.add_argument(
+        '--delay',
+        type=float,
+        default=0.5,
+        help='Delay in seconds between requests to avoid rate limiting (default: 0.5)'
+    )
     args = parser.parse_args()
     
     input_dir = Path(args.input_dir)
@@ -311,6 +344,9 @@ def main():
             success_count += 1
         else:
             fail_count += 1
+        
+        if idx < len(json_files) and args.delay > 0:
+            time.sleep(args.delay)
     
     print(f"\n{'='*80}")
     print(f"Summary:")
