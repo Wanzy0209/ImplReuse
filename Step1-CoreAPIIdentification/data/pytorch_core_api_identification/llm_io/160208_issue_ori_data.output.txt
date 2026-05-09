@@ -1,0 +1,78 @@
+The user wants to identify the single core PyTorch API responsible for the bug described in the report.
+
+**1. Analyze the Bug Report:**
+*   **Title:** "MPS regression on supported dtypes/scalar/alpha combinations on add/sub/rsub"
+*   **Description:** Allowed dtypes/scalar/alpha combinations in `add`, `sub`, and `rsub` fail on the MPS backend. This is a regression in 2.8.0/nightly compared to 2.7.0.
+*   **Reproducible Code:**
+    *   `torch.add(x, y, alpha=alpha)` fails for specific dtype combinations (e.g., `int`, `float`) when `alpha != 1`.
+    *   `torch.add(x, scalar, alpha=alpha)` fails for specific dtype/scalar combinations when `alpha != 1`.
+    *   `torch.sub(x, scalar, alpha=alpha)` fails for specific dtype/scalar combinations when `alpha != 1`.
+    *   `torch.rsub(x, scalar, alpha=alpha)` fails for specific dtype/scalar combinations when `alpha != 1`.
+*   **Trigger Conditions:** Backend is MPS. Specific dtypes. `alpha` values other than 1.
+
+**2. Identify the Core API:**
+The bug manifests in `torch.add`, `torch.sub`, and `torch.rsub`.
+However, looking at the error messages in the code:
+*   `Failed to create function state object for: add_alpha_dense_cast_float_int`
+*   `Failed to create function state object for: sub_alpha_dense_cast_float_int`
+
+The commonality is the `alpha` parameter handling in arithmetic operations on the MPS backend.
+The prompt asks for the *single* core PyTorch API.
+Usually, when multiple functions (`add`, `sub`, `rsub`) fail with similar errors related to a specific parameter (`alpha`) and backend (`MPS`), the issue is often in the backend implementation of the underlying operation or the dispatch logic.
+
+However, the question asks for the *API name*.
+Is it `torch.add`? `torch.sub`? `torch.rsub`?
+Or is it a lower-level API?
+
+Let's look at the error messages again. They mention `add_alpha_dense_cast_float_int`. This looks like an internal kernel name.
+The user-facing APIs are `torch.add`, `torch.sub`, `torch.rsub`.
+
+If I have to pick *one*, which one is the most representative?
+The title lists "add/sub/rsub".
+The code tests `torch.add` first and most extensively.
+The error messages start with `add_alpha...`.
+
+However, `sub` and `rsub` are essentially `add` with negation (conceptually), but in PyTorch they are distinct entry points in the API.
+But often, `sub` and `rsub` might call `add` internally or share the same kernel registration path with a multiplier of -1.
+
+Let's look at the specific failure pattern.
+`torch.add(x, y, alpha=2)` fails.
+`torch.sub(x, y, alpha=2)` fails.
+`torch.rsub(x, y, alpha=2)` fails.
+
+The prompt asks for the "single core PyTorch API".
+If I say `torch.add`, it covers the first set of errors.
+If I say `torch.sub`, it covers the second.
+If I say `torch.rsub`, it covers the third.
+
+Is there a more fundamental API?
+The bug is about the `alpha` argument.
+The `alpha` argument is supported by `add`, `sub`, `rsub`, `div`, `mul` (sometimes), etc.
+But the report specifically focuses on `add`, `sub`, and `rsub`.
+
+Let's consider the "Core API" definition. Usually, this refers to the function the user calls.
+Since the title groups them as "add/sub/rsub", and the code tests them all, picking just one might seem arbitrary unless one is the root cause.
+In PyTorch, `sub` is often implemented as `add(input, other, alpha=-1)`. `rsub` is `add(other, input, alpha=-1)`.
+If `sub` and `rsub` are failing, and `add` is failing, and the errors look like `add_alpha...`, it strongly suggests that `torch.add` is the primitive operation here, and `sub`/`rsub` rely on it or share the exact same kernel path for the `alpha` scaling logic.
+
+Therefore, `torch.add` is the most fundamental API among the three listed. If `torch.add` works with `alpha`, `sub` and `rsub` (which use `alpha` internally) would likely work too. The fact that they all fail points to the `add` logic (or the shared kernel logic invoked by `add`).
+
+Let's verify if `sub` calls `add`.
+In PyTorch C++ source (aten/src/ATen/native/BinaryOps.cpp), `sub` is often defined in terms of `add`.
+For example: `sub_out(const Tensor& self, const Tensor& other, Scalar alpha)` -> calls `add_out(self, other, -alpha)`.
+Similarly for `rsub`.
+
+So, the regression in `add` (specifically the `alpha` path on MPS) causes the regression in `sub` and `rsub`.
+Thus, the core API is `torch.add`.
+
+**3. Final Selection:**
+The bug report title mentions "add/sub/rsub".
+The code tests `torch.add`, `torch.sub`, `torch.rsub`.
+The error messages reference `add_alpha...`.
+The implementation of `sub` and `rsub` typically delegates to `add` with a negated alpha.
+Therefore, `torch.add` is the single core API responsible.
+
+**4. Formatting:**
+The user requested *only* the API name. No punctuation, no quotes.
+
+Result: torch.addtorch.add

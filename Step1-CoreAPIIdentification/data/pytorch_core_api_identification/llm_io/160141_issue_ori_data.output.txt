@@ -1,0 +1,56 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** RuntimeError: miopenStatusUnknownError on PyTorch 2.8.0+rocm6.4
+    *   **Description:** The user is running a TTS model (kokoro) on PyTorch with ROCm backend. It crashes with a `RuntimeError`.
+    *   **Error Logs:**
+        *   `MIOpen(HIP): Error [Compile] ... MIOpenDropoutHIP.cpp: HIPRTC_ERROR_COMPILATION (6)`
+        *   `fatal error: 'rocrand/rocrand_xorwow.h' file not found`
+        *   `MIOpen Error: ... Code object build failed. Source: MIOpenDropoutHIP.cpp`
+        *   Traceback points to `torch/nn/modules/rnn.py` (UserWarning about dropout) and `torch/nn/utils/weight_norm.py` (FutureWarning).
+        *   The actual crash happens during the forward pass of the model, specifically inside `self.predictor.text_encoder`.
+    *   **Environment:** PyTorch 2.8.0+rocm6.4, Python 3.12, AMD GPU (gfx1030).
+    *   **Trigger Conditions:** ROCm backend, compiling for gfx1030.
+
+2.  **Identify the Core Issue:**
+    *   The error is a compilation failure within MIOpen (the AMD equivalent of cuDNN).
+    *   The specific file failing to compile is `MIOpenDropoutHIP.cpp`.
+    *   The missing header is `rocrand/rocrand_xorwow.h`.
+    *   This suggests an issue with the ROCm/MIOpen installation or compatibility with the specific PyTorch version, specifically related to dropout operations being compiled on the fly (JIT compilation) or pre-compiled kernels failing to load, forcing a re-compilation that fails due to missing dependencies in the environment.
+
+3.  **Determine the Responsible API:**
+    *   The error originates from `MIOpenDropoutHIP.cpp`. This implies the operation triggering the compilation is **Dropout**.
+    *   Looking at the traceback and warnings:
+        *   `torch/nn/modules/rnn.py:123: UserWarning: dropout option adds dropout after all but last recurrent layer...`
+        *   The model uses RNNs (likely LSTM or GRU based on the TTS context) with dropout.
+    *   When PyTorch (via MIOpen) tries to execute the dropout operation on the ROCm backend, it attempts to compile the kernel. This compilation fails because of a missing ROCrand header.
+    *   Therefore, the PyTorch API that triggers this path is the **Dropout** module or function.
+    *   Is it `torch.nn.Dropout`? Or `torch.nn.functional.dropout`?
+    *   The traceback shows `torch/nn/modules/rnn.py`. RNNs often have a `dropout` parameter. If `dropout > 0`, the RNN implementation internally applies dropout.
+    *   However, the specific error is in `MIOpenDropoutHIP.cpp`. This is the backend implementation for the Dropout operation.
+    *   The most direct API responsible for invoking this backend logic is `torch.nn.functional.dropout` (which `torch.nn.Dropout` calls).
+    *   Let's look closer at the traceback. It goes through `model.forward_with_tokens` -> `self.predictor.text_encoder`. The warning `dropout option adds dropout after all but last recurrent layer` confirms that an RNN with dropout is being used.
+    *   While the RNN module is the container, the specific operation causing the MIOpen compilation error is the **Dropout** operation itself.
+    *   Is there a more specific API? The error is `miopenStatusUnknownError`. This usually comes from MIOpen calls.
+    *   The compilation error is `MIOpenDropoutHIP.cpp`.
+    *   The API is `torch.nn.Dropout` or `torch.nn.functional.dropout`.
+    *   Given the constraints, I need to pick the *single* core API.
+    *   The error is strictly about the compilation of the dropout kernel.
+    *   The warning explicitly mentions `dropout option`.
+    *   The compilation failure is in `MIOpenDropoutHIP.cpp`.
+    *   Therefore, the API is `torch.nn.Dropout` (or `torch.nn.functional.dropout`). `torch.nn.Dropout` is the standard module name.
+
+4.  **Refining the Choice:**
+    *   Could it be `torch.nn.RNN`? The warning comes from `rnn.py`. The RNN module *uses* dropout. If the user set `dropout=0.2` in the RNN constructor, the RNN module applies dropout.
+    *   However, the *compilation error* is specifically for the Dropout kernel (`MIOpenDropoutHIP.cpp`), not the RNN cell kernel (LSTM/GRU).
+    *   If the RNN kernel failed, it would likely say `MIOpenLSTM.cpp` or similar.
+    *   The missing file `rocrand/rocrand_xorwow.h` is a random number generation library header, used by Dropout.
+    *   Thus, the operation failing is Dropout.
+    *   The API is `torch.nn.Dropout`.
+
+5.  **Final Check:**
+    *   Does `torch.nn.Dropout` explain the bug? Yes. When executed on ROCm, it calls MIOpen. MIOpen tries to compile the dropout kernel. The compilation fails due to environment issues (missing header).
+    *   Is there any other candidate? `torch.nn.utils.weight_norm` is deprecated but doesn't seem to be the cause of the crash, just a warning. `torch.nn.modules.rnn` is where the warning comes from, but the crash is in the dropout logic inside it.
+    *   The most precise API causing the specific backend failure is `torch.nn.Dropout`.
+
+6.  **Formatting the Output:**
+    *   The user wants *only* the API name.
+    *   `torch.nn.Dropout`torch.nn.Dropout

@@ -1,0 +1,58 @@
+1.  **Analyze the Request:**
+    *   Input: A bug report for PyTorch.
+    *   Task: Identify the *single core PyTorch API* responsible for the bug.
+    *   Output format: Only the API name, or None. No JSON, Markdown, explanation, punctuation, or quotes.
+
+2.  **Analyze the Bug Report:**
+    *   **Title:** `DISABLED test_fused_all_gather_scaled_matmul_gather_dim_0_scale_mode_row-wise-sharded`
+    *   **Description:** Test failing on ROCm platforms. Flaky.
+    *   **Traceback:**
+        *   `test_fused_all_gather_scaled_matmul` calls `torch.ops.symm_mem.fused_all_gather_scaled_matmul`.
+        *   This calls `_fused_all_gather_scaled_matmul`.
+        *   Which calls `_fused_all_gather_matmul_impl`.
+        *   Which calls `_pipelined_multi_all_gather_and_consume`.
+        *   Which calls `get_symm_mem_workspace`.
+        *   Which calls `_SymmetricMemory.rendezvous`.
+        *   **Error:** `RuntimeError: handle_type_ != Expandable_Segments_Handle_Type::UNSPECIFIED INTERNAL ASSERT FAILED at .../CUDASymmetricMemory.cu:855`.
+    *   **Reproducible Command:** `PYTORCH_TEST_WITH_ROCM=1 python test/distributed/test_symmetric_memory.py SymmetricMemoryTest.test_fused_all_gather_scaled_matmul_gather_dim_0_scale_mode_row-wise-sharded`
+
+3.  **Identify the Core API:**
+    *   The test is specifically testing a fused operation.
+    *   The direct call in the Python test code is `torch.ops.symm_mem.fused_all_gather_scaled_matmul`.
+    *   The error occurs deep in the C++ backend (`CUDASymmetricMemory.cu`), specifically during the rendezvous logic for symmetric memory.
+    *   However, the user-facing API that triggers this path is the custom op `torch.ops.symm_mem.fused_all_gather_scaled_matmul`.
+    *   Is there a higher-level standard API? The traceback shows it's a custom op registered under `torch.ops.symm_mem`.
+    *   The test name is `test_fused_all_gather_scaled_matmul`.
+    *   The error is an internal assertion failure in the implementation of this specific fused operation.
+
+4.  **Select the Best Candidate:**
+    *   Candidate 1: `torch.ops.symm_mem.fused_all_gather_scaled_matmul`. This is the exact function called in the test that leads to the crash.
+    *   Candidate 2: `torch.distributed._symmetric_memory`. This is the module, but the specific API is the function.
+    *   Candidate 3: `all_gather`. While this operation *contains* an all-gather, it is a *fused* operation. The bug is specific to the fused implementation (symmetric memory handling), not the generic `all_gather`.
+
+    The prompt asks for the "single core PyTorch API". `torch.ops.symm_mem.fused_all_gather_scaled_matmul` is the specific API being tested and failing.
+
+5.  **Refine the Name:**
+    *   The traceback shows: `ag_output_1, mm_outputs_1 = torch.ops.symm_mem.fused_all_gather_scaled_matmul(`
+    *   This is the most precise identifier.
+
+6.  **Final Check:**
+    *   Does it explain the bug? Yes, the bug is in the implementation of this specific fused op.
+    *   Is it a single API? Yes.
+    *   Is it a PyTorch API? Yes, it's a custom op exposed via `torch.ops`.
+
+    Let's look at the error message again. `RuntimeError: handle_type_ != Expandable_Segments_Handle_Type::UNSPECIFIED INTERNAL ASSERT FAILED`. This happens inside `_SymmetricMemory.rendezvous`. This is called by `get_symm_mem_workspace`, called by `_pipelined_multi_all_gather_and_consume`, called by `_fused_all_gather_matmul_impl`, called by `torch.ops.symm_mem.fused_all_gather_scaled_matmul`.
+
+    The entry point is `torch.ops.symm_mem.fused_all_gather_scaled_matmul`.
+
+    Is there a more standard name? Sometimes these are wrapped. The file is `torch/distributed/_symmetric_memory/__init__.py`. The function `_fused_all_gather_scaled_matmul` is the python wrapper. The actual op is `torch.ops.symm_mem.fused_all_gather_scaled_matmul`.
+
+    I will use `torch.ops.symm_mem.fused_all_gather_scaled_matmul`.
+
+    Wait, looking at the constraints: "Reply with only one API name, or None." "Do not return JSON, Markdown, explanation, punctuation, or quotes."
+
+    The name is `torch.ops.symm_mem.fused_all_gather_scaled_matmul`.
+
+    Let's double check if `torch.distributed.all_gather` is a better fit. The test is `test_fused_all_gather_scaled_matmul`. The error is specific to the *fused* version using symmetric memory. The standard `all_gather` likely works fine. The bug is in the specific implementation of the fused op. Therefore, identifying the fused op is correct.
+
+    Final string: `torch.ops.symm_mem.fused_all_gather_scaled_matmul`torch.ops.symm_mem.fused_all_gather_scaled_matmul

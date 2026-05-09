@@ -1,0 +1,146 @@
+Bug Report:
+Title: torch.jit.script fails with 'undefined value' error when module has @torch.compiler.disable decorator (regression in 2.8.0)
+Issue ID: 160059
+Original bug description: ### 🐛 Describe the bug
+
+# Description
+
+`torch.jit.script` fails with an "undefined value" error when attempting to script a module that has a `@torch.compiler.disable` decorator on its forward method.
+This appears to be a regression introduced in PyTorch 2.8.0, as the same code worked correctly in version 2.7.0.
+
+# Reproduction Steps
+
+Minimal reproducible example:
+
+```python
+import torch
+from torch import nn
+
+
+def inverse_sigmoid(x: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+    x = x.clamp(min=0, max=1)
+    x1 = x.clamp(min=eps)
+    x2 = (1 - x).clamp(min=eps)
+
+    return torch.log(x1 / x2)
+
+
+class Model(nn.Module):
+    @torch.compiler.disable(recursive=False)  # type: ignore[misc]
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = inverse_sigmoid(x)
+        return x
+
+
+n = Model()
+torch.jit.script(n)
+```
+
+# Complete Error Traceback
+
+<details>
+<summary>Click to expand traceback</summary>
+
+```
+RuntimeError                              Traceback (most recent call last)
+Cell In[1], line 21
+     17         return x
+     20 n = Model()
+---> 21 torch.jit.script(n)
+
+File ~/Programming/.venv/lib/python3.11/site-packages/torch/jit/_script.py:1443, in script(obj, optimize, _frames_up, _rcb, example_inputs)
+   1441 prev = _TOPLEVEL
+   1442 _TOPLEVEL = False
+-> 1443 ret = _script_impl(
+   1444     obj=obj,
+   1445     optimize=optimize,
+   1446     _frames_up=_frames_up + 1,
+   1447     _rcb=_rcb,
+   1448     example_inputs=example_inputs,
+   1449 )
+   1451 if prev:
+   1452     log_torchscript_usage("script", model_id=_get_model_id(ret))
+
+File ~/Programming/.venv/lib/python3.11/site-packages/torch/jit/_script.py:1152, in _script_impl(obj, optimize, _frames_up, _rcb, example_inputs)
+   1150 if isinstance(obj, torch.nn.Module):
+   1151     obj = call_prepare_scriptable_func(obj)
+-> 1152     return torch.jit._recursive.create_script_module(
+   1153         obj, torch.jit._recursive.infer_methods_to_compile
+   1154     )
+   1155 else:
+   1156     obj = (
+   1157         obj.__prepare_scriptable__()
+   1158         if hasattr(obj, "__prepare_scriptable__")
+   1159         else obj
+   1160     )  # type: ignore[operator]
+
+File ~/Programming/.venv/lib/python3.11/site-packages/torch/jit/_recursive.py:557, in create_script_module(nn_module, stubs_fn, share_types, is_tracing)
+    555 if not is_tracing:
+    556     AttributeTypeIsSupportedChecker().check(nn_module)
+--> 557 return create_script_module_impl(nn_module, concrete_type, stubs_fn)
+
+File ~/Programming/.venv/lib/python3.11/site-packages/torch/jit/_recursive.py:630, in create_script_module_impl(nn_module, concrete_type, stubs_fn)
+    628 # Compile methods if necessary
+    629 if concrete_type not in concrete_type_store.methods_compiled:
+--> 630     create_methods_and_properties_from_stubs(
+    631         concrete_type, method_stubs, property_stubs
+    632     )
+    633     # Create hooks after methods to ensure no name collisions between hooks and methods.
+    634     # If done before, hooks can overshadow methods that aren't exported.
+    635     create_hooks_from_stubs(concrete_type, hook_stubs, pre_hook_stubs)
+
+File ~/Programming/.venv/lib/python3.11/site-packages/torch/jit/_recursive.py:466, in create_methods_and_properties_from_stubs(concrete_type, method_stubs, property_stubs)
+    463 property_defs = [p.def_ for p in property_stubs]
+    464 property_rcbs = [p.resolution_callback for p in property_stubs]
+--> 466 concrete_type._create_methods_and_properties(
+    467     property_defs, property_rcbs, method_defs, method_rcbs, method_defaults
+    468 )
+
+RuntimeError: 
+undefined value inverse_sigmoid:
+  File "/home/user/Programming/.venv/lib/python3.11/site-packages/torch/_dynamo/external_utils.py", line 16
+    @torch.compiler.disable(recursive=False)  # type: ignore[misc]
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = inverse_sigmoid(x)
+            ~~~~~~~~~~~~~~~ <--- HERE
+        return x
+```
+
+</details>
+
+
+cc @EikanWang @jgong5 @wenzhe-nrv @sa
+Structured error description: torch.jit.script fails with an "undefined value" error when attempting to script a module that has a @torch.compiler.disable decorator on its forward method. This appears to be a regression introduced in PyTorch 2.8.0, as the same code worked correctly in version 2.7.0.
+Minimal reproducible example: import torch
+from torch import nn
+
+
+def inverse_sigmoid(x: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+    x = x.clamp(min=0, max=1)
+    x1 = x.clamp(min=eps)
+    x2 = (1 - x).clamp(min=eps)
+
+    return torch.log(x1 / x2)
+
+
+class Model(nn.Module):
+    @torch.compiler.disable(recursive=False)  # type: ignore[misc]
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = inverse_sigmoid(x)
+        return x
+
+
+n = Model()
+torch.jit.script(n)
+Trigger conditions: {"backend": "", "dtype": "", "input_shape": "", "other_conditions": "module has a @torch.compiler.disable decorator on its forward method"}
+Environment: {"pytorch_version": "2.8.0", "python_version": "3.11", "os": "", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

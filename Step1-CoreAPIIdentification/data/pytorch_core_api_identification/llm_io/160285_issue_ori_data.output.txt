@@ -1,0 +1,56 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** Wrong-size gradients in Expert Parallel MoE.
+    *   **Issue:** Gradients for MoE layers are doubled when Expert Parallel (EP) size is 2.
+    *   **Context:** Using `torchtitan`, specifically `TorchGroupedExperts` and `torch.distributed.tensor.DTensor`.
+    *   **Observation:** The loss curves are equivalent, but the gradients are exactly 2x the size.
+    *   **Repro:** Uses `torch.distributed.tensor.DTensor` with a `DeviceMesh` configured for Expert Parallel (`ep=2`).
+    *   **Key Output:**
+        *   Without EP: `DeviceMesh((dp=2, ...))`, Gradient norm ~0.57.
+        *   With EP: `DeviceMesh((notep=1, ep=2), ...)`, Gradient norm ~1.14 (exactly 2x).
+    *   **Trigger Conditions:** Expert Parallel (EP) with size 2, `torch.distributed.tensor.DTensor`.
+
+2.  **Identify the Core Component:**
+    *   The bug is specifically about gradients being doubled in a distributed setting involving "Expert Parallel".
+    *   The code uses `torch.distributed.tensor.DTensor`.
+    *   The sharding strategy changes from `dp` (Data Parallel) to `ep` (Expert Parallel).
+    *   The issue is that when gradients are accumulated or reduced in the EP context, they are not being averaged or divided by the world size (or the EP size), resulting in a sum instead of an average (or simply double counting).
+
+3.  **Pinpoint the API:**
+    *   The bug report mentions `torch.distributed.tensor.DTensor` explicitly in the output logs.
+    *   The mechanism handling the sharding and gradient synchronization is the core of the issue.
+    *   Is it `torch.distributed.tensor.DTensor`? Or is it a specific function within it?
+    *   The bug is about the *behavior* of gradients with respect to sharding strategies.
+    *   The user mentions "Possibilities: 1. torch has a bug (perhaps in the distributed parts)".
+    *   The logs show `torch.distributed.tensor.DTensor` being used for the weights.
+    *   The gradient calculation and reduction logic is inherent to how `DTensor` handles backward passes with specific placements (sharding).
+    *   While `TorchGroupedExperts` is mentioned, that's part of `torchtitan` (a library built on PyTorch). The bug report asks for the *PyTorch* API responsible. The underlying PyTorch feature enabling this is `torch.distributed.tensor.DTensor`.
+    *   Specifically, the gradient reduction logic (often `redistribute` or `all_reduce`) during the backward pass for sharded tensors is likely the culprit.
+    *   However, the prompt asks for the "single core PyTorch API". `torch.distributed.tensor.DTensor` is the class representing the distributed tensor. The gradient handling is part of its autograd integration.
+
+4.  **Refining the API Name:**
+    *   Is it `torch.distributed`? Too broad.
+    *   Is it `torch.distributed.tensor`? A module.
+    *   Is it `torch.distributed.tensor.DTensor`? The specific class.
+    *   Is it `torch.distributed.tensor.ops`? Too specific.
+    *   The bug is about how gradients are handled when using `DTensor` with specific sharding (EP).
+    *   The most accurate "API" representing the feature causing the issue is `torch.distributed.tensor.DTensor`.
+
+5.  **Double Check:**
+    *   The bug report shows `experts.w1` is a `torch.distributed.tensor.DTensor`.
+    *   The issue is the gradient values on these tensors.
+    *   The logic for gradient synchronization is internal to `DTensor`'s autograd hooks.
+    *   Therefore, `torch.distributed.tensor.DTensor` is the responsible API.
+
+6.  **Final Selection:** `torch.distributed.tensor.DTensor`.
+
+    *Self-Correction/Alternative:* Could it be `torch.distributed.nn`? No, the logs show `DTensor`. Could it be `torch.autograd`? No, that's the engine, the specific API causing the *distributed* bug is the distributed tensor implementation.
+
+    The prompt asks for the API name. `torch.distributed.tensor.DTensor` is the standard name.
+
+    Let's look at the "Minimal reproducible example" section again.
+    `1 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'>`
+    The gradients are attached to these objects.
+
+    The bug is likely in the gradient reduction strategy (e.g., `ReduceOp.SUM` vs `ReduceOp.AVG` or lack of division by world size) inside the `DTensor` backward pass.
+
+    The API is `torch.distributed.tensor.DTensor`.torch.distributed.tensor.DTensor

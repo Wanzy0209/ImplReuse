@@ -1,0 +1,208 @@
+Bug Report:
+Title: torch.compilecrashes on model exported viatorch.export, with lifted constant from cache tensor
+Issue ID: 160066
+Original bug description: ### 🐛 Describe the bug
+
+I encountered a crash when using `torch.compile` on a model exported via `torch.export`. The model itself runs normally before export, but after exporting and compiling, it triggers:
+
++ A warning about a missing `get_attr` reference
+
++ Followed by a `BackendCompilerFailed` caused by mismatched `FakeTensorMode` contexts.
+
+This happens only after export, and seems related to the way `nn.Parameter(..., requires_grad=False)` and `.data` mutation are handled in conjunction with the `torch.export` lifted constant system.
+
+## Minimal Repro
+```python
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+
+class BaseModule(nn.Module):
+    def forward(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def predict(self, X, batch_size=1):
+        data_loader = DataLoader(TensorDataset(X), batch_size=batch_size, shuffle=False)
+        self.eval()
+        n_samples = X.size(0)
+        y_pred = torch.zeros((n_samples,) + self(X[0:1]).size()[1:])
+        r = 0
+        for batch_data in data_loader:
+            X_batch = torch.autograd.Variable(batch_data[0])
+            y_batch_pred = self(X_batch).data
+            y_pred[r:r + len(y_batch_pred)] = y_batch_pred
+            r += len(y_batch_pred)
+        return y_pred
+
+class CacheModule(BaseModule):
+    def __init__(self, cache: torch.Tensor):
+        super().__init__()
+        assert cache.ndim == 3
+        self.cache = nn.Parameter(cache, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        n_tokens = x.size(1)
+        rolled_cache = torch.roll(self.cache.data, -n_tokens, dims=1)
+        rolled_cache[:, -n_tokens:, :] = x
+        self.cache.data = rolled_cache
+        return self.cache
+
+class LinearBlock(nn.Module):
+    def __init__(self, in_features, out_features, activation=None):
+        super().__init__()
+        self.linear = nn.Linear(in_features, out_features)
+        self.activation = activation
+
+    def forward(self, x):
+        x = self.linear(x)
+        return self.activation(x) if self.activation else x
+
+class MyModel(BaseModule):
+    INPUT_FEATURES = 5
+    CACHE_SEQ_LEN = 10
+
+    def __init__(self):
+        super().__init__()
+        default_cache = torch.zeros(1, self.CACHE_SEQ_LEN, self.INPUT_FEATURES)
+        self.cache_layer = CacheModule(default_cache)
+        self.fc1 = LinearBlock(self.INPUT_FEATURES, 10, activation=nn.ReLU())
+        self.fc2 = LinearBlock(10, self.INPUT_FEATURES)
+
+    def forward(self, x):
+        cached = self.cache_layer(x)
+        out = self.fc1(cached)
+        out = self.fc2(out)
+        return out
+
+def my_model_function():
+    return MyModel()
+
+def GetInput():
+    return torch.randn(1, 3, MyModel.INPUT_FEATURES)
+
+if __name__ == "__main__":
+    input_tensor = GetInput()
+    exported_program = torch.export.export(my_model_function(), (input_tensor,))
+    exported_model = exported_program.module()
+
+    compiled_model = torch.compile(exported_model, mode="max-autotune-no-cudagraphs")
+    compiled_output = compiled_model(input_tensor)
+```
+
+## Actual Error Output
+```
+/.../torch/export/_unlift.py:81: UserWarning: Attempted to insert a get_attr Node with no underlying reference in the owning GraphModule!
+...
+BackendCompilerFailed: backend='inductor' raised:
+AssertionError: fake mode (...) doesn't match mode (...) from fake tensor input
+```
+This crash is thrown during FX/Inductor pre-grad passes.
+
+
+### Versions
+
+```
+PyTorch version: 2.7.1a0+gite2d141d
+Is debug build: True
+CUDA used to build PyTorch: 12.6
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.4 LTS (x86_64)
+GCC version: (Ubuntu 12.3.0-1ubuntu1~22.04) 12.3.0
+Clang version: Could not collect
+CMake version: version 3.22.1
+Libc version: glibc-2.35
+
+Python version: 3.10.16 (main, Dec 11 2024, 16:24:50) [GCC 11.2.0] (64-bit runtime)
+Python platform: Linux-6.8.0-59-generic-x86_64-with-glibc2.35
+Is CUDA available: True
+```
+
+cc @chauhang @penguinwu @avikchaudhuri @gmagogsfm @zhxchen17 @tugsbayasgalan @a
+Structured error description: A crash when using torch.compile on a model exported via torch.export. The model runs normally before export, but after exporting and compiling, it triggers a warning about a missing get_attr reference followed by a BackendCompilerFailed caused by mismatched FakeTensorMode contexts. This happens only after export, and seems related to the way nn.Parameter(..., requires_grad=False) and .data mutation are handled in conjunction with the torch.export lifted constant system.
+Minimal reproducible example: import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+
+class BaseModule(nn.Module):
+    def forward(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def predict(self, X, batch_size=1):
+        data_loader = DataLoader(TensorDataset(X), batch_size=batch_size, shuffle=False)
+        self.eval()
+        n_samples = X.size(0)
+        y_pred = torch.zeros((n_samples,) + self(X[0:1]).size()[1:])
+        r = 0
+        for batch_data in data_loader:
+            X_batch = torch.autograd.Variable(batch_data[0])
+            y_batch_pred = self(X_batch).data
+            y_pred[r:r + len(y_batch_pred)] = y_batch_pred
+            r += len(y_batch_pred)
+        return y_pred
+
+class CacheModule(BaseModule):
+    def __init__(self, cache: torch.Tensor):
+        super().__init__()
+        assert cache.ndim == 3
+        self.cache = nn.Parameter(cache, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        n_tokens = x.size(1)
+        rolled_cache = torch.roll(self.cache.data, -n_tokens, dims=1)
+        rolled_cache[:, -n_tokens:, :] = x
+        self.cache.data = rolled_cache
+        return self.cache
+
+class LinearBlock(nn.Module):
+    def __init__(self, in_features, out_features, activation=None):
+        super().__init__()
+        self.linear = nn.Linear(in_features, out_features)
+        self.activation = activation
+
+    def forward(self, x):
+        x = self.linear(x)
+        return self.activation(x) if self.activation else x
+
+class MyModel(BaseModule):
+    INPUT_FEATURES = 5
+    CACHE_SEQ_LEN = 10
+
+    def __init__(self):
+        super().__init__()
+        default_cache = torch.zeros(1, self.CACHE_SEQ_LEN, self.INPUT_FEATURES)
+        self.cache_layer = CacheModule(default_cache)
+        self.fc1 = LinearBlock(self.INPUT_FEATURES, 10, activation=nn.ReLU())
+        self.fc2 = LinearBlock(10, self.INPUT_FEATURES)
+
+    def forward(self, x):
+        cached = self.cache_layer(x)
+        out = self.fc1(cached)
+        out = self.fc2(out)
+        return out
+
+def my_model_function():
+    return MyModel()
+
+def GetInput():
+    return torch.randn(1, 3, MyModel.INPUT_FEATURES)
+
+if __name__ == "__main__":
+    input_tensor = GetInput()
+    exported_program = torch.export.export(my_model_function(), (input_tensor,))
+    exported_model = exported_program.module()
+
+    compiled_model = torch.compile(exported_model, mode="max-autotune-no-cudagraphs")
+    compiled_output = compiled_model(input_tensor)
+Trigger conditions: {"backend": "inductor", "dtype": "", "input_shape": "(1, 3, 5)", "other_conditions": "Using torch.export.export followed by torch.compile; using nn.Parameter(..., requires_grad=False) with .data mutation; using lifted constant system from torch.export"}
+Environment: {"pytorch_version": "2.7.1a0+gite2d141d", "python_version": "3.10.16", "os": "Ubuntu 22.04.4 LTS (x86_64)", "hardware": "CUDA 12.6"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.
