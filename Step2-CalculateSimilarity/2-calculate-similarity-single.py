@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Calculate pairwise code similarity between extracted PyTorch and TensorFlow APIs.
+"""Calculate pairwise code similarity between extracted PyTorch APIs.
 
 This script reads extracted API source data from:
 - data/pytorch-api-extracted
-- data/tensorflow-api-extracted
 
-It computes a similarity score for every PyTorch/TensorFlow API pair and writes
-the result as JSONL, one pair per line. The script reports progress while
-building embeddings and while writing the m*n pairs.
+It computes a similarity score for every PyTorch/PyTorch API pair (including
+self-comparison) and writes the result as JSONL, one pair per line. The script
+reports progress while building embeddings and while writing the m*m pairs.
 """
 
 import argparse
@@ -159,35 +158,32 @@ def normalize_embeddings(emb: np.ndarray) -> np.ndarray:
 
 def compute_pairwise_jsonl(
     pt_names: List[str],
-    tf_names: List[str],
     pt_emb: np.ndarray,
-    tf_emb: np.ndarray,
     out_path: Path,
     progress_interval: int = 1
 ) -> int:
-    total_pairs = len(pt_names) * len(tf_names)
+    total_pairs = len(pt_names) * len(pt_names)
     with out_path.open('w', encoding='utf-8') as fout:
         written = 0
-        for i, pt_name in enumerate(pt_names):
-            scores = np.dot(pt_emb[i:i + 1], tf_emb.T).ravel()
-            for j, tf_name in enumerate(tf_names):
+        for i, pt_name1 in enumerate(pt_names):
+            scores = np.dot(pt_emb[i:i + 1], pt_emb.T).ravel()
+            for j, pt_name2 in enumerate(pt_names):
                 item = {
-                    'pytorch_api': pt_name,
-                    'tensorflow_api': tf_name,
+                    'pytorch_api_1': pt_name1,
+                    'pytorch_api_2': pt_name2,
                     'similarity': float(scores[j])
                 }
                 fout.write(json.dumps(item, ensure_ascii=False) + '\n')
                 written += 1
             if (i + 1) % progress_interval == 0 or i == len(pt_names) - 1:
-                print(f'[{i+1}/{len(pt_names)}] PyTorch API "{pt_name}" compared against {len(tf_names)} TensorFlow APIs, total written {written}/{total_pairs}')
+                print(f'[{i+1}/{len(pt_names)}] PyTorch API "{pt_name1}" compared against {len(pt_names)} PyTorch APIs, total written {written}/{total_pairs}')
     return total_pairs
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Calculate pairwise code similarity for extracted framework APIs.')
+    parser = argparse.ArgumentParser(description='Calculate pairwise code similarity for PyTorch APIs.')
     parser.add_argument('--pytorch-dir', default='data/pytorch-api-extracted', help='Path to PyTorch extracted API directory')
-    parser.add_argument('--tensorflow-dir', default='data/tensorflow-api-extracted', help='Path to TensorFlow extracted API directory')
-    parser.add_argument('--output', default='data/api_pairwise_similarity.jsonl', help='Output JSONL file path')
+    parser.add_argument('--output', default='data/pytorch_pairwise_similarity.jsonl', help='Output JSONL file path')
     parser.add_argument('--model-dir', default='./codebert-base', help='Local CodeBERT directory or pretrained name')
     parser.add_argument('--progress-interval', type=int, default=10, help='How often to log progress (PyTorch APIs)')
     return parser.parse_args()
@@ -196,39 +192,30 @@ def parse_args():
 def main():
     args = parse_args()
     pt_dir = Path(args.pytorch_dir)
-    tf_dir = Path(args.tensorflow_dir)
     out_path = Path(args.output)
 
-    if not pt_dir.exists() or not tf_dir.exists():
-        raise FileNotFoundError('Both pytorch-dir and tensorflow-dir must exist.')
+    if not pt_dir.exists():
+        raise FileNotFoundError('pytorch-dir must exist.')
 
     print('Loading PyTorch API sources from', pt_dir)
     pt_sources = load_api_sources(pt_dir)
-    print('Loading TensorFlow API sources from', tf_dir)
-    tf_sources = load_api_sources(tf_dir)
-    print(f'Loaded {len(pt_sources)} PyTorch APIs and {len(tf_sources)} TensorFlow APIs')
+    print(f'Loaded {len(pt_sources)} PyTorch APIs')
 
-    if not pt_sources or not tf_sources:
-        raise RuntimeError('No API sources found in one of the directories.')
+    if not pt_sources:
+        raise RuntimeError('No API sources found in pytorch-dir.')
 
     pt_names = sorted(pt_sources.keys())
-    tf_names = sorted(tf_sources.keys())
     pt_texts = [normalize_code(pt_sources[name]) for name in pt_names]
-    tf_texts = [normalize_code(tf_sources[name]) for name in tf_names]
 
     print('Building PyTorch code embeddings...')
     pt_emb, method = build_code_embeddings(pt_texts, args.model_dir)
     print(f'PyTorch embeddings built with method: {method}')
-    print('Building TensorFlow code embeddings...')
-    tf_emb, method_tf = build_code_embeddings(tf_texts, args.model_dir)
-    print(f'TensorFlow embeddings built with method: {method_tf}')
 
     pt_emb = normalize_embeddings(pt_emb)
-    tf_emb = normalize_embeddings(tf_emb)
 
-    print('Computing pairwise similarity for all API pairs...')
-    total_pairs = compute_pairwise_jsonl(pt_names, tf_names, pt_emb, tf_emb, out_path, progress_interval=args.progress_interval)
-    print(f'Done. Wrote {total_pairs} API pairs to {out_path}')
+    print('Computing pairwise similarity for all PyTorch API pairs...')
+    total_pairs = compute_pairwise_jsonl(pt_names, pt_emb, out_path, progress_interval=args.progress_interval)
+    print(f'Done. Wrote {total_pairs} PyTorch API pairs to {out_path}')
 
 
 if __name__ == '__main__':
