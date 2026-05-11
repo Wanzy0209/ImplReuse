@@ -1,0 +1,97 @@
+Bug Report:
+Title: Specific torch compile memory leak involving flash_attn_varlen_func
+Issue ID: 165407
+Original bug description: ### 🐛 Describe the bug
+
+The following code causes a clear memory leak where the # of tensors increases every step. Inductor seems to be holding on to the memory incorrectly, keeping ghosts alive. 
+
+Example repro output:
+```python
+Step  150 | Loss: 2.3023 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2266 (130 w/grad) | AvgSeqLen: 35.8 | Time: 7.0s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  200 | Loss: 2.3037 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2602 (130 w/grad) | AvgSeqLen: 40.2 | Time: 9.0s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  250 | Loss: 2.3055 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3034 (130 w/grad) | AvgSeqLen: 40.6 | Time: 11.6s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  300 | Loss: 2.3029 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3514 (130 w/grad) | AvgSeqLen: 42.9 | Time: 14.4s
+```
+Note that the number of tensors should not be increasing here, they're leaked.
+
+
+Enabling 
+```
+torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True
+```
+
+Prevents the accumulation, however, it's an opaque and very hard to hunt down failure mode. There's apparently another issue that's harder to reproduce with the same configuration even with skip dynamic graphs, where the memory used will randomly balloon for no apparent reason. Using regular flash attn func does not create this behaviour, and seems to be related to variant graphs holding on to memory incorrectly. This demo shows the "graph holding" behaviour but I could not isolate the random memory explosion behaviour:
+
+Although skipping dynamic graphs fixes the clear issue here, there's still some other memory issues that I could not replicate in isolation but are still happening over longer periods in larger scale tests. This seems to be some pathological case where the graph compiler has a fundamental failure mode around retaining memory. As an aside, specifically marking the forward using
+```python
+    @torch.compiler.disable
+    def forward(self, x, cu_seqlens=None, max_seqlen=None):
+        q = self.w_q(x)
+        k = self.w_k(x)
+        v = self.w_v(x)
+
+        # Where s -> total sequence length (of all batches combined), h -> number attn heads, d -> hidden dimension
+        q = rearrange(q, 's (h d) -> s h d', h=self.n_heads)
+        k = rearrange(k, 's (h d) -> s h d', h=self.n_heads)
+        v = rearrange(v, 's (h d) -> s h d', h=self.n_heads)
+
+        out = flash_attn_varlen_func(
+            q, k, v,
+            cu_seqlens_q=cu_seqlens,
+            cu_seqlens_k=cu_seqlens,
+            max_seqlen_q=max_seqlen,
+            max_seqlen_k=max_seqlen,
+            
+//...
+```
+
+Does not actually stop the issue. Similarly
+```
+torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True
+```
+
+In concert with disable torch compile *still* causes training failures due to memory over long periods. A reference implementation of MHA mysteriously does not have this problem, for reference:
+```python
+import torch
+import torch.nn as nn
+from flash_attn import flash_attn_varlen_func
+from einops import rearrange
+
+class VarlenMHA(nn.Module):
+    def __init__(self, config, layer_idx=0):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.n_heads = config.n_attn_heads
+
+        assert self.hidden_size % self.n_heads == 0
+
+        # [ln(x + 1) / 2] + 1 -> ~[1, 2.5] s
+Structured error description: The following code causes a clear memory leak where the # of tensors increases every step. Inductor seems to be holding on to the memory incorrectly, keeping ghosts alive.
+Minimal reproducible example: Step  150 | Loss: 2.3023 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2266 (130 w/grad) | AvgSeqLen: 35.8 | Time: 7.0s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  200 | Loss: 2.3037 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2602 (130 w/grad) | AvgSeqLen: 40.2 | Time: 9.0s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  250 | Loss: 2.3055 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3034 (130 w/grad) | AvgSeqLen: 40.6 | Time: 11.6s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  300 | Loss: 2.3029 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3514 (130 w/grad) | AvgSeqLen: 42.9 | Time: 14.4s
+Trigger conditions: {"backend": "", "dtype": "", "input_shape": "", "other_conditions": "flash_attn_varlen_func, torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True prevents the issue, related to variant graphs holding on to memory incorrectly"}
+Environment: {"pytorch_version": "", "python_version": "3.13", "os": "", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

@@ -1,0 +1,54 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** Incorrect results of DTensor.mean with uneven sharding.
+    *   **Description:** Computing the mean of a DTensor (specifically a 3x4 tensor sharded across 2 processes) yields incorrect results because it doesn't account for uneven sharding. With a 1x4 tensor, it results in NaN.
+    *   **Code Snippet:**
+        ```python
+        from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh
+        import torch
+        from torch import distributed as dist
+
+        # ... setup ...
+
+        tensor = torch.arange(12).reshape(-1, 4).float().cuda()
+        # ... setup mesh ...
+
+        dt = distribute_tensor(tensor, device_mesh=mesh, placements=[Shard(0)])
+
+        mean = dt.mean() # <--- The operation causing the issue
+        full = mean.full_tensor()
+        ```
+    *   **Trigger Conditions:** Uneven sharding, `mean()` operation on DTensor.
+
+2.  **Identify the Core API:**
+    *   The user creates a `DTensor` using `distribute_tensor`.
+    *   The user calls `dt.mean()`.
+    *   The bug is specifically about the *calculation* of the mean being incorrect when the tensor is sharded unevenly.
+    *   While `distribute_tensor` creates the uneven sharding, the *bug* is in the behavior of the operation that processes that sharding. The operation is `mean`.
+    *   Is it `torch.mean` or `DTensor.mean`? The code calls `dt.mean()`. In PyTorch, `DTensor` implements its own methods to handle distributed logic (all-reduce, etc.).
+    *   The title explicitly says "Incorrect results of DTensor.mean".
+    *   The description says "The above code attempts to compute mean of a 3x4 DTensor. The result does not account for the uneven sharding".
+
+3.  **Evaluate Candidates:**
+    *   `distribute_tensor`: Sets up the state, but the bug is the *result* of the mean calculation. If `mean` handled uneven sharding correctly, `distribute_tensor` wouldn't be the problem.
+    *   `Shard`: A placement spec. Not the executable API causing the wrong math.
+    *   `mean`: This is the method being called on the DTensor object. The logic for distributed reduction (summing local sums and dividing by the global count) resides here. The bug report explicitly names "DTensor.mean".
+
+4.  **Select the Best Fit:**
+    *   The API is `mean`. Specifically, the `mean` method of the `DTensor` class (often aliased or dispatched from `torch.mean`).
+    *   The prompt asks for the "single core PyTorch API".
+    *   The code calls `dt.mean()`.
+    *   The title says "DTensor.mean".
+
+5.  **Format the Output:**
+    *   Constraint: Return only one API name, nothing else.
+    *   Constraint: No JSON, Markdown, explanation, punctuation, or quotes.
+
+    Result: `mean` or `DTensor.mean`. Usually, for these tasks, the method name itself is preferred if it's a standard tensor method, or the specific class method if it's unique. Given the context of "PyTorch API", `mean` is the standard API, but `DTensor.mean` is the specific implementation failing. However, looking at standard PyTorch API extraction, `mean` is the operation. Let's look at the code: `mean = dt.mean()`.
+    If I say `mean`, it's accurate. If I say `DTensor.mean`, it's more specific but might be considered a class method rather than a top-level API. However, the bug is in the implementation of `mean` for DTensors.
+    Let's check the title again: "Incorrect results of DTensor.mean".
+    Let's check the description: "attempts to compute mean".
+    The most direct API responsible for the *incorrect result* is the `mean` function/method.
+
+    Let's consider if `distribute_tensor` is the culprit. It creates the uneven shard. But uneven sharding is a valid state. The `mean` operation *should* handle it. The bug is that `mean` fails to handle it. Therefore, `mean` is the responsible API.
+
+    Final decision: `mean`.mean

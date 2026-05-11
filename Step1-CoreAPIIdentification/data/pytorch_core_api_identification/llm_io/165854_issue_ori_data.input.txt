@@ -1,0 +1,158 @@
+Bug Report:
+Title: New flex flash path breaks w/ dynamic buffers
+Issue ID: 165854
+Original bug description: ```Py
+import torch
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask, noop_mask
+
+
+def run_with_head_count(compiled_fa, H, device, dtype):
+    """Run flex attention with a specific head count, creating a captured buffer sized by H."""
+    B, S, D = 2, 256, 64
+
+    # Create captured buffer that depends on dynamic H
+    head_scale = torch.randn(H, device=device, dtype=dtype, requires_grad=True)
+
+    def score_mod(score, batch, head, token_q, token_kv):
+        return score * head_scale[head]
+
+    print(f"  Running with H={H}, head_scale.shape={head_scale.shape}")
+
+    # Run multiple iterations with the same head_scale
+    for i in range(5):
+        q = torch.randn(B, H, S, D, device=device, dtype=dtype, requires_grad=True)
+        k = torch.randn_like(q, requires_grad=True)
+        v = torch.randn_like(q, requires_grad=True)
+
+        block_mask = create_block_mask(noop_mask, B, 1, S, S, device=device)
+
+        outputs = compiled_fa(q, k, v, score_mod=score_mod, block_mask=block_mask)
+        loss = outputs.sum()
+        loss.backward()
+
+    print(f"  ✓ Completed {i+1} iterations")
+
+
+def main():
+    device = "cuda"
+    dtype = torch.float16
+    torch.manual_seed(0)
+
+    # Test with different head counts - this makes H a dynamic dimension
+    # and the captured buffer (head_scale) changes size with H
+    head_counts = [4, 8, 4, 16, 4]
+
+    compiled_fa = torch.compile(flex_attention, fullgraph=True, dynamic=True)
+
+    print(f"Running flex-attention with dynamic head counts on {device}, dtype={dtype}")
+    print(f"Testing head counts: {head_counts}\n")
+
+    for iteration, H in enumerate(head_counts, start=1):
+        print(f"Iteration {iteration}:")
+        run_with_head_count(compiled_fa, H, device, dtype)
+
+
+if __name__ == "__main__":
+    main()
+
+```
+
+```Shell
+^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/meta/pytorch/torch/_inductor/kernel/flex/flex_attention.py", line 196, in flex_attention
+    if _use_flex_flash_attention(subgraph, mask_graph, kernel_options):
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/meta/pytorch/torch/_inductor/kernel/flex/flex_flash_attention.py", line 120, in _use_flex_flash_attention
+    can_use, reason = _can_use_flex_flash_attention(subgraph, mask_graph)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/meta/pytorch/torch/_inductor/kernel/flex/flex_flash_attention.py", line 86, in _can_use_flex_flash_attention
+    if input_buffers_require_grads(subgraph.graph_module):
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/meta/pytorch/torch/_inductor/kernel/flex/flex_flash_attention.py", line 53, in input_buffers_require_grads
+    if n.meta["tensor_meta"].requires_grad:
+       ~~~~~~^^^^^^^^^^^^^^^
+torch._inductor.exc.InductorError: LoweringException: KeyError: 'tensor_meta'
+  target: flex_attention
+  args[0]: TensorBox(StorageBox(
+    InputBuffer(name='primals_3', layout=FixedLayout('cuda:0', torch.float16, size=[s5, 8, s37, 64], stride=[512*s37, 64*s37, 64, 1]))
+  ))
+  args[1]: TensorBox(StorageBox(
+    InputBuffer(name='primals_4', layout=FixedLayout('cuda:0', torch.float16, size=[s5, 8, s37, 64], stride=[512*s37, 64*s37, 64, 1]))
+  ))
+  args[2]: TensorBox(StorageBox(
+    InputBuffer(name='primals_5', layout=FixedLayout('cuda:0', torch.float16, size=[s5, 8, s37, 64], stride=[512*s37, 64*s37, 64, 1]))
+  ))
+  args[3]: Subgraph(name='sdpa_score0', graph_module=<lambda>(), graph=None)
+  args[4]: (s37, s71, TensorBox(StorageBox(
+    InputBuffer(name='primals_10', layout=FixedLayout('cuda:0', torch.int32, size=[s5, 1, s5], stride=[s5, s5, 1]))
+  )), TensorBox(StorageBox(
+    InputBuffer(name='primals_7', layout=FixedLayout('cuda:0', torch.int32, size=[s5, 1, s5, s5], stride=[s5**2, s5**2, s5, 1]))
+  )), TensorBox(StorageBox(
+    InputBuffer(name='primals_13', layout=FixedLayout('cuda:0', torch.int32, size=[s5, 1, s5], stride=[s5, s5, 1]))
+  )), TensorBox(StorageBox(
+    Inpu
+Structured error description: A KeyError: 'tensor_meta' occurs in the flex attention implementation when using dynamic buffers. The error happens in torch._inductor.kernel.flex.flex_flash_attention.py at line 53 when checking input_buffers_require_grads, specifically when accessing n.meta['tensor_meta'].requires_grad. This occurs when running flex_attention with torch.compile using fullgraph=True and dynamic=True, with captured buffers that change size with dynamic dimensions.
+Minimal reproducible example: import torch
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask, noop_mask
+
+
+def run_with_head_count(compiled_fa, H, device, dtype):
+    """Run flex attention with a specific head count, creating a captured buffer sized by H."""
+    B, S, D = 2, 256, 64
+
+    # Create captured buffer that depends on dynamic H
+    head_scale = torch.randn(H, device=device, dtype=dtype, requires_grad=True)
+
+    def score_mod(score, batch, head, token_q, token_kv):
+        return score * head_scale[head]
+
+    print(f"  Running with H={H}, head_scale.shape={head_scale.shape}")
+
+    # Run multiple iterations with the same head_scale
+    for i in range(5):
+        q = torch.randn(B, H, S, D, device=device, dtype=dtype, requires_grad=True)
+        k = torch.randn_like(q, requires_grad=True)
+        v = torch.randn_like(q, requires_grad=True)
+
+        block_mask = create_block_mask(noop_mask, B, 1, S, S, device=device)
+
+        outputs = compiled_fa(q, k, v, score_mod=score_mod, block_mask=block_mask)
+        loss = outputs.sum()
+        loss.backward()
+
+    print(f"  ✓ Completed {i+1} iterations")
+
+
+def main():
+    device = "cuda"
+    dtype = torch.float16
+    torch.manual_seed(0)
+
+    # Test with different head counts - this makes H a dynamic dimension
+    # and the captured buffer (head_scale) changes size with H
+    head_counts = [4, 8, 4, 16, 4]
+
+    compiled_fa = torch.compile(flex_attention, fullgraph=True, dynamic=True)
+
+    print(f"Running flex-attention with dynamic head counts on {device}, dtype={dtype}")
+    print(f"Testing head counts: {head_counts}\n")
+
+    for iteration, H in enumerate(head_counts, start=1):
+        print(f"Iteration {iteration}:")
+        run_with_head_count(compiled_fa, H, device, dtype)
+
+
+if __name__ == "__main__":
+    main()
+Trigger conditions: {"backend": "CUDA", "dtype": "torch.float16", "input_shape": "Batch size 2, sequence length 256, dimension 64, dynamic head count H (4, 8, 4, 16, 4)", "other_conditions": "Using torch.compile with fullgraph=True and dynamic=True, using flex_attention with dynamic buffers (captured buffers that change size with dynamic dimensions)"}
+Environment: {"pytorch_version": "unknown", "python_version": "unknown", "os": "unknown", "hardware": "CUDA"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

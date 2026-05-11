@@ -1,0 +1,43 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** Internal assert failed when using Tensorly on MPS.
+    *   **Description:** The user is using `tensorly` with the `pytorch` backend to perform a PARAFAC decomposition. It works on CPU but fails on MPS (Metal Performance Shaders, Apple Silicon GPU).
+    *   **Error Message:** `RuntimeError: false INTERNAL ASSERT FAILED at ".../BatchLinearAlgebra.cpp":1614 ... torch.linalg.solve: Argument 2 has illegal value.`
+    *   **Traceback:** The error originates from `tensorly.decomposition._cp.py`, specifically line 426: `tl.solve(tl.conj(tl.transpose(pseudo_inverse)), tl.transpose(mttkrp))`. Since the backend is PyTorch, `tl.solve` maps to `torch.linalg.solve` (or `torch.solve` in older versions, but the error message explicitly says `torch.linalg.solve`).
+    *   **Reproducible Code:**
+        ```python
+        import tensorly as tl
+        tl.set_backend("pytorch")
+        from tensorly.decomposition import parafac
+        import torch # implied by context
+
+        x = torch.ones(12,3,12).to("mps")
+        weights, factors = parafac(x.detach(), 12, init="random", tol=1e-6)
+        ```
+    *   **Trigger Conditions:** MPS backend, specific tensor operations inside `parafac`.
+    *   **Environment:** PyTorch 2.8.0, macOS 15.4.1 (arm64), Apple M2.
+
+2.  **Identify the Core API:**
+    *   The error message explicitly names the API: `torch.linalg.solve`.
+    *   The traceback shows the call chain: `parafac` -> `tl.solve` -> `torch.linalg.solve`.
+    *   The assertion failure is in `BatchLinearAlgebra.cpp`, which handles linear algebra operations like solving linear systems.
+    *   The bug is specific to the MPS backend implementation of this operation.
+
+3.  **Evaluate Candidates:**
+    *   `tensorly.decomposition.parafac`: This is the high-level library function, but the bug is inside PyTorch, not Tensorly.
+    *   `torch.to`: Used to move the tensor to MPS. While necessary to trigger the bug, it's not the source of the assertion failure.
+    *   `torch.linalg.solve`: This is the function called directly before the crash, and the error message explicitly points to it ("torch.linalg.solve: Argument 2 has illegal value"). The assertion failure in `BatchLinearAlgebra.cpp` confirms this is the operation failing.
+
+4.  **Select the Best Fit:**
+    *   The error message is the strongest indicator: `torch.linalg.solve`.
+    *   The file path `BatchLinearAlgebra.cpp` corresponds to the implementation of linear algebra routines like `solve`.
+
+5.  **Format the Output:**
+    *   The user requested *only* the API name.
+    *   API name: `torch.linalg.solve`.
+
+6.  **Final Check:**
+    *   Does `torch.linalg.solve` explain the bug? Yes, the MPS backend implementation of `solve` is throwing an internal assertion error.
+    *   Is it a single API? Yes.
+    *   Is it a PyTorch API? Yes.
+
+    Result: `torch.linalg.solve`torch.linalg.solve

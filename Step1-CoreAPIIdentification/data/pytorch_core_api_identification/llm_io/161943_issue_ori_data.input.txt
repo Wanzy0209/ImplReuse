@@ -1,0 +1,135 @@
+Bug Report:
+Title: Sub-devicemesh get_group raises RuntimeError during JVP calculation
+Issue ID: 161943
+Original bug description: ### 🐛 Describe the bug
+
+### Bug description
+An unexpected RuntimeErrorwhen will raise when using torch.distributed.device_mesh.DeviceMesh.get_group()in combination with torch.func.jvp. The error occurs when accessing the communication group through a mesh dimension during automatic differentiation, but works fine in eager execution mode.
+
+### Reproducible code:
+```python
+import torch
+from torch import nn
+from torch import distributed as dist
+from torch.distributed.device_mesh import DeviceMesh
+
+
+dist.init_process_group(backend='nccl', init_method='env://')
+torch.cuda.set_device(dist.get_rank())
+
+tensor = torch.randn(2)
+
+mesh = DeviceMesh(
+    device_type="cuda",
+    mesh=[[0, 1, 2, 3], [4, 5, 6, 7]],
+    mesh_dim_names=('fsdp', 'ep')
+)
+
+class Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.mesh = mesh
+
+    def forward(self, x):
+        # This line causes error during JVP
+        self.mesh['ep'].get_group()  
+        return x
+
+# Works in eager mode
+mesh['ep'].get_group()  # Passes without error
+
+# Fails with JVP
+torch.func.jvp(
+    Model(),
+    (tensor,),
+    (tensor,)
+)  # Raises RuntimeError
+```
+### Error log
+```
+Traceback (most recent call last):
+  File "debug.py", line 26, in <module>
+    torch.func.jvp(Model(), (tensor,), (tensor,)) # error
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib64/python3.12/site-packages/torch/_functorch/eager_transforms.py", line 1042, in jvp
+    return _jvp_with_argnums(
+           ^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib64/python3.12/site-packages/torch/_functorch/eager_transforms.py", line 1101, in _jvp_with_argnums
+    result_duals = func(*duals)
+                   ^^^^^^^^^^^^
+  File "/usr/local/lib64/python3.12/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib64/python3.12/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "debug.py", line 22, in forward
+    mesh['ep'].get_group() # error here
+    ~~~~^^^^^^
+  File "/usr/local/lib64/python3.12/site-packages/torch/distributed/device_mesh.py", line 725, in __getitem__
+    submesh = _mesh_resources.create_sub_mesh(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib64/python3.12/site-packages/torch/distributed/device_mesh.py", line 149, in create_sub_mesh
+    submesh = DeviceMesh(
+              ^^^^^^^^^^^
+  File "/usr/local/lib64/python3.12/site-packages/torch/distributed/device_mesh.py", line 442, in __init__
+    self._flatten_mesh_list = tuple(self.mesh.flatten().tolist())
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Cannot access data pointer of Tensor that doesn't have storage
+```
+
+
+### Versions
+
+PyTorch 2.6.0
+
+cc @H-Huang @awgu @wanchaol @fegin @fduwjj @wz337 @wconstab @d4l3k @pragupta
+Structured error description: An unexpected RuntimeError will raise when using torch.distributed.device_mesh.DeviceMesh.get_group() in combination with torch.func.jvp. The error occurs when accessing the communication group through a mesh dimension during automatic differentiation, but works fine in eager execution mode.
+Minimal reproducible example: import torch
+from torch import nn
+from torch import distributed as dist
+from torch.distributed.device_mesh import DeviceMesh
+
+
+dist.init_process_group(backend='nccl', init_method='env://')
+torch.cuda.set_device(dist.get_rank())
+
+tensor = torch.randn(2)
+
+mesh = DeviceMesh(
+    device_type="cuda",
+    mesh=[[0, 1, 2, 3], [4, 5, 6, 7]],
+    mesh_dim_names=('fsdp', 'ep')
+)
+
+class Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.mesh = mesh
+
+    def forward(self, x):
+        # This line causes error during JVP
+        self.mesh['ep'].get_group()  
+        return x
+
+# Works in eager mode
+mesh['ep'].get_group()  # Passes without error
+
+# Fails with JVP
+torch.func.jvp(
+    Model(),
+    (tensor,),
+    (tensor,)
+)  # Raises RuntimeError
+Trigger conditions: {"backend": "nccl", "dtype": "", "input_shape": "(2,)", "other_conditions": "Using DeviceMesh with mesh_dim_names ('fsdp', 'ep'), using torch.func.jvp"}
+Environment: {"pytorch_version": "2.6.0", "python_version": "3.12", "os": "", "hardware": "cuda"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

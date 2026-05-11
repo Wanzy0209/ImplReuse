@@ -1,0 +1,107 @@
+Bug Report:
+Title: Keras with torch MPS: binary_crossentropy crashes with mps.multiply broadcast ((B,T,1) × (B,T))
+Issue ID: 166746
+Original bug description: ### 🐛 Describe the bug
+
+When using the torch backend with MPS with Keras I get an assertion failure.
+
+```
+$ python3 scratch/mre_keras_no_sw.py
+Keras: 3.11.3
+PyTorch: 2.9.0
+MPS available: True
+X: (32, 50, 10) y: (32, 50, 1)
+(mpsFileLoc): /AppleInternal/Library/BuildRoots/4~B5vFugC00QBfsSa38UwjlpDhP2WeLxB3cTjDRaE/Library/Caches/com.apple.xbs/Sources/MetalPerformanceShadersGraph/mpsgraph/MetalPerformanceShadersGraph/Core/Files/MPSGraphUtilities.mm:233:0: error: 'mps.multiply' op operands don't have broadcast-compatible shapes
+(mpsFileLoc): /AppleInternal/Library/BuildRoots/4~B5vFugC00QBfsSa38UwjlpDhP2WeLxB3cTjDRaE/Library/Caches/com.apple.xbs/Sources/MetalPerformanceShadersGraph/mpsgraph/MetalPerformanceShadersGraph/Core/Files/MPSGraphUtilities.mm:233:0: note: see current operation: %10 = "mps.multiply"(%arg2, %9) : (tensor<32x50x1xf32>, tensor<32x50xf32>) -> tensor<*xf32>
+(mpsFileLoc): /AppleInternal/Library/BuildRoots/4~B5vFugC00QBfsSa38UwjlpDhP2WeLxB3cTjDRaE/Library/Caches/com.apple.xbs/Sources/MetalPerformanceShadersGraph/mpsgraph/MetalPerformanceShadersGraph/Core/Files/MPSGraphUtilities.mm:233:0: error: 'mps.multiply' op operands don't have broadcast-compatible shapes
+(mpsFileLoc): /AppleInternal/Library/BuildRoots/4~B5vFugC00QBfsSa38UwjlpDhP2WeLxB3cTjDRaE/Library/Caches/com.apple.xbs/Sources/MetalPerformanceShadersGraph/mpsgraph/MetalPerformanceShadersGraph/Core/Files/MPSGraphUtilities.mm:233:0: note: see current operation: %10 = "mps.multiply"(%arg2, %9) : (tensor<32x50x1xf32>, tensor<32x50xf32>) -> tensor<*xf32>
+/AppleInternal/Library/BuildRoots/4~B5vFugC00QBfsSa38UwjlpDhP2WeLxB3cTjDRaE/Library/Caches/com.apple.xbs/Sources/MetalPerformanceShadersGraph/mpsgraph/MetalPerformanceShadersGraph/Core/Files/MPSGraphExecutable.mm:1232: failed assertion `original module failed verification'
+Abort
+```
+
+With the code:
+
+``` python
+#!/usr/bin/env python3
+import os
+os.environ["KERAS_BACKEND"] = "torch"
+
+import numpy as np
+import keras
+from keras import layers, Model
+import torch
+
+print("Keras:", keras.__version__)
+print("PyTorch:", torch.__version__)
+print("MPS available:", torch.backends.mps.is_available())
+
+B, T, F = 32, 50, 10
+
+inp = layers.Input(shape=(T, F))
+x = layers.Dense(1, activation=None)(inp)  # (B,T,1)
+x = layers.Activation("sigmoid")(x)
+model = Model(inp, x)
+model.compile(optimizer="adam", loss="binary_crossentropy")
+
+X = np.random.randn(B, T, F).astype(np.float32)
+y = np.random.randint(0, 2, (B, T, 1)).astype(np.float32)
+
+print("X:", X.shape, "y:", y.shape)
+model.fit(X, y, epochs=1, batch_size=32, verbose=1)
+```
+
+and a native crash:
+
+```
+Thread 4 Crashed::  Dispatch queue: metal gpu stream
+0   libsystem_kernel.dylib        	       0x197c36388 __pthread_kill + 8
+1   libsystem_pthread.dylib       	       0x197c6f848 pthread_kill + 296
+2   libsystem_c.dylib             	       0x197b789e4 abort + 124
+3   libsystem_c.dylib             	       0x197b77c18 __assert_rtn + 284
+4   Metal                         	       0x1a3213cb0 MTLReportFailure.cold.1 + 48
+5   Metal                         	       0x1a31e8d70 MTLReportFailure + 576
+6   MetalPerformanceShadersGraph  	       0x1fc905348 -[MPSGraphExecutable commonPostInit:] + 912
+7   MetalPerformanceShadersGraph  	       0x1fc906318 -[MPSGraphExecutable initWithGraph:device:feeds:targetTensors:targetOperations:executableDescriptor:] + 1900
+8   MetalPerformanceShadersGraph  	       0x1fc7bf034 -[MPSGraph compileWithDevice:feeds:targetTensors:targetOperations:compilationDescriptor:] + 408
+9   MetalPerformanceShadersGraph  	       0x1fc7c04ac -[MPSGraph getExecutableForDevice:feeds:targetTensors:targetOperations:resultsDictionary:executionDescriptor:] + 1864
+10  MetalPerformanceShadersGraph  	       0x1fc7c0a48 -[MPSGraph runInternalWithMPSCommandBuffer:feeds:targetTensors:targetOperations:resultsDictionary:executionDescriptor:mpsGraphOwnedCommandBuffer:] + 232
+11  MetalPerformanceShadersGraph  	       0x1fc7bfb58 -[MPSGraph encodeToCommandBuffer:feeds:targetOperations:resultsDictio
+Structured error description: When using the torch backend with MPS with Keras, an assertion failure occurs. The error message indicates that 'mps.multiply' op operands don't have broadcast-compatible shapes. Specifically, it's trying to multiply tensors with shapes (32x50x1xf32) and (32x50xf32). The crash occurs in MetalPerformanceShadersGraph with the error: 'mps.multiply' op operands don't have broadcast-compatible shapes.
+Minimal reproducible example: #!/usr/bin/env python3
+import os
+os.environ["KERAS_BACKEND"] = "torch"
+
+import numpy as np
+import keras
+from keras import layers, Model
+import torch
+
+print("Keras:", keras.__version__)
+print("PyTorch:", torch.__version__)
+print("MPS available:", torch.backends.mps.is_available())
+
+B, T, F = 32, 50, 10
+
+inp = layers.Input(shape=(T, F))
+x = layers.Dense(1, activation=None)(inp)  # (B,T,1)
+x = layers.Activation("sigmoid")(x)
+model = Model(inp, x)
+model.compile(optimizer="adam", loss="binary_crossentropy")
+
+X = np.random.randn(B, T, F).astype(np.float32)
+y = np.random.randint(0, 2, (B, T, 1)).astype(np.float32)
+
+print("X:", X.shape, "y:", y.shape)
+model.fit(X, y, epochs=1, batch_size=32, verbose=1)
+Trigger conditions: {"backend": "MPS (Metal Performance Shaders) with PyTorch backend for Keras", "dtype": "float32", "input_shape": "(32, 50, 10) for X, (32, 50, 1) for y", "other_conditions": "Using Keras 3.11.3 with PyTorch 2.9.0, model with Dense layer outputting shape (B,T,1) and binary_crossentropy loss"}
+Environment: {"pytorch_version": "2.9.0", "python_version": "unknown", "os": "macOS (Apple Silicon)", "hardware": "Apple Silicon GPU (MPS)"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

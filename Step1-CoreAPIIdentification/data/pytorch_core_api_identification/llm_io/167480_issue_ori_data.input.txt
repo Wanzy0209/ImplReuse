@@ -1,0 +1,65 @@
+Bug Report:
+Title: OS command injection via torch.utils.cpp_extension precompiled-header build (use_pch path)
+Issue ID: 167480
+Original bug description: **Summary**
+There is an OS command injection risk in `torch/utils/cpp_extension.py` in the precompiled-header build helper. The helper constructs a compiler command including user-supplied values (e.g., `extra_cflags`, `extra_include_paths`) and executes the command via `subprocess.check_output(..., shell=True)`. If untrusted input reaches those parameters (for example, a service calling `load_inline(..., extra_cflags=..., use_pch=True)` with user-provided flags), an attacker can inject shell metacharacters and execute arbitrary commands as the Python process user.
+
+Original Thread : https://github.com/pytorch/pytorch/security/advisories/GHSA-gfrj-f355-6v3r#advisory-comment-139444
+
+**Affected versions**
+- Introduced in Aug 2023 (commit `5ed6047`, PR #106696).
+- Present in PyTorch releases starting with 2.1 and later main/nightly as of 2025.
+
+**Severity**
+- Meta Security and @malfet asked me to file me as general bug. Exact comment from Security Issue 
+
+```
+ _ @sumantro93 your example highlights the point I was trying to make: it's not framework's responsibility to sanitize the inputs.
+
+For example, In the sample that you've shared, one is allowed to compile and run any untrusted code, which is a huge security issue on its own, so even if this issue is fixed, one is already allowed to execute arbitrary code on the host by the Flask endpoint developer.
+
+Closing, but please do not hesitate to report it as regular issue or propose a pull request that would sanitize the inputs _
+``` 
+
+**Technical details & PoC**
+- The vulnerable pattern constructs a single command string and calls: `subprocess.check_output(cmd_string, shell=True, stderr=subprocess.STDOUT)`.
+- Proof-of-concept (local):
+```python
+# repro_pch_bug.py
+import os, subprocess
+def build_precompile_header(pch_cmd):
+    try:
+        subprocess.check_output(pch_cmd, shell=True, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        print('Error:', e)
+
+payload = "false; echo vulnerable > /tmp/pch_exploit"
+build_precompile_header(payload)
+print('Exploit file exists?', os.path.exists('/tmp/pch_exploit'))
+
+
+cc @janeyx99 @malfet
+Structured error description: There is an OS command injection risk in `torch/utils/cpp_extension.py` in the precompiled-header build helper. The helper constructs a compiler command including user-supplied values (e.g., `extra_cflags`, `extra_include_paths`) and executes the command via `subprocess.check_output(..., shell=True)`. If untrusted input reaches those parameters (for example, a service calling `load_inline(..., extra_cflags=..., use_pch=True)` with user-provided flags), an attacker can inject shell metacharacters and execute arbitrary commands as the Python process user.
+Minimal reproducible example: # repro_pch_bug.py
+import os, subprocess
+def build_precompile_header(pch_cmd):
+    try:
+        subprocess.check_output(pch_cmd, shell=True, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        print('Error:', e)
+
+payload = "false; echo vulnerable > /tmp/pch_exploit"
+build_precompile_header(payload)
+print('Exploit file exists?', os.path.exists('/tmp/pch_exploit'))
+Trigger conditions: {"backend": "", "dtype": "", "input_shape": "", "other_conditions": "use_pch=True with user-supplied values like extra_cflags, extra_include_paths"}
+Environment: {"pytorch_version": "2.1 and later main/nightly as of 2025", "python_version": "", "os": "", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

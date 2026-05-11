@@ -1,0 +1,96 @@
+Bug Report:
+Title: torch.export inconsistency with cdist aten op regarding valid compute_mode values
+Issue ID: 161089
+Original bug description: ### 🕵️‍♂️ Detected with [FACTO](https://github.com/meta-pytorch/FACTO)
+
+### 🐛 Describe the bug
+
+```python
+import torch
+import torch.nn as nn
+
+class CDistModel(nn.Module):
+    def __init__(self):
+        super(CDistModel, self).__init__()
+
+    def forward(self, x, y, compute_mode):
+        return torch.ops.aten._cdist_forward(x, y, p=2.0, compute_mode=compute_mode)
+
+x = torch.ones([3, 3])
+y = torch.ones([3, 3])
+
+model = CDistModel()
+
+# this succeeds
+model(x, y, None)
+model(x, y, 0)
+model(x, y, 1)
+model(x, y, 2)
+
+# this succeeds
+torch.export.export(model, (x, y, None))
+torch.export.export(model, (x, y, 1))
+torch.export.export(model, (x, y, 2))
+
+# this fails
+# RuntimeError: possible modes: None, 1, 2, but was: 0
+torch.export.export(model, (x, y, 0))
+
+# Notice that if we force a failure in the aten op, by passing a wrong
+# compute_mode, we get a different error message:
+# RuntimeError: possible modes: 0, 1, 2, but was: 3
+model(x, y, 3)
+```
+
+### Versions
+
+nightly
+
+cc @chauhang @penguinwu @avikchaudhuri @gmagogsfm @zhxchen17 @tugsbayasgalan @angelayi @suo @ydwu4
+Structured error description: There is an inconsistency between torch.ops.aten._cdist_forward and torch.export.export regarding valid compute_mode values. When calling the model directly with compute_mode=0, it succeeds. However, when trying to export the model with torch.export.export using compute_mode=0, it fails with 'RuntimeError: possible modes: None, 1, 2, but was: 0'. When passing an invalid mode like 3 to the aten op directly, the error message says 'RuntimeError: possible modes: 0, 1, 2, but was: 3', showing that the aten op considers 0 valid.
+Minimal reproducible example: import torch
+import torch.nn as nn
+
+class CDistModel(nn.Module):
+    def __init__(self):
+        super(CDistModel, self).__init__()
+
+    def forward(self, x, y, compute_mode):
+        return torch.ops.aten._cdist_forward(x, y, p=2.0, compute_mode=compute_mode)
+
+x = torch.ones([3, 3])
+y = torch.ones([3, 3])
+
+model = CDistModel()
+
+# this succeeds
+model(x, y, None)
+model(x, y, 0)
+model(x, y, 1)
+model(x, y, 2)
+
+# this succeeds
+torch.export.export(model, (x, y, None))
+torch.export.export(model, (x, y, 1))
+torch.export.export(model, (x, y, 2))
+
+# this fails
+# RuntimeError: possible modes: None, 1, 2, but was: 0
+torch.export.export(model, (x, y, 0))
+
+# Notice that if we force a failure in the aten op, by passing a wrong
+# compute_mode, we get a different error message:
+# RuntimeError: possible modes: 0, 1, 2, but was: 3
+model(x, y, 3)
+Trigger conditions: {"backend": "", "dtype": "", "input_shape": "[3, 3]", "other_conditions": "Using torch.export.export with compute_mode=0"}
+Environment: {"pytorch_version": "nightly", "python_version": "", "os": "", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

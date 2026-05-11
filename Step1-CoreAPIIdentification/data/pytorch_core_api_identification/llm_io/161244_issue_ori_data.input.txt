@@ -1,0 +1,242 @@
+Bug Report:
+Title: [Inductor]torch.compilegenerates incorrect code for llama4
+Issue ID: 161244
+Original bug description: ### 🐛 Describe the bug
+
+### Description
+When compiling llama4 to improve performance, we found an error:
+```log
+    AssertionError: expected size 128==128, stride 1==64 at dim=1; expected size 64==64, stride 128==1 at dim=2
+    Error in op: torch.ops.aten.polar.default
+    This error most often comes from a incorrect fake (aka meta) kernel for a custom op.
+    Use torch.library.opcheck to test your custom op.
+    See https://pytorch.org/docs/stable/library.html#torch.library.opcheck
+```
+This error is caused by an assertion in the generated code:
+```python
+    s70 = 128 
+    s72 = 4
+
+    buf9 = torch.ops.aten.polar.default(reinterpret_tensor(buf8, (s72, s70, 64), (64*s70, 1, s70), 0), reinterpret_tensor(buf7, (s72, s70, 64), (64*s70, 1, s70), 0))
+    del buf7
+    del buf8
+    buf10 = buf9
+    assert_size_stride(buf10, (s72, s70, 64), (64*s70, 64, 1), 'torch.ops.aten.polar.default')
+    assert_alignment(buf10, 16, 'torch.ops.aten.polar.default')
+```
+The stride of the input tensors for `aten.polar` does not match the stride required by the assertion.
+This issue cause the compiled code raising error.
+
+
+### Reproducer
+```python
+import torch
+import random
+import os
+from transformers import (
+    AutoTokenizer,
+    Llama4Config,
+    Llama4ForConditionalGeneration,
+)
+
+DEVICE = "cuda"
+MODEL_NAME = "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
+USE_COMPILE = True
+MODEL_CONFIG_NAME = "4-Func"
+INPUT_ID_LENGTH = 128
+MAX_NEW_TOKENS = 10
+
+SHELL_DIR = os.path.dirname(os.path.abspath(__file__))
+
+PROMPTS = [
+    "The future of artificial intelligence is ",
+    "Once upon a time, in a kingdom full of dragons and knights, ",
+    "The main cause of climate change is ",
+]
+
+
+def main():
+    PROMPT = [random.choice(PROMPTS) for i in range(50)]
+    PROMPT = " ".join(PROMPT)
+    print("="*80)
+    print(f"Using random prompt: \"{PROMPT}\"")
+    print("="*80)
+
+    config_path = os.path.join(SHELL_DIR, f"{MODEL_CONFIG_NAME}.json")
+    print(f"Loading model config from: {config_path}")
+
+    if not os.path.exists(config_path):
+        print(f"Error: Config file not found at {config_path}")
+        print("Please make sure the 'configs' directory and the JSON file exist.")
+        return
+
+    try:
+        model_config = Llama4Config.from_json_file(config_path)
+    except Exception as e:
+        print(f"Error reading or parsing config file: {e}")
+        return
+
+    torch.cuda.empty_cache()
+
+    print("Loading model from config...")
+    model = Llama4ForConditionalGeneration._from_config(
+        model_config,
+    )
+    model = model.to(DEVICE)
+    model.eval()
+    print("Model loaded.")
+
+    if USE_COMPILE:
+        print("Compiling model...")
+        model.forward = torch.compile(model.forward, dynamic=True, fullgraph=True)
+        print("Model compiled successfully.")
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+
+    inputs = tokenizer(
+        PROMPT,
+        return_tensors="pt",
+        max_length=INPUT_ID_LENGTH,
+        truncation=True,
+        padding="max_length",
+    ).to(DEVICE)
+
+    input_token_length = inputs.input_ids.shape[1]
+
+    batch_inputs = {k: v.expand(4, -1) for k, v in inputs.items()}
+
+    print("\nStarting generation...")
+    with torch.no_grad():
+        outputs = model.generate(
+            **batch_inputs,
+            max_new_tokens=MAX_NEW_TOKENS,
+            use_cache=True,
+            do_sample=False,
+        )
+
+    print("[DEBUG] outputs shape =", outputs.shape)
+
+    newly_generated_ids = outputs[:, input_token_length:]
+    decoded_new_parts = tokenizer.batch_decode(newly_generated_ids, skip_special_tokens=True)
+
+    print("\n--- Generated Text ---")
+    for i, new_text in enumerate(decoded_new_parts):
+        print(f"Sample {i+1}: {PROMPT}{new_text}")
+    print("----------------------")
+
+
+if __name__ == "__main__":
+    main()
+```
+Config (modified from [huggingface](https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8/blob/main/config.json)):
+[4-Func.json](https://github.com/user-attachments/f
+Structured error description: When compiling llama4 to improve performance, we found an error: AssertionError: expected size 128==128, stride 1==64 at dim=1; expected size 64==64, stride 128==1 at dim=2. Error in op: torch.ops.aten.polar.default. This error is caused by an assertion in the generated code. The stride of the input tensors for aten.polar does not match the stride required by the assertion.
+Minimal reproducible example: import torch
+import random
+import os
+from transformers import (
+    AutoTokenizer,
+    Llama4Config,
+    Llama4ForConditionalGeneration,
+)
+
+DEVICE = "cuda"
+MODEL_NAME = "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
+USE_COMPILE = True
+MODEL_CONFIG_NAME = "4-Func"
+INPUT_ID_LENGTH = 128
+MAX_NEW_TOKENS = 10
+
+SHELL_DIR = os.path.dirname(os.path.abspath(__file__))
+
+PROMPTS = [
+    "The future of artificial intelligence is ",
+    "Once upon a time, in a kingdom full of dragons and knights, ",
+    "The main cause of climate change is ",
+]
+
+
+def main():
+    PROMPT = [random.choice(PROMPTS) for i in range(50)]
+    PROMPT = " ".join(PROMPT)
+    print("="*80)
+    print(f"Using random prompt: \"{PROMPT}\"")
+    print("="*80)
+
+    config_path = os.path.join(SHELL_DIR, f"{MODEL_CONFIG_NAME}.json")
+    print(f"Loading model config from: {config_path}")
+
+    if not os.path.exists(config_path):
+        print(f"Error: Config file not found at {config_path}")
+        print("Please make sure the 'configs' directory and the JSON file exist.")
+        return
+
+    try:
+        model_config = Llama4Config.from_json_file(config_path)
+    except Exception as e:
+        print(f"Error reading or parsing config file: {e}")
+        return
+
+    torch.cuda.empty_cache()
+
+    print("Loading model from config...")
+    model = Llama4ForConditionalGeneration._from_config(
+        model_config,
+    )
+    model = model.to(DEVICE)
+    model.eval()
+    print("Model loaded.")
+
+    if USE_COMPILE:
+        print("Compiling model...")
+        model.forward = torch.compile(model.forward, dynamic=True, fullgraph=True)
+        print("Model compiled successfully.")
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+
+    inputs = tokenizer(
+        PROMPT,
+        return_tensors="pt",
+        max_length=INPUT_ID_LENGTH,
+        truncation=True,
+        padding="max_length",
+    ).to(DEVICE)
+
+    input_token_length = inputs.input_ids.shape[1]
+
+    batch_inputs = {k: v.expand(4, -1) for k, v in inputs.items()}
+
+    print("\nStarting generation...")
+    with torch.no_grad():
+        outputs = model.generate(
+            **batch_inputs,
+            max_new_tokens=MAX_NEW_TOKENS,
+            use_cache=True,
+            do_sample=False,
+        )
+
+    print("[DEBUG] outputs shape =", outputs.shape)
+
+    newly_generated_ids = outputs[:, input_token_length:]
+    decoded_new_parts = tokenizer.batch_decode(newly_generated_ids, skip_special_tokens=True)
+
+    print("\n--- Generated Text ---")
+    for i, new_text in enumerate(decoded_new_parts):
+        print(f"Sample {i+1}: {PROMPT}{new_text}")
+    print("----------------------")
+
+
+if __name__ == "__main__":
+    main()
+Trigger conditions: {"backend": "cuda", "dtype": "", "input_shape": "INPUT_ID_LENGTH = 128, batch size 4", "other_conditions": "torch.compile with dynamic=True, fullgraph=True"}
+Environment: {"pytorch_version": "", "python_version": "", "os": "", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

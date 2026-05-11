@@ -1,0 +1,122 @@
+Bug Report:
+Title: Umbrella bug: failures in basic custom MemPool patterns
+Issue ID: 167745
+Original bug description: ### 🐛 Describe the bug
+
+This is a bug to document several problematic patterns with custom MemPool allocations.
+For now, these simple tests do not include interactions with CUDA graph pools, but at the moment, custom MemPools behave very similarly to CUDA graph pools, so hopefully the current tests are sufficient for now.
+Additionally, the tests are not checking for thread-safety (for now), which will be added in the future as this was an issue previously (https://github.com/pytorch/pytorch/issues/152861).
+
+All tests can be found in this repo (which has two branches as explained per below): https://github.com/MatthiasKohl/pytorch-mempool-litmus
+
+Failing tests due to temporary `MemPool` objects:
+
+Test 1:
+
+```python
+pool1 = make_custom_pool(1)
+
+with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):
+    print("Pool 1 ctx start")
+    x1 = torch.randn(8, device="cuda")
+    print("Pool 1 ctx end")
+del x1
+```
+
+Test 2:
+
+```python
+pool1 = make_custom_pool(1)
+pool2 = make_custom_pool(2)
+
+x1 = torch.randn(8, device="cuda")
+with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):
+    print("Pool 1 ctx start")
+    with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool2)):
+        print("Pool 2 ctx start")
+        print("Pool 2 ctx end")
+    print("Pool 1 ctx end")
+del x1
+```
+
+For these, I think an important question is: should the above pattern be allowed at all in python?
+IMO, it should: From the point of view of the user, it should not be their responsibility to keep track of when exactly the custom pool is still needed or not, especially given that the caching allocator may free tensors at a later time than the deletion of the tensor itself. Not allowing this pattern would cause unnecessary confusion IMO. In this case, the user simply wants to mark all deleted tensors as "free-able" and all non-deleted tensors as "free-able as soon as they are deleted", at the point of deleting the pool object itself.
+Note that there is currently no good way to create a temporary python object tied to the context manager other than what the above test does.
+
+Test 1 fails because it incorrectly uses the default `cudaFree` here: https://github.com/pytorch/pytorch/blob/c940b1fbbca8da7e526bf610ce007f8af75f6cd5/c10/cuda/CUDACachingAllocator.cpp#L3382
+This is because the owner pool of the private pool isn't active anymore at the time where the blocks get released. We then call the default `cudaFree` which is dangerous as we have no idea whether this even works with pointers from a custom allocator.
+
+Test 2 fails because in the nested case, when deleting the `MemPool` object for `pool2`, we are still "capturing", thus running into the internal assert here: https://github.com/pytorch/pytorch/blob/c940b1fbbca8da7e526bf610ce007f8af75f6cd5/c10/cuda/CUDACachingAllocator.cpp#L3525
+
+All remaining simple tests in the repository fail due to the above issues related to temporary objects, so I created a side-branch of the repo to track cases where we keep references to the pools around: https://github.com/MatthiasKohl/pytorch-mempool-litmus/tree/mempool_non_temp
+
+In this case, we have failing tests due to incorrect nesting: many tests are essentially duplicates of https://github.com/pytorch/pytorch/issues/161193, e.g. the below
+
+Test 3:
+
+```python
+pool1 = torch.cuda.MemPool(make_custom_pool(1))
+pool2 = torch.cuda.MemPool(make_custom_pool(2))
+
+with torch.cuda.use_mem_pool(pool1):
+    print("Pool 1 ctx start")
+    with torch.cuda.use_mem_pool(pool2):
+        print("Pool 2 ctx start")
+        x1 = torch.randn(8, device="cuda")
+        print("Pool 2 ctx end")
+    print("Pool 1 ctx end")
+del x1
+```
+
+All remaining tests currently fail for the same reason, but depending on how the nesting issue is fixed, they may reveal further issues.
+Ideally, an incremental solution to the nesting issue should not make the situation worse (all currently passing tests should still pass).
+
+cc @syed-ahmed @ngimel as you're CC'ed on related issues as well
+
+Potential initial solutions:
+
+1. we need
+Structured error description: This is a bug to document several problematic patterns with custom MemPool allocations. Test 1 fails because it incorrectly uses the default cudaFree as the owner pool of the private pool isn't active anymore at the time where the blocks get released. Test 2 fails because in the nested case, when deleting the MemPool object for pool2, the code is still capturing, running into an internal assert. Test 3 fails due to incorrect nesting.
+Minimal reproducible example: pool1 = make_custom_pool(1)
+
+with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):
+    print("Pool 1 ctx start")
+    x1 = torch.randn(8, device="cuda")
+    print("Pool 1 ctx end")
+del x1
+
+pool1 = make_custom_pool(1)
+pool2 = make_custom_pool(2)
+
+x1 = torch.randn(8, device="cuda")
+with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):
+    print("Pool 1 ctx start")
+    with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool2)):
+        print("Pool 2 ctx start")
+        print("Pool 2 ctx end")
+    print("Pool 1 ctx end")
+del x1
+
+pool1 = torch.cuda.MemPool(make_custom_pool(1))
+pool2 = torch.cuda.MemPool(make_custom_pool(2))
+
+with torch.cuda.use_mem_pool(pool1):
+    print("Pool 1 ctx start")
+    with torch.cuda.use_mem_pool(pool2):
+        print("Pool 2 ctx start")
+        x1 = torch.randn(8, device="cuda")
+        print("Pool 2 ctx end")
+    print("Pool 1 ctx end")
+del x1
+Trigger conditions: {"backend": "CUDA", "dtype": "", "input_shape": "", "other_conditions": "custom MemPool allocations, temporary MemPool objects, nested MemPool contexts"}
+Environment: {"pytorch_version": "", "python_version": "", "os": "", "hardware": "CUDA"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

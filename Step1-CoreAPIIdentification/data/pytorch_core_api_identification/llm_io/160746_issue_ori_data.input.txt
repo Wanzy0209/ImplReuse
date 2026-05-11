@@ -1,0 +1,130 @@
+Bug Report:
+Title: [Fuzzer] mismatch eager vs compile  floating point results
+Issue ID: 160746
+Original bug description: ### 🐛 Describe the bug
+
+comparing eager and compiled results yeilds
+```
+Compiled result type: <class 'torch.Tensor'>                                                               
+Values differ (allclose failed)                                                                            
+Max absolute difference: 0.015522003173828125
+❌ Results differ between original and compiled (fullgraph=False)
+Original result: tensor([[ 1.6396,  1.8829,  0.1892,  0.0091, -0.0778,  1.8847,  1.9047,  0.1769,
+          1.7012,  0.8749,  1.9065,  1.9046,  0.2318,  1.5751,  0.9334,  0.0638],
+        [-0.0904,  1.6766,  1.8287,  0.0714,  1.8957, -0.0531,  0.3433,  0.7932,
+          0.7919,  0.2802,  1.8676,  1.4572,  0.3563,  0.9695,  1.6356,  1.5986],
+        [ 0.0862,  0.1239,  0.7322,  1.4763, -0.0766, -0.0924,  1.1049,  1.7013,
+          1.7867,  0.8903,  1.6911,  0.7095, -0.0146,  1.7732,  0.8001,  1.4947]])
+Compiled result: tensor([[ 1.6396,  1.8829,  0.1892,  0.0091, -0.0778,  1.8847,  1.9047,  0.1772,
+          1.7012,  0.8749,  1.9065,  1.9046,  0.2318,  1.5751,  0.9334,  0.0638],
+        [-0.0904,  1.6766,  1.8287,  0.0714,  1.8957, -0.0531,  0.3433,  0.7932,
+          0.7919,  0.2802,  1.8676,  1.4572,  0.3563,  0.9695,  1.6356,  1.5986],
+        [ 0.0862,  0.1239,  0.7169,  1.4763, -0.0766, -0.0924,  1.1049,  1.7013,
+          1.7867,  0.8903,  1.6911,  0.7057, -0.0146,  1.7884,  0.7846,  1.4820]])
+```
+
+repo:
+check out https://github.com/pytorch/pytorch/pull/160735
+run python fuzzer.py --avoid-complex --seed 2111298628
+or run the following program
+```
+import torch
+from tensor_fuzzer import fuzz_scalar, fuzz_tensor_simple, ScalarSpec, TensorSpec
+
+def compare_results(result1, result2) -> bool:
+    """
+    Compare two results for equality, handling different types appropriately.
+
+    Args:
+        result1: First result
+        result2: Second result
+
+    Returns:
+        True if results are considered equal, False otherwise
+    """
+
+    # Check if types match
+    if type(result1) != type(result2):
+        print(f"Type mismatch: {type(result1)} vs {type(result2)}")
+        return False
+
+    if isinstance(result1, torch.Tensor):
+        # For tensors, check shape, dtype, and values
+        if result1.shape != result2.shape:
+            print(f"Shape mismatch: {result1.shape} vs {result2.shape}")
+            return False
+
+        if result1.dtype != result2.dtype:
+            print(f"Dtype mismatch: {result1.dtype} vs {result2.dtype}")
+            return False
+
+        # Use torch.allclose for floating point comparison
+        try:
+            if result1.dtype in [
+                torch.float16,
+                torch.float32,
+                torch.float64,
+                torch.bfloat16,
+                torch.complex64,
+                torch.complex128,
+            ]:
+                if not torch.allclose(
+                    result1, result2, rtol=1e-5, atol=1e-8, equal_nan=True
+                ):
+                    print(f"Values differ (allclose failed)")
+                    print(
+                        f"Max absolute difference: {torch.max(torch.abs(result1 - result2)).item()}"
+                    )
+                    return False
+            else:
+                # For integer/bool tensors, use exact equality
+                if not torch.equal(result1, result2):
+                    print(f"Values differ (exact comparison)")
+                    return False
+        except Exception as e:
+            print(f"Error comparing tensor values: {e}")
+            return False
+
+        return True
+
+    elif isinstance(result1, (int, float, bool, complex)):
+        # For scalars, use appropriate comparison
+        if isinstance(result1, float):
+            # Use relative tolerance for floats
+            import math
+
+            if math.isnan(result1) and math.isnan(result2):
+                return True
+            elif math.isnan(result1) or math.isnan(result2):
+                return False
+            else:
+                return abs(result1
+Structured error description: 
+Minimal reproducible example: Compiled result type: <class 'torch.Tensor'>                                                               
+Values differ (allclose failed)                                                                            
+Max absolute difference: 0.015522003173828125
+❌ Results differ between original and compiled (fullgraph=False)
+Original result: tensor([[ 1.6396,  1.8829,  0.1892,  0.0091, -0.0778,  1.8847,  1.9047,  0.1769,
+          1.7012,  0.8749,  1.9065,  1.9046,  0.2318,  1.5751,  0.9334,  0.0638],
+        [-0.0904,  1.6766,  1.8287,  0.0714,  1.8957, -0.0531,  0.3433,  0.7932,
+          0.7919,  0.2802,  1.8676,  1.4572,  0.3563,  0.9695,  1.6356,  1.5986],
+        [ 0.0862,  0.1239,  0.7322,  1.4763, -0.0766, -0.0924,  1.1049,  1.7013,
+          1.7867,  0.8903,  1.6911,  0.7095, -0.0146,  1.7732,  0.8001,  1.4947]])
+Compiled result: tensor([[ 1.6396,  1.8829,  0.1892,  0.0091, -0.0778,  1.8847,  1.9047,  0.1772,
+          1.7012,  0.8749,  1.9065,  1.9046,  0.2318,  1.5751,  0.9334,  0.0638],
+        [-0.0904,  1.6766,  1.8287,  0.0714,  1.8957, -0.0531,  0.3433,  0.7932,
+          0.7919,  0.2802,  1.8676,  1.4572,  0.3563,  0.9695,  1.6356,  1.5986],
+        [ 0.0862,  0.1239,  0.7169,  1.4763, -0.0766, -0.0924,  1.1049,  1.7013,
+          1.7867,  0.8903,  1.6911,  0.7057, -0.0146,  1.7884,  0.7846,  1.4820]])
+Trigger conditions: {}
+Environment: {}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

@@ -1,0 +1,107 @@
+Bug Report:
+Title: torch.sparse.mmreturns corrupted sparse tensor causing Segmentation fault into_dense()on PyTorch 2.9.0
+Issue ID: 167716
+Original bug description: ### 🐛 Describe the bug
+
+I experienced a problem while using the "torch.sparse.mm()" function, which prompted me to consult the official documentation for clarification. The documentation includes sample code that executes successfully. According to the documentation, the second matrix parameter accepts both sparse and dense matrices. In the official example provided, the second matrix is implemented as a dense matrix. The example code runs as follows:
+```python
+import torch
+a = torch.tensor([[1., 0, 2], [0, 3, 0]]).to_sparse().requires_grad_()
+b = torch.tensor([[0, 1.], [2, 0], [0, 0]], requires_grad=True)
+y = torch.sparse.mm(a, b)
+z = y.to_dense()
+```
+The official example executes successfully. Out of curiosity about the behavior when the second matrix parameter is sparse, I created a custom sparse matrix to test the functionality. The sparse matrix multiplication operation itself completed without errors, but attempting to inspect the result using "to_dense()" caused a "Segmentation fault".
+The code runs as follows:
+```python
+import torch
+
+torch.manual_seed(42)
+
+indices_A = torch.tensor([[0, 1, 2], [0, 2, 3]])  
+values_A = torch.tensor([1.0, 2.0, 3.0])        
+A = torch.sparse_coo_tensor(indices_A, values_A, size=(3, 4))
+
+indices_B = torch.tensor([[0, 1, 2, 3], [0, 1, 1, 2]])  
+values_B = torch.tensor([4.0, 5.0, 6.0, 7.0]) 
+B = torch.sparse_coo_tensor(indices_B, values_B, size=(4, 2))
+
+C = torch.sparse.mm(A, B)
+C = C.to_dense()
+```
+it comes out:
+```
+test2.py:13: UserWarning: Sparse CSR tensor support is in beta state. If you miss a functionality in the sparse tensor support, please submit a feature request to https://github.com/pytorch/pytorch/issues. (Triggered internally at /pytorch/aten/src/ATen/SparseCsrTensorImpl.cpp:53.)
+  C = torch.sparse.mm(A, B)
+Segmentation fault (core dumped)
+```
+To further investigate the root cause, I proceeded to debug the code. During debugging, I found that simply printing the two matrices prior to invoking torch.sparse.mm()resolved the segmentation fault. The specific modification is shown below:
+```python
+import torch
+
+torch.manual_seed(42)
+
+indices_A = torch.tensor([[0, 1, 2], [0, 2, 3]])  
+values_A = torch.tensor([1.0, 2.0, 3.0])        
+A = torch.sparse_coo_tensor(indices_A, values_A, size=(3, 4))
+
+indices_B = torch.tensor([[0, 1, 2, 3], [0, 1, 1, 2]])  
+values_B = torch.tensor([4.0, 5.0, 6.0, 7.0]) 
+B = torch.sparse_coo_tensor(indices_B, values_B, size=(4, 2))
+
+print("A:", A)
+print("B:", B)
+
+C = torch.sparse.mm(A, B)
+C = C.to_dense()
+```
+Based on this observation, I suspect that the print()function inadvertently triggers necessary initialization procedures that should occur within "torch.sparse.mm()", but due to an implementation flaw in the sparse matrix multiplication function, these critical initialization steps are not being properly executed, resulting in the "Segmentation fault".
+To investigate the root cause of the issue, I proceeded to examine the internal data structures of the matrices by printing their properties. The diagnostic code is shown below:
+```python
+import torch
+import os
+
+torch.manual_seed(42)
+
+indices_A = torch.tensor([[0, 1, 2], [0, 2, 3]])
+values_A = torch.tensor([1.0, 2.0, 3.0])
+A = torch.sparse_coo_tensor(indices_A, values_A, size=(3, 4))
+
+indices_B = torch.tensor([[0, 1, 2, 3], [0, 1, 1, 2]])
+values_B = torch.tensor([4.0, 5.0, 6.0, 7.0])
+B = torch.sparse_coo_tensor(indices_B, values_B, size=(4, 2))
+
+C = torch.sparse.mm(A, B)
+
+indices = C.indices()
+values = C.values()
+print(f"  Indices shape: {indices.shape}")
+print(f"  Values shape: {values.shape}")
+print(f"  Indices range: [{indices.min().item()}, {indices.max().item()}]")
+print(f"  Values range: [{values.min().item()}, {values.max().item()}]")
+
+C = C.to_dense()
+```
+it comes out:
+
+<img width="326" height="90" alt="Image" src="https://github.com/user-attachments/assets/28078672-9831-4492-a6aa-0f640776ef44" />
+
+As highlighted in the red box, the index data of the resulting matrix C appears to be corrupted, lea
+Structured error description: 
+Minimal reproducible example: import torch
+a = torch.tensor([[1., 0, 2], [0, 3, 0]]).to_sparse().requires_grad_()
+b = torch.tensor([[0, 1.], [2, 0], [0, 0]], requires_grad=True)
+y = torch.sparse.mm(a, b)
+z = y.to_dense()
+Trigger conditions: {}
+Environment: {}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

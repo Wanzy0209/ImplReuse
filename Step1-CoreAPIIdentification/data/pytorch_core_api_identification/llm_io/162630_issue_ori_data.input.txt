@@ -1,0 +1,62 @@
+Bug Report:
+Title: [RFC] Intrusive Caching DLPack for Fast Conversion
+Issue ID: 162630
+Original bug description: Currently DLPack is being used for Tensor data exchange. This conversion, which involves populating metadata such as shape, data pointer, and strides, can introduce a small but non-negligible overhead, typically in the range of 40-80 nanoseconds on the C++ side. While this latency is already quite low, frequent tensor exchanges—such as those involving model weights or intermediate values used multiple times—can accumulate this overhead. 
+
+This RFC addresses the question of whether this overhead can be further reduced, particularly in scenarios where the same tensor is converted to DLPack multiple times during its lifetime. 
+
+It does involve change to the c10::TensorImpl data structure, so likely needs to be done with care. This post first put the high-level idea out to the community to seek feedbacks.
+
+## Proposal
+
+We propose an approach that integrates a caching mechanism directly into the framework's tensor object. The high-level concept is as follows:
+
+- **Cache Storage**: A std::unique_ptr<DLManagedTensorVersioned> will be added as a member field to the framework's tensor object (e.g., TensorImpl). This modification requires a change to the framework's internal tensor structure.
+- **On-Demand Population**: When the ToDLPack conversion method is called for the first time on a given tensor, the DLManagedTensorVersioned object will be created and populated. The framework's internal metadata will be transferred, and the manager_ctx of the DLManagedTensorVersioned will be set to point back to the TensorImpl itself. The deleter will also be configured at this time.
+-  **Ref counting integration** 
+     -  To prevent the TensorImpl from being deallocated while a DLPack consumer holds a reference, a new reference will be added to the TensorImpl intrusive reference counter each time a DLManagedTensorVersioned is returned. 
+     - The DLManagedTensorVersioned's deleter function will be configured to simply decrement the TensorObj's reference counter. This ensures that the TensorImpl and its cached DLManagedTensorVersioned are not deallocated until all DLPack and internal references are released.
+- **Cache Reuse**: For subsequent calls to ToDLPack on the same tensor object, the cached DLManagedTensorVersioned will be directly returned. The only overhead will be a pointer lookup and a reference count increment, which is an extremely fast operation, measured to be **as low as 3.8 nanosecond** in preliminary benchmarks.
+
+## Thread Safety
+In C++ environment, different thread may concurrent write to the cached field and it is important to consider thread-safety, so only one cached value is written and returned to the user. Here is an updated version, at high-level:
+
+- Different thread can race to create their own DLManagedTensorVersioned when they find cached field is nullptr
+- Use atomic_compare_exchange_strong_explicit to ensure one of the value get stored and only store it when the cached field is nullptr
+- Always return the stored value, and if the value is created by another thread, delete the current one and return the value created by another thread
+
+
+## Expected Benefits and Tradeoffs
+
+- **Significant Performance Improvement**: This caching strategy can reduce the DLPack conversion overhead from 40-80ns to a mere 1ns for repeated conversions.
+- **Reduced Redundancy**: Avoids repeated allocation and population of DLManagedTensorVersioned objects for the same tensor.
+- **Minimal Cost**: The overhead of this approach is limited to one extra pointer field per tensor object, which is negligible given the typical size of tensor metadata and data.
+
+## Example Implementation
+
+The following C++ code snippet illustrates the proposed mechanism within a hypothetical TensorImpl class that uses intrusive reference counting .
+
+```c++
+#include <atomic>
+
+// TensorImpl is a target of an intrusive ptr that contains a reference counter.
+// in the context of PyTorch, based on my understanding,
+// it would be c10::TensorImpl or something c10::TensorImp
+Structured error description: Currently DLPack is being used for Tensor data exchange. This conversion, which involves populating metadata such as shape, data pointer, and strides, can introduce a small but non-negligible overhead, typically in the range of 40-80 nanoseconds on the C++ side. While this latency is already quite low, frequent tensor exchanges—such as those involving model weights or intermediate values used multiple times—can accumulate this overhead. This RFC addresses the question of whether this overhead can be further reduced, particularly in scenarios where the same tensor is converted to DLPack multiple times during its lifetime.
+Minimal reproducible example: #include <atomic>
+
+// TensorImpl is a target of an intrusive ptr that contains a reference counter.
+// in the context of PyTorch, based on my understanding,
+// it would be c10::TensorImpl or something c10::TensorImp
+Trigger conditions: {"backend": "", "dtype": "", "input_shape": "", "other_conditions": "scenarios where the same tensor is converted to DLPack multiple times during its lifetime"}
+Environment: {"pytorch_version": "", "python_version": "", "os": "", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

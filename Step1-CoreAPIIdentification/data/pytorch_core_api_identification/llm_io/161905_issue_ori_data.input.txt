@@ -1,0 +1,142 @@
+Bug Report:
+Title: [MPS]torch.compileResNet-18 model fails duringloss.backward()on MPS backend, but works on CPU
+Issue ID: 161905
+Original bug description: ### 🐛 Describe the bug
+
+#### 🐛 Bug
+
+When using `torch.compile` on a model that has been moved to the `mps` device on macOS, calling `loss.backward()` results in a runtime error. The forward pass completes without issues.
+
+Notably, the exact same code runs successfully without any errors when the model and data are on the `cpu` backend. This suggests a potential bug or unimplemented feature in the `torch.compile` support for the MPS backend, specifically concerning the backward pass (gradient computation).
+
+#### To Reproduce
+
+Here is a minimal, self-contained code snippet to reproduce the error:
+
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch import Tensor
+from typing import Type, Any, Callable, Union, List, Optional
+from torchvision.models.resnet import resnet18
+
+
+BATCH_SIZE = 4
+NUM_CLASSES = 10
+LEARNING_RATE = 0.01
+device='mps'
+
+model = resnet18(num_classes=NUM_CLASSES)
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+
+model=model.to(device)
+model.train() 
+
+@torch.compile
+def train(images,labels):
+    images=images.to(device)
+    labels=labels.to(device)
+    
+    optimizer.zero_grad()
+
+    outputs = model(images)
+    loss = criterion(outputs, labels)
+    loss.backward()
+    optimizer.step()
+
+images = torch.randn(BATCH_SIZE, 3, 224, 224)
+labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,))
+
+train(images,labels)
+```
+
+#### Expected behavior
+
+The code should execute without any errors, regardless of whether the `DEVICE` is set to `'mps'` or `'cpu'`. The `loss.backward()` call should complete successfully, and the gradients for the model's parameters should be computed.
+
+#### Actual behavior
+
+When `DEVICE = 'mps'`, the code fails at `loss.backward()` with a runtime error. The forward pass and loss calculation are successful.
+
+### Error logs
+
+```
+W0901 19:47:33.366000 11122 site-packages/torch/_inductor/utils.py:2241] [0/0_1] DeviceCopy in input program
+W0901 19:47:33.367000 11122 site-packages/torch/_inductor/utils.py:2241] [0/0_1] DeviceCopy in input program
+W0901 19:47:34.821000 11122 site-packages/torch/_inductor/utils.py:1554] [1/0_1] Not enough SMs to use max_autotune_gemm mode
+Traceback (most recent call last):
+  File "/Users/name/resnet.py", line 37, in <module>
+    train(images,labels)
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/mlxnn/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 830, in compile_wrapper
+    return fn(*args, **kwargs)
+  File "/Users/name/resnet.py", line 27, in train
+    optimizer.zero_grad()
+  File "/Users/name/resnet.py", line 31, in torch_dynamo_resume_in_train_at_27
+    loss.backward()
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/mlxnn/lib/python3.10/site-packages/torch/_tensor.py", line 625, in backward
+    torch.autograd.backward(
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/mlxnn/lib/python3.10/site-packages/torch/autograd/__init__.py", line 354, in backward
+    _engine_run_backward(
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/mlxnn/lib/python3.10/site-packages/torch/autograd/graph.py", line 841, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/mlxnn/lib/python3.10/site-packages/torch/autograd/function.py", line 315, in apply
+    return user_fn(self, *args)
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/mlxnn/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 2303, in backward
+    return impl_fn()
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/mlxnn/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 2289, in impl_fn
+    out = CompiledFunction._backward_impl(ctx, all_args)
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/mlxnn/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 2423, in _backward_impl
+    out = call_func_at_runtime
+Structured error description: When using `torch.compile` on a model that has been moved to the `mps` device on macOS, calling `loss.backward()` results in a runtime error. The forward pass completes without issues. The exact same code runs successfully without any errors when the model and data are on the `cpu` backend.
+Minimal reproducible example: import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch import Tensor
+from typing import Type, Any, Callable, Union, List, Optional
+from torchvision.models.resnet import resnet18
+
+
+BATCH_SIZE = 4
+NUM_CLASSES = 10
+LEARNING_RATE = 0.01
+device='mps'
+
+model = resnet18(num_classes=NUM_CLASSES)
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+
+model=model.to(device)
+model.train() 
+
+@torch.compile
+def train(images,labels):
+    images=images.to(device)
+    labels=labels.to(device)
+    
+    optimizer.zero_grad()
+
+    outputs = model(images)
+    loss = criterion(outputs, labels)
+    loss.backward()
+    optimizer.step()
+
+images = torch.randn(BATCH_SIZE, 3, 224, 224)
+labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,))
+
+train(images,labels)
+Trigger conditions: {"backend": "MPS", "dtype": "", "input_shape": "(4, 3, 224, 224)", "other_conditions": "Using torch.compile, model moved to mps device"}
+Environment: {"pytorch_version": "", "python_version": "3.10", "os": "macOS", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

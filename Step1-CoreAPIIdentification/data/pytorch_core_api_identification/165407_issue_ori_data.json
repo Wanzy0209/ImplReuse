@@ -1,0 +1,53 @@
+{
+  "title": "Specific torch compile memory leak involving flash_attn_varlen_func",
+  "issue_id": "165407",
+  "bug_description": "### 🐛 Describe the bug\n\nThe following code causes a clear memory leak where the # of tensors increases every step. Inductor seems to be holding on to the memory incorrectly, keeping ghosts alive. \n\nExample repro output:\n```python\nStep  150 | Loss: 2.3023 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2266 (130 w/grad) | AvgSeqLen: 35.8 | Time: 7.0s\n/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead\n  return isinstance(obj, torch.Tensor)\nStep  200 | Loss: 2.3037 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2602 (130 w/grad) | AvgSeqLen: 40.2 | Time: 9.0s\n/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead\n  return isinstance(obj, torch.Tensor)\nStep  250 | Loss: 2.3055 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3034 (130 w/grad) | AvgSeqLen: 40.6 | Time: 11.6s\n/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead\n  return isinstance(obj, torch.Tensor)\nStep  300 | Loss: 2.3029 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3514 (130 w/grad) | AvgSeqLen: 42.9 | Time: 14.4s\n```\nNote that the number of tensors should not be increasing here, they're leaked.\n\n\nEnabling \n```\ntorch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True\n```\n\nPrevents the accumulation, however, it's an opaque and very hard to hunt down failure mode. There's apparently another issue that's harder to reproduce with the same configuration even with skip dynamic graphs, where the memory used will randomly balloon for no apparent reason. Using regular flash attn func does not create this behaviour, and seems to be related to variant graphs holding on to memory incorrectly. This demo shows the \"graph holding\" behaviour but I could not isolate the random memory explosion behaviour:\n\nAlthough skipping dynamic graphs fixes the clear issue here, there's still some other memory issues that I could not replicate in isolation but are still happening over longer periods in larger scale tests. This seems to be some pathological case where the graph compiler has a fundamental failure mode around retaining memory. As an aside, specifically marking the forward using\n```python\n    @torch.compiler.disable\n    def forward(self, x, cu_seqlens=None, max_seqlen=None):\n        q = self.w_q(x)\n        k = self.w_k(x)\n        v = self.w_v(x)\n\n        # Where s -> total sequence length (of all batches combined), h -> number attn heads, d -> hidden dimension\n        q = rearrange(q, 's (h d) -> s h d', h=self.n_heads)\n        k = rearrange(k, 's (h d) -> s h d', h=self.n_heads)\n        v = rearrange(v, 's (h d) -> s h d', h=self.n_heads)\n\n        out = flash_attn_varlen_func(\n            q, k, v,\n            cu_seqlens_q=cu_seqlens,\n            cu_seqlens_k=cu_seqlens,\n            max_seqlen_q=max_seqlen,\n            max_seqlen_k=max_seqlen,\n            \n//...\n```\n\nDoes not actually stop the issue. Similarly\n```\ntorch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True\n```\n\nIn concert with disable torch compile *still* causes training failures due to memory over long periods. A reference implementation of MHA mysteriously does not have this problem, for reference:\n```python\nimport torch\nimport torch.nn as nn\nfrom flash_attn import flash_attn_varlen_func\nfrom einops import rearrange\n\nclass VarlenMHA(nn.Module):\n    def __init__(self, config, layer_idx=0):\n        super().__init__()\n        self.hidden_size = config.hidden_size\n        self.n_heads = config.n_attn_heads\n\n        assert self.hidden_size % self.n_heads == 0\n\n        # [ln(x + 1) / 2] + 1 -> ~[1, 2.5] s",
+  "apis": [
+    "nn.Embedding",
+    "gate_scores.unsqueeze",
+    "self.reset_parameters",
+    "input_ids.clone",
+    "torch.cuda.empty_cache",
+    "nn.init.normal_"
+  ],
+  "best_code": "Step  150 | Loss: 2.3023 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2266 (130 w/grad) | AvgSeqLen: 35.8 | Time: 7.0s\n/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead\n  return isinstance(obj, torch.Tensor)\nStep  200 | Loss: 2.3037 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2602 (130 w/grad) | AvgSeqLen: 40.2 | Time: 9.0s\n/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead\n  return isinstance(obj, torch.Tensor)\nStep  250 | Loss: 2.3055 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3034 (130 w/grad) | AvgSeqLen: 40.6 | Time: 11.6s\n/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead\n  return isinstance(obj, torch.Tensor)\nStep  300 | Loss: 2.3029 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3514 (130 w/grad) | AvgSeqLen: 42.9 | Time: 14.4s",
+  "pull_urls": [],
+  "_meta": {
+    "file": "165407_issue_ori_data.json",
+    "generated_at": "2026-04-21 04:40:35",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\165407_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\165407_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-10 06:52:39",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\165407_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\165407_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "The following code causes a clear memory leak where the # of tensors increases every step. Inductor seems to be holding on to the memory incorrectly, keeping ghosts alive.",
+  "repro_code": "",
+  "repro_output": "Specific torch compile memory leak involving flash_attn_varlen_func",
+  "affected_api": "flash_attn_varlen_func",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "",
+    "other_conditions": "flash_attn_varlen_func, torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True prevents the issue, related to variant graphs holding on to memory incorrectly"
+  },
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "3.13",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": [],
+  "core_api_identification": {
+    "core_api": "1.  **Analyze the Request:**",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\165407_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\165407_issue_ori_data.output.events.json"
+  }
+}

@@ -1,0 +1,133 @@
+The user wants to identify the single core PyTorch API responsible for the bug described in the report.
+
+**1. Analyze the Bug Report:**
+
+*   **Title:** [CUDA][Distributed][CI] PyTorch Encounters "CUDA driver error: invalid argument" Failures with Distributed CUDASymmetricMemory Tests on B200
+*   **Issue ID:** 162429
+*   **Description:**
+    *   Tests failing: `test/distributed/test_c10d_nccl.py::CommTest::test_intra_node_comm_all_reduce` and `test/distributed/test_symmetric_memory.py` (specifically `test_empty_strided_p2p_set_device_True`).
+    *   Platform: B200 (Blackwell GPU).
+    *   Workaround: `export TORCH_SYMM_MEM_DISABLE_MULTICAST=1`.
+    *   Error message: `CUDA driver error: invalid argument`.
+    *   Stack trace location: `Exception raised from ~AllocationRef at /var/lib/jenkins/workspace/torch/csrc/distributed/c10d/symm_mem/CUDASymmetricMemory.cu:71`.
+    *   Stack trace frames:
+        *   `c10d::symmetric_memory::AllocationRef::~AllocationRef()`
+        *   `c10d::symmetric_memory::CUDASymmetricMemory::~CUDASymmetricMemory()`
+        *   `c10d::intra_node_comm::IntraNodeComm::~IntraNodeComm()`
+        *   `c10d::ProcessGroupNCCL::~ProcessGroupNCCL()`
+
+**2. Identify the Core Component:**
+
+*   The error happens in the destructor of `CUDASymmetricMemory`.
+*   The workaround involves disabling "multicast" in symmetric memory (`TORCH_SYMM_MEM_DISABLE_MULTICAST`).
+*   The tests are related to distributed communication (`test_c10d_nccl`, `test_symmetric_memory`).
+*   The specific file mentioned in the stack trace is `CUDASymmetricMemory.cu`.
+*   The class names in the stack trace are `c10d::symmetric_memory::CUDASymmetricMemory`.
+
+**3. Determine the API:**
+
+*   The bug is specifically about "CUDASymmetricMemory".
+*   Is `CUDASymmetricMemory` a public Python API? No, it's a C++ class.
+*   The prompt asks for the "single core PyTorch API". This usually refers to the Python-facing API or the specific internal component name if it's a distinct feature.
+*   Looking at the stack trace and the workaround, the feature is "Symmetric Memory".
+*   The error occurs during the destruction of an allocation related to symmetric memory.
+*   The tests are `test_intra_node_comm_all_reduce` and `test_empty_strided_p2p`.
+*   The underlying mechanism causing the crash is the `CUDASymmetricMemory` implementation, specifically related to multicast.
+*   However, usually, when asked for an "API name" in these contexts, it refers to the high-level function or class being tested or the specific internal component named in the error.
+*   The error is explicitly in `c10d::symmetric_memory::CUDASymmetricMemory`.
+*   The workaround is `TORCH_SYMM_MEM_DISABLE_MULTICAST`.
+*   The title mentions "Distributed CUDASymmetricMemory Tests".
+
+Let's look for the specific Python API that triggers this. The tests are `test_intra_node_comm_all_reduce`. This likely uses `ProcessGroupNCCL`. However, the specific regression is tied to the new "Symmetric Memory" feature used by `ProcessGroupNCCL` for intra-node communication.
+
+The stack trace shows:
+`c10d::symmetric_memory::CUDASymmetricMemory::~CUDASymmetricMemory()`
+
+The most specific identifier for the failing component is `CUDASymmetricMemory`. While it's a C++ class, it represents the core functionality (Symmetric Memory) that is failing.
+
+Is there a Python API? The tests are internal distributed tests. The feature is "Symmetric Memory".
+If I have to pick the *single core API*, `CUDASymmetricMemory` is the most accurate description of the component failing. However, often these prompts look for the Python function name. But here, the bug is deep in the C++ backend for a specific feature.
+
+Let's re-read the prompt constraints: "Infer which single API is most responsible for triggering the bug."
+The bug is triggered by the destruction/deallocation of `CUDASymmetricMemory`.
+The workaround disables multicast in symmetric memory.
+
+If I look at the stack trace, the immediate context is `c10d::symmetric_memory::AllocationRef`.
+The class is `CUDASymmetricMemory`.
+
+Let's consider if `ProcessGroupNCCL` is the API. It is the user-facing API for distributed training. But the bug is specific to the *Symmetric Memory* optimization within it.
+The title says "Distributed CUDASymmetricMemory Tests".
+
+Let's try to find if there is a Python API `torch.distributed.sym_mem` or similar. A quick mental check suggests `symmetric_memory` is mostly an internal implementation detail for `ProcessGroupNCCL` optimizations (specifically for intra-node comm).
+
+However, the prompt asks for the "single core PyTorch API". If the bug is in `CUDASymmetricMemory`, that is the name of the class/component.
+
+Let's look at the error message again: `Exception raised from ~AllocationRef at .../CUDASymmetricMemory.cu:71`.
+The class is `c10d::symmetric_memory::CUDASymmetricMemory`.
+
+If I must provide a name, `CUDASymmetricMemory` seems the most precise technical identifier for the failing component. `ProcessGroupNCCL` is the container, but the bug is in the specific memory management feature.
+
+Let's check if `torch.distributed` is the API. Too broad.
+`torch.distributed.nccl`? Too broad.
+`CUDASymmetricMemory`? This is the specific class mentioned in the title and stack trace.
+
+Let's verify if `CUDASymmetricMemory` is considered an "API" in this context. In PyTorch bug tracking, internal classes are often referred to as APIs if they are distinct components. The title explicitly calls it "Distributed CUDASymmetricMemory Tests".
+
+Let's consider the possibility of `ProcessGroupNCCL`. The stack trace shows `ProcessGroupNCCL` destructor calling `IntraNodeComm` destructor calling `CUDASymmetricMemory` destructor. The bug is in `CUDASymmetricMemory`.
+The workaround `TORCH_SYMM_MEM_DISABLE_MULTICAST` targets the symmetric memory logic.
+
+Therefore, `CUDASymmetricMemory` is the most responsible component.
+
+Wait, is there a Python API `torch.distributed.sym_mem`?
+Searching internal knowledge... Symmetric memory is an internal C++ feature used by `ProcessGroupNCCL`. It is not exposed as a direct Python API like `torch.nn.Linear`.
+However, the prompt asks for the "single core PyTorch API". Sometimes this implies the Python function being called. The test is `test_intra_node_comm_all_reduce`. This calls `all_reduce`.
+But the *bug* is in `CUDASymmetricMemory`.
+
+Let's look at the "Trigger conditions" in the prompt: `GPU Platform: B200; export TORCH_SYMM_MEM_DISABLE_MULTICAST=1 makes the test pass`.
+This confirms the issue is with the Symmetric Memory implementation.
+
+If I have to choose between `ProcessGroupNCCL` and `CUDASymmetricMemory`, `CUDASymmetricMemory` is the specific failing unit. `ProcessGroupNCCL` is the user of that unit. The bug report title highlights "CUDASymmetricMemory".
+
+Let's assume the question asks for the specific class or function name where the error originates.
+The error originates in `c10d::symmetric_memory::CUDASymmetricMemory`.
+The name is `CUDASymmetricMemory`.
+
+Let's double check if there is a more generic name like "Symmetric Memory". The class name is `CUDASymmetricMemory`.
+
+Let's consider the possibility that the API is `ProcessGroupNCCL`. If I say `ProcessGroupNCCL`, it's correct that it's the distributed API, but it doesn't pinpoint the regression. The regression is in the symmetric memory path.
+If I say `CUDASymmetricMemory`, it pinpoints the regression.
+
+Let's look at the provided solution format. "Reply with only one API name".
+Common answers for these types of tasks are usually the class name or the function name.
+Given the stack trace `c10d::symmetric_memory::CUDASymmetricMemory::~CUDASymmetricMemory()`, the class name is `CUDASymmetricMemory`.
+
+Let's check if `torch.distributed` is the intended answer. Usually, if it's a specific feature, they want the feature name.
+The title: "Distributed CUDASymmetricMemory Tests".
+The error: `CUDASymmetricMemory.cu`.
+
+I will go with `CUDASymmetricMemory`.
+
+One more check: Is it possible the API is `IntraNodeComm`?
+Stack trace: `c10d::intra_node_comm::IntraNodeComm::~IntraNodeComm()`.
+This calls `CUDASymmetricMemory`.
+The error is raised inside `CUDASymmetricMemory` (specifically `AllocationRef` which is part of it).
+The workaround is `TORCH_SYMM_MEM_DISABLE_MULTICAST`. "SYMM_MEM" refers to Symmetric Memory.
+The class implementing this is `CUDASymmetricMemory`.
+
+Therefore, `CUDASymmetricMemory` is the best fit.
+
+Final verification:
+Bug: CUDA driver error in CUDASymmetricMemory.
+Component: CUDASymmetricMemory.
+API Name: CUDASymmetricMemory.
+
+Is there any ambiguity?
+The test is `test_intra_node_comm_all_reduce`.
+The user calls `all_reduce`.
+The implementation uses `IntraNodeComm`.
+`IntraNodeComm` uses `CUDASymmetricMemory`.
+`CUDASymmetricMemory` crashes.
+
+If the question asks for the API *responsible* for the bug, it's the one that has the bug. `CUDASymmetricMemory` has the bug (or its interaction with the B200 driver).
+
+I will provide `CUDASymmetricMemory`.CUDASymmetricMemory

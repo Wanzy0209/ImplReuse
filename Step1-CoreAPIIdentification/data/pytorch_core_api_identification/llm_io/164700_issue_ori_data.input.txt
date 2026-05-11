@@ -1,0 +1,152 @@
+Bug Report:
+Title: torch.compile generates illegal triton tl.broadcast_to and crashes from particular unsqueeze and torch.cat interleaving: 'constexpr_type' object has no attribute 'is_block'
+Issue ID: 164700
+Original bug description: ### 🐛 Describe the bug
+
+Here's a minimal-ish reproducer (while I will concede that it looks fairly nonsensical; I promise this was reduced from a genuine larger codebase):
+
+```python
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+
+device = "cuda"
+
+def f(x, y):
+    y2 = torch.cat(
+        [
+            x[:, 1:],
+            y[:, None] + 32 * 2048,
+        ],
+        dim=1,
+    )
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    return (
+        torch.cat([x2, y3], dim=1)
+        + torch.arange(-2048, 0, device=device)[None, None, :]
+    ).reshape(1, 32 * 2048)
+
+# This succeeds
+display(
+    f(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+
+# This crashes
+display(
+    torch.compile(f)(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+```
+
+Torch generates illegal Triton for the fused kernel, specifically it produces `tl.broadcast_to(1 + (31), [XBLOCK])`, whence `triton.compiler.errors.CompilationError` /  `AttributeError: 'constexpr_type' object has no attribute 'is_block'` (full error included below).
+
+Note that _in this particular case_ moving the unsqueeze after the torch.cat like so avoids the issue:
+
+```python
+def g(x, y):
+    y2 = torch.cat(
+        [
+            x[:, 1:],
+            y[:, None] + 32 * 2048,
+        ],
+        dim=1,
+    )
+
+    x2 = x[:, 1:]
+    y3 = y2[:, -1:]
+
+    return (
+        torch.cat([x2, y3], dim=1)[:, :, None]
+        + torch.arange(-2048, 0, device=device)[None, None, :]
+    ).reshape(1, 32 * 2048)
+```
+
+### Error logs
+
+```
+tensor([[-2048, -2047, -2046,  ..., 65533, 65534, 65535]], device='cuda:0')
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] Output code: 
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] # AOT ID: ['0_inference']
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from ctypes import c_void_p, c_long, c_int
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import torch
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import math
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import random
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import os
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import tempfile
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from math import inf, nan
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from cmath import nanj
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch._inductor.hooks import run_intermediate_hooks
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch._inductor.utils import maybe_profile
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch._inductor.codegen.memory_planning import _align as align
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch import device, empty_strided
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch._inductor.async_compile import AsyncCompile
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch._inductor.select_algorithm import extern_kernels
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import triton
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import triton.language as tl
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch._inductor.runtime.triton_heuristics import start_graph, end_graph
+V1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code]
+Structured error description: Torch generates illegal Triton for the fused kernel, specifically it produces `tl.broadcast_to(1 + (31), [XBLOCK])`, causing `triton.compiler.errors.CompilationError` and `AttributeError: 'constexpr_type' object has no attribute 'is_block'`.
+Minimal reproducible example: import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+
+device = "cuda"
+
+def f(x, y):
+    y2 = torch.cat(
+        [
+            x[:, 1:],
+            y[:, None] + 32 * 2048,
+        ],
+        dim=1,
+    )
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    return (
+        torch.cat([x2, y3], dim=1)
+        + torch.arange(-2048, 0, device=device)[None, None, :]
+    ).reshape(1, 32 * 2048)
+
+# This succeeds
+display(
+    f(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+
+# This crashes
+display(
+    torch.compile(f)(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+Trigger conditions: {"backend": "CUDA", "dtype": "torch.int64, torch.int32", "input_shape": "(1, 32) for x, (1,) for y", "other_conditions": "Using torch.compile with specific unsqueeze and torch.cat interleaving pattern"}
+Environment: {"pytorch_version": "unknown", "python_version": "unknown", "os": "unknown", "hardware": "V100"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

@@ -1,0 +1,137 @@
+Bug Report:
+Title: Gemma3 ONNX Export Fails due to vmap
+Issue ID: 160761
+Original bug description: Trying `torch.onnx.export` for Gemma3,  the export fails both with and without `dynamo`. 
+Could be a `torch.vmap` issue introduced by `transformers==4.55.0` in `masking_utils.py`?
+https://github.com/huggingface/transformers/blob/main/src/transformers/masking_utils.py#L153
+
+Using:
+`transformers==4.55.0, torch==2.7.0+cpu`
+
+Code to reproduce:
+
+```
+import os
+from pathlib import Path
+
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-270m-it")
+model = AutoModelForCausalLM.from_pretrained("google/gemma-3-270m-it")
+
+
+messages = [
+    {"role": "user", "content": "Who are you?"},
+]
+
+inputs = tokenizer.apply_chat_template(
+    messages,
+    add_generation_prompt=True,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="pt",
+).to(model.device)
+
+
+example_inputs = (inputs["input_ids"], inputs["attention_mask"])
+
+# ONNX Export
+torch.onnx.export(
+    model,
+    example_inputs,
+    "gemma3.onnx",
+    input_names=["input_ids", "attention_mask"],
+    output_names=["logits"],
+    opset_version=17,
+    do_constant_folding=True,
+    dynamo = True,
+)
+
+print("ONNX model exported to gemma3.onnx")
+
+```
+
+Error trace:
+```
+W0815 10:50:15.492000 2659766 torch/onnx/_internal/exporter/_registration.py:103] torchvision is not installed. Skipping torchvision::nms
+[torch.onnx] Obtain model graph for `Gemma3ForCausalLM([...]` with `torch.export.export(..., strict=False)`...
+[torch.onnx] Obtain model graph for `Gemma3ForCausalLM([...]` with `torch.export.export(..., strict=False)`... ❌
+[torch.onnx] Obtain model graph for `Gemma3ForCausalLM([...]` with `torch.export.export`...
+[torch.onnx] Obtain model graph for `Gemma3ForCausalLM([...]` with `torch.export.export`... ❌
+[torch.onnx] Obtain model graph for `Gemma3ForCausalLM([...]` with Torch Script...
+`loss_type=None` was set in the config but it is unrecognised.Using the default loss: `ForCausalLMLoss`.
+/proj/work/sdey/mlir-compiler/venv/lib/python3.10/site-packages/transformers/masking_utils.py:190: TracerWarning: Converting a tensor to a Python boolean might cause the trace to be incorrect. We can't record the data flow of Python values, so this value will be treated as a constant in the future. This means that the trace might not generalize to other inputs!
+  if (padding_length := kv_length + kv_offset - attention_mask.shape[-1]) > 0:
+[torch.onnx] Obtain model graph for `Gemma3ForCausalLM([...]` with Torch Script... ❌
+Traceback (most recent call last):
+  File "/proj/work/sdey/mlir-compiler/venv/lib/python3.10/site-packages/torch/onnx/_internal/exporter/_capture_strategies.py", line 110, in __call__
+    exported_program = self._capture(model, args, kwargs, dynamic_shapes)
+  File "/proj/work/sdey/mlir-compiler/venv/lib/python3.10/site-packages/torch/onnx/_internal/exporter/_capture_strategies.py", line 190, in _capture
+    return torch.export.export(
+  File "/proj/work/sdey/mlir-compiler/venv/lib/python3.10/site-packages/torch/export/__init__.py", line 360, in export
+    return _export(
+  File "/proj/work/sdey/mlir-compiler/venv/lib/python3.10/site-packages/torch/export/_trace.py", line 1092, in wrapper
+    raise e
+  File "/proj/work/sdey/mlir-compiler/venv/lib/python3.10/site-packages/torch/export/_trace.py", line 1065, in wrapper
+    ep = fn(*args, **kwargs)
+  File "/proj/work/sdey/mlir-compiler/venv/lib/python3.10/site-packages/torch/export/exported_program.py", line 121, in wrapper
+    return fn(*args, **kwargs)
+  File "/proj/work/sdey/mlir-compiler/venv/lib/python3.10/site-packages/torch/export/_trace.py", line 2112, in _export
+    ep = _export_for_training(
+  File "/proj/work/sdey/mlir-compiler/venv/lib/python3.10/site-packages/torch/export/_trace.py", line 1092, in wrapper
+    raise e
+  File "/proj/work/sdey/mlir-compiler/venv/lib/python3.10/site-packages/torch/export/_trace.py", line 1065, in wrapper
+    ep = fn(*args, **kwargs)
+  File "/proj/work/sdey/mlir-compiler/venv/lib/python3.10/site-packages/torch/export/e
+Structured error description: Trying `torch.onnx.export` for Gemma3, the export fails both with and without `dynamo`. Could be a `torch.vmap` issue introduced by `transformers==4.55.0` in `masking_utils.py`?
+Minimal reproducible example: import os
+from pathlib import Path
+
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-270m-it")
+model = AutoModelForCausalLM.from_pretrained("google/gemma-3-270m-it")
+
+
+messages = [
+    {"role": "user", "content": "Who are you?"},
+]
+
+inputs = tokenizer.apply_chat_template(
+    messages,
+    add_generation_prompt=True,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="pt",
+).to(model.device)
+
+
+example_inputs = (inputs["input_ids"], inputs["attention_mask"])
+
+# ONNX Export
+torch.onnx.export(
+    model,
+    example_inputs,
+    "gemma3.onnx",
+    input_names=["input_ids", "attention_mask"],
+    output_names=["logits"],
+    opset_version=17,
+    do_constant_folding=True,
+    dynamo = True,
+)
+
+print("ONNX model exported to gemma3.onnx")
+Trigger conditions: {"backend": "CPU", "dtype": "", "input_shape": "", "other_conditions": "transformers==4.55.0, torch==2.7.0+cpu, model \"google/gemma-3-270m-it\""}
+Environment: {"pytorch_version": "2.7.0+cpu", "python_version": "3.10", "os": "", "hardware": "CPU"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

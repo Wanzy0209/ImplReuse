@@ -1,0 +1,60 @@
+{
+  "title": "torch.compile generates illegal triton tl.broadcast_to and crashes from particular unsqueeze and torch.cat interleaving: 'constexpr_type' object has no attribute 'is_block'",
+  "issue_id": "164700",
+  "bug_description": "### 🐛 Describe the bug\n\nHere's a minimal-ish reproducer (while I will concede that it looks fairly nonsensical; I promise this was reduced from a genuine larger codebase):\n\n```python\nimport os\n\nos.environ[\"TORCH_LOGS\"] = \"output_code\"\n\nimport torch\nimport torch.nn\n\ndevice = \"cuda\"\n\ndef f(x, y):\n    y2 = torch.cat(\n        [\n            x[:, 1:],\n            y[:, None] + 32 * 2048,\n        ],\n        dim=1,\n    )\n\n    x2 = x[:, 1:, None]\n    y3 = y2[:, -1:, None]\n\n    return (\n        torch.cat([x2, y3], dim=1)\n        + torch.arange(-2048, 0, device=device)[None, None, :]\n    ).reshape(1, 32 * 2048)\n\n# This succeeds\ndisplay(\n    f(\n        torch.zeros(1, 32, dtype=torch.int64, device=device),\n        torch.zeros(1, dtype=torch.int32, device=device),\n    )\n)\n\n# This crashes\ndisplay(\n    torch.compile(f)(\n        torch.zeros(1, 32, dtype=torch.int64, device=device),\n        torch.zeros(1, dtype=torch.int32, device=device),\n    )\n)\n```\n\nTorch generates illegal Triton for the fused kernel, specifically it produces `tl.broadcast_to(1 + (31), [XBLOCK])`, whence `triton.compiler.errors.CompilationError` /  `AttributeError: 'constexpr_type' object has no attribute 'is_block'` (full error included below).\n\nNote that _in this particular case_ moving the unsqueeze after the torch.cat like so avoids the issue:\n\n```python\ndef g(x, y):\n    y2 = torch.cat(\n        [\n            x[:, 1:],\n            y[:, None] + 32 * 2048,\n        ],\n        dim=1,\n    )\n\n    x2 = x[:, 1:]\n    y3 = y2[:, -1:]\n\n    return (\n        torch.cat([x2, y3], dim=1)[:, :, None]\n        + torch.arange(-2048, 0, device=device)[None, None, :]\n    ).reshape(1, 32 * 2048)\n```\n\n### Error logs\n\n```\ntensor([[-2048, -2047, -2046,  ..., 65533, 65534, 65535]], device='cuda:0')\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] Output code: \nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] # AOT ID: ['0_inference']\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from ctypes import c_void_p, c_long, c_int\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import torch\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import math\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import random\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import os\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import tempfile\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from math import inf, nan\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from cmath import nanj\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch._inductor.hooks import run_intermediate_hooks\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch._inductor.utils import maybe_profile\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch._inductor.codegen.memory_planning import _align as align\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch import device, empty_strided\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch._inductor.async_compile import AsyncCompile\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch._inductor.select_algorithm import extern_kernels\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import triton\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] import triton.language as tl\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code] from torch._inductor.runtime.triton_heuristics import start_graph, end_graph\nV1005 14:57:22.616000 3666 torch/_inductor/graph.py:2345] [0/0] [__output_code]",
+  "apis": [
+    "torch.arange",
+    "src.make_ir",
+    "triton_poi_fused_add_cat_0.run",
+    "u003etl.broadcast_to",
+    "torch.cat",
+    "tl.where"
+  ],
+  "best_code": "import os\n\nos.environ[\"TORCH_LOGS\"] = \"output_code\"\n\nimport torch\nimport torch.nn\n\ndevice = \"cuda\"\n\ndef f(x, y):\n    y2 = torch.cat(\n        [\n            x[:, 1:],\n            y[:, None] + 32 * 2048,\n        ],\n        dim=1,\n    )\n\n    x2 = x[:, 1:, None]\n    y3 = y2[:, -1:, None]\n\n    return (\n        torch.cat([x2, y3], dim=1)\n        + torch.arange(-2048, 0, device=device)[None, None, :]\n    ).reshape(1, 32 * 2048)\n\n# This succeeds\ndisplay(\n    f(\n        torch.zeros(1, 32, dtype=torch.int64, device=device),\n        torch.zeros(1, dtype=torch.int32, device=device),\n    )\n)\n\n# This crashes\ndisplay(\n    torch.compile(f)(\n        torch.zeros(1, 32, dtype=torch.int64, device=device),\n        torch.zeros(1, dtype=torch.int32, device=device),\n    )\n)",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/160190",
+    "https://github.com/pytorch/pytorch/pull/165066"
+  ],
+  "_meta": {
+    "file": "164700_issue_ori_data.json",
+    "generated_at": "2026-04-21 04:12:09",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\164700_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\164700_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-10 05:58:40",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\164700_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\164700_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "Torch generates illegal Triton for the fused kernel, specifically it produces `tl.broadcast_to(1 + (31), [XBLOCK])`, causing `triton.compiler.errors.CompilationError` and `AttributeError: 'constexpr_type' object has no attribute 'is_block'`.",
+  "repro_code": "import os\n\nos.environ[\"TORCH_LOGS\"] = \"output_code\"\n\nimport torch\nimport torch.nn\n\ndevice = \"cuda\"\n\ndef f(x, y):\n    y2 = torch.cat(\n        [\n            x[:, 1:],\n            y[:, None] + 32 * 2048,\n        ],\n        dim=1,\n    )\n\n    x2 = x[:, 1:, None]\n    y3 = y2[:, -1:, None]\n\n    return (\n        torch.cat([x2, y3], dim=1)\n        + torch.arange(-2048, 0, device=device)[None, None, :]\n    ).reshape(1, 32 * 2048)\n\n# This succeeds\ndisplay(\n    f(\n        torch.zeros(1, 32, dtype=torch.int64, device=device),\n        torch.zeros(1, dtype=torch.int32, device=device),\n    )\n)\n\n# This crashes\ndisplay(\n    torch.compile(f)(\n        torch.zeros(1, 32, dtype=torch.int64, device=device),\n        torch.zeros(1, dtype=torch.int32, device=device),\n    )\n)",
+  "repro_output": "torch.compile generates illegal triton tl.broadcast_to and crashes from particular unsqueeze and torch.cat interleaving: 'constexpr_type' object has no attribute 'is_block'",
+  "affected_api": "torch.compile, torch.cat, unsqueeze (via None indexing)",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.int64, torch.int32",
+    "input_shape": "(1, 32) for x, (1,) for y",
+    "other_conditions": "Using torch.compile with specific unsqueeze and torch.cat interleaving pattern"
+  },
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "V100"
+  },
+  "labels": [
+    "torch.compile",
+    "triton",
+    "bug"
+  ],
+  "core_api_identification": {
+    "core_api": "python",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\164700_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\164700_issue_ori_data.output.events.json"
+  }
+}

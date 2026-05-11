@@ -1,0 +1,77 @@
+The user wants to identify the single core PyTorch API responsible for the bug described in the report.
+
+**1. Analyze the Bug Report:**
+
+*   **Title:** `DISABLED test_neg_view_cholesky_inverse_cuda_float64`
+*   **Issue ID:** 165292
+*   **Platform:** ROCm (AMD GPU)
+*   **Test Name:** `test_neg_view_cholesky_inverse_cuda_float64`
+*   **File:** `test_ops.py`
+*   **Error Message:** `AssertionError: Tensor-likes are not close!` (Mismatched elements: 50/50, 100%).
+*   **Repro Command:** `PYTORCH_OPINFO_SAMPLE_INPUT_INDEX=9 PYTORCH_TEST_WITH_ROCM=1 python test/test_ops.py TestMathBitsCUDA.test_neg_view_cholesky_inverse_cuda_float64`
+*   **Trigger Conditions:**
+    *   Backend: ROCm
+    *   Dtype: `torch.float64`
+    *   Input Shape: `(2, 5, 5)`
+    *   Other: Non-contiguous input (`contiguous=False`).
+*   **Context:** The test name suggests it involves "neg", "view", "cholesky", and "inverse". The error happens in `_test_math_view` inside `test_neg_view`.
+
+**2. Analyze the Test Name and Code Context:**
+
+*   The test name is `test_neg_view_cholesky_inverse_cuda_float64`.
+*   This looks like an auto-generated test name based on OpInfo. PyTorch's test suite uses `OpInfo` to generate tests for various operators.
+*   The pattern usually is `test_{variant}_{op_name}_{device}_{dtype}`.
+*   Here, the variant is `neg_view`.
+*   The operator name seems to be `cholesky_inverse`.
+*   Let's verify this hypothesis. The error trace shows:
+    ```python
+    File "/var/lib/jenkins/pytorch/test/test_ops.py", line 2203, in test_neg_view
+        self._test_math_view(
+    File "/var/lib/jenkins/pytorch/test/test_ops.py", line 2118, in _test_math_view
+        self.assertEqual(expected_forward, forward_with_mathview)
+    ```
+*   The test is checking if the output of an operator matches the output when the input is a "math view" (often involving negation or other view-like operations that might be optimized differently).
+*   The specific operator being tested is embedded in the test name: `cholesky_inverse`.
+
+**3. Identify the API:**
+
+*   The test is specifically for `torch.cholesky_inverse`.
+*   The error occurs when comparing the result of `torch.cholesky_inverse` on a normal tensor vs a "neg view" tensor (likely `input.neg()` or similar view operation) on ROCm with float64.
+*   The failure is a numerical mismatch (100% mismatched elements), suggesting the implementation of `cholesky_inverse` on ROCm for float64 might be handling non-contiguous inputs (views) incorrectly or there's a specific optimization path failing.
+
+**4. Verify against constraints:**
+
+*   "Single core PyTorch API": `torch.cholesky_inverse` fits this.
+*   "Most responsible for triggering the bug": The bug is a numerical accuracy/correctness failure in the implementation of this specific function under specific conditions (ROCm, float64, view).
+*   "Return only one API name": `torch.cholesky_inverse` or just `cholesky_inverse`. Usually, the canonical name is preferred.
+
+**5. Refine the API Name:**
+
+*   The test name is `test_neg_view_cholesky_inverse_cuda_float64`.
+*   The operator being tested is `cholesky_inverse`.
+*   Is it `torch.inverse`? No, the name is specific.
+*   Is it `torch.cholesky`? No, it's `cholesky_inverse`.
+*   Is it `torch.neg`? The test involves a "neg view", but the failure is in the result of the main operator being tested. The "neg view" is the *condition* (input mutation/view), not the API failing itself. The API failing to compute the correct inverse is `cholesky_inverse`.
+
+**6. Final Decision:**
+
+The API is `torch.cholesky_inverse`.
+
+Let's double check if `cholesky_inverse` is a public API. Yes, `torch.cholesky_inverse(input, upper=False) -> Tensor`.
+
+The error message says `Caused by sample input at index 9: SampleInput(input=Tensor[size=(2, 5, 5), ...])`. The test framework iterates over `OpInfo` tests. The test name `test_neg_view_cholesky_inverse_cuda_float64` strongly implies the operator is `cholesky_inverse`.
+
+Therefore, the API is `torch.cholesky_inverse`.
+
+I will output the name without the `torch.` prefix if it's ambiguous, but usually, the full name or the standard name is best. The prompt asks for "one API name". `cholesky_inverse` is the function name.
+
+Let's look at the error trace again.
+`File "/var/lib/jenkins/pytorch/test/test_ops.py", line 2203, in test_neg_view`
+`self._test_math_view(`
+`File "/var/lib/jenkins/pytorch/test/test_ops.py", line 2118, in _test_math_view`
+`self.assertEqual(expected_forward, forward_with_mathview)`
+
+The test is checking if `op(input)` equals `op(view(input))`.
+The `op` here is `cholesky_inverse`.
+
+Result: `cholesky_inverse`cholesky_inverse

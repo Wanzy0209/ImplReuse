@@ -1,0 +1,55 @@
+{
+  "title": "Umbrella bug: failures in basic custom MemPool patterns",
+  "issue_id": "167745",
+  "bug_description": "### 🐛 Describe the bug\n\nThis is a bug to document several problematic patterns with custom MemPool allocations.\nFor now, these simple tests do not include interactions with CUDA graph pools, but at the moment, custom MemPools behave very similarly to CUDA graph pools, so hopefully the current tests are sufficient for now.\nAdditionally, the tests are not checking for thread-safety (for now), which will be added in the future as this was an issue previously (https://github.com/pytorch/pytorch/issues/152861).\n\nAll tests can be found in this repo (which has two branches as explained per below): https://github.com/MatthiasKohl/pytorch-mempool-litmus\n\nFailing tests due to temporary `MemPool` objects:\n\nTest 1:\n\n```python\npool1 = make_custom_pool(1)\n\nwith torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):\n    print(\"Pool 1 ctx start\")\n    x1 = torch.randn(8, device=\"cuda\")\n    print(\"Pool 1 ctx end\")\ndel x1\n```\n\nTest 2:\n\n```python\npool1 = make_custom_pool(1)\npool2 = make_custom_pool(2)\n\nx1 = torch.randn(8, device=\"cuda\")\nwith torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):\n    print(\"Pool 1 ctx start\")\n    with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool2)):\n        print(\"Pool 2 ctx start\")\n        print(\"Pool 2 ctx end\")\n    print(\"Pool 1 ctx end\")\ndel x1\n```\n\nFor these, I think an important question is: should the above pattern be allowed at all in python?\nIMO, it should: From the point of view of the user, it should not be their responsibility to keep track of when exactly the custom pool is still needed or not, especially given that the caching allocator may free tensors at a later time than the deletion of the tensor itself. Not allowing this pattern would cause unnecessary confusion IMO. In this case, the user simply wants to mark all deleted tensors as \"free-able\" and all non-deleted tensors as \"free-able as soon as they are deleted\", at the point of deleting the pool object itself.\nNote that there is currently no good way to create a temporary python object tied to the context manager other than what the above test does.\n\nTest 1 fails because it incorrectly uses the default `cudaFree` here: https://github.com/pytorch/pytorch/blob/c940b1fbbca8da7e526bf610ce007f8af75f6cd5/c10/cuda/CUDACachingAllocator.cpp#L3382\nThis is because the owner pool of the private pool isn't active anymore at the time where the blocks get released. We then call the default `cudaFree` which is dangerous as we have no idea whether this even works with pointers from a custom allocator.\n\nTest 2 fails because in the nested case, when deleting the `MemPool` object for `pool2`, we are still \"capturing\", thus running into the internal assert here: https://github.com/pytorch/pytorch/blob/c940b1fbbca8da7e526bf610ce007f8af75f6cd5/c10/cuda/CUDACachingAllocator.cpp#L3525\n\nAll remaining simple tests in the repository fail due to the above issues related to temporary objects, so I created a side-branch of the repo to track cases where we keep references to the pools around: https://github.com/MatthiasKohl/pytorch-mempool-litmus/tree/mempool_non_temp\n\nIn this case, we have failing tests due to incorrect nesting: many tests are essentially duplicates of https://github.com/pytorch/pytorch/issues/161193, e.g. the below\n\nTest 3:\n\n```python\npool1 = torch.cuda.MemPool(make_custom_pool(1))\npool2 = torch.cuda.MemPool(make_custom_pool(2))\n\nwith torch.cuda.use_mem_pool(pool1):\n    print(\"Pool 1 ctx start\")\n    with torch.cuda.use_mem_pool(pool2):\n        print(\"Pool 2 ctx start\")\n        x1 = torch.randn(8, device=\"cuda\")\n        print(\"Pool 2 ctx end\")\n    print(\"Pool 1 ctx end\")\ndel x1\n```\n\nAll remaining tests currently fail for the same reason, but depending on how the nesting issue is fixed, they may reveal further issues.\nIdeally, an incremental solution to the nesting issue should not make the situation worse (all currently passing tests should still pass).\n\ncc @syed-ahmed @ngimel as you're CC'ed on related issues as well\n\nPotential initial solutions:\n\n1. we need",
+  "apis": [
+    "u003ecaptures_underway.empty",
+    "cpp_extension.load_inline",
+    "torch.randn",
+    "CUSTOM_ALLOC_SOURCE_TEMPLATE.replace",
+    "os.makedirs",
+    "torch.cuda.CUDAPluggableAllocator"
+  ],
+  "best_code": "pool1 = make_custom_pool(1)\n\nwith torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):\n    print(\"Pool 1 ctx start\")\n    x1 = torch.randn(8, device=\"cuda\")\n    print(\"Pool 1 ctx end\")\ndel x1",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/160351"
+  ],
+  "_meta": {
+    "file": "167745_issue_ori_data.json",
+    "generated_at": "2026-04-21 06:13:54",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\167745_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\167745_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-10 09:39:13",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\167745_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\167745_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "This is a bug to document several problematic patterns with custom MemPool allocations. Test 1 fails because it incorrectly uses the default cudaFree as the owner pool of the private pool isn't active anymore at the time where the blocks get released. Test 2 fails because in the nested case, when deleting the MemPool object for pool2, the code is still capturing, running into an internal assert. Test 3 fails due to incorrect nesting.",
+  "repro_code": "pool1 = make_custom_pool(1)\n\nwith torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):\n    print(\"Pool 1 ctx start\")\n    x1 = torch.randn(8, device=\"cuda\")\n    print(\"Pool 1 ctx end\")\ndel x1\n\npool1 = make_custom_pool(1)\npool2 = make_custom_pool(2)\n\nx1 = torch.randn(8, device=\"cuda\")\nwith torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):\n    print(\"Pool 1 ctx start\")\n    with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool2)):\n        print(\"Pool 2 ctx start\")\n        print(\"Pool 2 ctx end\")\n    print(\"Pool 1 ctx end\")\ndel x1\n\npool1 = torch.cuda.MemPool(make_custom_pool(1))\npool2 = torch.cuda.MemPool(make_custom_pool(2))\n\nwith torch.cuda.use_mem_pool(pool1):\n    print(\"Pool 1 ctx start\")\n    with torch.cuda.use_mem_pool(pool2):\n        print(\"Pool 2 ctx start\")\n        x1 = torch.randn(8, device=\"cuda\")\n        print(\"Pool 2 ctx end\")\n    print(\"Pool 1 ctx end\")\ndel x1",
+  "repro_output": "Umbrella bug: failures in basic custom MemPool patterns",
+  "affected_api": "torch.cuda.use_mem_pool, torch.cuda.MemPool",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "",
+    "input_shape": "",
+    "other_conditions": "custom MemPool allocations, temporary MemPool objects, nested MemPool contexts"
+  },
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "",
+    "hardware": "CUDA"
+  },
+  "labels": [],
+  "core_api_identification": {
+    "core_api": "1.  **Analyze the Request:**",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\167745_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\167745_issue_ori_data.output.events.json"
+  }
+}

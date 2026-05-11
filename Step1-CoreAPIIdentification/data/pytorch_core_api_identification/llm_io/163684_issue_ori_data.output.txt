@@ -1,0 +1,213 @@
+The user wants to identify the single core PyTorch API responsible for the bug described in the report.
+
+**Bug Report Analysis:**
+*   **Title:** PyTorch 2.8 + CUDA 12.8 fails to initialize on RTX 5090 (WinError 1114)
+*   **Description:** The user is trying to run a source-built PyTorch 2.8.0 with CUDA 12.8 on an RTX 5090 (compute capability sm_120).
+*   **Error:** `OSError: [WinError 1114] A dynamic link library (DLL) initialization routine failed. Error loading "torch_cpu.dll" or one of its dependencies.`
+*   **Context:**
+    *   The error happens during the loading of `torch_cpu.dll`.
+    *   The user mentions `torch_cuda.dll` depends on `torch_cpu.dll`.
+    *   The failure is internal to DLL initialization (DllMain or static constructor).
+    *   The user is using specific build flags: `TORCH_CUDA_ARCH_LIST=8.6;9.0;12.0`.
+    *   The user mentions "device registration failure" as a possibility.
+    *   The error is a Windows DLL loading error, not a Python API call error per se, but the question asks for the "core PyTorch API" responsible for triggering the bug.
+
+**Identifying the API:**
+The bug is about initialization and device registration. The error occurs when importing torch or trying to use CUDA capabilities, specifically related to the new GPU architecture (sm_120) and CUDA 12.8.
+
+However, looking at the error message: `Error loading "torch_cpu.dll"`. This suggests the issue is deep in the C++ initialization code, likely related to the dispatcher, device registration, or the CUDA extension loading mechanism.
+
+The user mentions "device registration failure". In PyTorch, device registration usually happens via the `Device` module or the `CUDA` extension initialization.
+
+But the prompt asks for the *single core PyTorch API*.
+Is there a specific Python API call mentioned? No, the error happens at import/load time.
+Is there a specific C++ API implied? The bug report mentions "device registration".
+
+Let's look at the trigger conditions: `{"backend": "CUDA", ... "RTX 5090 GPU", "CUDA 12.8", "sm_120 flags"}`.
+
+The issue is likely related to how PyTorch detects or initializes the CUDA device, specifically for a new architecture (sm_120) that might not be fully supported or correctly handled in the initialization logic of the 2.8 source build with that specific CUDA version.
+
+Common APIs involved in initialization/device checking:
+*   `torch.cuda.is_available()`
+*   `torch.device('cuda')`
+*   `torch.cuda.get_device_name()`
+
+However, the error happens *before* these can be called, during the DLL load. The bug report says: "torch_cpu.dll loads cleanly in Dependencies.exe but crashes during runtime... failure occurs inside DllMain or static constructor".
+
+This implies the issue is in the C++ backend initialization. The "API" in this context usually refers to the Python interface or the high-level C++ interface.
+
+If I have to pick an API that *would* trigger this or is most associated with the failure mode (initialization of CUDA backend), it's usually the CUDA availability check or device initialization.
+
+However, the error is specifically about `torch_cpu.dll`. The user notes: "torch_cuda.dll depends on torch_cpu.dll". The crash is in `torch_cpu.dll`.
+
+Wait, if the crash is in `torch_cpu.dll`, why is CUDA mentioned? Because the build flags included CUDA architectures (`TORCH_CUDA_ARCH_LIST`), and the user is trying to run on a CUDA machine. The static constructors in `torch_cpu.dll` might be trying to register CUDA kernels or dispatchers, which fails due to the sm_120/CUDA 12.8 mismatch or driver issues.
+
+The bug report title mentions "PyTorch 2.8 + CUDA 12.8 fails to initialize".
+The description mentions "device registration failure".
+
+In PyTorch, the mechanism for registering devices and dispatchers is internal. But from a user perspective, the "API" that interacts with the GPU is `torch.cuda`.
+
+Let's reconsider the constraints. "Infer which single API is most responsible for triggering the bug."
+If the user simply runs `import torch`, and it crashes, is `import torch` the API? No, that's Python syntax.
+The crash happens because of the CUDA backend initialization.
+
+If I look at similar bugs regarding initialization failures on new hardware, they often relate to `torch.cuda.is_available()` or the underlying C++ `c10::cuda::device_count()` or similar.
+
+However, the error is `WinError 1114` loading `torch_cpu.dll`. This is a system error, not a PyTorch API error. But the prompt asks for the PyTorch API.
+
+Perhaps the API is `torch.cuda`? Or `torch.device`?
+
+Let's look at the "Minimal reproducible example" section. It's empty, but "Trigger conditions" are provided.
+The trigger is the environment setup and the attempt to run PyTorch.
+
+If I have to name the API that is failing to initialize, it is the CUDA backend.
+The API representing the CUDA backend is `torch.cuda`.
+
+Let's check if there's a more specific API. The user mentions "sm_120 initialization".
+The bug is likely in the code that handles `TORCH_CUDA_ARCH_LIST` or the JIT compilation/PTX loading for sm_120.
+
+But usually, for these "identify the API" tasks, if it's a general initialization failure related to a specific backend, the answer is the backend namespace.
+
+Let's look at the error again: `Error loading "torch_cpu.dll"`.
+This is tricky. The CPU DLL is crashing. Why? Probably because of static initialization of the CUDA dispatcher logic which lives in the core (cpu) library to dispatch to CUDA.
+
+If I must choose one API, `torch.cuda` is the most logical candidate because the bug is entirely conditional on the presence of the RTX 5090 (CUDA device) and the CUDA 12.8 build flags. Without the CUDA context (or attempt to initialize it), `torch_cpu.dll` likely loads fine.
+
+Therefore, the API responsible is the CUDA interface.
+
+Is there a specific function? `torch.cuda.init()`? That's internal.
+`torch.cuda.is_available()` is the standard check.
+
+However, the prompt asks for the "single core PyTorch API".
+If the bug is "PyTorch fails to initialize", and the cause is "CUDA 12.8 + RTX 5090", the API is `torch.cuda`.
+
+Let's double check if `torch` itself is considered an API. Usually, we look for modules or functions.
+The bug report mentions "device registration failure".
+The API for device registration is internal.
+
+Let's assume the question implies "Which part of the PyTorch user-facing API is the user trying to use when this happens, or which part is failing?"
+The user is trying to use PyTorch with CUDA.
+The API is `torch.cuda`.
+
+Let's try to find if there is a more specific API mentioned in the text.
+"sm_120 initialization"
+"device registration"
+"torch_cpu.dll"
+"torch_cuda.dll"
+
+The user says: "torch_cuda.dll depends on torch_cpu.dll, so exclusion breaks CUDA backend".
+The user wants "Guidance on isolating DllMain crash or bypassing CPU backend for CUDA-only workflows".
+
+The failure is in `torch_cpu.dll`, but it is triggered by the CUDA build configuration.
+If I have to pick the API, `torch.cuda` seems the most appropriate high-level identifier.
+
+Alternative: `torch.ops`? No.
+Alternative: `torch.utils.cpp_extension`? No, this is a source build.
+
+Let's look at the "Trigger conditions" again.
+`"backend": "CUDA"`
+
+The API corresponding to the CUDA backend is `torch.cuda`.
+
+Let's verify if `torch.cuda` is a valid "API name" in this context. Yes, it is the standard namespace for CUDA operations.
+
+Is there any other candidate?
+`torch.device`? Used to specify the device.
+`torch.cuda.is_available()`? The specific function often called.
+
+However, the crash happens at import time, before `is_available` is explicitly called by the user (though it might be called internally).
+The initialization of the CUDA backend is the culprit.
+
+I will go with `torch.cuda`.
+
+Wait, looking at the error `WinError 1114` loading `torch_cpu.dll`.
+This is a very low-level error.
+Could the answer be `torch`? No, that's the package.
+Could the answer be `torch._C`? That's the C++ extension module.
+
+Let's look at the provided solution in similar tasks. Usually, if it's a backend issue, it's `torch.cuda`.
+If it's a specific function like `torch.load`, it's that.
+Here, it's initialization.
+
+Let's consider the phrase "sm_120 initialization".
+This refers to the initialization of the CUDA capability 12.0 (sm_120).
+This is part of the CUDA backend.
+
+I will stick with `torch.cuda`.
+
+One more check: The user mentions "torch_cpu.dll".
+Is it possible the API is `torch`?
+The prompt asks for "the single core PyTorch API".
+If I run `import torch`, and it crashes, the API being invoked is the `torch` module initialization.
+But the *cause* is the CUDA backend.
+Usually, in these classification tasks, we identify the subsystem causing the issue.
+Subsystem: CUDA.
+API: `torch.cuda`.
+
+Let's refine. The bug is about "PyTorch 2.8 + CUDA 12.8 fails to initialize".
+The failure is in `torch_cpu.dll` but due to CUDA dependencies.
+The user is trying to use the CUDA functionality.
+The API is `torch.cuda`.
+
+Let's try to see if there is a specific function mentioned.
+"device registration failure".
+"sm_120 initialization".
+
+If I have to be very specific, maybe `torch.cuda.device_count()` or `torch.cuda.current_device()`?
+But the crash happens before these are called. It happens during static initialization.
+Static initialization of what? The CUDA dispatcher.
+
+If the answer must be a single API name, `torch.cuda` is the best fit for the subsystem.
+
+Let's consider if the answer is `None`.
+"Error loading torch_cpu.dll". This is a build/environment issue, not necessarily an API logic bug.
+However, the prompt asks to "Infer which single API is most responsible for triggering the bug."
+The trigger is the attempt to initialize the CUDA backend.
+So `torch.cuda` is the trigger.
+
+Final decision: `torch.cuda`.
+
+Wait, looking at the error message again: `Error loading "torch_cpu.dll"`.
+The user says: "torch_cuda.dll depends on torch_cpu.dll".
+This implies the dependency chain is: Python -> torch (python) -> torch_C (pybind) -> torch_cpu.dll -> (maybe) torch_cuda.dll.
+Actually, usually `torch_cpu.dll` is the core. `torch_cuda.dll` is the CUDA extension.
+If `torch_cpu.dll` crashes, it's because of code inside `torch_cpu.dll`.
+Why would `torch_cpu.dll` crash because of CUDA?
+Because of static initialization of CUDA-related dispatchers or global variables that query CUDA capabilities (like `c10::cuda::device_count()` called in a global constructor).
+
+So the code path is: Global init in `torch_cpu.dll` -> calls CUDA API -> crashes.
+The PyTorch API that encompasses this CUDA interaction is `torch.cuda`.
+
+If I have to choose between `torch` and `torch.cuda`, `torch.cuda` is more specific to the trigger conditions (RTX 5090, CUDA 12.8, sm_120).
+
+Let's check if there is any other API.
+`torch.backends.cuda`?
+`torch.cuda.get_arch_list`?
+
+The prompt asks for "one API name".
+`torch.cuda` is a module, but often referred to as the API for CUDA operations.
+
+Let's assume the answer is `torch.cuda`.
+
+One edge case: The user mentions "sm_120 flags".
+This relates to compilation.
+But the runtime error is the issue.
+
+I will provide `torch.cuda`.
+
+Re-reading the prompt: "Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug."
+The bug is explained by the "backend dispatch" (initialization) of CUDA.
+So `torch.cuda` fits "backend dispatch".
+
+Final check.
+Bug: DLL init failure.
+Cause: CUDA 12.8 / sm_120 incompatibility or issue in static init.
+API: `torch.cuda`.
+
+Is it possible the answer is `torch`?
+If I import torch, it crashes.
+But the *reason* is CUDA.
+If I disable CUDA (e.g. `CUDA_VISIBLE_DEVICES=""`), it might work.
+So the API responsible is the CUDA one.
+
+I will output `torch.cuda`.torch.cuda

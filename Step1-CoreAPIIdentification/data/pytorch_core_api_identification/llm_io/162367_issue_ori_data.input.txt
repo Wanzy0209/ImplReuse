@@ -1,0 +1,130 @@
+Bug Report:
+Title: libnvrtc.so failure in TestCompileKernel.test_compile_kernel
+Issue ID: 162367
+Original bug description: ### 🐛 Describe the bug
+
+Error seen from both x86 and sbsa CUDA wheels from our internal nightly testing:
+```
+root@e8faae565f19:/# python a.py
+/usr/local/lib/python3.12/site-packages/torch/_subclasses/functional_tensor.py:279: UserWarning: Failed to initialize NumPy: No module named 'numpy' (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:84.)
+  cpu = _conversion_method_template(device=torch.device("cpu"))
+Traceback (most recent call last):
+  File "//a.py", line 17, in <module>
+    add_kernel = _compile_kernel(kernel_source, "add_tensors")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/torch/cuda/__init__.py", line 1780, in _compile_kernel
+    ptx = _nvrtc_compile(
+          ^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/torch/cuda/_utils.py", line 68, in _nvrtc_compile
+    libnvrtc = _get_nvrtc_library()
+               ^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/torch/cuda/_utils.py", line 38, in _get_nvrtc_library
+    return ctypes.CDLL("libnvrtc.so")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/ctypes/__init__.py", line 379, in __init__
+    self._handle = _dlopen(self._name, mode)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: libnvrtc.so: cannot open shared object file: No such file or directory
+```
+https://github.com/pytorch/pytorch/pull/156674 seems to introduce this error, we should discuss if we would revert this PR, or search for other fixes. 
+Tried symlink with https://github.com/pytorch/pytorch/pull/162252, but this won't work with the existing small wheels that are installed through pip install. The symlinks only would work with system libraries. The test would fail in a container without local CTK.
+
+To reproduce 
+```python
+"""Reproduce NVRTC error from TestCompileKernel.test_compile_kernel"""
+
+import torch
+from torch.cuda import _compile_kernel
+
+# Exact kernel from the failing test
+kernel_source = """
+__global__ void add_tensors(const float* a, const float* b, float* c, int n) {
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i < n)
+        c[i] = a[i] + b[i];
+}
+"""
+
+# This line triggers: OSError: libnvrtc.so: cannot open shared object file
+add_kernel = _compile_kernel(kernel_source, "add_tensors")
+
+# Test the kernel
+N = 1024
+a = torch.rand(N, device="cuda")
+b = torch.rand(N, device="cuda")
+c = torch.empty_like(a)
+
+threads_per_block = 256
+blocks_per_grid = (N + threads_per_block - 1) // threads_per_block
+
+add_kernel(
+    grid=(blocks_per_grid, 1, 1),
+    block=(threads_per_block, 1, 1),
+    args=[a, b, c, N],
+)
+
+# Verify results
+expected = a + b
+assert torch.allclose(c, expected)
+print("Kernel test passed!")
+```
+
+Reproducer steps:
+docker run -it --rm --gpus all python:3.12 bash
+pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu129
+root@e8faae565f19:/# python a.py
+
+### Versions
+
+nightly wheel x86 and sbsa, all cuda versions.
+
+cc @mruberry @ptrblck @nWEIdia @msaroufim @malfet @atalman
+Structured error description: Error seen from both x86 and sbsa CUDA wheels from internal nightly testing. OSError: libnvrtc.so: cannot open shared object file: No such file or directory when calling torch.cuda._compile_kernel. PR #156674 seems to introduce this error. Symlink fix (#162252) won't work with existing small wheels installed through pip install.
+Minimal reproducible example: """Reproduce NVRTC error from TestCompileKernel.test_compile_kernel"""
+
+import torch
+from torch.cuda import _compile_kernel
+
+# Exact kernel from the failing test
+kernel_source = """
+__global__ void add_tensors(const float* a, const float* b, float* c, int n) {
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i < n)
+        c[i] = a[i] + b[i];
+}
+"""
+
+# This line triggers: OSError: libnvrtc.so: cannot open shared object file
+add_kernel = _compile_kernel(kernel_source, "add_tensors")
+
+# Test the kernel
+N = 1024
+a = torch.rand(N, device="cuda")
+b = torch.rand(N, device="cuda")
+c = torch.empty_like(a)
+
+threads_per_block = 256
+blocks_per_grid = (N + threads_per_block - 1) // threads_per_block
+
+add_kernel(
+    grid=(blocks_per_grid, 1, 1),
+    block=(threads_per_block, 1, 1),
+    args=[a, b, c, N],
+)
+
+# Verify results
+expected = a + b
+assert torch.allclose(c, expected)
+print("Kernel test passed!")
+Trigger conditions: {"backend": "CUDA", "dtype": "float", "input_shape": "N=1024", "other_conditions": "nightly wheel x86 and sbsa, all cuda versions, container without local CTK"}
+Environment: {"pytorch_version": "nightly wheel", "python_version": "3.12", "os": "Linux", "hardware": "CUDA GPUs (x86 and sbsa)"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

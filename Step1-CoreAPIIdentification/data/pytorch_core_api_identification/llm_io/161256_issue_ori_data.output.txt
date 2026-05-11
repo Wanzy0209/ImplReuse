@@ -1,0 +1,40 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** Simple float64 Matmul on RX 7600xt with ROCm 6.4.3 and PyTorch 2.8 Crashes with Segfault.
+    *   **Code:**
+        ```python
+        import torch
+        torch.set_default_dtype(torch.float64)
+        x = torch.randn(1000, 1000, device="cuda")
+        y = torch.randn(1000, 1000, device="cuda")
+        z = x @ y
+        print(z[0, 0])
+        ```
+    *   **Issue:** Segfault occurs at `z = x @ y`.
+    *   **Backtrace:** Points to `librocblas.so` (ROCm BLAS library), specifically `Tensile::...` functions related to finding solutions for contraction problems.
+    *   **Trigger Conditions:** ROCm backend, float64 dtype, matrix multiplication operation.
+
+2.  **Identify the Core Operation:**
+    *   The line causing the crash is `z = x @ y`.
+    *   In Python/PyTorch, the `@` operator corresponds to matrix multiplication.
+    *   The underlying PyTorch function for this is `torch.matmul` (or `torch.mm` for 2D tensors, but `@` maps to `torch.matmul` generally).
+
+3.  **Evaluate Candidate APIs:**
+    *   `torch.set_default_dtype`: Sets the default type, but doesn't perform the crash-inducing computation.
+    *   `torch.randn`: Creates tensors. If the crash happened here, the backtrace would look different (allocation related). The crash happens *after* this.
+    *   `torch.matmul`: This is the function implementing the `@` operator. It dispatches to the backend (ROCm in this case) to perform the matrix multiplication. The backtrace shows `librocblas.so` (the BLAS implementation used by ROCm for matmul) crashing.
+    *   `torch.mm`: Specific to 2D matrices. `x @ y` invokes `torch.matmul`. While `torch.mm` is the underlying kernel for 2D, `torch.matmul` is the public API entry point for the `@` operator.
+
+4.  **Select the Best Fit:**
+    *   The crash happens during the execution of the matrix multiplication operation.
+    *   The `@` operator is syntactic sugar for `torch.matmul`.
+    *   The backtrace confirms the crash is deep in the BLAS library called by the matmul operation.
+    *   Therefore, `torch.matmul` is the single core PyTorch API responsible for triggering the execution path that leads to the segfault.
+
+5.  **Final Verification:**
+    *   Does `torch.matmul` explain the bug? Yes, it's the function performing the operation that crashes.
+    *   Is it a single API? Yes.
+    *   Is it the most responsible? Yes, without calling this (via `@`), the bug doesn't manifest.
+
+6.  **Format Output:**
+    *   Constraint: Return only one API name, nothing else.
+    *   Result: torch.matmultorch.matmul

@@ -1,0 +1,133 @@
+Bug Report:
+Title: Metal Performance Shaders (MPS) Bug on very simple linear regression
+Issue ID: 161361
+Original bug description: ### 🐛 Describe the bug
+
+When running this simple linear regression toy example on the MPS backend (Apple Silicon GPU), the model does not learn — the weights are not updated and the loss remains constant across epochs.
+However, if I change the device to "cpu", the exact same code works as expected: the weights are updated and the loss decreases over time.
+This suggests that manual parameter updates using .data do not behave correctly on MPS, even though they work fine on CPU, I have not tested with CUDA yet.
+
+
+```python
+
+import torch 
+import pandas as pd
+import torchvision
+import torch.nn as nn
+import numpy as np
+import torchvision.transforms as transforms
+import statsmodels.api as sm
+device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+
+df = sm.datasets.get_rdataset("AirPassengers").data
+df = df.shift(1)
+df = df.dropna().reset_index(drop=True)
+x = torch.from_numpy(df.index.values).reshape(-1,1).float().to(device)
+data = torch.from_numpy(df['value'].values).float().to(device)
+y = data.float().unsqueeze(1).to(device)  # shape (144, 1)
+ones = torch.ones(data.size(0),1,requires_grad=False).to(device)# shape (144, 1)
+w = torch.rand(2,1,requires_grad=True).to(device)
+data_aug = torch.cat([x, ones], dim=1).to(device) # shape (144, 2)
+
+
+for epoch in range(100):
+    pred = data_aug @ w
+    loss = torch.abs(y - pred).mean() 
+
+    if w.grad is not None:
+        w.grad.zero_()
+    loss.backward()
+
+    with torch.no_grad():
+        w.data -= 0.01 * w.grad  
+        w.grad.zero_()
+
+    print(f"Epoch {epoch}: loss = {loss.item():.4f}")
+
+```
+
+
+### Versions
+
+PyTorch version: 2.8.0
+Is debug build: False
+CUDA used to build PyTorch: None
+ROCM used to build PyTorch: N/A
+
+OS: macOS 14.6.1 (arm64)
+GCC version: Could not collect
+Clang version: 16.0.0 (clang-1600.0.26.6)
+CMake version: Could not collect
+Libc version: N/A
+
+Python version: 3.9.6 (default, Nov 11 2024, 03:15:38)  [Clang 16.0.0 (clang-1600.0.26.6)] (64-bit runtime)
+Python platform: macOS-14.6.1-arm64-arm-64bit
+Is CUDA available: False
+CUDA runtime version: No CUDA
+CUDA_MODULE_LOADING set to: N/A
+GPU models and configuration: No CUDA
+Nvidia driver version: No CUDA
+cuDNN version: No CUDA
+Is XPU available: False
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: True
+
+CPU:
+Apple M2 Pro
+
+Versions of relevant libraries:
+[pip3] numpy==2.0.2
+[pip3] torch==2.8.0
+[pip3] torchaudio==2.8.0
+[pip3] torchvision==0.23.0
+[pip3] torchviz==0.0.3
+[conda] Could not collect
+
+cc @ezyang @albanD @gqchen @nikitaved @soulitzer @Varal7 @xmfan @kulinseth @malfet @DenisVieriu97 @jhavukainen
+Structured error description: When running this simple linear regression toy example on the MPS backend (Apple Silicon GPU), the model does not learn — the weights are not updated and the loss remains constant across epochs. However, if I change the device to "cpu", the exact same code works as expected: the weights are updated and the loss decreases over time. This suggests that manual parameter updates using .data do not behave correctly on MPS, even though they work fine on CPU, I have not tested with CUDA yet.
+Minimal reproducible example: import torch 
+import pandas as pd
+import torchvision
+import torch.nn as nn
+import numpy as np
+import torchvision.transforms as transforms
+import statsmodels.api as sm
+device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+
+df = sm.datasets.get_rdataset("AirPassengers").data
+df = df.shift(1)
+df = df.dropna().reset_index(drop=True)
+x = torch.from_numpy(df.index.values).reshape(-1,1).float().to(device)
+data = torch.from_numpy(df['value'].values).float().to(device)
+y = data.float().unsqueeze(1).to(device)  # shape (144, 1)
+ones = torch.ones(data.size(0),1,requires_grad=False).to(device)# shape (144, 1)
+w = torch.rand(2,1,requires_grad=True).to(device)
+data_aug = torch.cat([x, ones], dim=1).to(device) # shape (144, 2)
+
+
+for epoch in range(100):
+    pred = data_aug @ w
+    loss = torch.abs(y - pred).mean() 
+
+    if w.grad is not None:
+        w.grad.zero_()
+    loss.backward()
+
+    with torch.no_grad():
+        w.data -= 0.01 * w.grad  
+        w.grad.zero_()
+
+    print(f"Epoch {epoch}: loss = {loss.item():.4f}")
+Trigger conditions: {"backend": "MPS", "dtype": "float", "input_shape": "x: (144, 1), y: (144, 1), w: (2, 1), data_aug: (144, 2)", "other_conditions": "manual parameter updates using .data"}
+Environment: {"pytorch_version": "2.8.0", "python_version": "3.9.6", "os": "macOS 14.6.1 (arm64)", "hardware": "Apple M2 Pro"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

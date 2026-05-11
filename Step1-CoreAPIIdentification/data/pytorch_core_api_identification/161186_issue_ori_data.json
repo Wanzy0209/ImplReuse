@@ -1,0 +1,55 @@
+{
+  "title": "Memory leak when custom autograd Function is used with AC due to early-stopping",
+  "issue_id": "161186",
+  "bug_description": "### 🐛 Describe the bug\n\nOriginally reported by Alex Nichol in slack channel\n\n```python\nimport torch\nimport torch.utils.checkpoint\n\nclass MyOp(torch.autograd.Function):\n    @staticmethod\n    def forward(ctx, inp: torch.Tensor):\n        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)\n        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)\n        ctx.save_for_backward(\n            inp,\n            out_0,\n            out_1,\n        )\n        return out_0, out_1\n\n    @staticmethod\n    def backward(ctx, dA, dB):\n        _ = ctx.saved_tensors  # this is necessary\n        return None\n\n\ndef op_fn(inp):\n    return MyOp.apply(inp)[0]\n\n\ndummy_input = torch.nn.Parameter(torch.randn(2**20, device=\"cuda\"))\nfor i in range(1000):\n    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)\n    full_out.sum().backward()\n    dummy_input.grad = None  # free gradient memory\n    print(i, torch.cuda.memory_allocated() / 1024**2, \"MiB\")\n```\n\nThis leak happens when a custom autograd Function is the last operation in a checkpointed region (and the autograd Function saves an output for backward). It happens because AC raises an exception to exit the forward early prior to the proper clean up custom autograd Function needs to do when it saves tensors. \n\n### Versions\n\nmain\n\ncc @ezyang @gchanan @zou3519 @kadeng @msaroufim @albanD @gqchen @nikitaved @Varal7 @xmfan",
+  "apis": [
+    "torch.nn.Parameter",
+    "torch.randn",
+    "torch.cuda.memory_allocated",
+    "ctx.save_for_backward",
+    "torch.utils.checkpoint.checkpoint",
+    "MyOp.apply"
+  ],
+  "best_code": "import torch\nimport torch.utils.checkpoint\n\nclass MyOp(torch.autograd.Function):\n    @staticmethod\n    def forward(ctx, inp: torch.Tensor):\n        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)\n        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)\n        ctx.save_for_backward(\n            inp,\n            out_0,\n            out_1,\n        )\n        return out_0, out_1\n\n    @staticmethod\n    def backward(ctx, dA, dB):\n        _ = ctx.saved_tensors  # this is necessary\n        return None\n\n\ndef op_fn(inp):\n    return MyOp.apply(inp)[0]\n\n\ndummy_input = torch.nn.Parameter(torch.randn(2**20, device=\"cuda\"))\nfor i in range(1000):\n    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)\n    full_out.sum().backward()\n    dummy_input.grad = None  # free gradient memory\n    print(i, torch.cuda.memory_allocated() / 1024**2, \"MiB\")",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/161171"
+  ],
+  "_meta": {
+    "file": "161186_issue_ori_data.json",
+    "generated_at": "2026-04-20 23:06:12",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\161186_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\161186_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-09 21:39:15",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\161186_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\161186_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "This leak happens when a custom autograd Function is the last operation in a checkpointed region (and the autograd Function saves an output for backward). It happens because AC raises an exception to exit the forward early prior to the proper clean up custom autograd Function needs to do when it saves tensors.",
+  "repro_code": "import torch\nimport torch.utils.checkpoint\n\nclass MyOp(torch.autograd.Function):\n    @staticmethod\n    def forward(ctx, inp: torch.Tensor):\n        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)\n        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)\n        ctx.save_for_backward(\n            inp,\n            out_0,\n            out_1,\n        )\n        return out_0, out_1\n\n    @staticmethod\n    def backward(ctx, dA, dB):\n        _ = ctx.saved_tensors  # this is necessary\n        return None\n\n\ndef op_fn(inp):\n    return MyOp.apply(inp)[0]\n\n\ndummy_input = torch.nn.Parameter(torch.randn(2**20, device=\"cuda\"))\nfor i in range(1000):\n    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)\n    full_out.sum().backward()\n    dummy_input.grad = None  # free gradient memory\n    print(i, torch.cuda.memory_allocated() / 1024**2, \"MiB\")",
+  "repro_output": "Memory leak when custom autograd Function is used with AC due to early-stopping",
+  "affected_api": "torch.utils.checkpoint.checkpoint",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "float32",
+    "input_shape": "2^20 elements",
+    "other_conditions": "Custom autograd Function is the last operation in a checkpointed region, and the autograd Function saves an output for backward"
+  },
+  "environment": {
+    "pytorch_version": "main",
+    "python_version": "",
+    "os": "",
+    "hardware": "CUDA"
+  },
+  "labels": [],
+  "core_api_identification": {
+    "core_api": "1.  **Analyze the Bug Report:**",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\161186_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\161186_issue_ori_data.output.events.json"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "title": "[BUG] Optimizer should validatebetasparameter type to prevent unexpected serialization behavior with OmegaConf objects",
+  "issue_id": "167319",
+  "bug_description": "### 🐛 Describe the bug\n\n## 🐛 Bug Description\n\nPyTorch optimizers (e.g., `AdamW`, `Adam`) accept `betas` parameter as any sequence-like object without type validation. When an OmegaConf `ListConfig` object is passed, it leads to unexpected behavior during checkpoint serialization because `ListConfig` retains references to the entire configuration tree.\n\n## To Reproduce\n\n```python\nimport torch\nfrom torch.optim import AdamW\nfrom omegaconf import OmegaConf\n\n# Create a config with nested structure\ncfg = OmegaConf.create({\n    'model': {'betas': [0.9, 0.999]},\n    'data': {'batch_size': 32},\n    # ... other configurations\n})\n\n# Create optimizer with OmegaConf ListConfig (no error raised)\nmodel = torch.nn.Linear(10, 1)\noptimizer = AdamW(model.parameters(), lr=1e-3, betas=cfg.model.betas)\n\n# Save checkpoint\ncheckpoint = {\n    'optimizer_state_dict': optimizer.state_dict()\n}\ntorch.save(checkpoint, 'checkpoint.pt')\n\n# The entire config tree is serialized due to ListConfig._parent reference!\n# This causes:\n# 1. Unexpectedly large checkpoint files\n# 2. PyTorch 2.6+ loading failures with weights_only=True\n```\n\n## Expected behavior\n\nThe optimizer should validate that `betas` is a `tuple` or `list`, and raise a `TypeError` if other sequence-like objects are passed:\n\n```python\nif not isinstance(betas, (tuple, list)):\n    raise TypeError(f\"betas should be a tuple or list, got {type(betas)}\")\n```\n\nAlternatively, convert the input to tuple:\n```python\nbetas = tuple(betas)  # Force conversion\n```\n\n## Actual behavior\nThe scripts I check my checkpoint below:\n```python\n#!/usr/bin/env python3\n\"\"\"\nScript to inspect PyTorch checkpoint files and find all OmegaConf ListConfig objects.\n\"\"\"\n\nimport sys\nimport torch\nfrom pathlib import Path\nfrom omegaconf import ListConfig, DictConfig\n\n\ndef inspect_value(obj, path=\"root\", found_objects=None, visited=None):\n    \"\"\"\n    Recursively inspect an object and find all OmegaConf ListConfig instances.\n    \n    Args:\n        obj: Object to inspect\n        path: Current path in the object tree\n        found_objects: List to store found ListConfig objects\n        visited: Set of visited object ids to avoid infinite recursion\n    \"\"\"\n    if found_objects is None:\n        found_objects = []\n    if visited is None:\n        visited = set()\n    \n    # Avoid infinite recursion by checking if we've seen this object\n    obj_id = id(obj)\n    if obj_id in visited:\n        return found_objects\n    visited.add(obj_id)\n    \n    # Check if current object is ListConfig\n    if isinstance(obj, ListConfig):\n        found_objects.append({\n            'path': path,\n            'type': 'ListConfig',\n            'value': obj,\n            'length': len(obj)\n        })\n        print(f\"Found ListConfig at: {path}\")\n        print(f\"  Length: {len(obj)}\")\n        print(f\"  Content: {obj}\")\n        print()\n    \n    # Check if current object is DictConfig (also from OmegaConf)\n    if isinstance(obj, DictConfig):\n        found_objects.append({\n            'path': path,\n            'type': 'DictConfig',\n            'value': obj,\n            'keys': list(obj.keys())\n        })\n        print(f\"Found DictConfig at: {path}\")\n        print(f\"  Keys: {list(obj.keys())}\")\n        print()\n    \n    # Recursively check dictionaries\n    if isinstance(obj, dict):\n        for key, value in obj.items():\n            new_path = f\"{path}['{key}']\"\n            inspect_value(value, new_path, found_objects, visited)\n    \n    # Recursively check lists and tuples\n    elif isinstance(obj, (list, tuple)):\n        for idx, item in enumerate(obj):\n            new_path = f\"{path}[{idx}]\"\n            inspect_value(item, new_path, found_objects, visited)\n    \n    # Check object attributes if it has __dict__\n    elif hasattr(obj, '__dict__') and not isinstance(obj, (str, bytes, int, float, bool, type(None))):\n        try:\n            for key, value in obj.__dict__.items():\n                new_path = f\"{path}.{key}\"\n                inspect_value(value, new_path, found_objects, visi",
+  "apis": [
+    "torch.load",
+    "OmegaConf.create",
+    "found_objects.append",
+    "numpy",
+    "sys.exit",
+    "pt_file.exists"
+  ],
+  "best_code": "import torch\nfrom torch.optim import AdamW\nfrom omegaconf import OmegaConf\n\n# Create a config with nested structure\ncfg = OmegaConf.create({\n    'model': {'betas': [0.9, 0.999]},\n    'data': {'batch_size': 32},\n    # ... other configurations\n})\n\n# Create optimizer with OmegaConf ListConfig (no error raised)\nmodel = torch.nn.Linear(10, 1)\noptimizer = AdamW(model.parameters(), lr=1e-3, betas=cfg.model.betas)\n\n# Save checkpoint\ncheckpoint = {\n    'optimizer_state_dict': optimizer.state_dict()\n}\ntorch.save(checkpoint, 'checkpoint.pt')\n\n# The entire config tree is serialized due to ListConfig._parent reference!\n# This causes:\n# 1. Unexpectedly large checkpoint files\n# 2. PyTorch 2.6+ loading failures with weights_only=True",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/167336"
+  ],
+  "_meta": {
+    "file": "167319_issue_ori_data.json",
+    "generated_at": "2026-04-21 05:56:26",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\167319_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\167319_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-10 08:50:57",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\167319_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\167319_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "PyTorch optimizers (e.g., `AdamW`, `Adam`) accept `betas` parameter as any sequence-like object without type validation. When an OmegaConf `ListConfig` object is passed, it leads to unexpected behavior during checkpoint serialization because `ListConfig` retains references to the entire configuration tree.",
+  "repro_code": "import torch\nfrom torch.optim import AdamW\nfrom omegaconf import OmegaConf\n\n# Create a config with nested structure\ncfg = OmegaConf.create({\n    'model': {'betas': [0.9, 0.999]},\n    'data': {'batch_size': 32},\n    # ... other configurations\n})\n\n# Create optimizer with OmegaConf ListConfig (no error raised)\nmodel = torch.nn.Linear(10, 1)\noptimizer = AdamW(model.parameters(), lr=1e-3, betas=cfg.model.betas)\n\n# Save checkpoint\ncheckpoint = {\n    'optimizer_state_dict': optimizer.state_dict()\n}\ntorch.save(checkpoint, 'checkpoint.pt')\n\n# The entire config tree is serialized due to ListConfig._parent reference!\n# This causes:\n# 1. Unexpectedly large checkpoint files\n# 2. PyTorch 2.6+ loading failures with weights_only=True",
+  "repro_output": "[BUG] Optimizer should validatebetasparameter type to prevent unexpected serialization behavior with OmegaConf objects",
+  "affected_api": "AdamW, Adam",
+  "trigger_conditions": {
+    "backend": "",
+    "dtype": "",
+    "input_shape": "",
+    "other_conditions": "Using OmegaConf ListConfig object as betas parameter"
+  },
+  "environment": {
+    "pytorch_version": "PyTorch 2.6+",
+    "python_version": "",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": [],
+  "core_api_identification": {
+    "core_api": "python",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\167319_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\167319_issue_ori_data.output.events.json"
+  }
+}

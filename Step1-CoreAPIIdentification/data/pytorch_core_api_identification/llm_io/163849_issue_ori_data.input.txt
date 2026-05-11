@@ -1,0 +1,167 @@
+Bug Report:
+Title: tensordict.nn.dispatch does not have expected behavior
+Issue ID: 163849
+Original bug description: ### 🐛 Describe the bug
+
+First, here is the imports and test function :
+```Python
+import torch
+import torch.nn as nn
+from tensordict import NonTensorData, TensorDict
+from tensordict.nn import dispatch
+
+
+def test(cls: type[nn.Module]) -> None:
+    instance = cls()
+    tensordict = TensorDict(
+        {"a": torch.zeros(3, 5), "b": torch.ones(3, 2)}, batch_size=(3,)
+    )
+
+    print("Mode 1")
+    print("legacy\n", instance(tensordict["a"], tensordict["b"]))
+    print("up to date\n", instance(tensordict))
+
+    print("Mode 2")
+    instance.mode = "mode2"
+    print("legacy\n", instance(tensordict["a"], tensordict["b"]))
+    print("up to date\n", instance(tensordict))
+```
+
+I'm working with multimodal models but want them to be retrocompatible with old scripts. To do so, I wanted to use [`dispatch`](https://docs.pytorch.org/tensordict/stable/reference/generated/tensordict.nn.dispatch.html) from `tensordict.nn` which allows to take a module doing computations in a `TensorDict` to still take inputs as positional arguments. I wanted it to map the legacy inputs to different tensordict keys depending on the modality. In terms of code, the logic I wanted to implement was along the line of the following :
+```Python
+class MyModule1(nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.mode = "mode1"
+        self.key_map = {
+            "mode1": ["a", "z"],
+            "mode2": ["a", "b"],
+            # [...]
+        }
+
+    @dispatch(source=self.key_map[self.mode], dest=["c", "d"])
+    def forward(self, tensordict):
+        tensordict["c"] = tensordict["a"] - 1
+        print("b in dict : ", "b" in tensordict.keys())
+        if "b" in tensordict.keys():
+            tensordict["d"] = tensordict["b"] * 2
+        elif "z" in tensordict.keys():
+            tensordict["d"] = tensordict["z"] ** 2
+        else:
+            tensordict["d"] = NonTensorData(None)
+        return tensordict
+```
+which obviously does not work because `self` cannot be accessed outside of methods (classic python).
+
+So I moved the forward to another method (inner_forward) and thought that forward would then make use of dispatch, as follow :
+```Python
+class MyModule2(nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.mode = "mode1"
+        self.key_map = {
+            "mode1": ["a", "z"],
+            "mode2": ["a", "b"],
+            # [...]
+        }
+
+    def inner_forward(self, tensordict):
+        tensordict["c"] = tensordict["a"] - 1
+        print("b in dict : ", "b" in tensordict.keys())
+        if "b" in tensordict.keys():
+            tensordict["d"] = tensordict["b"] * 2
+        elif "z" in tensordict.keys():
+            tensordict["d"] = tensordict["z"] ** 2
+        else:
+            tensordict["d"] = NonTensorData(None)
+        return tensordict
+
+    def forward(self, *args, **kwargs):
+        return dispatch(source=self.key_map[self.mode], dest=["c", "d"])(
+            self.inner_forward
+        )(*args, **kwargs)
+```
+This one raised `TypeError: MyModule2.inner_forward() takes 2 positional arguments but 3 were given`
+
+So I iterated, and did the following to understand :
+```Python
+class MyModule2_2(nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.mode = "mode1"
+        self.key_map = {
+            "mode1": ["a", "z"],
+            "mode2": ["a", "b"],
+            # [...]
+        }
+
+    def inner_forward(self, whatever, tensordict):
+        print("self", self)
+        print("whatever", whatever)
+        print("tensordict", tensordict)
+        tensordict["c"] = tensordict["a"] - 1
+        print("b in dict : ", "b" in tensordict.keys())
+        if "b" in tensordict.keys():
+            tensordict["d"] = tensordict["b"] * 2
+        elif "z" in tensordict.keys():
+            tensordict["d"] = tensordict["z"] ** 2
+        else:
+            tensordict["d"] = NonTensorData(None)
+        retu
+Structured error description: The user is trying to use `dispatch` from `tensordict.nn` to make multimodal models retrocompatible with old scripts by mapping legacy inputs to different tensordict keys depending on the modality. The decorator approach fails because `self` cannot be accessed outside of methods. When attempting to call `dispatch` dynamically in the `forward` method wrapping `inner_forward`, it raises `TypeError: MyModule2.inner_forward() takes 2 positional arguments but 3 were given`.
+Minimal reproducible example: import torch
+import torch.nn as nn
+from tensordict import NonTensorData, TensorDict
+from tensordict.nn import dispatch
+
+def test(cls: type[nn.Module]) -> None:
+    instance = cls()
+    tensordict = TensorDict(
+        {"a": torch.zeros(3, 5), "b": torch.ones(3, 2)}, batch_size=(3,)
+    )
+
+    print("Mode 1")
+    print("legacy\n", instance(tensordict["a"], tensordict["b"]))
+    print("up to date\n", instance(tensordict))
+
+    print("Mode 2")
+    instance.mode = "mode2"
+    print("legacy\n", instance(tensordict["a"], tensordict["b"]))
+    print("up to date\n", instance(tensordict))
+
+class MyModule2(nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.mode = "mode1"
+        self.key_map = {
+            "mode1": ["a", "z"],
+            "mode2": ["a", "b"],
+        }
+
+    def inner_forward(self, tensordict):
+        tensordict["c"] = tensordict["a"] - 1
+        print("b in dict : ", "b" in tensordict.keys())
+        if "b" in tensordict.keys():
+            tensordict["d"] = tensordict["b"] * 2
+        elif "z" in tensordict.keys():
+            tensordict["d"] = tensordict["z"] ** 2
+        else:
+            tensordict["d"] = NonTensorData(None)
+        return tensordict
+
+    def forward(self, *args, **kwargs):
+        return dispatch(source=self.key_map[self.mode], dest=["c", "d"])(
+            self.inner_forward
+        )(*args, **kwargs)
+Trigger conditions: {"backend": "", "dtype": "", "input_shape": "batch_size=(3,), shapes (3, 5) and (3, 2)", "other_conditions": "Using tensordict.nn.dispatch decorator dynamically in forward method"}
+Environment: {"pytorch_version": "", "python_version": "", "os": "", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

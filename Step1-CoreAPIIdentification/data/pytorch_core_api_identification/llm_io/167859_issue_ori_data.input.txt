@@ -1,0 +1,83 @@
+Bug Report:
+Title: [DTensor] need to support arbitrary _StridedShard in compute_local_shape_and_global_offset
+Issue ID: 167859
+Original bug description: ### 🚀 The feature, motivation and pitch
+
+for _StridedShard, compute_local_shape_and_global_offset was landed to consider fsdp2 + tp: `(_StridedShard(0, split_factor=mesh.size(k)), Shard(0))`
+
+need to extend it to arbitrary `_StridedShard`, say `_StridedShard(dim=0, split_factor=batch_size), _StridedShard(dim=0, split_factor=batch_size * math.ceil(seq_len * 1.0 / device_mesh.size(0)))`
+
+```
+    @with_comms
+    def test_strided_shard_compute_local_shape_and_global_offset_2D(self):
+        device_mesh = init_device_mesh(self.device_type, (2, 2))
+        batch_size, seq_len, dim1 = 2, 3, 3
+        nelem = batch_size * seq_len * dim1
+        global_tensor = torch.arange(nelem).view(batch_size * seq_len * dim1)
+        global_shape = global_tensor.size()
+
+        placements = (
+            _StridedShard(dim=0, split_factor=batch_size),
+            _StridedShard(dim=0, split_factor=batch_size * math.ceil(seq_len * 1.0 / device_mesh.size(0)))
+        )
+
+        dtensor = distribute_tensor(global_tensor, device_mesh, (Replicate(), Replicate())).redistribute(device_mesh, placements)
+        local_size, global_offset = compute_local_shape_and_global_offset(
+            global_shape, device_mesh, placements
+        )
+
+        import time
+        time.sleep(torch.distributed.get_rank())
+        print(f"{torch.distributed.get_rank()=} {local_size=} expected_size={dtensor._local_tensor.shape}")
+```
+
+```
+torch.distributed.get_rank()=0 local_size=(18,) expected_size=torch.Size([7])
+torch.distributed.get_rank()=1 local_size=(18,) expected_size=torch.Size([3])
+torch.distributed.get_rank()=2 local_size=(18,) expected_size=torch.Size([4])
+torch.distributed.get_rank()=3 local_size=(18,) expected_size=torch.Size([4])
+```
+
+### Alternatives
+
+_No response_
+
+### Additional context
+
+_No response_
+
+cc @H-Huang @awgu @wanchaol @fegin @fduwjj @wz337 @wconstab @d4l3k @pragupta @msaroufim @dcci @tianyu-l @XilunWu @SherlockNoMad
+Structured error description: The compute_local_shape_and_global_offset function needs to be extended to support arbitrary _StridedShard configurations beyond the specific case of (_StridedShard(0, split_factor=mesh.size(k)), Shard(0)) for FSDP2 + TP. Currently, when using arbitrary _StridedShard placements like _StridedShard(dim=0, split_factor=batch_size) and _StridedShard(dim=0, split_factor=batch_size * math.ceil(seq_len * 1.0 / device_mesh.size(0))), the function returns incorrect local sizes.
+Minimal reproducible example: @with_comms
+def test_strided_shard_compute_local_shape_and_global_offset_2D(self):
+    device_mesh = init_device_mesh(self.device_type, (2, 2))
+    batch_size, seq_len, dim1 = 2, 3, 3
+    nelem = batch_size * seq_len * dim1
+    global_tensor = torch.arange(nelem).view(batch_size * seq_len * dim1)
+    global_shape = global_tensor.size()
+
+    placements = (
+        _StridedShard(dim=0, split_factor=batch_size),
+        _StridedShard(dim=0, split_factor=batch_size * math.ceil(seq_len * 1.0 / device_mesh.size(0)))
+    )
+
+    dtensor = distribute_tensor(global_tensor, device_mesh, (Replicate(), Replicate())).redistribute(device_mesh, placements)
+    local_size, global_offset = compute_local_shape_and_global_offset(
+        global_shape, device_mesh, placements
+    )
+
+    import time
+    time.sleep(torch.distributed.get_rank())
+    print(f"{torch.distributed.get_rank()=} {local_size=} expected_size={dtensor._local_tensor.shape}")
+Trigger conditions: {"backend": "", "dtype": "", "input_shape": "batch_size=2, seq_len=3, dim1=3 (total shape 18)", "other_conditions": "Using 2D device mesh of size (2, 2) with _StridedShard placements"}
+Environment: {"pytorch_version": "", "python_version": "", "os": "", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

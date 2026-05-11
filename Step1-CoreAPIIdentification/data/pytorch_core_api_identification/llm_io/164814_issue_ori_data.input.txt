@@ -1,0 +1,92 @@
+Bug Report:
+Title: [Fuzzer][Eager/Compile Divergence] dimensionality of sizes (0) must match dimensionality of strides (1)
+Issue ID: 164814
+Original bug description: ### 🐛 Describe the bug
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1000560)
+
+def fuzzed_program(sentinel):
+    var_node_3 = torch.full((2, 3), 3, dtype=torch.int32) # size=(2, 3), stride=(3, 1), dtype=int32, device=cuda
+    _inp_unique_wide = torch.arange(1, device=var_node_3.device, dtype=torch.int64)
+    _uniq_wide = torch.unique(_inp_unique_wide)
+    var_node_2 = _uniq_wide.to(var_node_3.dtype) # size=(1,), stride=(1,), dtype=int32, device=cuda
+    var_node_1 = torch.reshape(var_node_2, [1]) # size=(1,), stride=(1,), dtype=int32, device=cuda
+    var_node_0 = torch.squeeze(var_node_1) # size=(), stride=(), dtype=int32, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+
+args = () + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+```
+
+```
+   ✅ eager success                                                                                                                                                                                                                             
+   E1006 20:23:59.033000 677925 /home/bobren/local/a/pytorch/torch/_subclasses/fake_tensor.py:2780] [0/0] failed while attempting to run meta for aten.as_strided.default                                                                       
+   E1006 20:23:59.033000 677925 /home/bobren/local/a/pytorch/torch/_subclasses/fake_tensor.py:2780] [0/0] Traceback (most recent call last):                                                                                                    
+   E1006 20:23:59.033000 677925 /home/bobren/local/a/pytorch/torch/_subclasses/fake_tensor.py:2780] [0/0]   File "/home/bobren/local/a/pytorch/torch/_subclasses/fake_tensor.py", line 2776, in _dispatch_impl                                  
+   E1006 20:23:59.033000 677925 /home/bobren/local/a/pytorch/torch/_subclasses/fake_tensor.py:2780] [0/0]     r = func(*args, **kwargs)                                                                                                         
+   E1006 20:23:59.033000 677925 /home/bobren/local/a/pytorch/torch/_subclasses/fake_tensor.py:2780] [0/0]   File "/home/bobren/local/a/pytorch/torch/_ops.py", line 841, in __call__                                                            
+   E1006 20:23:59.033000 677925 /home/bobren/local/a/pytorch/torch/_subclasses/fake_tensor.py:2780] [0/0]     return self._op(*args, **kwargs)                                                                                                  
+   E1006 20:23:59.033000 677925 /home/bobren/local/a/pytorch/torch/_subclasses/fake_tensor.py:2780] [0/0] RuntimeError: dimensionality of sizes (0) must match dimensionality of strides (1)                                                    
+   Traceback (most recent call last):                                                                                                                                                                                                           
+     File "/tmp/torchfuzz/fuzz_9bd0a2d3.py", line 28, in <module>                                                                                                                                                                               
+       result_compiled = compiled_program(*args)                                                                                                                                                                                                
+     File "/home/bobren/local/a/pytorch/torch/_dynamo/eval_fram
+Structured error description: RuntimeError: dimensionality of sizes (0) must match dimensionality of strides (1) occurs during torch.compile with fullgraph=True and dynamic=True, while eager mode succeeds
+Minimal reproducible example: import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1000560)
+
+def fuzzed_program(sentinel):
+    var_node_3 = torch.full((2, 3), 3, dtype=torch.int32) # size=(2, 3), stride=(3, 1), dtype=int32, device=cuda
+    _inp_unique_wide = torch.arange(1, device=var_node_3.device, dtype=torch.int64)
+    _uniq_wide = torch.unique(_inp_unique_wide)
+    var_node_2 = _uniq_wide.to(var_node_3.dtype) # size=(1,), stride=(1,), dtype=int32, device=cuda
+    var_node_1 = torch.reshape(var_node_2, [1]) # size=(1,), stride=(1,), dtype=int32, device=cuda
+    var_node_0 = torch.squeeze(var_node_1) # size=(), stride=(), dtype=int32, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+
+args = () + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+Trigger conditions: {"backend": "CUDA", "dtype": "int32, int64", "input_shape": "(2, 3), (1,), ()", "other_conditions": "torch.compile with fullgraph=True and dynamic=True"}
+Environment: {"pytorch_version": "unknown", "python_version": "unknown", "os": "Linux", "hardware": "CUDA"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

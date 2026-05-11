@@ -1,0 +1,57 @@
+1.  **Analyze the Request:**
+    *   Input: A bug report describing failures in PyTorch smoke tests on B200 hardware.
+    *   Task: Identify the single core PyTorch API responsible for the bug.
+    *   Output Format: Only the API name, no JSON, Markdown, explanation, punctuation, or quotes.
+
+2.  **Analyze the Bug Report:**
+    *   **Title:** "[B200] Smoke Tests fail on _scaled_mm_v2 op" -> This strongly suggests the API is `_scaled_mm_v2`.
+    *   **Traceback:**
+        *   `File ".../test/test_scaled_matmul_cuda.py", line 1495, in test_blockwise_mxfp8_nvfp4_mxfp4_numerics C = scaled_mm_wrap(...)`
+        *   `File ".../test/test_scaled_matmul_cuda.py", line 222, in scaled_mm_wrap out = scaled_mm(...)`
+        *   `File ".../torch/nn/functional.py", line 6698, in scaled_mm out = torch._scaled_mm_v2(...)`
+        *   `ValueError: scale_b must be swizzled to SWIZZLE_32_4_4 format`
+    *   **Error Message:** `ValueError: scale_b must be swizzled to SWIZZLE_32_4_4 format` raised from `_scaled_mxfp8_mxfp8` (internal C++ function) called via `torch._scaled_mm_v2`.
+    *   **Context:** The tests are calling `scaled_mm` (public API), which internally calls `torch._scaled_mm_v2` (internal/private API). The error occurs inside `_scaled_mm_v2`.
+
+3.  **Determine the "Core" API:**
+    *   The public API is `torch.nn.functional.scaled_mm`.
+    *   The internal API directly throwing the error (or being the entry point to the failing logic) is `torch._scaled_mm_v2`.
+    *   The title explicitly mentions "_scaled_mm_v2 op".
+    *   The traceback shows `out = torch._scaled_mm_v2(...)` right before the error.
+    *   Usually, when identifying the "core API" for a bug report, if the title names a specific internal op that is failing, that is the most precise identifier. However, `scaled_mm` is the user-facing API.
+    *   Let's look at the constraints: "Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug."
+    *   The error is about the implementation of the operation `_scaled_mm_v2` (specifically the swizzling requirement for `scale_b`).
+    *   The title says "fail on _scaled_mm_v2 op".
+    *   The traceback shows the call `torch._scaled_mm_v2`.
+    *   While `scaled_mm` calls it, the specific logic failing is associated with `_scaled_mm_v2`.
+
+4.  **Refining the Choice:**
+    *   Is it `scaled_mm` or `_scaled_mm_v2`?
+    *   The title is the strongest hint: "Smoke Tests fail on _scaled_mm_v2 op".
+    *   The error happens inside the call to `torch._scaled_mm_v2`.
+    *   If I return `scaled_mm`, it's technically correct as the entry point, but `_scaled_mm_v2` is the specific operator mentioned in the title and the traceback line immediately preceding the error.
+    *   Let's check the traceback again.
+        ```python
+        File "/opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/nn/functional.py", line 6698, in scaled_mm
+            out = torch._scaled_mm_v2(
+        ValueError: scale_b must be swizzled to SWIZZLE_32_4_4 format
+        ```
+    *   The error is raised *during* the execution of `torch._scaled_mm_v2`.
+    *   The prompt asks for the "single core PyTorch API". `_scaled_mm_v2` is the specific operator implementation. `scaled_mm` is a wrapper.
+    *   Given the title explicitly names `_scaled_mm_v2`, I will use that.
+
+5.  **Final Verification:**
+    *   API Name: `torch._scaled_mm_v2` (or just `_scaled_mm_v2`).
+    *   Does it match the constraints? Yes.
+    *   Is it the single core API? Yes.
+
+6.  **Formatting Output:**
+    *   "Reply with only one API name, or None."
+    *   "Do not return JSON, Markdown, explanation, punctuation, or quotes."
+    *   Result: `torch._scaled_mm_v2`
+
+    *Self-Correction/Refinement:* Sometimes "API" implies the public interface. `scaled_mm` is public. `_scaled_mm_v2` is private. However, the title says "fail on _scaled_mm_v2 op". In the context of PyTorch internals and bug tracking, the specific operator name is usually the target. The error is specific to the implementation of `_scaled_mm_v2` (likely a new kernel or specific backend dispatch for B200). I will stick with the one in the title and the direct call site of the error.
+
+    Let's double check if `scaled_mm` is better. If a user calls `scaled_mm`, it fails. But the bug is about the internal op `_scaled_mm_v2` handling the swizzling. The title is the most authoritative summary of the issue. Title: "...fail on _scaled_mm_v2 op".
+
+    I will provide `torch._scaled_mm_v2`.torch._scaled_mm_v2

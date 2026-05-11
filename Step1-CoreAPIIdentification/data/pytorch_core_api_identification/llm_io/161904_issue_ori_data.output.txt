@@ -1,0 +1,179 @@
+The user wants to identify the single core PyTorch API responsible for the bug described in the report.
+
+**Bug Report Analysis:**
+*   **Title:** ZeroBubble and DualPipeV pipeline parallel schedules fail with torch.compiled model.
+*   **Description:** The ZeroBubble and DualPipeV schedules are incompatible with `torch.compiled` models.
+*   **Code Snippet:**
+    *   Imports `torch`.
+    *   Uses `torch.distributed` components (`init_device_mesh`, `PipelineStage`, `get_schedule_class`).
+    *   Defines a `Transformer` model.
+    *   In `parallelize_transformer`, there is a commented out section `# apply_compile(model)` but the description explicitly mentions `torch.compiled` models. The code snippet provided in the "Minimal reproducible example" section is cut off at the end: `for layer_id, transformer_block in model.layers.named_children():`. However, the description says "The ZeroBubble and DualPipeV schedules don't seem to be compatible with models that are `torch.compiled`."
+    *   The core issue is the interaction between `torch.compile` (or the compiled state of a model) and specific pipeline parallel schedules (`ZBVZeroBubble`, `DualPipeV`).
+
+**Identifying the Core API:**
+The bug is about the failure of specific pipeline parallel schedules when the model is compiled.
+The compilation process in PyTorch is primarily handled by `torch.compile`.
+The schedules themselves (`ZBVZeroBubble`, `DualPipeV`) are part of `torch.distributed.pipelining.schedules`.
+
+However, the prompt asks for the *single core PyTorch API* responsible for triggering the bug.
+Usually, when a feature fails specifically when "compiled" is involved, the compilation API is the trigger or the source of the incompatibility.
+The bug title explicitly states: "fail with torch.compiled model".
+The description says: "don't seem to be compatible with models that are `torch.compiled`."
+
+Is the bug in the schedules or in `torch.compile`?
+The bug report is filed against the interaction. The schedules fail *because* the model is compiled.
+If I have to pick one API that represents the "compiled" aspect, it is `torch.compile`.
+If I have to pick the API that is failing, it's the schedule classes (e.g., `ZBVZeroBubble`).
+
+Let's look at the constraints: "Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug."
+
+The bug is that the schedules *fail* when the model is compiled. This implies that the execution semantics of the compiled model (likely related to graph breaks, control flow, or buffer handling) are incompatible with how these specific schedules operate.
+The API that introduces these different execution semantics is `torch.compile`.
+
+Let's check if there is a more specific API mentioned.
+The code snippet shows `torch._functorch.config.donated_buffer = False`. This is an internal config, not a public API.
+The code uses `torch.distributed.pipelining.schedules.get_schedule_class`.
+
+However, the most distinct "API" mentioned in the title and description as the condition for failure is `torch.compile`. Without `torch.compile`, the schedules work (implied). With `torch.compile`, they fail. Therefore, `torch.compile` is the API whose behavior/semantics are causing the issue with the other component.
+
+Let's reconsider. Is the bug in the pipeline schedule implementation? Yes, likely. But the question asks for the API *from* the bug report that is responsible for *triggering* the bug or is the core subject.
+The title says "fail with torch.compiled model".
+The description says "incompatible with models that are `torch.compiled`".
+
+If I look at similar tasks, usually, if a feature X fails with feature Y, and Y is a major mode switch (like compilation), Y is often the answer.
+However, the bug is about the *schedules* failing.
+Let's look at the "Trigger conditions": "Using torch.compiled models".
+
+If I answer `torch.compile`, it fits the description of the API that changes the execution model.
+If I answer `ZBVZeroBubble` or `DualPipeV`, those are specific classes, not necessarily a single "core API" in the general sense, though they are APIs.
+The prompt asks for "the single core PyTorch API". `torch.compile` is a very high-level, core API. `ZBVZeroBubble` is a specific class in a submodule.
+
+Let's look at the code again.
+`def parallelize_transformer(model: nn.Module, compile=True) -> nn.Module:`
+`    if compile:`
+`        # ...`
+`        # apply_compile(model)`
+
+The user is trying to compile the model. The schedules fail.
+The API that performs the compilation is `torch.compile`.
+
+Let's try to find if there is a specific distributed API that is the culprit.
+The issue is likely that `torch.compile` captures the model into a graph, and the pipeline schedule expects to interact with the module in a specific way (e.g., calling forward multiple times, or specific buffer handling) that the compiled graph doesn't support or breaks.
+
+The prompt asks to identify the API *from* the bug report.
+The text mentions: "torch.compiled", "torch.compile", "torch.distributed.device_mesh", "torch.distributed.pipelining", "torch.distributed.pipelining.schedules".
+
+The most "core" API that is the variable factor here is `torch.compile`. The schedules are the context, but the compilation is the trigger.
+
+Let's verify if `torch.compile` is considered the "core API" in this context.
+The bug is about incompatibility.
+If I have to choose between the failing component (Schedule) and the triggering component (Compile), usually the triggering component (the one changing the state/semantics) is the answer in these types of classification tasks, especially when the title frames it as "X fails with Y".
+
+Let's check the exact wording: "Reply with only one API name".
+"torch.compile" is a function name.
+"ZBVZeroBubble" is a class name.
+
+The title is "ZeroBubble and DualPipeV pipeline parallel schedules fail with torch.compiled model".
+This structure suggests `torch.compile` is the condition.
+
+Let's assume the question asks for the API that is the *source* of the problem or the *primary* API involved in the failure mode.
+The failure mode is "compilation".
+The API is `torch.compile`.
+
+Let's double check if there is any other candidate.
+`torch.distributed.pipelining`? Too broad.
+`PipelineStage`? Used in the code.
+`get_schedule_class`? Used in the code.
+
+The description says: "The ZeroBubble and DualPipeV schedules don't seem to be compatible with models that are `torch.compiled`."
+This implies the schedules are the ones with the bug, but `torch.compile` is the API they are incompatible with.
+However, usually, in these "identify the API" tasks, if the bug is "Feature A doesn't work with Feature B", and Feature B is a major system-wide change (like compilation), Feature B is often the target because it changes the execution semantics.
+
+Let's look at the "Trigger conditions": "Using torch.compiled models".
+This strongly points to `torch.compile`.
+
+Let's consider the possibility that the answer is `torch.distributed.pipelining`. But that's a module.
+The prompt asks for an API name. `torch.compile` is a specific function.
+
+Let's try to find if there is a specific API *inside* the schedules that is failing. The code doesn't show the internals of the schedules.
+The code shows the usage of `torch.compile` (via `apply_compile` which presumably calls it).
+
+Decision: The bug is about the interaction with `torch.compile`. The API that represents the compilation process is `torch.compile`.
+
+One counter-argument: The bug is *in* the schedules. The schedules are the ones that need fixing. But the question asks for the API *from* the bug report. `torch.compile` is explicitly mentioned as the condition.
+Also, `torch.compile` is a "core PyTorch API". `ZBVZeroBubble` is a specific schedule class in a distributed library (often considered experimental or higher-level compared to the core compiler).
+
+Therefore, `torch.compile` is the best fit for "single core PyTorch API".
+
+Final check:
+Title: "... fail with torch.compiled model"
+Description: "... incompatible with models that are `torch.compiled`."
+Trigger: "Using torch.compiled models"
+
+The API is `torch.compile`.
+
+Wait, looking at the code snippet provided in the "Minimal reproducible example":
+```python
+def parallelize_transformer(model: nn.Module, compile=True) -> nn.Module:
+    if compile:
+        torch._functorch.config.donated_buffer = False  # why needed?
+        # apply_ac(model, job_config.activation_checkpoint)
+        # apply_compile(model)
+        for layer_id, transformer_block in model.layers.named_children():
+```
+The code is actually cut off. But the description says "models that are `torch.compiled`".
+The user is reporting that when they use `torch.compile`, it fails.
+
+I will stick with `torch.compile`.
+
+One more thought: Could it be `torch.distributed.pipelining.schedules`?
+The prompt asks for "one API name". `torch.compile` is a function. `schedules` is a module.
+`torch.compile` is the most distinct API entity here.
+
+Let's consider the phrase "core PyTorch API". `torch.compile` is definitely a core API. Pipeline parallel schedules are part of the distributed ecosystem, which is important but `torch.compile` is arguably more "core" to the PyTorch runtime execution model.
+
+The bug is that the schedules fail *with* `torch.compile`.
+If I have to identify the API responsible for the bug (i.e., the one causing the incompatibility or the one being discussed as the problematic interaction), `torch.compile` is the strongest candidate.
+
+Let's try to see if there is any other interpretation.
+Maybe the bug is in `torch.distributed`?
+But the title highlights `torch.compiled`.
+
+I will provide `torch.compile`.
+
+Wait, is it possible the answer is `torch.distributed.pipelining`?
+The bug is about the schedules failing.
+But the prompt asks for the API *from* the bug report.
+The bug report mentions `torch.compiled` multiple times.
+The "Trigger conditions" explicitly list "Using torch.compiled models".
+
+If the question was "Which component is buggy?", I might say the schedules.
+But the question asks for the "single core PyTorch API from a bug report".
+This phrasing often targets the specific function or class name that is central to the issue.
+Given the emphasis on "torch.compiled" in the title and description, `torch.compile` is the intended answer.
+
+Let's verify the constraints.
+"Reply with only one API name, and nothing else."
+"Do not return JSON, Markdown, explanation, punctuation, or quotes."
+
+The answer should be: `torch.compile`
+
+Let's double check if `torch.compiled` is an API. No, it's an adjective describing the model. The API that creates it is `torch.compile`.
+The text says "models that are `torch.compiled`". This refers to the result of `torch.compile`.
+
+Is there any other API?
+`torch.distributed.device_mesh.init_device_mesh`?
+`torch.distributed.pipelining.PipelineStage`?
+`torch.distributed.pipelining.schedules.get_schedule_class`?
+
+The bug is specifically about the *incompatibility* with compilation.
+If I remove `torch.compile`, the bug disappears (presumably).
+If I change the schedule, the bug might disappear (e.g. using a different schedule).
+But the title frames it as "Schedules fail with torch.compiled model".
+This puts `torch.compile` as the condition.
+
+I'll go with `torch.compile`.
+
+One edge case: The code snippet has `torch._functorch.config.donated_buffer`. This is an internal API. The prompt asks for "core PyTorch API". Usually implies public API. `torch.compile` is public.
+
+Final decision: `torch.compile`.torch.compile

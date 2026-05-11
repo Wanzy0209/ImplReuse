@@ -1,0 +1,143 @@
+Bug Report:
+Title: Reflect padding: CUDA errror when one of the batch dimensions is larger than uint16 max value (2**16)
+Issue ID: 165861
+Original bug description: ### 🐛 Describe the bug
+
+Reflect padding breaks when one of the batch dimensions is larger than uint16 max value (2**16).
+The total memory footprint is not important, as when the tensor holds more numbers, but all but last dimension is within the uint16 range everything is fine. 
+
+Other padding modes behave fine, the problem is only with the reflection one.
+
+## why is this important?
+`torch.stft` only accepts 2D tensors (B, L), requiring flattening of higher dimensions into the batch dimension. This commonly produces batch sizes > 65536 for large batches or multi-dimensional audio/signal data.
+
+## reproduce
+```python
+import torch
+import torch.nn.functional as F
+
+# these break cuda
+x = torch.rand(2**16, 2, device="cuda")
+# x = torch.rand(1, 2**16, 2, device="cuda")
+# x = torch.rand(2**16, 1, 2, device="cuda")
+
+# these are fine even if the total number of samples is more than 2**16, but not along a single dimension
+# x = torch.rand(2**16 - 1, 200, device="cuda")     # everything ok
+# x = torch.rand(8, 2**16 - 1, 200, device="cuda")  # everything ok
+# x = torch.rand(2**16 - 1, 8, 200, device="cuda")  # everything ok
+
+# x = torch.rand(2, 2**18, device="cuda") # everything ok
+
+F.pad(x, (1, 1), mode="constant")
+print("constant pad ok")
+F.pad(x, (1, 1), mode="circular")
+print("circular pad ok")
+F.pad(x, (1, 1), mode="replicate")
+print("replicate pad ok")
+
+F.pad(x, (1, 1), mode="reflect")
+print("this won't print")
+```
+
+output (error message):
+```
+constant pad ok
+circular pad ok
+replicate pad ok
+Traceback (most recent call last):
+  File "/home/milu10/src/temp/torch-pad-cuda-bug.py", line 23, in <module>
+    F.pad(x, (1, 1), mode="reflect")
+  File "/home/milu10/src/temp/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/functional.py", line 5294, in pad
+    return torch._C._nn.pad(input, pad, mode, value)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.AcceleratorError: CUDA error: invalid configuration argument
+Search for `cudaErrorInvalidConfiguration' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+```
+
+### Versions
+
+`python collect_env.py`: 
+
+Collecting environment information...
+PyTorch version: 2.9.0+cu128
+Is debug build: False
+CUDA used to build PyTorch: 12.8
+ROCM used to build PyTorch: N/A
+
+OS: Rocky Linux 9.5 (Blue Onyx) (x86_64)
+GCC version: (GCC) 11.5.0 20240719 (Red Hat 11.5.0-5)
+Clang version: Could not collect
+CMake version: version 3.26.5
+Libc version: glibc-2.34
+
+Python version: 3.12.12 | packaged by conda-forge | (main, Oct 13 2025, 14:34:15) [GCC 14.3.0] (64-bit runtime)
+Python platform: Linux-5.14.0-503.14.1.el9_5.x86_64-x86_64-with-glibc2.34
+Is CUDA available: True
+CUDA runtime version: Could not collect
+CUDA_MODULE_LOADING set to: 
+GPU models and configuration: GPU 0: NVIDIA A100-PCIE-40GB
+Nvidia driver version: 565.57.01
+cuDNN version: Could not collect
+Is XPU available: False
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: True
+
+CPU:
+Architecture:                         x86_64
+CPU op-mode(s):                       32-bit, 64-bit
+Address sizes:                        43 bits physical, 48 bits virtual
+Byte Order:                           Little Endian
+CPU(s):                               64
+On-line CPU(s) list:                  0-63
+Vendor ID:                            AuthenticAMD
+Model name:                           AMD EPYC 7502 32-Core Processor
+CPU family:                           23
+Model:                                49
+Thread(s) per core:                   1
+Core(s) per socket:                   32
+Socket(s):                            2
+Stepping:                             0
+Frequency boost:                      enabled
+CPU(s) scaling MHz:                   97%
+CPU max M
+Structured error description: Reflect padding breaks when one of the batch dimensions is larger than uint16 max value (2**16). The total memory footprint is not important, as when the tensor holds more numbers, but all but last dimension is within the uint16 range everything is fine. Other padding modes behave fine, the problem is only with the reflection one.
+Minimal reproducible example: import torch
+import torch.nn.functional as F
+
+# these break cuda
+x = torch.rand(2**16, 2, device="cuda")
+# x = torch.rand(1, 2**16, 2, device="cuda")
+# x = torch.rand(2**16, 1, 2, device="cuda")
+
+# these are fine even if the total number of samples is more than 2**16, but not along a single dimension
+# x = torch.rand(2**16 - 1, 200, device="cuda")     # everything ok
+# x = torch.rand(8, 2**16 - 1, 200, device="cuda")  # everything ok
+# x = torch.rand(2**16 - 1, 8, 200, device="cuda")  # everything ok
+
+# x = torch.rand(2, 2**18, device="cuda") # everything ok
+
+F.pad(x, (1, 1), mode="constant")
+print("constant pad ok")
+F.pad(x, (1, 1), mode="circular")
+print("circular pad ok")
+F.pad(x, (1, 1), mode="replicate")
+print("replicate pad ok")
+
+F.pad(x, (1, 1), mode="reflect")
+print("this won't print")
+Trigger conditions: {"backend": "CUDA", "dtype": "unknown", "input_shape": "one of the batch dimensions is larger than uint16 max value (2**16)", "other_conditions": "mode=\"reflect\""}
+Environment: {"pytorch_version": "2.9.0+cu128", "python_version": "3.12.12", "os": "Rocky Linux 9.5 (Blue Onyx) (x86_64)", "hardware": "NVIDIA A100-PCIE-40GB"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

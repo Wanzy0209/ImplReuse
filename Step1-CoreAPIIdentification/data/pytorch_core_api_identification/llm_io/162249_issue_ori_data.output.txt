@@ -1,0 +1,67 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** DISABLED test_logger_enabled_and_save_activations_flags (__main__.TestFXNumericSuiteNShadows)
+    *   **Issue ID:** 162249
+    *   **Description:** A test is failing/flaky in CI on macOS. It involves `TestFXNumericSuiteNShadows`.
+    *   **Error Message:**
+        ```python
+        File "/Users/ec2-user/runner/_work/_temp/venv-3.12-1757036501/lib/python3.12/site-packages/torch/backends/quantized/__init__.py", line 37, in __set__
+            torch._C._set_qengine(_get_qengine_id(val))
+        RuntimeError: quantized engine NoQEngine is not supported
+        ```
+    *   **Context:** The error happens inside `override_quantized_engine` context manager when exiting (restoring the previous engine). The previous engine is identified as "NoQEngine".
+    *   **Trigger Conditions:** Backend: "qnnpack, NoQEngine", OS: "mac, macos".
+
+2.  **Identify the Core API:**
+    *   The error occurs in `torch.backends.quantized.engine`.
+    *   Specifically, the setter logic `torch._C._set_qengine(_get_qengine_id(val))` is failing because `val` is "NoQEngine".
+    *   The test uses `override_quantized_engine`.
+    *   The stack trace shows the failure happens when trying to set `torch.backends.quantized.engine = previous`.
+    *   The error message explicitly states: `RuntimeError: quantized engine NoQEngine is not supported`.
+    *   The issue is related to the quantization backend engine management.
+
+3.  **Evaluate Candidates:**
+    *   `torch.backends.quantized.engine`: This is the property being set when the crash occurs. The crash happens because the system is trying to set the engine to "NoQEngine", which isn't supported.
+    *   `torch._C._set_qengine`: This is the C++ binding called by the setter. While this is where the exception is raised, it's an internal implementation detail of the public API.
+    *   `override_quantized_engine`: This is a testing utility (`torch.testing._internal.common_quantized`). While it's involved in the flow, the actual failure is in the public API it interacts with.
+    *   `torch.testing._internal.common_quantized`: This is a module, not a specific API.
+
+4.  **Select the Best Fit:**
+    *   The bug is about the state of the quantized engine. The error is triggered by assigning a value to `torch.backends.quantized.engine`.
+    *   The specific error is that "NoQEngine" is not supported when trying to restore the engine state.
+    *   Therefore, the API responsible for managing this state is `torch.backends.quantized.engine`.
+
+5.  **Refine the API Name:**
+    *   Is it `torch.backends.quantized`? Too broad.
+    *   Is it `torch.backends.quantized.engine`? Yes, this is the specific property causing the issue.
+    *   Is it `torch._C._set_qengine`? Too internal.
+
+    Let's look at the traceback again:
+    `File ".../torch/backends/quantized/__init__.py", line 37, in __set__`
+    `torch.backends.quantized.engine = previous`
+
+    The API is `torch.backends.quantized.engine`.
+
+6.  **Final Check:**
+    *   Does this explain the bug? Yes. The bug is that the system tries to set the quantized engine to "NoQEngine" (which is invalid) via this API.
+    *   Is it a single API name? Yes.
+    *   Is it a core PyTorch API? Yes.
+
+    One might argue it's `torch.backends.quantized`, but `engine` is the specific attribute being manipulated. Usually, for these tasks, the specific attribute or function is preferred over the module.
+
+    Let's consider if `torch.backends.quantized.engine` is the standard way to refer to it. Yes.
+
+    Another possibility: `torch._C._set_qengine`. However, the prompt asks for the "core PyTorch API". Usually, this implies the public Python API, not the C++ binding, unless the bug is specifically about the binding's signature. Here, the binding is correctly rejecting an invalid value passed to it by the public API's setter logic.
+
+    The error is `RuntimeError: quantized engine NoQEngine is not supported`. This comes from the logic handling `torch.backends.quantized.engine`.
+
+    Let's double check if there is a more specific function like `set_qengine`. The traceback shows `torch._C._set_qengine`. The public interface is the property `torch.backends.quantized.engine`.
+
+    I will go with `torch.backends.quantized.engine`.
+
+    Wait, looking at the error message again:
+    `torch.backends.quantized.engine = previous`
+    This is the line causing the crash.
+
+    Is there any other API? The test is `TestFXNumericSuiteNShadows`. This implies FX and Quantization. But the crash is purely in the backend engine setting.
+
+    Decision: `torch.backends.quantized.engine`.torch.backends.quantized.engine

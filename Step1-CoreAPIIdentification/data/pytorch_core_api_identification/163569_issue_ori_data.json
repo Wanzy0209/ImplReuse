@@ -1,0 +1,60 @@
+{
+  "title": "[Fuzzer][Eager/Compile Divergence] torch.nn.functional.conv1d works in eager but fails compile",
+  "issue_id": "163569",
+  "bug_description": "### 🐛 Describe the bug\n\n```\nimport torch\nimport sys\ntorch._dynamo.config.capture_scalar_outputs = True\ntorch._dynamo.config.capture_dynamic_output_shape_ops = True\ntorch._inductor.config.emulate_precision_casts = True\n\ndef foo(arg0, arg1, arg2):\n    t0 = arg0 # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda\n    t1 = t0.max(dim=0).values # size=(261, 17, 358), stride=(358, 93438, 1), dtype=bfloat16, device=cuda\n    t2 = t1.transpose(1, 0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=bfloat16, device=cuda\n    t3 = arg1 # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda\n    t4 = torch.exp(t3) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda\n    t5 = arg2 # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda\n    t6 = t5.transpose(2, 1) # size=(261, 64, 1), stride=(16704, 64, 1), dtype=float32, device=cuda\n    t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda\n    t8 = t7.clone(); t8.zero_() # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda\n    t9 = t2 * t7 * t8 # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda\n    output = t9  # output tensor\n    return output\n\narg0 = torch.rand([2, 261, 17, 358], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda\narg1 = torch.rand([17, 64, 358], dtype=torch.float32, device='cuda', requires_grad=True) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda\narg2 = torch.rand([261, 1, 64], dtype=torch.float32, device='cuda', requires_grad=True) # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda\nif __name__ == '__main__':\n    out_eager = foo(arg0, arg1, arg2)\n    out_eager.sum().backward()\n    print('Eager Success! ✅')\n    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)\n    out_compiled = compiled_foo(arg0, arg1, arg2)\n    out_compiled.sum().backward()\n    print('Compile Success! ✅')\n```\n\n```\n(/home/bobren/local/a/pytorch-env) [14:51] devgpu035:/home/bobren/local/a/pytorch/torchfuzz python fuzzer.py --seed 25226\nRunning fuzzer with max_depth=3, seed=25226, output=None\nGenerated program written to: /tmp/torchfuzz/fuzz_3d3a00c41e9598b3.py\nRunning generated program...\nSelected CUDA_VISIBLE_DEVICES=7\n=== Program Output (Failure) ===\nEager Success! ✅\n\nTraceback (most recent call last):\n  File \"/tmp/torchfuzz/fuzz_3d3a00c41e9598b3.py\", line 29, in <module>\n    out_compiled = compiled_foo(arg0, arg1, arg2)\n  File \"/data/users/bobren/a/pytorch/torch/_dynamo/eval_frame.py\", line 830, in compile_wrapper\n    return fn(*args, **kwargs)\n  File \"/tmp/torchfuzz/fuzz_3d3a00c41e9598b3.py\", line 7, in foo\n    def foo(arg0, arg1, arg2):\n  File \"/data/users/bobren/a/pytorch/torch/_dynamo/eval_frame.py\", line 1035, in _fn\n    return fn(*args, **kwargs)\n  File \"/data/users/bobren/a/pytorch/torch/_functorch/aot_autograd.py\", line 1130, in forward\n    return compiled_fn(full_args)\n  File \"/data/users/bobren/a/pytorch/torch/_functorch/_aot_autograd/runtime_wrappers.py\", line 339, in runtime_wrapper\n    all_outs = call_func_at_runtime_with_args(\n  File \"/data/users/bobren/a/pytorch/torch/_functorch/_aot_autograd/utils.py\", line 129, in call_func_at_runtime_with_args\n    out = normalize_as_list(f(args))\n  File \"/data/users/bobren/a/pytorch/torch/_functorch/_aot_autograd/utils.py\", line 103, in g\n    return f(*args)\n  File \"/data/users/bobren/a/pytorch/torch/autograd/function.py\", line 581, in apply\n    return super().apply(*args, **kwargs)  # type: ignore[misc]\n  File \"/data/users/bobren/a/pytorch/torch/_functorch/_aot_autograd/runtime_wrappers.py\", line 2118, in forward\n    fw_outs = call_func_at_runtime_with_args(\n  File \"/data/users/bobren/a/pytorch/torch/_functorch/_aot_autograd/utils.py\", line 129, in call_func_at_runtime_with_args\n    out = normaliz",
+  "apis": [
+    "t5.transpose",
+    "self.current_callable",
+    "torch.nn.functional.conv1d",
+    "torch.exp",
+    "t1.transpose",
+    "t7.clone"
+  ],
+  "best_code": "import torch\nimport sys\ntorch._dynamo.config.capture_scalar_outputs = True\ntorch._dynamo.config.capture_dynamic_output_shape_ops = True\ntorch._inductor.config.emulate_precision_casts = True\n\ndef foo(arg0, arg1, arg2):\n    t0 = arg0 # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda\n    t1 = t0.max(dim=0).values # size=(261, 17, 358), stride=(358, 93438, 1), dtype=bfloat16, device=cuda\n    t2 = t1.transpose(1, 0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=bfloat16, device=cuda\n    t3 = arg1 # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda\n    t4 = torch.exp(t3) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda\n    t5 = arg2 # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda\n    t6 = t5.transpose(2, 1) # size=(261, 64, 1), stride=(16704, 64, 1), dtype=float32, device=cuda\n    t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda\n    t8 = t7.clone(); t8.zero_() # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda\n    t9 = t2 * t7 * t8 # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda\n    output = t9  # output tensor\n    return output\n\narg0 = torch.rand([2, 261, 17, 358], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda\narg1 = torch.rand([17, 64, 358], dtype=torch.float32, device='cuda', requires_grad=True) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda\narg2 = torch.rand([261, 1, 64], dtype=torch.float32, device='cuda', requires_grad=True) # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda\nif __name__ == '__main__':\n    out_eager = foo(arg0, arg1, arg2)\n    out_eager.sum().backward()\n    print('Eager Success! ✅')\n    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)\n    out_compiled = compiled_foo(arg0, arg1, arg2)\n    out_compiled.sum().backward()\n    print('Compile Success! ✅')",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/163584",
+    "https://github.com/pytorch/pytorch/pull/160408"
+  ],
+  "_meta": {
+    "file": "163569_issue_ori_data.json",
+    "generated_at": "2026-04-21 03:17:24",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\163569_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\163569_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-10 04:25:34",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163569_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163569_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "torch.nn.functional.conv1d works in eager mode but fails when compiled with torch.compile. The code runs successfully in eager mode but throws an error during compilation.",
+  "repro_code": "import torch\nimport sys\ntorch._dynamo.config.capture_scalar_outputs = True\ntorch._dynamo.config.capture_dynamic_output_shape_ops = True\ntorch._inductor.config.emulate_precision_casts = True\n\ndef foo(arg0, arg1, arg2):\n    t0 = arg0 # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda\n    t1 = t0.max(dim=0).values # size=(261, 17, 358), stride=(358, 93438, 1), dtype=bfloat16, device=cuda\n    t2 = t1.transpose(1, 0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=bfloat16, device=cuda\n    t3 = arg1 # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda\n    t4 = torch.exp(t3) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda\n    t5 = arg2 # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda\n    t6 = t5.transpose(2, 1) # size=(261, 64, 1), stride=(16704, 64, 1), dtype=float32, device=cuda\n    t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda\n    t8 = t7.clone(); t8.zero_() # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda\n    t9 = t2 * t7 * t8 # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda\n    output = t9  # output tensor\n    return output\n\narg0 = torch.rand([2, 261, 17, 358], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda\narg1 = torch.rand([17, 64, 358], dtype=torch.float32, device='cuda', requires_grad=True) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda\narg2 = torch.rand([261, 1, 64], dtype=torch.float32, device='cuda', requires_grad=True) # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda\nif __name__ == '__main__':\n    out_eager = foo(arg0, arg1, arg2)\n    out_eager.sum().backward()\n    print('Eager Success! ✅')\n    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)\n    out_compiled = compiled_foo(arg0, arg1, arg2)\n    out_compiled.sum().backward()\n    print('Compile Success! ✅')",
+  "repro_output": "[Fuzzer][Eager/Compile Divergence] torch.nn.functional.conv1d works in eager but fails compile",
+  "affected_api": "torch.nn.functional.conv1d",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "bfloat16, float32",
+    "input_shape": "(2, 261, 17, 358), (17, 64, 358), (261, 1, 64)",
+    "other_conditions": "torch.compile with fullgraph=True and dynamic=True"
+  },
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "Linux",
+    "hardware": "CUDA/GPU (CUDA_VISIBLE_DEVICES=7)"
+  },
+  "labels": [
+    "Fuzzer",
+    "Eager/Compile Divergence",
+    "conv1d"
+  ],
+  "core_api_identification": {
+    "core_api": "python",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163569_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163569_issue_ori_data.output.events.json"
+  }
+}

@@ -1,0 +1,168 @@
+Bug Report:
+Title: Expand sometimes interpreted as Repeat by compiler
+Issue ID: 163372
+Original bug description: ### 🐛 Describe the bug
+
+This sample code leads to a huge amount or RAM allocated on GPU.
+It seems like torch.expand() is interpreted as torch.repeat(), leading the compiled code to try to allocate much more memory than needed instead of seeing it as a View.
+
+Versions to reproduce:
+* It works when NOT compiled with torch 2.5.1 / 2.7.1 / 2.8.0
+* It works when compiled with torch 2.5.1
+* It doesn't work (=huge RAM allocated) when compiled with torch 2.7.1 / 2.8.0
+
+Ablation:
+* It only fails with the Inductor backend
+* It fails with all 3 modes (default/reduce-overhead/max-autotune)
+
+```
+import torch
+
+BATCH_SIZE = 64
+CHANNELS, IMG_SIZE = 3, 224
+GRID_SIZE = 13
+
+class MyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.grid = torch.nn.Parameter(torch.randn((5000, GRID_SIZE, GRID_SIZE, 2), device='cuda'))
+        self.fc = torch.nn.Linear(GRID_SIZE*GRID_SIZE*CHANNELS, 16)
+
+    def forward(self, x):
+        per_channel = []
+        for i in range(CHANNELS):
+            channel = x[:,i,...].expand(5000,-1,-1,-1)
+            patch = torch.nn.functional.grid_sample(channel, self.grid, mode="bilinear", align_corners=False, padding_mode="border")
+            patch = patch.transpose(0,1).flatten(start_dim=2)
+            per_channel.append(patch)
+        x = torch.cat(per_channel, axis=2)
+        x = self.fc(x)
+        return x
+
+def main():
+    model = MyModel()
+    model = model.cuda()
+    model = torch.compile(model)
+
+    for _ in range(10):
+        x = torch.randn((BATCH_SIZE, CHANNELS, IMG_SIZE, IMG_SIZE), device='cuda')
+        x = model(x)
+        x = torch.sum(x)
+        x.backward()
+
+
+if __name__ == "__main__":
+    main()
+
+```
+
+### Error logs
+
+> File "/tmp/torchinductor_user/y7/cy75qveg2xupnkcoat553zkmtcn3iesdftw4xpcfaal4vkxbj53r.py", line 390, in call
+>     buf6 = empty_strided_cuda((5000, 64, 224, 224), (3211264, 50176, 224, 1), torch.float32)
+>            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 59.81 GiB
+
+### Versions
+
+Collecting environment information...
+PyTorch version: 2.7.1+cu126
+Is debug build: False
+CUDA used to build PyTorch: 12.6
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.5 LTS (x86_64)
+GCC version: (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0
+Clang version: Could not collect
+CMake version: version 3.22.1
+Libc version: glibc-2.35
+
+Python version: 3.11.10 (main, Oct 16 2024, 15:38:19) [GCC 11.4.0] (64-bit runtime)
+Python platform: Linux-5.15.0-140-generic-x86_64-with-glibc2.35
+Is CUDA available: True
+CUDA runtime version: Could not collect
+CUDA_MODULE_LOADING set to: LAZY
+GPU models and configuration: 
+GPU 0: NVIDIA RTX 5000 Ada Generation
+GPU 1: NVIDIA RTX 5000 Ada Generation
+GPU 2: NVIDIA RTX 5000 Ada Generation
+GPU 3: NVIDIA RTX 5000 Ada Generation
+GPU 4: NVIDIA RTX 5000 Ada Generation
+GPU 5: NVIDIA RTX 5000 Ada Generation
+GPU 6: NVIDIA RTX 5000 Ada Generation
+GPU 7: NVIDIA RTX 5000 Ada Generation
+
+Nvidia driver version: 560.35.03
+cuDNN version: Probably one of the following:
+/usr/lib/x86_64-linux-gnu/libcudnn.so.7.6.5
+/usr/lib/x86_64-linux-gnu/libcudnn.so.8.9.7
+/usr/lib/x86_64-linux-gnu/libcudnn_adv_infer.so.8.9.7
+/usr/lib/x86_64-linux-gnu/libcudnn_adv_train.so.8.9.7
+/usr/lib/x86_64-linux-gnu/libcudnn_cnn_infer.so.8.9.7
+/usr/lib/x86_64-linux-gnu/libcudnn_cnn_train.so.8.9.7
+/usr/lib/x86_64-linux-gnu/libcudnn_ops_infer.so.8.9.7
+/usr/lib/x86_64-linux-gnu/libcudnn_ops_train.so.8.9.7
+Is XPU available: False
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: True
+
+CPU:
+Architecture:                         x86_64
+CPU op-mode(s):                       32-bit, 64-bit
+Address sizes:                        52 bits physical, 57 bits virtual
+Byte Order:                           Little Endian
+CPU(s):                               128
+On-line CPU(s) list:                  0-127
+Vendor ID:                            AuthenticAMD
+Model name:                           AM
+Structured error description: This sample code leads to a huge amount or RAM allocated on GPU. It seems like torch.expand() is interpreted as torch.repeat(), leading the compiled code to try to allocate much more memory than needed instead of seeing it as a View.
+Minimal reproducible example: import torch
+
+BATCH_SIZE = 64
+CHANNELS, IMG_SIZE = 3, 224
+GRID_SIZE = 13
+
+class MyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.grid = torch.nn.Parameter(torch.randn((5000, GRID_SIZE, GRID_SIZE, 2), device='cuda'))
+        self.fc = torch.nn.Linear(GRID_SIZE*GRID_SIZE*CHANNELS, 16)
+
+    def forward(self, x):
+        per_channel = []
+        for i in range(CHANNELS):
+            channel = x[:,i,...].expand(5000,-1,-1,-1)
+            patch = torch.nn.functional.grid_sample(channel, self.grid, mode="bilinear", align_corners=False, padding_mode="border")
+            patch = patch.transpose(0,1).flatten(start_dim=2)
+            per_channel.append(patch)
+        x = torch.cat(per_channel, axis=2)
+        x = self.fc(x)
+        return x
+
+def main():
+    model = MyModel()
+    model = model.cuda()
+    model = torch.compile(model)
+
+    for _ in range(10):
+        x = torch.randn((BATCH_SIZE, CHANNELS, IMG_SIZE, IMG_SIZE), device='cuda')
+        x = model(x)
+        x = torch.sum(x)
+        x.backward()
+
+
+if __name__ == "__main__":
+    main()
+Trigger conditions: {"backend": "Inductor", "dtype": "torch.float32", "input_shape": "(BATCH_SIZE, CHANNELS, IMG_SIZE, IMG_SIZE) where BATCH_SIZE=64, CHANNELS=3, IMG_SIZE=224", "other_conditions": "It only fails with the Inductor backend. It fails with all 3 modes (default/reduce-overhead/max-autotune). It works when NOT compiled with torch 2.5.1 / 2.7.1 / 2.8.0. It works when compiled with torch 2.5.1. It doesn't work (=huge RAM allocated) when compiled with torch 2.7.1 / 2.8.0."}
+Environment: {"pytorch_version": "2.7.1+cu126", "python_version": "3.11.10", "os": "Ubuntu 22.04.5 LTS (x86_64)", "hardware": "NVIDIA RTX 5000 Ada Generation"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

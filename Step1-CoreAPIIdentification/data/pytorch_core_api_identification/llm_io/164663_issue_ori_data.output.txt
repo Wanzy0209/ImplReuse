@@ -1,0 +1,86 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** FSDPMemTracker fails with KeyError for RMSNorm during backward.
+    *   **Description:** When sharding a model using `nn.RMSNorm`, `FSDPMemTracker` raises a `KeyError` during pre-backward. This happens when `RMSNorm` is wrapped with a `Linear` module in a single `fully_sharded()` call.
+    *   **Repro Code:**
+        *   Imports `torch`, `torch.distributed`, `torch.nn`, `torch.distributed.device_mesh`, `torch.distributed._composable.fsdp`, `torch.distributed.tensor.experimental`, `torch.distributed._tools.fsdp2_mem_tracker`.
+        *   Defines `TestModule` with `nn.RMSNorm` and `nn.Linear`.
+        *   Initializes distributed process group.
+        *   Applies `fully_shard` to `[model.norm, model.output]`.
+        *   Applies `fully_shard` to `model`.
+        *   Initializes `FSDPMemTracker(model)`.
+        *   Runs forward and backward pass inside the tracker context.
+    *   **Error:** `KeyError` during pre-backward.
+    *   **Context:** The issue specifically mentions `FSDPMemTracker` failing with `RMSNorm`.
+
+2.  **Identify the Core API:**
+    *   The bug is titled "FSDPMemTracker fails...".
+    *   The description says "FSDPMemTracker raises KeyError...".
+    *   The code explicitly uses `tracker = FSDPMemTracker(model)` and `with tracker...`.
+    *   The issue is specific to the interaction between `FSDPMemTracker` and `RMSNorm` (likely how `RMSNorm` handles autograd hooks or state tracking which the tracker inspects).
+    *   While `fully_shard` is used to set up the scenario, the *failure* occurs inside the tracker logic. The tracker is the tool reporting the error or crashing because it doesn't handle `RMSNorm`'s internal state correctly during the backward pass inspection.
+    *   However, looking at the "Task" constraints: "Infer which single API is most responsible for triggering the bug." and "Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug."
+
+3.  **Evaluate Candidates:**
+    *   `FSDPMemTracker`: This is the class throwing the exception. It's a tool for debugging memory usage. Is it a "core PyTorch API"? It's in `torch.distributed._tools`, which implies it's internal or utility-level, but it's the direct source of the crash.
+    *   `fully_shard`: This is the composable API for FSDP. It transforms the model. The bug happens *because* the model is sharded. If the model wasn't sharded, the tracker might not fail (or might fail differently). But the title explicitly blames the tracker.
+    *   `nn.RMSNorm`: This is the module being tracked. The bug is specific to this module. The tracker fails to handle it.
+    *   `torch.distributed`: The general package.
+
+4.  **Refining the "Core API" definition:**
+    *   Usually, "Core API" refers to the public-facing functionality users interact with to define models or training loops (like `nn.Module`, `optim.SGD`, `autograd.backward`).
+    *   `FSDPMemTracker` is a debugging tool.
+    *   `fully_shard` is the main feature being used (FSDP2).
+    *   However, the bug report is specifically about the *tracker* failing. The tracker is the component that has the bug (missing key lookup).
+    *   Let's look at the error source implied by the title: "FSDPMemTracker fails".
+    *   If I have to choose between the feature (`fully_shard`) and the tool (`FSDPMemTracker`), the tool is the one crashing.
+    *   Is `FSDPMemTracker` considered a "Core PyTorch API"? It's in `torch.distributed._tools`. The underscore usually denotes internal. But it's imported and used directly in the repro.
+    *   Let's consider `nn.RMSNorm`. The bug is triggered *by* RMSNorm. But RMSNorm itself works fine; the tracker fails to track it.
+    *   Let's consider `fully_shard`. It sets up the state that the tracker inspects.
+
+    *   *Self-Correction/Refinement*: The prompt asks for the "single core PyTorch API". Often in these tasks, if a specific utility class is the subject of the bug report (Title: "X fails"), X is the answer.
+    *   The title is "FSDPMemTracker fails...".
+    *   The description says "FSDPMemTracker raises KeyError".
+    *   The code uses `FSDPMemTracker`.
+    *   Therefore, `FSDPMemTracker` is the most specific API responsible for the failure.
+
+    *   *Alternative View*: Is `fully_shard` the "core" API and `FSDPMemTracker` just a side tool? The bug is about the tracker's implementation details (KeyError). If the tracker didn't exist, the code would run fine. The bug is *in* the tracker.
+    *   However, usually, these prompts look for the high-level feature causing the issue. But here, the issue is explicitly about the tracker's inability to handle a specific module type.
+    *   Let's look at the imports. `from torch.distributed._tools.fsdp2_mem_tracker import FSDPMemTracker`.
+    *   If I return `FSDPMemTracker`, it fits the title and the description perfectly.
+
+    *   Let's check if `nn.RMSNorm` is a better fit. The bug is "FSDPMemTracker fails ... for RMSNorm". The subject is FSDPMemTracker.
+    *   Let's check `fully_shard`. The bug happens "when RMSNorm is wrapped ... in a single fully_sharded()". This is a condition, but the *failure* is the tracker.
+
+    *   Decision: The bug is a defect in `FSDPMemTracker`. The API that is failing is `FSDPMemTracker`.
+
+5.  **Final Check:**
+    *   Bug Title: FSDPMemTracker fails...
+    *   Description: FSDPMemTracker raises KeyError...
+    *   Code: `tracker = FSDPMemTracker(model)`
+    *   The API is `FSDPMemTracker`.
+
+    *   Is it a "Core" API? It's part of the distributed stack. In the context of this specific bug report, it is the primary API involved.
+
+    *   One might argue `fully_shard` is the "core" feature, but the bug isn't that sharding fails; it's that *tracking* fails. The tracker is the API with the bug.
+
+    *   Let's verify if there's a more generic API like `torch.distributed.fsdp`. The import is specific: `torch.distributed._tools.fsdp2_mem_tracker`.
+    *   The prompt asks for "the single core PyTorch API".
+    *   I will stick with `FSDPMemTracker`.
+
+    *   Wait, looking at the "Trigger conditions": "Using FSDP with fully_shard".
+    *   But the "Structured error description" says: "FSDPMemTracker raises KeyError".
+    *   The most precise answer is the one that is broken.
+
+    *   Let's consider if the prompt implies the API *causing* the issue (RMSNorm) vs the API *experiencing* the issue (FSDPMemTracker). Usually, we identify the component that is buggy.
+    *   If I say `nn.RMSNorm`, it implies RMSNorm is broken. It isn't.
+    *   If I say `fully_shard`, it implies sharding is broken. It isn't.
+    *   If I say `FSDPMemTracker`, it implies the tracker is broken. It is.
+
+    *   Therefore, `FSDPMemTracker` is the correct answer.
+
+    *   One nuance: Is `FSDPMemTracker` considered an "API" or an internal tool? It is imported and used by the user in the repro. It is an interface provided by PyTorch (even if in `_tools`).
+
+    *   Let's double check if `fully_shard` is the intended answer. The bug is filed against the FSDP component generally. But the title is very specific.
+    *   If I have to choose between a feature (`fully_shard`) and a utility (`FSDPMemTracker`), and the bug is explicitly about the utility crashing, the utility is the answer.
+
+    *   Final decision: `FSDPMemTracker`.FSDPMemTracker

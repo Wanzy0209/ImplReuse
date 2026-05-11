@@ -1,0 +1,34 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** Dynamo graph break on flex attention code.
+    *   **Issue:** When using `torch.compile` with `fullgraph=True` on a model that uses `create_block_mask` (from `torch.nn.attention.flex_attention`), a graph break occurs.
+    *   **Error Message:** "Unsupported: id() with unsupported args ... (NestedUserFunctionVariable(),)".
+    *   **Stack Trace Location:** The error happens inside `create_block_mask` -> `_get_mod_type` -> `inspect.signature(fn)`.
+    *   **Context:** The user defines a local function `dynamic_mask_function` inside the `forward` method. This function captures an intermediate tensor `intermediate`. `create_block_mask` is called with this function.
+    *   **Specific Failure Point:** The stack trace points to `inspect.signature` being called on the function passed to `create_block_mask`. Dynamo struggles to trace `inspect.signature` when the object is a `NestedUserFunctionVariable` (a closure defined inside the compiled region).
+
+2.  **Identify the Core API:**
+    *   The user code calls `create_block_mask`.
+    *   The error happens *inside* `create_block_mask`.
+    *   The error is triggered by `inspect.signature` (Python stdlib), but the PyTorch API responsible for invoking this logic in a way that breaks Dynamo is `create_block_mask`.
+    *   Is it `flex_attention`? The code shows `out = torch.compile(flex_attention)(...)` works, but `out = flex_attention(...)` works. The issue is specifically about the graph break during the execution of `create_block_mask` within the `forward` pass of the compiled model.
+    *   The title says "Dynamo graph break on flex attention code", but the specific API causing the break in the provided repro is `create_block_mask`.
+    *   Let's look at the trigger conditions: "Using fullgraph=True in torch.compile, using create_block_mask with a dynamic mask function".
+    *   The error message explicitly mentions `create_block_mask` in the user code context: `File ".../forward", line 27, in forward block_mask = create_block_mask(...)`.
+
+3.  **Evaluate Candidates:**
+    *   `torch.compile`: This is the mechanism triggering the analysis, but the bug is about how a specific function behaves *under* `torch.compile`.
+    *   `flex_attention`: The user calls this later, but the graph break happens *before* that, at the `create_block_mask` call.
+    *   `create_block_mask`: This is the function being called when the graph break occurs. It performs introspection (`inspect.signature`) on the passed function, which Dynamo cannot handle for nested functions.
+    *   `inspect.signature`: This is a Python standard library function, not a PyTorch API. The prompt asks for the "single core PyTorch API".
+
+4.  **Select the Best Fit:**
+    *   The bug is about `create_block_mask`'s implementation interacting poorly with Dynamo when passed a closure.
+    *   Therefore, `create_block_mask` is the PyTorch API involved.
+
+5.  **Final Check:**
+    *   Does `create_block_mask` explain the bug? Yes. It calls `inspect.signature` on a user-defined function, which causes a graph break in Dynamo.
+    *   Is it a PyTorch API? Yes (`torch.nn.attention.flex_attention.create_block_mask`).
+
+6.  **Formatting:** The user wants *only* the API name.
+
+    Name: `create_block_mask`create_block_mask

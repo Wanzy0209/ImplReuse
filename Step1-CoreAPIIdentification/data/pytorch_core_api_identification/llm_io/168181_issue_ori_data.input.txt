@@ -1,0 +1,102 @@
+Bug Report:
+Title: [inductor] User-defined Triton kernel output + .cpu() correctness issue
+Issue ID: 168181
+Original bug description: Repro:
+Apply
+```
+diff --git a/test/inductor/test_triton_kernels.py b/test/inductor/test_triton_kernels.py
+index eee4dba7f27..2eef80e5976 100644
+--- a/test/inductor/test_triton_kernels.py
++++ b/test/inductor/test_triton_kernels.py
+@@ -1216,6 +1216,20 @@ def forward(self, x_1, output_1):
+         compiled_out = torch.compile(f)(x, y)
+         self.assertEqual(compiled_out, eager_out)
+ 
++    @requires_gpu
++    def test_triton_kernel_to_cpu(self):
++        def f(x, y):
++            out = torch.zeros_like(x)
++            add_kernel[(1,)](x, y, out, 16, 16)
++            out_cpu = out.cpu() + 1
++            return out_cpu
++
++        x = torch.randn(4, 4, device=GPU_TYPE)
++        y = torch.randn(4, 4, device=GPU_TYPE)
++        eager_out = f(x, y)
++        compiled_out = torch.compile(f)(x, y)
++        self.assertEqual(compiled_out, eager_out)
++
+     @requires_gpu
+     def test_triton_kernel_out_of_order(self):
+         @triton.jit
+```
+
+, then run 
+
+```
+python test/inductor/test_triton_kernels.py -k test_triton_kernel_to_cpu
+
+
+Fframes [('total', 1), ('ok', 1)]
+stats [('calls_captured', 4), ('unique_graphs', 1)]
+inductor [('fxgraph_cache_miss', 1), ('pattern_matcher_count', 1), ('pattern_matcher_nodes', 1)]
+aot_autograd [('total', 1), ('autograd_cache_miss', 1), ('autograd_cache_saved', 1), ('ok', 1)]
+graph_break []
+
+======================================================================
+FAIL: test_triton_kernel_to_cpu (__main__.KernelTests.test_triton_kernel_to_cpu)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/data/users/binbao/pytorch/torch/testing/_internal/common_utils.py", line 3334, in wrapper
+    method(*args, **kwargs)
+  File "/data/users/binbao/pytorch/test/inductor/test_triton_kernels.py", line 1231, in test_triton_kernel_to_cpu
+    self.assertEqual(compiled_out, eager_out)
+  File "/data/users/binbao/pytorch/torch/_dynamo/test_case.py", line 112, in assertEqual
+    return super().assertEqual(x, y, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/binbao/pytorch/torch/testing/_internal/common_utils.py", line 4289, in assertEqual
+    raise error_metas.pop()[0].to_error(  # type: ignore[index]
+AssertionError: Tensor-likes are not close!
+
+Mismatched elements: 4 / 16 (25.0%)
+Greatest absolute difference: 2.2042765617370605 at index (0, 1) (up to 1e-05 allowed)
+Greatest relative difference: 59.26969909667969 at index (0, 0) (up to 1.3e-06 allowed)
+
+To execute this test, run the following from the base repo dir:
+    python test/inductor/test_triton_kernels.py KernelTests.test_triton_kernel_to_cpu
+
+This message can be suppressed by setting PYTORCH_PRINT_REPRO_ON_FAILURE=0
+
+----------------------------------------------------------------------
+Ran 1 test in 2.040s
+
+FAILED (failures=1)
+```
+
+cc @ezyang @gchanan @kadeng @msaroufim @chauhang @penguinwu @voznesenskym @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @ipiszy @chenyang78 @muchulee8 @amjames @aakhundov @coconutruben
+Structured error description: A correctness issue occurs when using a user-defined Triton kernel followed by a .cpu() call. The compiled version produces different results than the eager version, with mismatched elements and significant absolute and relative differences.
+Minimal reproducible example: @requires_gpu
+def test_triton_kernel_to_cpu(self):
+    def f(x, y):
+        out = torch.zeros_like(x)
+        add_kernel[(1,)](x, y, out, 16, 16)
+        out_cpu = out.cpu() + 1
+        return out_cpu
+
+    x = torch.randn(4, 4, device=GPU_TYPE)
+    y = torch.randn(4, 4, device=GPU_TYPE)
+    eager_out = f(x, y)
+    compiled_out = torch.compile(f)(x, y)
+    self.assertEqual(compiled_out, eager_out)
+Trigger conditions: {"backend": "GPU", "dtype": "unknown", "input_shape": "(4, 4)", "other_conditions": "Using torch.compile with a user-defined Triton kernel followed by .cpu() call"}
+Environment: {"pytorch_version": "unknown", "python_version": "unknown", "os": "unknown", "hardware": "GPU"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

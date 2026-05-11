@@ -1,0 +1,43 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** Redundant global code in the context parallel.
+    *   **Description:** The user points out that `_compiled_create_block_mask` is created but never used in `torch/distributed/tensor/experimental/_context_parallel/_attention.py`.
+    *   **Crucial Observation:** The user notes that the creation of this unused code triggers `torch.compile` (via `torch._dynamo.eval_frame`), which subsequently calls `torch.distributions.Distribution.set_default_validate_args(False)`.
+    *   **Impact:** This global side effect (changing distribution validation args) affects the use of distribution ops elsewhere in the application.
+    *   **Reproducible Example:** `torch.distributions.Distribution.set_default_validate_args(False)` (This is the side effect, not the trigger).
+    *   **Trigger:** The trigger is the import or execution of code in `torch.distributed.tensor.experimental._context_parallel._attention` which defines `_compiled_create_block_mask`.
+
+2.  **Identify the Core API:**
+    *   The bug is about a side effect caused by `torch.compile` being invoked globally during module initialization (or definition) in the context parallel code.
+    *   The specific line mentioned is `https://github.com/pytorch/pytorch/blob/main/torch/distributed/tensor/experimental/_context_parallel/_attention.py#L1035`.
+    *   The description says: "The global code will call torch.compile".
+    *   The side effect is `torch.distributions.Distribution.set_default_validate_args(False)`.
+    *   The root cause is the invocation of `torch.compile` (or the internal mechanism that triggers it, `torch._dynamo`).
+    *   However, the prompt asks for the *single core PyTorch API* responsible for triggering the bug.
+    *   Is it `torch.distributed.tensor`? No, that's the module.
+    *   Is it `torch.distributions.Distribution.set_default_validate_args`? That's the victim of the side effect, not the trigger.
+    *   Is it `torch.compile`? Yes. The description explicitly states: "The global code will call torch.compile". This call triggers the internal logic that changes the global state of distributions.
+
+3.  **Refine the API Name:**
+    *   The bug report mentions `_compiled_create_block_mask` is created. This usually implies `torch.compile` is called on a function to create a compiled version.
+    *   The text says: "The global code will call torch.compile".
+    *   Therefore, `torch.compile` is the API being invoked that causes the undesired global state change.
+
+4.  **Check Constraints:**
+    *   Return only one API name.
+    *   No JSON, Markdown, etc.
+    *   Prefer the API whose behavior change/compilation path explains the bug.
+
+5.  **Final Decision:** The API is `torch.compile`.
+
+    *Self-Correction/Double Check:* Could it be `torch._dynamo`? The description says "call torch.compile and call ... from here torch/_dynamo/eval_frame.py". `torch.compile` is the public API that users call (or the library calls internally) which invokes dynamo. The bug report explicitly names `torch.compile` as the thing being called.
+
+    Another possibility: `torch.distributed.tensor.experimental._context_parallel._attention`. This is a module path, not a specific API name.
+
+    The most direct API responsible for the *trigger* (the compilation path) is `torch.compile`.
+
+    Let's look at the specific line in the repo (mental check or search simulation): Line 1035 in `_attention.py` likely looks like `_compiled_create_block_mask = torch.compile(create_block_mask)`.
+    So `torch.compile` is definitely the API.
+
+    The bug is that `torch.compile` is being called at import time (global scope), which has a side effect on `torch.distributions`.
+
+    Result: `torch.compile`.torch.compile

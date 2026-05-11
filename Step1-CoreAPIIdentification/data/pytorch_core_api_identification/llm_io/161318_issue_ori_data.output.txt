@@ -1,0 +1,121 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** "inductor crash on data-dependent slice"
+    *   **Description:** Inductor crashes with an internal error during a program involving data-dependent slicing.
+    *   **Code Snippet:**
+        ```python
+        import torch
+
+        @torch.compile(fullgraph=True)
+        def fn(encoder_attention_mask, encoder_hidden_states):
+            encoder_hidden_states = encoder_hidden_states.new_zeros([1, 512, 3072])
+            text_len = encoder_attention_mask.sum().item() # Data-dependent value
+            encoder_hidden_states = encoder_hidden_states[:, :text_len] # Slice using that value
+
+        torch._dynamo.config.capture_scalar_outputs = True
+        mask = (torch.arange(512) < 8).unsqueeze(0).cuda()
+        hidden = torch.randn((1, 512, 4096)).cuda()
+
+        fn(mask, hidden)
+        ```
+    *   **Error Logs:** The traceback points to `torch._inductor/lowering.py`, specifically inside a function named `slice_`. The error occurs at `x.get_layout().offset`.
+    *   **Trigger Conditions:** `torch.compile` with `fullgraph=True`, `capture_scalar_outputs = True`, data-dependent slicing.
+
+2.  **Identify the Core API:**
+    *   The bug is explicitly about "data-dependent slice".
+    *   The code performs slicing: `encoder_hidden_states[:, :text_len]`.
+    *   The error occurs in the Inductor lowering phase for slicing operations (`slice_`).
+    *   The issue is that the slice index (`text_len`) is derived from a tensor operation (`sum().item()`), making it dynamic/data-dependent, which Inductor struggles with in this specific context (fullgraph).
+
+3.  **Evaluate Candidates:**
+    *   `torch.compile`: This is the wrapper, but the crash happens inside the compilation of a specific operation. While `torch.compile` is the mechanism, the *operation* causing the crash is the slice.
+    *   `torch.sum`: This calculates the value used for slicing, but the crash happens when that value is used to slice the tensor.
+    *   `Tensor.slice` (or `__getitem__` with slice): This is the direct operation causing the Inductor crash. The traceback explicitly mentions `slice_` in `lowering.py`.
+    *   `torch._inductor`: This is the backend, but usually, we look for the user-facing API that triggers the behavior.
+
+4.  **Select the Best Fit:**
+    *   The title says "inductor crash on data-dependent slice".
+    *   The code line causing the issue is `encoder_hidden_states[:, :text_len]`.
+    *   The traceback points to `slice_`.
+    *   The core functionality failing is the slicing operation with a dynamic index.
+
+    Is there a specific API name for slicing? In PyTorch, slicing is done via `__getitem__` with a `slice` object. However, in the context of PyTorch APIs, "slice" is often referred to as `torch.Tensor.slice` (though usually accessed via brackets) or simply "slice". Looking at the error log, the function is `slice_`.
+
+    Let's look at the constraints: "Return only one API name".
+    If I say `torch.compile`, it's too broad.
+    If I say `torch.sum`, it's not where the crash is.
+    If I say `slice`, it's the operation.
+    If I say `Tensor.__getitem__`, it's the method.
+
+    Usually, for these types of bug reports, the specific operation causing the backend failure is the answer. The operation is slicing.
+    The traceback shows `File ".../torch/_inductor/lowering.py", line 1280, in slice_`.
+    The user code is `encoder_hidden_states[:, :text_len]`.
+
+    Is there a more specific API? `torch.slice` exists but is deprecated/less common than bracket notation. `torch.narrow` is similar.
+    However, the most direct mapping to the "data-dependent slice" description is the slice operation itself.
+
+    Let's consider `torch.compile`. The bug is *in* the compiler (Inductor). But the trigger is the specific pattern of code. The prompt asks for the "single core PyTorch API from a bug report". Usually, this means the function or method being called that causes the issue.
+    The issue is "inductor crash on data-dependent slice".
+    The API is `slice`.
+
+    Let's double check if `torch.compile` is the intended answer. The bug is a compiler bug. But usually, if a specific operator causes a compiler crash, the operator is the API. For example, if `torch.sin` crashes the compiler, the API is `torch.sin`. Here, the operation is slicing.
+
+    Let's look at the traceback again.
+    `File ".../torch/_inductor/lowering.py", line 1280, in slice_`
+    `new_storage_offset = x.get_layout().offset + start_index * x.get_stride()[dim]`
+
+    The operation is definitely slicing.
+    In PyTorch, the API for slicing is generally just referred to as `slice` (via `__getitem__`).
+
+    Let's try to find if there is a specific function name in the user code that maps to a standard API.
+    `encoder_hidden_states[:, :text_len]` -> `Tensor.__getitem__`.
+    `encoder_attention_mask.sum()` -> `Tensor.sum`.
+
+    The title says "inductor crash on data-dependent slice".
+    The description says "data-dependent slicing".
+    The error is in `slice_`.
+
+    I will go with `slice`. It is the most descriptive and accurate term for the operation causing the crash.
+
+    Wait, is `torch.compile` the API? The bug is about the *compiler* crashing. The user calls `torch.compile`. The bug is a limitation/bug in the compiler's handling of slices.
+    However, usually, "API" refers to the functionality being used. If I use `torch.nn.Linear` and it crashes, the API is `torch.nn.Linear`. If I use slicing and it crashes, the API is `slice`.
+
+    Let's look at similar examples or the definition of "API" in this context.
+    If the bug was "torch.compile fails with dynamic shapes", the API might be `torch.compile`.
+    But here it is specific to "slice".
+    The traceback shows `slice_` in the lowering code.
+
+    Let's consider `Tensor.__getitem__`. This is the Python method. Is it considered a "PyTorch API"? Yes.
+    Is `slice` a PyTorch API? `torch.slice` exists but is not what is used here.
+    The operation is "slicing".
+
+    Let's look at the prompt again: "Infer which single API is most responsible for triggering the bug."
+    The trigger is the slicing operation with a dynamic index.
+    The API is `slice`.
+
+    Let's refine. Is it `torch.compile`?
+    The bug is *in* the inductor (part of `torch.compile`).
+    But the *trigger* is the slice.
+    If I remove the slice, the bug goes away.
+    If I remove `torch.compile`, the bug goes away.
+    However, `torch.compile` is the environment. The specific interaction causing the crash is the slice.
+    Usually, for "inductor crash on X", X is the API.
+
+    Let's check if `torch.slice` is the intended name. `torch.slice(input, dim, start, end, step)`. The user uses `tensor[start:end]`.
+    The user code uses `__getitem__`.
+    The error log mentions `slice_`.
+
+    I will stick with `slice`. It is the operation name.
+
+    Alternative: `torch.compile`.
+    Reasoning: The bug is a crash in the compiler. The user is using the compiler API. The compiler fails to handle a specific case.
+    However, usually, these tasks want the operator that is failing.
+    Example: "Bug: matmul fails on XPU". API: `matmul`.
+    Example: "Bug: inductor crash on data-dependent slice". API: `slice`.
+
+    Let's verify if `slice` is a valid API name in this context. Yes, slicing is a core tensor operation.
+
+    Final check:
+    Title: "inductor crash on data-dependent slice"
+    Code: `encoder_hidden_states[:, :text_len]`
+    Traceback: `slice_`
+    API: `slice`slice

@@ -1,0 +1,328 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** `_dynamo_graph_capture_for_export + aot_export_joint_with_descriptors doesn't work with kwargs`
+    *   **Description:** The user is trying to use `_dynamo_graph_capture_for_export` to capture a graph and then passing that graph module to `aot_export_joint_with_descriptors`. The model has a `forward` method with a keyword argument (`scale`).
+    *   **Error:** `TypeError: Interpreter.run() got an unexpected keyword argument 'scale'`. This happens inside `PropagateUnbackedSymInts(mod).run(...)`.
+    *   **Context:** The user notes that `aot_export_joint_with_descriptors_alone` works fine (meaning calling `aot_export_joint_with_descriptors` directly on the original model works). The issue arises specifically when the graph module comes from `_dynamo_graph_capture_for_export`.
+
+2.  **Identify the Core APIs:**
+    *   `torch._dynamo.functional_export._dynamo_graph_capture_for_export`
+    *   `torch._functorch.aot_autograd.aot_export_joint_with_descriptors`
+    *   `torch.nn.Module` (the user's class)
+    *   `torch._guards.tracing.TracingContext`
+
+3.  **Trace the Execution Flow:**
+    *   Step 1: `gm = _dynamo_graph_capture_for_export(model)(*inputs, **kwargs)`. This captures a graph module `gm`.
+    *   Step 2: `aot_export_joint_with_descriptors(stack, gm, inputs, kwargs=kwargs)` is called.
+    *   Step 3: Inside `aot_export_joint_with_descriptors`, it calls `create_aot_state`.
+    *   Step 4: Inside `create_aot_state`, it calls `run_functionalized_fw_and_collect_metadata`.
+    *   Step 5: Inside that, it calls the functionalized version of the model.
+    *   Step 6: The error occurs in `graph_capture_wrappers.py` inside `functional_call`, specifically `PropagateUnbackedSymInts(mod).run(...)`.
+    *   The error message says `Interpreter.run() got an unexpected keyword argument 'scale'`.
+
+4.  **Analyze the Root Cause:**
+    *   The error implies that `PropagateUnbackedSymInts` (which seems to be an Interpreter) is being called with `**kwargs` (containing `scale`), but the `run` method of that interpreter doesn't accept `**kwargs`.
+    *   Why is it being called with kwargs? Because `aot_export_joint_with_descriptors` is called with `kwargs=kwargs`.
+    *   Why does it work with the original model but not the graph module from `_dynamo_graph_capture_for_export`?
+    *   When `_dynamo_graph_capture_for_export` captures the graph, it typically flattens inputs or changes the signature of the `forward` method of the resulting `GraphModule`. Usually, exported graph modules have a flattened signature (e.g., `forward(self, arg0, arg1)` instead of `forward(self, x, scale=1.0)`).
+    *   If `gm` (the captured graph) has a flattened signature (positional args only), but `aot_export_joint_with_descriptors` is trying to call it with `kwargs={"scale": ...}`, there's a mismatch.
+    *   However, the specific error is inside `PropagateUnbackedSymInts(mod).run(...)`. This suggests that the internal mechanism of `aot_export_joint_with_descriptors` (specifically the functionalization/propagation step) is trying to pass kwargs to an interpreter that doesn't support them, or the graph module `gm` is being wrapped in a way that doesn't propagate kwargs correctly to the underlying interpreter.
+
+5.  **Determine the "Single Core API":**
+    *   The bug title explicitly mentions two APIs: `_dynamo_graph_capture_for_export` and `aot_export_joint_with_descriptors`.
+    *   The description says: "Using _dynamo_graph_capture_for_export followed by aot_export_joint_with_descriptors fails".
+    *   The error happens *inside* `aot_export_joint_with_descriptors` (specifically in `PropagateUnbackedSymInts` which is part of the AOT Autograd logic).
+    *   However, the *trigger* is the interaction between the two.
+    *   Which one is "most responsible"?
+        *   `_dynamo_graph_capture_for_export` produces a graph module. If it produces a graph module that is incompatible with standard PyTorch calling conventions (kwargs) or if it produces a graph module that `aot_export_joint_with_descriptors` is expected to handle but doesn't, it's a compatibility issue.
+        *   `aot_export_joint_with_descriptors` is the one crashing. It receives `kwargs` and tries to pass them down. The crash happens because the interpreter (`PropagateUnbackedSymInts`) doesn't accept kwargs.
+    *   Looking at the error stack trace: `File ".../torch/_functorch/_aot_autograd/graph_capture_wrappers.py", line 1358, in functional_call out = PropagateUnbackedSymInts(mod).run(...)`. This is deep inside `aot_export_joint_with_descriptors`.
+    *   The bug report title highlights the combination. However, usually, the API that is failing to handle the input (the graph module) or the input format (kwargs) is the one considered the location of the bug.
+    *   The user says: "However, `aot_export_joint_with_descriptors_alone` works fine". This implies `aot_export_joint_with_descriptors` works with kwargs *if* the input is a standard `nn.Module`. It fails when the input is the output of `_dynamo_graph_capture_for_export`.
+    *   This suggests that `_dynamo_graph_capture_for_export` produces a `GraphModule` that `aot_export_joint_with_descriptors` cannot handle correctly when kwargs are involved.
+    *   Alternatively, `aot_export_joint_with_descriptors` should be robust enough to handle `GraphModule`s produced by the export path.
+    *   Let's look at the specific error: `Interpreter.run() got an unexpected keyword argument 'scale'`. This suggests that `PropagateUnbackedSymInts` (an interpreter) is being called with kwargs. Standard PyTorch interpreters often take flattened args.
+    *   The issue is likely that `aot_export_joint_with_descriptors` is passing kwargs to a graph module that expects flattened positional args (which is what `_dynamo_graph_capture_for_export` produces).
+    *   The bug is in the integration. But if I have to pick *one*, which one is the "core" API being reported?
+    *   The title puts them together. The description says "Using X followed by Y fails".
+    *   Usually, if a new API (X) produces output that breaks an existing API (Y), the bug is often in X (producing non-standard output) or Y (not supporting the new standard).
+    *   `_dynamo_graph_capture_for_export` is an internal/private API (indicated by the leading underscore). `aot_export_joint_with_descriptors` is also internal/private.
+    *   The error occurs inside `aot_export_joint_with_descriptors`.
+    *   However, the *change* that introduced the bug is likely the usage of `_dynamo_graph_capture_for_export`.
+    *   Let's look at the "Trigger conditions": "Model with keyword arguments in forward method, using _dynamo_graph_capture_for_export followed by aot_export_joint_with_descriptors".
+    *   If I look at the stack trace, the crash is in `torch._functorch.aot_autograd.aot_export_joint_with_descriptors`.
+    *   But the *cause* is the graph module generated by `_dynamo_graph_capture_for_export`.
+    *   Let's consider the prompt: "Infer which single API is most responsible for triggering the bug."
+    *   If I remove `_dynamo_graph_capture_for_export` and just use the model, it works. So `_dynamo_graph_capture_for_export` is the variable that changes the state of the system to a failing state.
+    *   However, `aot_export_joint_with_descriptors` is the one throwing the exception.
+    *   Let's look at the error again: `TypeError: Interpreter.run() got an unexpected keyword argument 'scale'`.
+    *   This happens in `PropagateUnbackedSymInts(mod).run(...)`.
+    *   `PropagateUnbackedSymInts` is part of the AOT Autograd stack.
+    *   The issue is that `aot_export_joint_with_descriptors` is trying to call the graph module with kwargs, but the graph module (or the interpreter wrapping it) doesn't support it.
+    *   Since `_dynamo_graph_capture_for_export` is the specific API being used to generate the problematic graph module in this report, and the report is about the *combination*, identifying the API that is the "new" or "specific" usage causing the issue is usually the right call.
+    *   The title is: `_dynamo_graph_capture_for_export + aot_export_joint_with_descriptors doesn't work with kwargs`.
+    *   If I have to pick one, `_dynamo_graph_capture_for_export` is the one producing the graph that triggers the failure in the other. But `aot_export_joint_with_descriptors` is the one failing.
+    *   Let's look at the "Structured error description": "Using _dynamo_graph_capture_for_export followed by aot_export_joint_with_descriptors fails".
+    *   Often, bugs like this are filed against the component that is crashing (`aot_export_joint_with_descriptors`) because it should handle the input, or against the component producing the bad input (`_dynamo_graph_capture_for_export`).
+    *   Given the error is `TypeError: Interpreter.run() got an unexpected keyword argument`, it looks like `aot_export_joint_with_descriptors` is blindly passing kwargs to an interpreter that doesn't want them.
+    *   However, `_dynamo_graph_capture_for_export` is the API that is explicitly mentioned in the title as the first part of the failing chain.
+    *   Let's try to find if there's a specific API mentioned in the "Task" section that implies a preference. "Prefer the API whose behavior change... best explains the observed bug."
+    *   The behavior change is the introduction of `_dynamo_graph_capture_for_export`. Without it, it works.
+    *   Therefore, `_dynamo_graph_capture_for_export` is the API whose usage triggers the bug.
+    *   Wait, let's reconsider. The bug is that they *don't work together*. The crash is in `aot_export_joint_with_descriptors`.
+    *   If I fix `aot_export_joint_with_descriptors` to handle the graph module from `_dynamo_graph_capture_for_export`, the bug is fixed.
+    *   If I fix `_dynamo_graph_capture_for_export` to output a graph module that `aot_export_joint_with_descriptors` likes, the bug is fixed.
+    *   Which is the "core" API? The title lists both.
+    *   Let's look at the error location again. `torch._functorch.aot_autograd.aot_export_joint_with_descriptors`.
+    *   The error is `Interpreter.run() got an unexpected keyword argument 'scale'`. This is a signature mismatch.
+    *   The graph module `gm` returned by `_dynamo_graph_capture_for_export` likely has a signature like `forward(self, x, scale)` (positional) or `forward(self, x, scale_1)`.
+    *   The user calls `aot_export_joint_with_descriptors(..., kwargs={"scale": ...})`.
+    *   `aot_export_joint_with_descriptors` tries to call `gm` with kwargs.
+    *   If `gm` doesn't support kwargs, it fails.
+    *   The bug is that `aot_export_joint_with_descriptors` doesn't handle the graph module produced by `_dynamo_graph_capture_for_export` correctly when kwargs are present.
+    *   However, the prompt asks for the "single core PyTorch API from a bug report".
+    *   The bug report title is `_dynamo_graph_capture_for_export + aot_export_joint_with_descriptors ...`.
+    *   Usually, the API that is the *subject* of the bug report is the one that is broken or the one being tested.
+    *   Here, the user is trying to use `_dynamo_graph_capture_for_export` (likely a new feature) and feed it into `aot_export_joint_with_descriptors`.
+    *   The failure is in `aot_export_joint_with_descriptors`.
+    *   But the *issue* is the interaction.
+    *   Let's look at the provided solution in similar tasks. Usually, if the title is "API A + API B doesn't work", and the error is in API B, API B is often the answer because that's where the crash is. But if API A is the new thing being integrated, API A might be the answer.
+    *   Let's look at the error stack trace again.
+        `File ".../torch/_functorch/aot_autograd.py", line 1274, in aot_export_joint_with_descriptors`
+    *   The error is definitely inside `aot_export_joint_with_descriptors`.
+    *   The bug is that `aot_export_joint_with_descriptors` fails.
+    *   The trigger is `_dynamo_graph_capture_for_export`.
+    *   If I have to choose the API *most responsible*, it's the one that is failing to handle the input. `aot_export_joint_with_descriptors` is the one crashing.
+    *   However, the title puts `_dynamo_graph_capture_for_export` first.
+    *   Let's check the "Trigger conditions": "using _dynamo_graph_capture_for_export followed by aot_export_joint_with_descriptors".
+    *   Let's assume the question asks for the API that is the *primary subject* of the bug report. The user is likely a developer working on `_dynamo_graph_capture_for_export` (or the export path) and found it breaks `aot_export_joint_with_descriptors`.
+    *   Or, the user is trying to use the export path and found it doesn't work with AOT.
+    *   Let's look at the error message again. `TypeError: Interpreter.run() got an unexpected keyword argument 'scale'`.
+    *   This is a very specific error inside `aot_export_joint_with_descriptors`.
+    *   If I return `aot_export_joint_with_descriptors`, it is the API that is crashing.
+    *   If I return `_dynamo_graph_capture_for_export`, it is the API that produces the input causing the crash.
+    *   Let's look at the "Task" constraints again. "Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug."
+    *   The behavior change is the usage of `_dynamo_graph_capture_for_export`. The "execution semantics" of the graph module produced by `_dynamo_graph_capture_for_export` (likely flattened args) conflicts with the expectations of `aot_export_joint_with_descriptors` (which expects to be able to pass kwargs).
+    *   The bug is that `aot_export_joint_with_descriptors` doesn't support the graph module from `_dynamo_graph_capture_for_export`.
+    *   Which API is "most responsible"?
+    *   If I fix `aot_export_joint_with_descriptors` to inspect the signature of the graph module and flatten the kwargs before calling it, the bug is fixed.
+    *   If I fix `_dynamo_graph_capture_for_export` to preserve kwargs in the signature (if possible), the bug is fixed.
+    *   Usually, the consumer (`aot_export_joint_with_descriptors`) is expected to be robust, or the producer (`_dynamo_graph_capture_for_export`) is expected to produce a standard format.
+    *   Given the error is a `TypeError` inside `aot_export_joint_with_descriptors`, `aot_export_joint_with_descriptors` is the one failing.
+    *   However, the title emphasizes `_dynamo_graph_capture_for_export`.
+    *   Let's try to find the "single core API". The bug report is about the *interaction*.
+    *   Let's look at the code snippet.
+    *   `gm = _dynamo_graph_capture_for_export(model)(*inputs, **kwargs)`
+    *   `aot_export_joint_with_descriptors(..., gm, inputs, kwargs=kwargs)`
+    *   The user passes `kwargs` to `aot_export_joint_with_descriptors`.
+    *   `aot_export_joint_with_descriptors` tries to use them.
+    *   The crash is in `aot_export_joint_with_descriptors`.
+    *   I will bet on `aot_export_joint_with_descriptors` being the API that is failing, but `_dynamo_graph_capture_for_export` is the API being reported on as the cause of the incompatibility.
+    *   Actually, looking at the title: `_dynamo_graph_capture_for_export + aot_export_joint_with_descriptors doesn't work with kwargs`.
+    *   If I have to pick one, `_dynamo_graph_capture_for_export` is the "new" API (implied by the TODO comment in the code: "TODO: switch to use the official graph_capture API once it is ready"). The user is testing the new API.
+    *   The bug is that the new API doesn't work with the existing one.
+    *   Therefore, the bug is likely attributed to the new API (`_dynamo_graph_capture_for_export`) not producing a compatible graph, or the existing one (`aot_export_joint_with_descriptors`) needing an update.
+    *   In many bug tracking systems, the bug is assigned to the component that crashes. Here it crashes in `aot_export_joint_with_descriptors`.
+    *   However, the prompt asks to identify the API *from the bug report*.
+    *   Let's look at the "Trigger conditions" again. "using _dynamo_graph_capture_for_export followed by aot_export_joint_with_descriptors".
+    *   If I simply return `aot_export_joint_with_descriptors`, it captures the crash site.
+    *   If I return `_dynamo_graph_capture_for_export`, it captures the "new feature" aspect.
+    *   Let's look at the error stack trace one more time.
+    *   `File ".../torch/_functorch/aot_autograd.py", line 1274, in aot_export_joint_with_descriptors`
+    *   `File ".../torch/_functorch/aot_autograd.py", line 569, in create_aot_state`
+    *   `File ".../torch/_functorch/_aot_autograd/collect_metadata_analysis.py", line 213, in inner`
+    *   `File ".../torch/_functorch/_aot_autograd/utils.py", line 189, in flat_fn`
+    *   `File ".../torch/_functorch/_aot_autograd/graph_capture_wrappers.py", line 1358, in functional_call`
+    *   `TypeError: Interpreter.run() got an unexpected keyword argument 'scale'`
+    *   The error is deep in the functorch/aot stack.
+    *   The API `aot_export_joint_with_descriptors` is the entry point to this stack.
+    *   The API `_dynamo_graph_capture_for_export` is the entry point to the graph generation.
+    *   The bug is that `aot_export_joint_with_descriptors` cannot handle the graph module.
+    *   I will go with `aot_export_joint_with_descriptors` because that is the API that is throwing the error and failing to execute. The bug report is "X + Y doesn't work", and Y is the one breaking.
+    *   Wait, let me reconsider the "behavior change" hint. "Prefer the API whose behavior change... best explains the observed bug."
+    *   The behavior change is the introduction of `_dynamo_graph_capture_for_export`. Before that, the user would just pass the model. Now they pass the graph module. The behavior of the *input* to `aot_export_joint_with_descriptors` changed.
+    *   So `_dynamo_graph_capture_for_export` is the source of the change.
+    *   But `aot_export_joint_with_descriptors` is the one failing to adapt.
+    *   Let's look at the title again. `_dynamo_graph_capture_for_export + aot_export_joint_with_descriptors ...`
+    *   If I search for this issue ID (165951) in my internal knowledge (simulated), usually these issues are tagged with the component that owns the crashing code or the new feature.
+    *   Given the explicit mention of `_dynamo_graph_capture_for_export` in the title and the "TODO" comment suggesting it's the new/experimental path, it is highly likely the bug is being filed against the export/dynamo side, or highlighting the incompatibility of the export side.
+    *   However, the error is `TypeError: Interpreter.run() got an unexpected keyword argument 'scale'`. This is a signature error.
+    *   The graph module `gm` has a signature that doesn't accept `scale` as a kwarg (or at all).
+    *   `_dynamo_graph_capture_for_export` likely flattens the signature.
+    *   `aot_export_joint_with_descriptors` is called with `kwargs`.
+    *   The mismatch is the bug.
+    *   Which API is "most responsible"?
+    *   If `_dynamo_graph_capture_for_export` is supposed to produce a graph that is compatible with `aot_export_joint_with_descriptors`, then it is responsible.
+    *   If `aot_export_joint_with_descriptors` is supposed to handle any graph module, it is responsible.
+    *   Given the specific error is inside `aot_export_joint_with_descriptors`'s internal interpreter, it seems `aot_export_joint_with_descriptors` is the one with the limitation (it doesn't handle kwargs for graph modules that don't support them, or it doesn't flatten them).
+    *   But the user is calling `aot_export_joint_with_descriptors` with `kwargs`.
+    *   If I have to pick one, `aot_export_joint_with_descriptors` is the one crashing.
+    *   Let's try to find a reason to pick `_dynamo_graph_capture_for_export`.
+    *   The title starts with it.
+    *   The description starts with it.
+    *   The code uses it.
+    *   The bug is "Using X followed by Y fails".
+    *   If I say "The bug is in `aot_export_joint_with_descriptors`", it implies `aot_export_joint_with_descriptors` is broken.
+    *   If I say "The bug is in `_dynamo_graph_capture_for_export`", it implies it produces bad output.
+    *   The error is a `TypeError` in `aot_export_joint_with_descriptors`.
+    *   Let's assume the question wants the API that is the *subject* of the bug report. The user is reporting that the combination doesn't work.
+    *   However, usually, the API that is *failing* is the one identified.
+    *   Let's look at the "Trigger conditions": "using _dynamo_graph_capture_for_export followed by aot_export_joint_with_descriptors".
+    *   I will provide `aot_export_joint_with_descriptors` because it is the API that raises the exception. The bug is that it crashes when given a specific type of input (a graph module from export) with kwargs.
+    *   Wait, looking at the error again: `Interpreter.run() got an unexpected keyword argument 'scale'`.
+    *   This is inside `PropagateUnbackedSymInts`.
+    *   This is a very specific internal mechanism.
+    *   The API `aot_export_joint_with_descriptors` is the public (or internal public) face of this.
+    *   Let's check if `_dynamo_graph_capture_for_export` is a better fit.
+    *   The bug report is about the *integration*.
+    *   If I have to pick one, I'll pick the one that is crashing.
+    *   Let's try to think if there's a more specific API. `PropagateUnbackedSymInts`? No, that's too internal.
+    *   `aot_export_joint_with_descriptors` is the function called in the user code that fails.
+    *   `_dynamo_graph_capture_for_export` is the function called that produces the input.
+    *   The error is in `aot_export_joint_with_descriptors`.
+    *   I'll go with `aot_export_joint_with_descriptors`.
+
+    *   *Self-Correction*: Let's look at the title again. `_dynamo_graph_capture_for_export + aot_export_joint_with_descriptors ...`
+    *   Often, when a title is "A + B doesn't work", and A is a new feature, the bug is about A not working with B.
+    *   The user is likely trying to use `_dynamo_graph_capture_for_export`.
+    *   The bug is that it *doesn't work* with `aot_export_joint_with_descriptors`.
+    *   This implies the responsibility lies with `_dynamo_graph_capture_for_export` to be compatible, or `aot_export_joint_with_descriptors` to support it.
+    *   Given the error is a `TypeError` in `aot_export_joint_with_descriptors`, it's a failure of `aot_export_joint_with_descriptors` to handle the input.
+    *   However, if `_dynamo_graph_capture_for_export` is the "core" API being introduced/tested, it might be the answer.
+    *   Let's look at the "Task" again. "Infer which single API is most responsible for triggering the bug."
+    *   Triggering the bug.
+    *   The bug is triggered by calling `aot_export_joint_with_descriptors` with the output of `_dynamo_graph_capture_for_export`.
+    *   If I don't call `aot_export_joint_with_descriptors`, there is no bug (the graph is captured successfully).
+    *   If I don't call `_dynamo_graph_capture_for_export`, there is no bug (the model works with `aot_export_joint_with_descriptors`).
+    *   The *interaction* triggers it.
+    *   But the *crash* is in `aot_export_joint_with_descriptors`.
+    *   I will stick with `aot_export_joint_with_descriptors`.
+
+    *   *Alternative view*: The bug is that `_dynamo_graph_capture_for_export` produces a graph that loses the kwargs information (or flattens it), making it incompatible with the downstream API. If `_dynamo_graph_capture_for_export` preserved the signature, it would work. So `_dynamo_graph_capture_for_export` is responsible for the incompatibility.
+    *   However, `aot_export_joint_with_descriptors` is the one throwing the exception.
+    *   Let's look at the error message `TypeError: Interpreter.run() got an unexpected keyword argument 'scale'`.
+    *   This is a very clear failure of `aot_export_joint_with_descriptors` (or its internal interpreter) to accept the arguments passed to it.
+    *   The user passes `kwargs` to `aot_export_joint_with_descriptors`.
+    *   `aot_export_joint_with_descriptors` passes them to the interpreter.
+    *   The interpreter rejects them.
+    *   This is a bug in `aot_export_joint_with_descriptors` (or the interpreter it uses).
+    *   Therefore, `aot_export_joint_with_descriptors` is the API responsible for the failure.
+
+    *   Let's double check the prompt. "Reply with only one API name".
+    *   I will provide `aot_export_joint_with_descriptors`.
+
+    *   Wait, let me look at the imports.
+    *   `from torch._functorch.aot_autograd import aot_export_joint_with_descriptors`
+    *   `from torch._dynamo.functional_export import _dynamo_graph_capture_for_export`
+    *   The error is in `torch._functorch.aot_autograd`.
+    *   The title mentions `_dynamo_graph_capture_for_export` first.
+    *   Is it possible the bug is in `_dynamo_graph_capture_for_export`?
+    *   If `_dynamo_graph_capture_for_export` is supposed to output a graph that is "export ready" and compatible with AOT, and it outputs a graph that breaks AOT, then it's `_dynamo_graph_capture_for_export`'s fault.
+    *   But the error is a `TypeError` in the consumer.
+    *   Let's assume the question asks for the API that is *broken*.
+    *   `aot_export_joint_with_descriptors` is broken (it crashes).
+    *   `_dynamo_graph_capture_for_export` works (it returns a graph module).
+    *   So `aot_export_joint_with_descriptors` is the broken API.
+
+    *   Let's try to find a reason to pick `_dynamo_graph_capture_for_export`.
+    *   Maybe the bug is that `_dynamo_graph_capture_for_export` *should* handle kwargs differently?
+    *   The user calls `_dynamo_graph_capture_for_export(model)(*inputs, **kwargs)`.
+    *   It returns `gm`.
+    *   Then `aot_export_joint_with_descriptors(..., gm, inputs, kwargs=kwargs)`.
+    *   The issue is that `gm` doesn't accept kwargs.
+    *   So `_dynamo_graph_capture_for_export` produced a `gm` that doesn't accept kwargs.
+    *   Is that a bug in `_dynamo_graph_capture_for_export`? Or is that expected behavior (flattening)?
+    *   If flattening is expected, then `aot_export_joint_with_descriptors` should handle flattened graphs.
+    *   If `aot_export_joint_with_descriptors` is supposed to handle flattened graphs, then it's a bug in `aot_export_joint_with_descriptors` that it doesn't (and tries to pass kwargs).
+    *   If `aot_export_joint_with_descriptors` is not supposed to handle flattened graphs, then `_dynamo_graph_capture_for_export` is at fault for flattening.
+    *   Given `aot_export_joint_with_descriptors` is a general AOT export tool, it should probably handle various graph module types.
+    *   The error `Interpreter.run() got an unexpected keyword argument` suggests the interpreter is strict.
+    *   I'll stick with `aot_export_joint_with_descriptors`.
+
+    *   Let's check the "Trigger conditions" again.
+    *   "Model with keyword arguments in forward method, using _dynamo_graph_capture_for_export followed by aot_export_joint_with_descriptors"
+    *   The trigger is the *usage* of `_dynamo_graph_capture_for_export`.
+    *   If I don't use it, no bug.
+    *   If I use it, bug.
+    *   This points to `_dynamo_graph_capture_for_export`.
+    *   But the *failure* is in `aot_export_joint_with_descriptors`.
+    *   Let's look at the "Task" again. "Infer which single API is most responsible for triggering the bug."
+    *   Triggering.
+    *   The presence of `_dynamo_graph_capture_for_export` triggers the bug in `aot_export_joint_with_descriptors`.
+    *   So `_dynamo_graph_capture_for_export` is the trigger.
+    *   But `aot_export_joint_with_descriptors` is the one that has the bug (the crash).
+    *   Usually, "responsible for the bug" means "where the bug is".
+    *   The bug is the crash.
+    *   The crash is in `aot_export_joint_with_descriptors`.
+    *   I will go with `aot_export_joint_with_descriptors`.
+
+    *   Let's try to find if there is a more specific API mentioned in the stack trace that is the "core" API.
+    *   `PropagateUnbackedSymInts`? No.
+    *   `aot_export_joint_with_descriptors` is the top-level API in the stack trace that belongs to the user's call.
+    *   The user calls `aot_export_joint_with_descriptors`.
+    *   It crashes.
+    *   Therefore, `aot_export_joint_with_descriptors` is the API that is failing.
+
+    *   Final check: Is there any ambiguity?
+    *   The title mentions both.
+    *   The error is in one.
+    *   The trigger is the other.
+    *   "Responsible for triggering the bug".
+    *   If I say "The rain triggered the flood", the rain is responsible.
+    *   If I say "The bug in the code triggered the crash", the code is responsible.
+    *   Here, the usage of `_dynamo_graph_capture_for_export` triggers the crash in `aot_export_joint_with_descriptors`.
+    *   But the *bug* (the defect) is in `aot_export_joint_with_descriptors` (not handling the input).
+    *   If `aot_export_joint_with_descriptors` was correct, using `_dynamo_graph_capture_for_export` would not trigger a bug.
+    *   So `aot_export_joint_with_descriptors` is the API with the defect.
+    *   I will return `aot_export_joint_with_descriptors`.
+
+    *   Wait, looking at the title again: `_dynamo_graph_capture_for_export + aot_export_joint_with_descriptors doesn't work with kwargs`.
+    *   This phrasing suggests the *combination* is the problem.
+    *   But I must pick one.
+    *   Let's look at the error message one more time.
+    *   `TypeError: Interpreter.run() got an unexpected keyword argument 'scale'`
+    *   This is a signature mismatch.
+    *   The graph module `gm` (from `_dynamo_graph_capture_for_export`) has a signature that doesn't match what `aot_export_joint_with_descriptors` is trying to call.
+    *   If `_dynamo_graph_capture_for_export` is the "official graph_capture API" (as mentioned in the TODO), then it defines the standard.
+    *   If `aot_export_joint_with_descriptors` doesn't follow the standard, it's `aot_export_joint_with_descriptors`'s bug.
+    *   If `_dynamo_graph_capture_for_export` is not the standard yet, it might be the one that needs to adapt.
+    *   However, the error is a crash in `aot_export_joint_with_descriptors`.
+    *   I'll stick with `aot_export_joint_with_descriptors`.
+
+    *   Let's consider the possibility that the answer is `_dynamo_graph_capture_for_export`.
+    *   Why? Because the bug report is about the *export* path failing.
+    *   The user is trying to export.
+    *   The export API is `_dynamo_graph_capture_for_export`.
+    *   The fact that it fails with `aot_export_joint_with_descriptors` is a symptom of the export API producing a bad graph.
+    *   But the error is in `aot_export_joint_with_descriptors`.
+    *   Let's look at the "Task" constraints: "Prefer the API whose behavior change... best explains the observed bug."
+    *   The behavior change is the usage of `_dynamo_graph_capture_for_export`.
+    *   The observed bug is the crash.
+    *   The behavior change *causes* the crash.
+    *   So `_dynamo_graph_capture_for_export` explains the bug (why it happens now and not before).
+    *   But `aot_export_joint_with_descriptors` is the location of the bug.
+    *   Let's assume the question asks for the API that is *broken*.
+    *   If I fix `aot_export_joint_with_descriptors`, the bug goes away.
+    *   If I fix `_dynamo_graph_capture_for_export`, the bug goes away.
+    *   Which fix is more likely?
+    *   `aot_export_joint_with_descriptors` is likely a more established API. `_dynamo_graph_capture_for_export` is new (TODO comment).
+    *   Usually, new features adapt to existing APIs, or existing APIs are updated to support new features.
+    *   Given the error is a `TypeError` in the existing API, it's likely the existing API needs to be updated to support the new graph format.
+    *   So the bug is in `aot_export_joint_with_descriptors` (it lacks support).
+    *   I will return `aot_export_joint_with_descriptors`.
+
+    *   Let's try to verify with the "Trigger conditions".
+    *   "using _dynamo_graph_capture_for_export followed by aot_export_joint_with_descriptors"
+    *   If I just say `aot_export_joint_with_descriptors`, it misses the context of the trigger.
+    *   But the prompt asks for the "single core PyTorch API".
+    *   The API that is failing is `aot_export_joint_with_descriptors`.
+    *   The API that is the trigger is `_dynamo_graph_capture_for_export`.
+    *   I'll go with `aot_export_joint_with_descriptors` because it's the one crashing.
+
+    *   One more thought: The error is `Interpreter.run() got an unexpected keyword argument 'scale'`.
+    *   This is inside `PropagateUnbackedSymInts`.
+    *   This is a specific interpreter used by `aot_export_joint_with_descriptors`.
+    *   The bug is that this interpreter doesn't support kwargs.
+    *   This is a limitation of `aot_export_joint_with_descriptors`.
+    *   So `aot_export_joint_with_descriptors` is the responsible API.
+
+    *   Final decision: `aot_export_joint_with_descriptors`.aot_export_joint_with_descriptors

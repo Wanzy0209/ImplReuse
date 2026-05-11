@@ -1,0 +1,60 @@
+{
+  "title": "Flex Attention Silently Incorrect with bfloat16 and Masks",
+  "issue_id": "163588",
+  "bug_description": "# PyTorch flex_attention Numerical Instability with bfloat16 and Masks\n\n## 🐛 Describe the bug\n\n`flex_attention` produces significantly different results than `F.scaled_dot_product_attention` when using bfloat16 dtype with cross-attention masks with significant masked padding. The error grows to >3% of the output magnitude, which I believe is beyond acceptable numerical precision differences.\n\n### Key findings:\n- **Bug triggers**: When attending to ≤58% of positions with bfloat16\n- **Bug disappears**: When attending to ≥59% of positions\n- **Error magnitude**: Up to 3.4% relative error (vs 0.3% expected tolerance)\n- **Does NOT occur with float32**: Same code with float32 has <0.001% error\n- **Comparison baseline**: Physical array slicing with `F.scaled_dot_product_attention` provides ground truth\n\nThis affects production models using bfloat16 for memory efficiency, particularly in autoregressive generation scenarios where cross-attention masks are commonly used to handle variable-length conditioning.\n\n## Minimal Reproduction\n\n```python\nimport torch\nfrom torch.nn.attention.flex_attention import create_block_mask, flex_attention\nimport torch.nn.functional as F\n\nB, H, Q, D, KV = 1, 1, 1, 64, 1000\n\n# Test showing error threshold: masking <=58% causes bug, >=59% is OK\nprint(\"PyTorch flex_attention bfloat16 bug demonstration:\")\nprint(\"-\" * 50)\n\nfor mask_amount in [580, 590]:\n    mask = create_block_mask(\n        lambda b, h, q, kv: kv < mask_amount,\n        B, H, Q, KV, \"cuda\"\n    )\n\n    torch.manual_seed(0)\n    q = torch.randn(B, H, Q, D, dtype=torch.bfloat16, device=\"cuda\") * 5\n    k = torch.randn(B, H, KV, D, dtype=torch.bfloat16, device=\"cuda\") * 5\n    v = torch.randn(B, H, KV, D, dtype=torch.bfloat16, device=\"cuda\") * 5\n\n    flex_out = flex_attention(q, k, v, block_mask=mask)\n    ref_out = F.scaled_dot_product_attention(q, k[:, :, :mask_amount], v[:, :, :mask_amount])\n\n    error = (flex_out - ref_out).abs().max() / ref_out.abs().max()\n    status = \"BUG!\" if error > 0.01 else \"OK\"\n    print(f\"Mask {mask_amount}/{KV} ({mask_amount/KV:.0%}): Error {error:.1%} ({status})\")\n\nprint(\"\\nBug triggers when masking ≤58% of positions with bfloat16\")\n```\n\n### Output:\n```\nPyTorch flex_attention bfloat16 bug demonstration:\n--------------------------------------------------\nMask 580/1000 (58%): Error 3.4% (BUG!)\nMask 590/1000 (59%): Error 0.3% (OK)\n\nBug triggers when masking ≤58% of positions with bfloat16\n```\n\n## Expected behavior\n\n`flex_attention` with a mask should produce nearly identical results to `F.scaled_dot_product_attention` with physical array slicing (within normal bfloat16 precision tolerance of <1%).\n\n## Actual behavior\n\nLarge numerical divergence (>3% error) when using bfloat16 with masks that exclude more than ~42% of positions.\n\n## Versions\n\n```\nCollecting environment information...\nPyTorch version: 2.8.0+cu126\nIs debug build: False\nCUDA used to build PyTorch: 12.6\nROCM used to build PyTorch: N/A\n\nOS: Ubuntu 22.04.4 LTS (x86_64)\nGCC version: (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0\nClang version: Could not collect\nCMake version: Could not collect\nLibc version: glibc-2.35\n\nPython version: 3.11.13 (main, Jun  4 2025, 08:57:29) [GCC 11.4.0] (64-bit runtime)\nPython platform: Linux-6.5.0-1023-aws-x86_64-with-glibc2.35\nIs CUDA available: True\nCUDA runtime version: Could not collect\nCUDA_MODULE_LOADING set to: LAZY\nGPU models and configuration: GPU 0: NVIDIA A100-SXM4-80GB\nNvidia driver version: 535.183.01\ncuDNN version: Could not collect\nIs XPU available: False\nHIP runtime version: N/A\nMIOpen runtime version: N/A\nIs XNNPACK available: True\n\nCPU:\nArchitecture:                       x86_64\nCPU op-mode(s):                     32-bit, 64-bit\nAddress sizes:                      46 bits physical, 57 bits virtual\nByte Order:                         Little Endian\nCPU(s):                             24\nOn-line CPU(s) list:                0-23\nVendor ID:                          GenuineIntel\nModel name:                         Intel Xeon Processo",
+  "apis": [
+    "F.scaled_dot_product_attention",
+    "torch.randn",
+    "torch.manual_seed",
+    "numpy",
+    "ref_out.to",
+    "q.to"
+  ],
+  "best_code": "import torch\nfrom torch.nn.attention.flex_attention import create_block_mask, flex_attention\nimport torch.nn.functional as F\n\nB, H, Q, D, KV = 1, 1, 1, 64, 1000\n\n# Test showing error threshold: masking <=58% causes bug, >=59% is OK\nprint(\"PyTorch flex_attention bfloat16 bug demonstration:\")\nprint(\"-\" * 50)\n\nfor mask_amount in [580, 590]:\n    mask = create_block_mask(\n        lambda b, h, q, kv: kv < mask_amount,\n        B, H, Q, KV, \"cuda\"\n    )\n\n    torch.manual_seed(0)\n    q = torch.randn(B, H, Q, D, dtype=torch.bfloat16, device=\"cuda\") * 5\n    k = torch.randn(B, H, KV, D, dtype=torch.bfloat16, device=\"cuda\") * 5\n    v = torch.randn(B, H, KV, D, dtype=torch.bfloat16, device=\"cuda\") * 5\n\n    flex_out = flex_attention(q, k, v, block_mask=mask)\n    ref_out = F.scaled_dot_product_attention(q, k[:, :, :mask_amount], v[:, :, :mask_amount])\n\n    error = (flex_out - ref_out).abs().max() / ref_out.abs().max()\n    status = \"BUG!\" if error > 0.01 else \"OK\"\n    print(f\"Mask {mask_amount}/{KV} ({mask_amount/KV:.0%}): Error {error:.1%} ({status})\")\n\nprint(\"\\nBug triggers when masking ≤58% of positions with bfloat16\")",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/163986"
+  ],
+  "_meta": {
+    "file": "163588_issue_ori_data.json",
+    "generated_at": "2026-04-21 03:17:54",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\163588_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\163588_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-10 04:26:27",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163588_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163588_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "flex_attention produces significantly different results than F.scaled_dot_product_attention when using bfloat16 dtype with cross-attention masks with significant masked padding. The error grows to >3% of the output magnitude, which is beyond acceptable numerical precision differences.",
+  "repro_code": "import torch\nfrom torch.nn.attention.flex_attention import create_block_mask, flex_attention\nimport torch.nn.functional as F\n\nB, H, Q, D, KV = 1, 1, 1, 64, 1000\n\n# Test showing error threshold: masking <=58% causes bug, >=59% is OK\nprint(\"PyTorch flex_attention bfloat16 bug demonstration:\")\nprint(\"-\" * 50)\n\nfor mask_amount in [580, 590]:\n    mask = create_block_mask(\n        lambda b, h, q, kv: kv < mask_amount,\n        B, H, Q, KV, \"cuda\"\n    )\n\n    torch.manual_seed(0)\n    q = torch.randn(B, H, Q, D, dtype=torch.bfloat16, device=\"cuda\") * 5\n    k = torch.randn(B, H, KV, D, dtype=torch.bfloat16, device=\"cuda\") * 5\n    v = torch.randn(B, H, KV, D, dtype=torch.bfloat16, device=\"cuda\") * 5\n\n    flex_out = flex_attention(q, k, v, block_mask=mask)\n    ref_out = F.scaled_dot_product_attention(q, k[:, :, :mask_amount], v[:, :, :mask_amount])\n\n    error = (flex_out - ref_out).abs().max() / ref_out.abs().max()\n    status = \"BUG!\" if error > 0.01 else \"OK\"\n    print(f\"Mask {mask_amount}/{KV} ({mask_amount/KV:.0%}): Error {error:.1%} ({status})\")\n\nprint(\"\\nBug triggers when masking ≤58% of positions with bfloat16\")",
+  "repro_output": "Flex Attention Silently Incorrect with bfloat16 and Masks",
+  "affected_api": "flex_attention, F.scaled_dot_product_attention",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "bfloat16",
+    "input_shape": "B=1, H=1, Q=1, D=64, KV=1000",
+    "other_conditions": "Attending to ≤58% of positions with bfloat16; cross-attention masks with significant masked padding"
+  },
+  "environment": {
+    "pytorch_version": "2.8.0+cu126",
+    "python_version": "3.11.13",
+    "os": "Ubuntu 22.04.4 LTS (x86_64)",
+    "hardware": "NVIDIA A100-SXM4-80GB"
+  },
+  "labels": [
+    "bug",
+    "numerical stability",
+    "bfloat16",
+    "attention"
+  ],
+  "core_api_identification": {
+    "core_api": "1.  **Analyze the Bug Report:**",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163588_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163588_issue_ori_data.output.events.json"
+  }
+}

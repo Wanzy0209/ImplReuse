@@ -1,0 +1,63 @@
+1.  **Analyze the Request:**
+    *   Input: A bug report about a failing test (`test_autocast_custom_enabled`) on ROCm.
+    *   Error: `torch.OutOfMemoryError: HIP out of memory` during the backward pass.
+    *   Task: Identify the *single core PyTorch API* most responsible for triggering the bug.
+    *   Constraints: Only the API name, no extra text, no JSON/Markdown.
+
+2.  **Analyze the Bug Report:**
+    *   **Title:** `DISABLED test_autocast_custom_enabled`
+    *   **Context:** The test is failing in CI on ROCm. It's flaky (sometimes passes, sometimes fails with OOM).
+    *   **Traceback:**
+        *   `loss.backward()` -> `torch.autograd.backward` -> `_engine_run_backward` -> `Variable._execution_engine.run_backward` -> `autograd.function.apply` -> `autocast_mode.decorate_bwd` -> `backward` (custom function) -> `grad.mm(b.t())`.
+    *   **Error Message:** `torch.OutOfMemoryError: HIP out of memory. Tried to allocate 76.00 MiB...`
+    *   **Test Name:** `test_autocast_custom_enabled`. This strongly suggests the test is about the `autocast` feature.
+    *   **Code Snippet in Traceback:** `torch/amp/autocast_mode.py`, line 573, in `decorate_bwd`.
+
+3.  **Identify the Core API:**
+    *   The test is explicitly named `test_autocast_custom_enabled`.
+    *   The traceback goes through `torch.amp.autocast_mode`.
+    *   The error happens during the backward pass inside an autocast context (implied by the test name and the traceback path through `decorate_bwd`).
+    *   The specific error is an OOM, but the *feature* being tested and the context in which the error occurs is the Autocast mechanism.
+    *   Is it `torch.autograd.backward`? No, that's just the trigger.
+    *   Is it `torch.mm`? That's the operation failing, but the test is about autocast wrapping custom functions.
+    *   Is it `torch.amp.autocast`? This is the API being tested. The test verifies that custom functions work correctly with autocast enabled. The failure (OOM) is happening *within* the scope of this API's functionality (specifically the backward pass decoration).
+
+4.  **Refine the API Name:**
+    *   The traceback shows `torch/amp/autocast_mode.py`.
+    *   The user-facing API is `torch.autocast` (or `torch.cuda.amp.autocast` in older versions, but `torch.amp.autocast` is the modern unified one).
+    *   Looking at the traceback: `File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/amp/autocast_mode.py", line 573, in decorate_bwd`.
+    *   The test name is `test_autocast_custom_enabled`.
+    *   The core API responsible for the context being tested is `torch.amp.autocast`.
+
+5.  **Consider Alternatives:**
+    *   `torch.autograd.Function`: The test involves a custom autograd function. However, the bug is about the interaction with autocast. The "core API" usually refers to the high-level feature being tested or the one causing the specific behavior change. Here, the test is specifically for `autocast`.
+    *   `torch.mm`: This is the operation causing the allocation. But `mm` is standard. The bug is specific to the `autocast` test.
+    *   `torch.cuda.memory`: This is where the error is raised, but it's a consequence, not the API being tested.
+
+6.  **Final Decision:**
+    The test is `test_autocast_custom_enabled`. The failure occurs inside the autocast logic (`decorate_bwd`). The API being exercised is `torch.amp.autocast`.
+
+    Let's check the exact API name convention. In PyTorch, it is `torch.amp.autocast`. Sometimes referred to as `torch.cuda.amp.autocast` for CUDA, but the traceback shows `torch/amp/autocast_mode.py`.
+
+    The prompt asks for the "single core PyTorch API".
+    The most specific and relevant API is `torch.amp.autocast`.
+
+    Let's double check if `torch.autocast` is the alias. Yes, `torch.autocast` is the top-level alias for `torch.amp.autocast`.
+
+    Is there a more specific one? The error is in `decorate_bwd`. This is part of the `autocast` implementation for custom functions.
+
+    Let's look at the traceback again.
+    `File "/opt/conda/envs/py_3.12/lib/python3.12/site-packages/torch/amp/autocast_mode.py", line 573, in decorate_bwd`
+
+    The test is verifying `autocast` behavior.
+    Therefore, `torch.amp.autocast` is the correct answer.
+
+    Wait, is it possible the API is `torch.autograd.Function`? The test is about *custom* functions with autocast. But the "autocast" part is the modifier causing the specific execution path (the decoration of the backward pass). Without autocast, the backward pass would run differently. The test is explicitly `test_autocast_custom_enabled`.
+
+    I will go with `torch.amp.autocast`.
+
+    Another possibility: `torch.autograd.backward`. But that's generic. The bug is specific to the autocast context.
+
+    Let's verify the exact string. The traceback path is `torch/amp/autocast_mode.py`. The class/function is likely `autocast`.
+
+    Result: `torch.amp.autocast`torch.amp.autocast

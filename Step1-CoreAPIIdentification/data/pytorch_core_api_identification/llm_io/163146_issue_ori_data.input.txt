@@ -1,0 +1,93 @@
+Bug Report:
+Title: [export] Data dependent error on slices in autograd::applySlicing
+Issue ID: 163146
+Original bug description: ### 🐛 Describe the bug
+
+export onnx model error, the error somehow is related with dynamic slice and input data.
+error traceback here
+```shell
+[torch.onnx] Obtain model graph for `Mlp([...]` with `torch.export.export(..., strict=False)`...
+[torch.onnx] Obtain model graph for `Mlp([...]` with `torch.export.export(..., strict=False)`... ❌
+[torch.onnx] Obtain model graph for `Mlp([...]` with `torch.export.export(..., strict=True)`...
+[torch.onnx] Obtain model graph for `Mlp([...]` with `torch.export.export(..., strict=True)`... ❌
+[torch.onnx] Obtain model graph for `Mlp([...]` with `torch.export draft_export`...
+W0917 11:24:08.128222 31595 site-packages/torch/fx/experimental/symbolic_shapes.py:7274] propagate_real_tensors evaluate_expr(u1) -> 200
+W0917 11:24:08.313687 31595 site-packages/torch/export/_draft_export.py:500] 
+W0917 11:24:08.313687 31595 site-packages/torch/export/_draft_export.py:500] ################################################################################################### 
+W0917 11:24:08.313687 31595 site-packages/torch/export/_draft_export.py:500] WARNING: 1 issue(s) found during export, and it was not able to soundly produce a graph.
+W0917 11:24:08.313687 31595 site-packages/torch/export/_draft_export.py:500] To view the report of failures in an html page, please run the command:
+W0917 11:24:08.313687 31595 site-packages/torch/export/_draft_export.py:500]     `tlparse /var/folders/ld/qwk1tvt50nj_xnz08ntyqdlw0000gp/T/export/dedicated_log_torch_trace_3b7s6392.log --export`
+W0917 11:24:08.313687 31595 site-packages/torch/export/_draft_export.py:500] Or, you can view the errors in python by inspecting `print(ep._report)`.
+W0917 11:24:08.313687 31595 site-packages/torch/export/_draft_export.py:500] #################################################################################################
+[torch.onnx] Draft Export report:
+
+###################################################################################################
+WARNING: 1 issue(s) found during export, and it was not able to soundly produce a graph.
+Please follow the instructions to fix the errors.
+###################################################################################################
+
+1. Data dependent error.
+    When exporting, we were unable to evaluate the value of `u1`.
+    This was encountered 1 times.
+    This occurred at the following user stacktrace: 
+        File /miniforge3/envs/torch/lib/python3.9/site-packages/torch/nn/modules/module.py, lineno 1773, in _wrapped_call_impl
+        File /miniforge3/envs/torch/lib/python3.9/site-packages/torch/nn/modules/module.py, lineno 1784, in _call_impl
+            selected_item_embedding = item_embedding[:, :max_item_num, :]
+        
+        Locals:
+            item_embedding: ['Tensor(shape: torch.Size([s10, s64, 64]), stride: (64*s64, 64, 1), storage_offset: 0)']
+            max_item_num: ['Tensor(shape: torch.Size([]), stride: (), storage_offset: 0)']
+
+        Symbols:
+           s10: L['item_embedding'].size()[0]
+           s64: L['item_embedding'].size()[1]
+
+    And the following framework stacktrace: 
+        File /miniforge3/envs/torch/lib/python3.9/site-packages/torch/_ops.py, lineno 1243, in __call__
+            return self._op(*args, **kwargs)
+
+    As a result, it was specialized to a constant (e.g. `200` in the 1st occurrence), and asserts were inserted into the graph.
+
+    Please add `torch._check(...)` to the original code to assert this data-dependent assumption.
+    Please refer to https://docs.google.com/document/d/1kZ_BbB3JnoLbUZleDT6635dHs88ZVYId8jT-yTFgf3A/edit#heading=h.boi2xurpqa0o for more details.
+```
+
+code here
+```python
+import torch
+import torch.nn as nn
+
+
+def sequence_mask(lengths, max_len=None):
+    """
+    Creates a boolean mask for sequences based on their lengths.
+
+    Args:
+        lengths (torch.Tensor): A 1D tensor of shape (batch_size,)
+                                containing the lengths of each sequence.
+        max_len (int, optional): The maxi
+Structured error description: export onnx model error, the error somehow is related with dynamic slice and input data. Data dependent error encountered when exporting, unable to evaluate the value of `u1`. The error occurred at `selected_item_embedding = item_embedding[:, :max_item_num, :]`.
+Minimal reproducible example: import torch
+import torch.nn as nn
+
+
+def sequence_mask(lengths, max_len=None):
+    """
+    Creates a boolean mask for sequences based on their lengths.
+
+    Args:
+        lengths (torch.Tensor): A 1D tensor of shape (batch_size,)
+                                containing the lengths of each sequence.
+        max_len (int, optional): The maxi
+Trigger conditions: {"backend": "", "dtype": "", "input_shape": "item_embedding: torch.Size([s10, s64, 64]), max_item_num: torch.Size([])", "other_conditions": "ONNX export with dynamic slicing"}
+Environment: {"pytorch_version": "", "python_version": "3.9", "os": "macOS", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

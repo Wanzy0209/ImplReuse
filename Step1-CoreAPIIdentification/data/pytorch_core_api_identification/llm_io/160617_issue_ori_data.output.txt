@@ -1,0 +1,103 @@
+The user wants to identify the single core PyTorch API responsible for a bug based on a provided bug report.
+
+**Bug Report Analysis:**
+*   **Title:** [inductor][cpu] GPT2ForSequenceClassification AMP max autotune accuracy failure in 2025-08-06 nightly release
+*   **Issue:** Accuracy failure (RMSE too high) when running GPT2ForSequenceClassification on CPU with AMP (Automatic Mixed Precision) and `inductor_max_autotune`.
+*   **Bad Commit:** `b7860c7863df9139bceabf5b0c186e6e4287aa4c`
+*   **Good Commit:** `9222552572890fd7ff1d75884cc6a99a55ab90bc`
+*   **Error Message:** `RMSE (res-fp64): 0.00602, (ref-fp64): 0.00100 ... Accuracy failed for key name logits`
+*   **Context:**
+    *   Backend: CPU
+    *   Mode: Inference, AMP (bfloat16), Max Autotune
+    *   Model: HuggingFace GPT2ForSequenceClassification
+    *   Logs show `AUTOTUNE linear_unary... cpp_CppMicroGemmAMX_...` being selected.
+
+**Key Clues:**
+1.  **Inductor & Max Autotune:** The bug is specific to the `torch.compile` backend (Inductor) with the `max_autotune` mode.
+2.  **CPU & AMX:** The logs mention `cpp_CppMicroGemmAMX`. This suggests the bug is related to the AMX (Advanced Matrix Extensions) kernel selection or execution on CPU.
+3.  **Accuracy Failure:** The selected kernel (likely the AMX one) produces incorrect numerical results compared to the reference.
+4.  **Commit Range:** The bad commit likely introduced a change in how these kernels are selected, compiled, or executed, or how the autotuning process ranks them.
+
+**Inferring the API:**
+The bug is about *compilation* and *kernel selection* within the Inductor backend, specifically triggered by the `max_autotune` mode. The user asks for the "single core PyTorch API".
+
+*   Is it `torch.compile`? Yes, that's the entry point.
+*   Is it `torch.amp`? The bug happens in AMP mode, but the root cause is likely the kernel selection (AMX) which is an Inductor backend detail.
+*   Is it a specific backend function? The logs show `AUTOTUNE linear_unary`.
+
+However, usually, when asking for the "API" in these contexts, it refers to the high-level user-facing API that triggers the behavior, or the specific internal API that changed if the user context implies deep internals. Given the constraints ("single core PyTorch API"), `torch.compile` is the most standard answer for Inductor-related bugs. The bug is a regression in the compiler's output.
+
+Let's look closer at the "bad commit". While I can't browse the web to see the exact diff of `b7860c7863df9139bceabf5b0c186e6e4287aa4c`, the title and description strongly point to the compilation process. The "max autotune" mode is a specific configuration of `torch.compile`.
+
+The bug is an *accuracy failure* in *inference* with *AMP* and *max_autotune*. This implies the compiler chose a kernel (AMX) that is numerically unstable or incorrect for the specific operation (likely a matrix multiplication or linear layer) in bfloat16.
+
+The API that enables this behavior is `torch.compile`.
+
+Let's consider if there's a more specific API. `torch.amp.autocast`? The bug happens *inside* the autocast context, but the failure is in the generated code. The trigger is the combination of `torch.compile` and the `mode="max_autotune"` argument.
+
+If I have to pick the *single* core API, `torch.compile` is the overarching mechanism. Without `torch.compile`, Inductor and autotuning don't happen.
+
+Let's double check if there's a specific "autotune" API. `torch._inductor.config` is internal. The user-facing API is `torch.compile`.
+
+Is it possible the API is `torch.nn.Linear`? The logs show `linear_unary`. But the bug isn't in the definition of Linear, it's in how it's compiled.
+
+Is it `torch.bfloat16`? It's a dtype, not really an API function in the sense of a call causing the bug, though it's a parameter.
+
+The most distinct API mentioned in the title and description that controls the behavior is `torch.compile` (specifically with the `max_autotune` setting).
+
+Let's verify if there's any other candidate.
+The error is `Accuracy failed for key name logits`.
+The logs show `AUTOTUNE linear_unary`.
+The backend is `inductor`.
+
+The bug is a regression in the compiler. The API is `torch.compile`.
+
+Wait, looking at the prompt: "Infer which single API is most responsible for triggering the bug."
+The bug is triggered by running the script which uses `torch.compile`.
+The specific mode is `max_autotune`.
+
+Could it be `torch.amp.autocast`?
+The title says "AMP max autotune accuracy failure".
+If I remove AMP, does it fail? Unknown.
+If I remove max_autotune, it works (implied by "max autotune accuracy failure").
+If I remove `torch.compile`, it works (implied by "inductor" failure).
+
+The core functionality that is failing is the compilation/autotuning mechanism provided by `torch.compile`.
+
+Let's consider the specific commit hash `b7860c7863df9139bceabf5b0c186e6e4287aa4c`. This looks like a real PyTorch commit hash. In many similar bug reports, the "API" is the high-level function being used. Here, the user is running a benchmark script that compiles a model.
+
+The most accurate answer is `torch.compile`.
+
+Let's check if there is a more specific API related to the error message.
+The error message comes from `torch._dynamo.utils.py`.
+The logs mention `AUTOTUNE`.
+
+However, `torch.compile` is the standard answer for Inductor bugs.
+
+Let's try to find if there is a specific API for the AMX backend or autotuning that is public. There isn't really a public API for "select AMX kernel". It's an internal detail of `torch.compile`.
+
+Therefore, `torch.compile` is the correct answer.
+
+One more check: Is it `torch.nn.Module`? No.
+Is it `torch.no_grad`? No.
+
+The bug is about the *compiler* behavior. The API is `torch.compile`.
+
+Final check of the prompt constraints: "Reply with only one API name, or None."
+
+I will provide `torch.compile`.
+
+Wait, looking at the "Trigger conditions": `{"backend": "CPU", "dtype": "torch.bfloat16", ... "other_conditions": "AMP mode, max autotune, static mode, inference, huggingface GPT2ForSequenceClassification model"}`.
+
+The "max autotune" is a mode of `torch.compile`.
+The "AMP mode" is `torch.amp.autocast`.
+
+Which one is "most responsible"?
+The error is an accuracy failure in the *autotuned* kernels. The autotuning is part of `torch.compile`. The AMP just sets the dtype. The compiler chooses the kernel based on the dtype. The failure is the kernel choice/execution.
+So `torch.compile` is the primary suspect.
+
+If I had to be extremely specific, maybe `torch._inductor.compile`? But that's internal. The public API is `torch.compile`.
+
+Let's assume the question asks for the public API.
+
+Answer: `torch.compile`torch.compile

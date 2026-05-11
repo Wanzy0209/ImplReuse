@@ -1,0 +1,105 @@
+Bug Report:
+Title: [Fuzzer][Eager/Compile Divergence] IncompatibleTypeErrorImpl('invalid operands of type pointer<fp16> and triton.language.float64')
+Issue ID: 164157
+Original bug description: ### 🐛 Describe the bug
+
+```
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+    t0 = arg0 # size=(47,), stride=(1,), dtype=int64, device=cuda
+    t1 = torch.tanh(t0) # size=(47,), stride=(1,), dtype=int64, device=cuda
+    t2 = arg1 # size=(), stride=(), dtype=int64, device=cuda
+    t3 = arg2 # size=(), stride=(), dtype=int64, device=cuda
+    t4 = t2 * t3 # size=(), stride=(), dtype=int64, device=cuda
+    t5 = t1.clone(); t5.fill_(t4.item()) # size=(47,), stride=(1,), dtype=int64, device=cuda
+    t6 = arg3 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t7 = arg4 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t8 = arg5 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t9 = torch.cat([t6, t6, t7, t8], dim=2) # size=(256, 88, 4), stride=(352, 4, 1), dtype=float16, device=cuda
+    t10 = t9.std(dim=2) # size=(256, 88), stride=(256, 1), dtype=float16, device=cuda
+    t11 = torch.nn.functional.embedding(torch.clamp(t5, 0, t10.size(0) - 1).to(torch.long), t10) # size=(47, 88), stride=(88, 1), dtype=float16, device=cuda
+    output = t11 + sentinel  # output tensor with sentinel for gradient flow
+    return output
+
+arg0 = torch.randint(0, 1000, [47], dtype=torch.int64, device='cuda') # size=(47,), stride=(1,), dtype=int64, device=cuda
+arg1 = torch.randint(0, 1000, [], dtype=torch.int64, device='cuda') # size=(), stride=(), dtype=int64, device=cuda
+arg2 = torch.randint(0, 1000, [], dtype=torch.int64, device='cuda') # size=(), stride=(), dtype=int64, device=cuda
+arg3 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True) # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+arg4 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True) # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+arg5 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True) # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+sentinel = torch.tensor(0.0, dtype=torch.float16, device='cuda', requires_grad=True) # Sentinel for gradient flow
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+```
+
+```
+   Eager Success! ✅                                                                                       
+   E0929 05:02:33.788000 529079 torch/_inductor/runtime/triton_heuristics.py:791] [0/0] Triton compilation failed: triton_poi_fused_add_embedding_std_2
+   E0929 05:02:33.788000 529079 torch/_inductor/runtime/triton_heuristics.py:791] [0/0] def triton_poi_fused_add_embedding_std_2(in_out_ptr0, in_ptr0, in_ptr1, ks0, ks1, ks2, xnumel, XBLOCK : tl.constexpr):
+   E0929 05:02:33.788000 529079 torch/_inductor/runtime/triton_heuristics.py:791] [0/0]     xoffset = tl.program_id(0) * XBLOCK
+   E0929 05:02:33.788000 529079 torch/_inductor/runtime/triton_heuristics.py:791] [0/0]     xindex = xoffset + tl.arange(0, XBLOCK)[:]
+   E0929 05:02:33.788000 529079 torch/_inductor/runtime/triton_heuristics.py:791] [0/0]     xmask = xindex < xnumel
+   E0929 05:02:33.788000 529079 torch/_inductor/runtime/triton_heuristics.py:791] [0/0]     x0 = (xindex % ks2)
+   E0929 05:02:33.788000 529079 torch/_inductor/runtime/triton_heuristics.py:791] [0/0]     x2 = xindex    
+   E0929 05:02:33.788000 529079 torch/_inductor/runtime/triton_heuristics.py:791] [0/0]     tl.device_assert(((((tl.full([], 0.0, tl.float64)) * ((tl.full([], 0.0, tl.float64)) >= (ks1)) + (ks1) * ((ks1) > (tl.full([], 0.0, tl.float64)))))
+Structured error description: Eager execution succeeds but torch.compile fails with Triton compilation error: 'Triton compilation failed: triton_poi_fused_add_embedding_std_2' with type incompatibility between pointer<fp16> and triton.language.float64
+Minimal reproducible example: import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+    t0 = arg0 # size=(47,), stride=(1,), dtype=int64, device=cuda
+    t1 = torch.tanh(t0) # size=(47,), stride=(1,), dtype=int64, device=cuda
+    t2 = arg1 # size=(), stride=(), dtype=int64, device=cuda
+    t3 = arg2 # size=(), stride=(), dtype=int64, device=cuda
+    t4 = t2 * t3 # size=(), stride=(), dtype=int64, device=cuda
+    t5 = t1.clone(); t5.fill_(t4.item()) # size=(47,), stride=(1,), dtype=int64, device=cuda
+    t6 = arg3 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t7 = arg4 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t8 = arg5 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t9 = torch.cat([t6, t6, t7, t8], dim=2) # size=(256, 88, 4), stride=(352, 4, 1), dtype=float16, device=cuda
+    t10 = t9.std(dim=2) # size=(256, 88), stride=(256, 1), dtype=float16, device=cuda
+    t11 = torch.nn.functional.embedding(torch.clamp(t5, 0, t10.size(0) - 1).to(torch.long), t10) # size=(47, 88), stride=(88, 1), dtype=float16, device=cuda
+    output = t11 + sentinel  # output tensor with sentinel for gradient flow
+    return output
+
+arg0 = torch.randint(0, 1000, [47], dtype=torch.int64, device='cuda') # size=(47,), stride=(1,), dtype=int64, device=cuda
+arg1 = torch.randint(0, 1000, [], dtype=torch.int64, device='cuda') # size=(), stride=(), dtype=int64, device=cuda
+arg2 = torch.randint(0, 1000, [], dtype=torch.int64, device='cuda') # size=(), stride=(), dtype=int64, device=cuda
+arg3 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True) # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+arg4 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True) # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+arg5 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True) # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+sentinel = torch.tensor(0.0, dtype=torch.float16, device='cuda', requires_grad=True) # Sentinel for gradient flow
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+Trigger conditions: {"backend": "CUDA", "dtype": "int64, float16", "input_shape": "(47,), (), (256, 88, 1), (256, 88, 4), (256, 88), (47, 88)", "other_conditions": "torch.compile with fullgraph=True and dynamic=True, torch._inductor.config.emulate_precision_casts = True"}
+Environment: {"pytorch_version": "unknown", "python_version": "unknown", "os": "unknown", "hardware": "unknown"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

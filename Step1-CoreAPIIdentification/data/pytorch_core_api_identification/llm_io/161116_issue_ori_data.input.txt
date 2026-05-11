@@ -1,0 +1,110 @@
+Bug Report:
+Title: NCCL Segfault when initializing a process group on an NVL72
+Issue ID: 161116
+Original bug description: ### 🐛 Describe the bug
+
+We are trying to run distributed training with Torchtitan on a GB200 NVL72 cluster but using more than 10 trays (40 GPUs) fails with a NCCL segmentation fault. Using 10 and less trays works fine.
+
+We boiled it down to the creation of the process group, so even this simple example crashes when we increase the number of trays to 11:
+```python
+import torch
+import torch.distributed as dist
+import os
+def main():
+    gpu_id = int(os.environ["LOCAL_RANK"])
+    
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+    dist.init_process_group(backend='nccl',
+                            device_id=gpu_id,
+                            )
+    dist.barrier()
+    
+if __name__ == "__main__":
+    main()
+```
+Error log is enormous but this is the relevant part:
+```
+#1436 0x0000400079529e3c in ncclTopoSearchTryGpu (system=<optimized out>, graph=<optimized out>, saveGraph=<optimized out>, step=<optimized out>, backToNet=<optimized out>, backToFirstRank=<optimized out>, forcedOrder=<optimized out>, time=0x4000fc2e9d74, type=-1, index=-1, g=0) at graph/search.cc:343
+#1437 0x0000400079528a80 in ncclTopoSearchRec (system=system@entry=0x4000fc520010, graph=graph@entry=0x4000fc2e9d78, saveGraph=saveGraph@entry=0x8fa53f8, time=time@entry=0x4000fc2e9d74) at graph/search.cc:725
+#1438 0x000040007952dde4 in ncclTopoCompute (system=0x4000fc520010, graph=graph@entry=0x8fa53f8) at graph/search.cc:1011
+#1439 0x0000400079504524 in initTransportsRank (timers=<optimized out>, parent=<optimized out>, comm=<optimized out>) at init.cc:860
+#1440 ncclCommInitRankFunc (job_=<optimized out>) at init.cc:1449
+#1441 0x00004000794f3258 in ncclAsyncJobMain (arg=0x90a77d0) at group.cc:71
+#1442 0x000040000026595c in start_thread (arg=0x400000044f00) at ./nptl/pthread_create.c:447
+#1443 0x00004000002cba4c in thread_start () at ../sysdeps/unix/sysv/linux/aarch64/clone3.S:76
+```
+We run the script using this SLURM job file:
+```
+#!/bin/bash
+#SBATCH --ntasks=13
+#SBATCH --nodes=13
+#SBATCH --gpus-per-task=4
+
+nodes=( $( scontrol show hostnames $SLURM_JOB_NODELIST ) )
+nodes_array=($nodes)
+head_node=${nodes_array[0]}
+head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address)
+
+echo Node IP: $head_node_ip
+export LOGLEVEL=INFO
+
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT,GRAPH,ENV, COLL
+export TORCH_DISTRIBUTED_DEBUG=INFO
+
+export LD_LIBRARY_PATH=/opt/amazon/efa/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/usr/local/lib/:$LD_LIBRARY_PATH
+export CUDA_LAUNCH_BLOCKING=0
+
+export TORCH_DIST_INIT_BARRIER=1
+export TORCH_CPP_LOG_LEVEL=INFO
+
+export NCCL_MIN_P2P_NCHANNELS=32
+export NCCL_MIN_CTAS=64
+export NCCL_MIN_NCHANNELS=32
+export NCCL_CUMEM_ENABLE=1
+export NCCL_NVLS_ENABLE=0
+
+srun torchrun --nnodes 13 --nproc_per_node 4 --rdzv_id 101 --rdzv_backend c10d --rdzv_endpoint "$head_node_ip:29001" ./simple_barrier.py
+```
+**Steps taken so far:**
+**Recompile NCCL with debug symbols:**
+After consulting with the NCCL team we recompiled NCCL with debug symbols which shows the parts which are optimized out in the error above:
+```
+Thread 6 "python3" received signal SIGSEGV, Segmentation fault.
+[Switching to Thread 0x4000e3e9a8c0 (LWP 1496391)]
+0x00004000001272c0 in ncclTopoSearchRecGpu (system=0x0, graph=0x0, saveGraph=0x0, gpu=0x0, step=0, backToNet=0, backToFirstRank=0, forcedOrder=0, time=0x4000e3e7540c) at graph/search.cc:545
+545	ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, struct ncclTopoNode* gpu, int step, int backToNet, int backToFirstRank, int forcedOrder, int *time) {
+```
+According to @sjeaugey from the NCCL team: "the 0x0 addresses (and all threads being in ncclTopoSearchRecGpu) are likely because of the stack overflow which corrupted the stack of all threads." which points to that we're hitting the stack limit. We already verified that "ulimit -s" is set to unlimited by running it right before python is executed.
+
+**NCCL collective in C++ with memory pressure
+Structured error description: We are trying to run distributed training with Torchtitan on a GB200 NVL72 cluster but using more than 10 trays (40 GPUs) fails with a NCCL segmentation fault. Using 10 and less trays works fine. We boiled it down to the creation of the process group, so even this simple example crashes when we increase the number of trays to 11. According to @sjeaugey from the NCCL team: "the 0x0 addresses (and all threads being in ncclTopoSearchRecGpu) are likely because of the stack overflow which corrupted the stack of all threads." which points to that we're hitting the stack limit. We already verified that "ulimit -s" is set to unlimited by running it right before python is executed.
+Minimal reproducible example: import torch
+import torch.distributed as dist
+import os
+def main():
+    gpu_id = int(os.environ["LOCAL_RANK"])
+    
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+    dist.init_process_group(backend='nccl',
+                            device_id=gpu_id,
+                            )
+    dist.barrier()
+    
+if __name__ == "__main__":
+    main()
+Trigger conditions: {"backend": "nccl", "dtype": "unknown", "input_shape": "unknown", "other_conditions": "Running on GB200 NVL72 cluster with more than 10 trays (40 GPUs). Using 13 nodes with 4 GPUs per task. NCCL_NVLS_ENABLE=0, NCCL_MIN_P2P_NCHANNELS=32, NCCL_MIN_CTAS=64, NCCL_MIN_NCHANNELS=32, NCCL_CUMEM_ENABLE=1"}
+Environment: {"pytorch_version": "unknown", "python_version": "unknown", "os": "Linux (aarch64)", "hardware": "GB200 NVL72 cluster with 13 nodes, 4 GPUs per task"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

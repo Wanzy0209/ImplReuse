@@ -1,0 +1,57 @@
+{
+  "title": "Partitioning fx graph according instruction gives errors",
+  "issue_id": "166034",
+  "bug_description": "### 🐛 Describe the bug\n\nHi, I am trying to partition an fx graph according to examples given here: https://github.com/pytorch/pytorch/blob/51319ca090bc7458168a8451c04ca7e021a72693/torch/fx/passes/split_modulepy#L55. But the example code gives error. The resulting graph module does not have the same input as the original module so it cannot run.\n\n\n\nMy code:\n\n```py\nimport torch\nfrom torch.fx.graph_module import GraphModule\nfrom torch.fx.node import Node\nfrom torch.fx.passes.split_module import split_module\n\nclass MyModule(torch.nn.Module):\n    def __init__(self) -> None:\n        super().__init__()\n        self.param = torch.nn.Parameter(torch.rand(3, 4))\n        self.linear = torch.nn.Linear(4, 5)\n\n    def forward(self, x, y):\n        z = self.linear(x + self.param).clamp(min=0.0, max=1.0)\n        w = self.linear(y).clamp(min=0.0, max=1.0)\n        return z + w\n\n# symbolically trace model\nmy_module = MyModule()\ninputs = (torch.rand(3, 4), torch.rand(3, 4))\nmy_module_traced = torch.export.export(my_module, inputs)\n\n# random mod partitioning\npartition_counter = 0\nNPARTITIONS = 3\n\ndef mod_partition(node: Node):\n    global partition_counter\n    partition = partition_counter % NPARTITIONS\n    partition_counter = (partition_counter + 1) % NPARTITIONS\n    return partition\n\n# split module in module with submodules\nmodule_with_submodules = split_module(\n    my_module_traced, my_module, mod_partition\n)\nprint(module_with_submodules)\nmodule_with_submodules(*inputs)\n```\n\nOutput:\n```\nGraphModule(\n  (submod_0): GraphModule()\n  (submod_1): GraphModule()\n  (submod_2): GraphModule()\n)\n\n\n\ndef forward(self, p_param, p_linear_weight, p_linear_bias, x, y):\n    submod_0 = self.submod_0(x, p_param, y, p_linear_weight, p_linear_bias);  x = p_param = y = None\n    getitem = submod_0[0]\n    getitem_1 = submod_0[1];  submod_0 = None\n    submod_1 = self.submod_1(getitem, p_linear_weight, p_linear_bias, getitem_1);  getitem = p_linear_weight = p_linear_bias = getitem_1 = None\n    getitem_2 = submod_1[0]\n    getitem_3 = submod_1[1];  submod_1 = None\n    submod_2 = self.submod_2(getitem_2, getitem_3);  getitem_2 = getitem_3 = None\n    return (submod_2,)\n    \n# To see more debug info, please use `graph_module.print_readable()`\nTraceback (most recent call last):\n  File \"/home/other/partitioning_exp.py\", line 37, in <module>\n    module_with_submodules(*inputs)\n  File \"/usr/local/lib/python3.12/dist-packages/torch/fx/graph_module.py\", line 845, in call_wrapped\n    return self._wrapped_call(self, *args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/dist-packages/torch/fx/graph_module.py\", line 415, in __call__\n    raise e\n  File \"/usr/local/lib/python3.12/dist-packages/torch/fx/graph_module.py\", line 402, in __call__\n    return super(self.cls, obj).__call__(*args, **kwargs)  # type: ignore[misc]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py\", line 1780, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py\", line 1791, in _call_impl\n    return forward_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: forward() missing 3 required positional arguments: 'p_linear_bias', 'x', and 'y'\n```\n\n### Versions\n\nPyTorch version: 2.10.0.dev20251018+cu130\nIs debug build: False\nCUDA used to build PyTorch: 13.0\nROCM used to build PyTorch: N/A\n\nOS: Ubuntu 24.04.2 LTS (x86_64)\nGCC version: (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0\nClang version: Could not collect\nCMake version: version 3.24.0\nLibc version: glibc-2.39\n\nPython version: 3.12.3 (main, Jun 18 2025, 17:59:45) [GCC 13.3.0] (64-bit runtime)\nPython platform: Linux-5.15.0-70-generic-x86_64-with-glibc2.39\nIs CUDA available: True\nCUDA runtime version: 13.0.48\nCUDA_MODULE_LOADING set to: \nGPU models and configuration: GPU 0: NVIDIA A100 80GB PCIe\nNv",
+  "apis": [
+    "torch.nn.Parameter",
+    "self.submod_1",
+    "numpy",
+    "self._wrapped_call",
+    "self.linear",
+    "self.submod_2"
+  ],
+  "best_code": "import torch\nfrom torch.fx.graph_module import GraphModule\nfrom torch.fx.node import Node\nfrom torch.fx.passes.split_module import split_module\n\nclass MyModule(torch.nn.Module):\n    def __init__(self) -> None:\n        super().__init__()\n        self.param = torch.nn.Parameter(torch.rand(3, 4))\n        self.linear = torch.nn.Linear(4, 5)\n\n    def forward(self, x, y):\n        z = self.linear(x + self.param).clamp(min=0.0, max=1.0)\n        w = self.linear(y).clamp(min=0.0, max=1.0)\n        return z + w\n\n# symbolically trace model\nmy_module = MyModule()\ninputs = (torch.rand(3, 4), torch.rand(3, 4))\nmy_module_traced = torch.export.export(my_module, inputs)\n\n# random mod partitioning\npartition_counter = 0\nNPARTITIONS = 3\n\ndef mod_partition(node: Node):\n    global partition_counter\n    partition = partition_counter % NPARTITIONS\n    partition_counter = (partition_counter + 1) % NPARTITIONS\n    return partition\n\n# split module in module with submodules\nmodule_with_submodules = split_module(\n    my_module_traced, my_module, mod_partition\n)\nprint(module_with_submodules)\nmodule_with_submodules(*inputs)",
+  "pull_urls": [],
+  "_meta": {
+    "file": "166034_issue_ori_data.json",
+    "generated_at": "2026-04-21 05:09:48",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\166034_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\166034_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-10 07:24:39",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\166034_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\166034_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "The user is trying to partition an fx graph according to examples given in the PyTorch documentation, but the example code gives error. The resulting graph module does not have the same input as the original module so it cannot run.",
+  "repro_code": "import torch\nfrom torch.fx.graph_module import GraphModule\nfrom torch.fx.node import Node\nfrom torch.fx.passes.split_module import split_module\n\nclass MyModule(torch.nn.Module):\n    def __init__(self) -> None:\n        super().__init__()\n        self.param = torch.nn.Parameter(torch.rand(3, 4))\n        self.linear = torch.nn.Linear(4, 5)\n\n    def forward(self, x, y):\n        z = self.linear(x + self.param).clamp(min=0.0, max=1.0)\n        w = self.linear(y).clamp(min=0.0, max=1.0)\n        return z + w\n\n# symbolically trace model\nmy_module = MyModule()\ninputs = (torch.rand(3, 4), torch.rand(3, 4))\nmy_module_traced = torch.export.export(my_module, inputs)\n\n# random mod partitioning\npartition_counter = 0\nNPARTITIONS = 3\n\ndef mod_partition(node: Node):\n    global partition_counter\n    partition = partition_counter % NPARTITIONS\n    partition_counter = (partition_counter + 1) % NPARTITIONS\n    return partition\n\n# split module in module with submodules\nmodule_with_submodules = split_module(\n    my_module_traced, my_module, mod_partition\n)\nprint(module_with_submodules)\nmodule_with_submodules(*inputs)",
+  "repro_output": "Partitioning fx graph according instruction gives errors",
+  "affected_api": "torch.fx.passes.split_module.split_module",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "unknown",
+    "input_shape": "(3, 4)",
+    "other_conditions": "Using torch.export.export for tracing, using split_module from torch.fx.passes.split_module"
+  },
+  "environment": {
+    "pytorch_version": "2.10.0.dev20251018+cu130",
+    "python_version": "3.12.3",
+    "os": "Ubuntu 24.04.2 LTS (x86_64)",
+    "hardware": "NVIDIA A100 80GB PCIe"
+  },
+  "labels": [
+    "fx",
+    "bug",
+    "module:fx"
+  ],
+  "core_api_identification": {
+    "core_api": "1.  **Analyze the Bug Report:**",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\166034_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\166034_issue_ori_data.output.events.json"
+  }
+}

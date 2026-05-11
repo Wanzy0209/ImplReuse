@@ -1,0 +1,111 @@
+Bug Report:
+Title: [Fuzzer][Eager/Compile Divergence] list index out of range
+Issue ID: 163971
+Original bug description: ### 🐛 Describe the bug
+
+```
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0):
+    t0 = arg0 # size=(), stride=(), dtype=bfloat16, device=cuda
+    t1 = torch.softmax(t0, dim=0) # size=(), stride=(), dtype=bfloat16, device=cuda
+    t2 = torch.nn.functional.gelu(t1) # size=(), stride=(), dtype=bfloat16, device=cuda
+    t3 = torch.softmax(t2, dim=0) # size=(), stride=(), dtype=bfloat16, device=cuda
+    output = t3  # output tensor
+    return output
+
+arg0 = torch.rand([], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(), stride=(), dtype=bfloat16, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+```
+
+```
+Eager Success! ✅
+
+Traceback (most recent call last):
+  File "/tmp/torchfuzz/fuzz_3b68a564759ad020.py", line 21, in <module>
+    out_compiled = compiled_foo(arg0)
+  File "/data/users/bobren/a/pytorch/torch/_dynamo/eval_frame.py", line 899, in compile_wrapper
+    raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1
+  File "/data/users/bobren/a/pytorch/torch/_dynamo/output_graph.py", line 2289, in _call_user_compiler
+    raise BackendCompilerFailed(
+  File "/data/users/bobren/a/pytorch/torch/_dynamo/output_graph.py", line 2264, in _call_user_compiler
+    compiled_fn = compiler_fn(gm, example_inputs)
+  File "/data/users/bobren/a/pytorch/torch/_dynamo/repro/after_dynamo.py", line 156, in __call__
+    compiled_gm = compiler_fn(gm, example_inputs)
+  File "/data/users/bobren/a/pytorch/torch/__init__.py", line 2399, in __call__
+    return compile_fx(model_, inputs_, config_patches=self.config)
+  File "/data/users/bobren/a/pytorch/torch/_inductor/compile_fx.py", line 2682, in compile_fx
+    return aot_autograd(
+  File "/data/users/bobren/a/pytorch/torch/_dynamo/backends/common.py", line 117, in __call__
+    cg = aot_module_simplified(gm, example_inputs, **self.kwargs)
+  File "/data/users/bobren/a/pytorch/torch/_functorch/aot_autograd.py", line 1108, in aot_module_simplified
+    compiled_fn, _ = aot_stage2_compile(aot_state, aot_graph_capture)
+  File "/data/users/bobren/a/pytorch/torch/_functorch/_aot_autograd/graph_compile.py", line 242, in aot_stage2_compile
+    return aot_stage2_autograd(aot_state, aot_graph_capture)
+  File "/data/users/bobren/a/pytorch/torch/_functorch/_aot_autograd/graph_compile.py", line 1397, in aot_stage2_autograd
+    fw_module, bw_module = aot_config.partition_fn(
+  File "/data/users/bobren/a/pytorch/torch/_inductor/compile_fx.py", line 2109, in partition_fn
+    _recursive_joint_graph_passes(gm, skip_invoke_subgraph=True)
+  File "/data/users/bobren/a/pytorch/torch/_inductor/compile_fx.py", line 530, in _recursive_joint_graph_passes
+    joint_graph_passes(gm)
+  File "/data/users/bobren/a/pytorch/torch/_inductor/fx_passes/joint_graph.py", line 601, in joint_graph_passes
+    ).apply_graph_pass(patterns.apply)
+  File "/data/users/bobren/a/pytorch/torch/fx/passes/graph_transform_observer.py", line 88, in apply_graph_pass
+    return pass_fn(self.gm.graph)
+  File "/data/users/bobren/a/pytorch/torch/_inductor/pattern_matcher.py", line 1982, in apply
+    if is_match(m) and guard_or_false(entry.extra_check(m)):
+  File "/data/users/bobren/a/pytorch/torch/_inductor/fx_passes/joint_graph.py", line 889, in _other_is_broadcasted_in_dim
+    return all(statically_known_true(other_shape[d] == 1) for d in dim)
+  File "/data/users/bobren/a/pytorch/torch/_inductor/fx_passes/joint_graph.py", line 889, in <genexpr>
+    return all(statically_known_true(other_shape[d] == 1) for d in dim)
+torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+IndexError: list index out of range
+
+Set TORCHDYNAMO_VER
+Structured error description: Running a function with torch.compile causes an IndexError: list index out of range in the inductor backend during pattern matching, while eager execution succeeds. The error occurs in the _other_is_broadcasted_in_dim function when checking statically_known_true(other_shape[d] == 1).
+Minimal reproducible example: import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0):
+    t0 = arg0 # size=(), stride=(), dtype=bfloat16, device=cuda
+    t1 = torch.softmax(t0, dim=0) # size=(), stride=(), dtype=bfloat16, device=cuda
+    t2 = torch.nn.functional.gelu(t1) # size=(), stride=(), dtype=bfloat16, device=cuda
+    t3 = torch.softmax(t2, dim=0) # size=(), stride=(), dtype=bfloat16, device=cuda
+    output = t3  # output tensor
+    return output
+
+arg0 = torch.rand([], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(), stride=(), dtype=bfloat16, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+Trigger conditions: {"backend": "inductor", "dtype": "bfloat16", "input_shape": "scalar (empty tensor [])", "other_conditions": "fullgraph=True, dynamic=True, capture_scalar_outputs=True, capture_dynamic_output_shape_ops=True, emulate_precision_casts=True"}
+Environment: {"pytorch_version": "unknown", "python_version": "unknown", "os": "unknown", "hardware": "cuda"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

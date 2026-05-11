@@ -1,0 +1,56 @@
+{
+  "title": "AOT compilation of Triton op fails in PyTorch 2.8",
+  "issue_id": "160646",
+  "bug_description": "### 🐛 Describe the bug\n\nI have a model that works fine with `aoti_compile_and_package` in PyTorch 2.7, but after updating to PyTorch 2.8 compilation fails. I managed to distil the issue into a small repro:\n\n```python\nimport tempfile\n\nimport torch\nimport triton\nimport triton.language as tl\nfrom torch.library import triton_op, wrap_triton\n\n\n@triton.jit\ndef my_kernel(\n    out1,\n    out2,\n):\n    # the actual kernel does something more meaningful of course\n    tl.store(out1, 1.0)\n    tl.store(out2, 1.0)\n\n\n@triton_op(\"repro::my_triton_op\", mutates_args={})\ndef my_triton_op(\n    q: torch.Tensor,\n    block_size: int = 128,\n) -> torch.Tensor:\n    out1 = torch.empty((1,), device=q.device)\n    out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)\n\n    wrap_triton(my_kernel)[(1, 1)](\n        out1,\n        out2,\n    )\n\n    return out1\n\n\nclass MyModule(torch.nn.Module):\n    def __init__(self):\n        super().__init__()\n\n    def forward(self, q):\n        return my_triton_op(q)\n\n\ndef main():\n    model = MyModule().to(\"cuda\")\n    with torch.inference_mode():\n        q = torch.randn(1024, device=\"cuda\")\n        exported_model = torch.export.export(model, (q,), dynamic_shapes=({0: torch.export.Dim(\"dim\")},))\n    with tempfile.TemporaryDirectory() as tmpdir:\n        torch._inductor.aoti_compile_and_package(\n            exported_model,\n            package_path=tmpdir + \"/package.pt2\",\n        )\n\n\nif __name__ == \"__main__\":\n    main()\n```\n\nUsing PyTorch 2.8 this fails with:\n\n```\nTraceback (most recent call last):\n  File \"/home/dthul/repro/repro.py\", line 55, in <module>\n    main()\n  File \"/home/dthul/repro/repro.py\", line 48, in main\n    torch._inductor.aoti_compile_and_package(\n  File \"/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/__init__.py\", line 151, in aoti_compile_and_package\n    return aot_inductor_minifier_wrapper(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/debug.py\", line 961, in aot_inductor_minifier_wrapper\n    raise e\n  File \"/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/debug.py\", line 931, in aot_inductor_minifier_wrapper\n    return func(\n           ^^^^^\n  File \"/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/__init__.py\", line 194, in _aoti_compile_and_package_inner\n    aoti_files = aot_compile(gm, args, kwargs, options=inductor_configs)\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/__init__.py\", line 301, in aot_compile\n    return compile_fx_aot(\n           ^^^^^^^^^^^^^^^\n  File \"/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py\", line 1820, in compile_fx_aot\n    compiled_artifacts = compile_fx(\n                         ^^^^^^^^^^^\n  File \"/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py\", line 2002, in compile_fx\n    return compile_fx(\n           ^^^^^^^^^^^\n  File \"/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py\", line 2059, in compile_fx\n    return compile_fx(\n           ^^^^^^^^^^^\n  File \"/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py\", line 2409, in compile_fx\n    return inference_compiler(unlifted_gm, example_inputs_)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_functorch/aot_autograd.py\", line 483, in __call__\n    return self.compiler_fn(gm, example_inputs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/dthul/repro/.venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py\", line 2250, in fw_compiler_base\n    return inner_compile(\n           ^^^^^^^^^^^^^^\n  File \"/home/dthul/.local/share/uv/python/cpython-3.12.8-linux-x86_64-gnu/lib/python3.12/contextlib.py\", line 81, in inner\n    return func(*args, **kwds)\n  ",
+  "apis": [
+    "self.compute_ancestors",
+    "q.size",
+    "scheme.codegen_and_compile",
+    "tempfile.TemporaryDirectory",
+    "self.codegen",
+    "self._init"
+  ],
+  "best_code": "import tempfile\n\nimport torch\nimport triton\nimport triton.language as tl\nfrom torch.library import triton_op, wrap_triton\n\n\n@triton.jit\ndef my_kernel(\n    out1,\n    out2,\n):\n    # the actual kernel does something more meaningful of course\n    tl.store(out1, 1.0)\n    tl.store(out2, 1.0)\n\n\n@triton_op(\"repro::my_triton_op\", mutates_args={})\ndef my_triton_op(\n    q: torch.Tensor,\n    block_size: int = 128,\n) -> torch.Tensor:\n    out1 = torch.empty((1,), device=q.device)\n    out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)\n\n    wrap_triton(my_kernel)[(1, 1)](\n        out1,\n        out2,\n    )\n\n    return out1\n\n\nclass MyModule(torch.nn.Module):\n    def __init__(self):\n        super().__init__()\n\n    def forward(self, q):\n        return my_triton_op(q)\n\n\ndef main():\n    model = MyModule().to(\"cuda\")\n    with torch.inference_mode():\n        q = torch.randn(1024, device=\"cuda\")\n        exported_model = torch.export.export(model, (q,), dynamic_shapes=({0: torch.export.Dim(\"dim\")},))\n    with tempfile.TemporaryDirectory() as tmpdir:\n        torch._inductor.aoti_compile_and_package(\n            exported_model,\n            package_path=tmpdir + \"/package.pt2\",\n        )\n\n\nif __name__ == \"__main__\":\n    main()",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/157189",
+    "https://github.com/InternLM/xtuner/pull/1193"
+  ],
+  "_meta": {
+    "file": "160646_issue_ori_data.json",
+    "generated_at": "2026-04-20 21:55:49",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\160646_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\160646_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-09 19:04:29",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\160646_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\160646_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "I have a model that works fine with `aoti_compile_and_package` in PyTorch 2.7, but after updating to PyTorch 2.8 compilation fails.",
+  "repro_code": "import tempfile\n\nimport torch\nimport triton\nimport triton.language as tl\nfrom torch.library import triton_op, wrap_triton\n\n\n@triton.jit\ndef my_kernel(\n    out1,\n    out2,\n):\n    # the actual kernel does something more meaningful of course\n    tl.store(out1, 1.0)\n    tl.store(out2, 1.0)\n\n\n@triton_op(\"repro::my_triton_op\", mutates_args={})\ndef my_triton_op(\n    q: torch.Tensor,\n    block_size: int = 128,\n) -> torch.Tensor:\n    out1 = torch.empty((1,), device=q.device)\n    out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)\n\n    wrap_triton(my_kernel)[(1, 1)](\n        out1,\n        out2,\n    )\n\n    return out1\n\n\nclass MyModule(torch.nn.Module):\n    def __init__(self):\n        super().__init__()\n\n    def forward(self, q):\n        return my_triton_op(q)\n\n\ndef main():\n    model = MyModule().to(\"cuda\")\n    with torch.inference_mode():\n        q = torch.randn(1024, device=\"cuda\")\n        exported_model = torch.export.export(model, (q,), dynamic_shapes=({0: torch.export.Dim(\"dim\")},))\n    with tempfile.TemporaryDirectory() as tmpdir:\n        torch._inductor.aoti_compile_and_package(\n            exported_model,\n            package_path=tmpdir + \"/package.pt2\",\n        )\n\n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "AOT compilation of Triton op fails in PyTorch 2.8",
+  "affected_api": "torch._inductor.aoti_compile_and_package",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "unknown",
+    "input_shape": "(1024,) with dynamic dimension",
+    "other_conditions": "Using PyTorch 2.8, using triton_op with wrap_triton"
+  },
+  "environment": {
+    "pytorch_version": "2.8",
+    "python_version": "3.12",
+    "os": "Linux",
+    "hardware": "CUDA"
+  },
+  "labels": [],
+  "core_api_identification": {
+    "core_api": "torch._inductor.aoti_compile_and_package",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\160646_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\160646_issue_ori_data.output.events.json"
+  }
+}

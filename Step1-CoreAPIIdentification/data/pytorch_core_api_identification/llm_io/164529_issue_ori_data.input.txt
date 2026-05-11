@@ -1,0 +1,107 @@
+Bug Report:
+Title: [RFC] Implement shrink_group API to expose ncclCommShrink
+Issue ID: 164529
+Original bug description: ### 🚀 The feature, motivation and pitch
+
+### PyTorch Process Group Shrink API 
+
+Authors: @brchang24 @spotluri @bosilca 
+
+#### Summary
+
+This document outlines proposed API changes to improve fault tolerance and flexibility in PyTorch Process Groups.  
+
+#### Motivation
+
+**Fault Tolerance support**
+
+The API is designed to enhance fault tolerance capabilities in PyTorch by enabling exclusion of faulty ranks. 
+
+With the new API, malfunctioning participants should be excluded to avoid hangings, as their reliability can't be guaranteed. This API is not limited to hard faults (where processes disappear due to hardware failures) but allows the application to mold the execution environment as needed (for correctness or performance reasons). 
+
+**Performance**
+
+The existing abort \+ init method entails a fixed cost for full initialization, as illustrated in the chart below with rank shrink as an example.
+
+![Image](https://github.com/user-attachments/assets/eb264cbf-48a5-4117-8e60-0a179a45d75f)
+
+  
+We also explored alternatives like split, but that approach requires the participation of all ranks, including malfunctioning ones, to form a new group.  
+
+So, both above factors must be considered when designing the API. 
+
+#### Proposed API changes 
+
+To address these concerns above, we are proposing the following API changes: 
+
+New API: shrink\_group() 
+
+```python
+shrink_group(ranks_to_exclude: List[int],
+            Pg: Optional[ProcessGroup] = None,
+            shrink_flags : int = NCCL_SHRINK_DEFAULT)
+
+Shrink an existing distributed group. Only group members of the updated ProcessGroup need to enter this function. The excluded ranks do not need to call this function. The scope of this call is therefore collective across the processes that belong to the shrunk distributed group.
+
+Args:
+ranks_exclude (list[int]):  List of group ranks to be excluded in the updated ProcessGroup. This list must be consistent across all participating processes.
+pg (ProcessGroup, optional): The process group to work on, If None, the default process group will be used.
+shrink_flags (int): NCCL_SHRINK_DEFAULT (default)
+                    NCCL_SHRINK_ABORT (attempt to terminate ongoing operations in the parent communicator before shrinking. 
+```
+
+#### Implementation 
+
+PyTorch should directly use the shrink functionality if supported by the backend. 
+
+**Use Cases** 
+
+Rank Shrink 
+
+When one rank is detected defective and needs to be excluded, the new shrink\_group() can be invoked as the below example: 
+
+Example 
+
+remove rank 2   
+**shrink\_group**(\[2\], pg)   
+
+<img width="729" height="432" alt="Image" src="https://github.com/user-attachments/assets/fa84fbab-abcc-4099-98c3-a9f2e1389f40" />
+
+In the example above, only the original rank 0, 1, and 3 need to invoke shrink\_group(), not rank 2 to avoid potential hang. After the shrink, the original rank 2 is excluded, so, the original rank 3 will be shifted down to become rank 2 in the updated group, if no parameter key is passed in. 
+
+Errors could be reported by the backend or PyTorch. However, it is up to the upper layer to decide whether to exclude a rank from the group. 
+
+Ideally, the defective ranks should be excluded from all associated groups. However, it appears to be enforcing a policy on PyTorch. This design suggests delegating the decision to exclude ranks from a group or completely dissolve the group to the Upper Layer (UL). Meanwhile, PyTorch should verify that no subgroups use the rank before it is removed from the default group. 
+
+**Things to Consider** 
+
+**Group Rank recalculation** 
+
+Shrink can lead to changes in the group's rank order. It will apply the default method to recalculate group ranks as detailed below.  
+
+When shrinking, ranks will be shifted to close any gaps left by excluded ranks. 
+
+**Metrics**
+
+What are the main metrics to measure the value of this feature? 
+
+1. When one node/rank goes down completely   
+   To compare with the existing solution. 
+
+ 
+
+2. Performance comparison with the exis
+Structured error description: This is an RFC proposing a new shrink_group() API to improve fault tolerance and flexibility in PyTorch Process Groups. The API enables exclusion of faulty ranks to avoid hangings and provides performance benefits over the existing abort + init method.
+Minimal reproducible example: shrink_group([2], pg)
+Trigger conditions: {"backend": "NCCL", "dtype": "", "input_shape": "", "other_conditions": "Distributed process groups with faulty ranks to exclude"}
+Environment: {"pytorch_version": "", "python_version": "", "os": "", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

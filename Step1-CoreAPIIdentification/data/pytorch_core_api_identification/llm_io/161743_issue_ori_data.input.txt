@@ -1,0 +1,243 @@
+Bug Report:
+Title: Seeing worse performance with torch.compile() command vs not running this command
+Issue ID: 161743
+Original bug description: ### 🐛 Describe the bug
+
+I am toggling torch.compile true/false, and seeing 3x drop in tokens/sec with torch.compile=True
+```json
+{
+    "model_id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    "bnb_config": {
+        "load_in_8bit": false,
+        "load_in_4bit": false,
+        "bnb_4bit_use_double_quant": true,
+        "bnb_4bit_quant_type": "nf4",
+        "bnb_4bit_compute_dtype": "bfloat16"
+    },
+    "ACCESS_TOKEN": "insert your token",
+    "dataset_name": "rajpurkar/squad",
+    "batch_size": 8,
+    "max_length": 100,
+    "do_sample": false, 
+    "num_beams": 1,
+    "cache_implementation": "static",
+    "torch.compile": false
+}
+```
+this is the script I am running
+```python
+from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer
+from transformers import BitsAndBytesConfig
+import torch
+import os
+import time
+import numpy as np
+from datasets import load_dataset, load_from_disk
+from threading import Thread
+import json
+
+
+def model_load(model_id, access_token, bnb_config=None, device='auto'):
+
+    local_model_path = model_id.split("/")[-1]
+    local_model_path = os.path.join(".", local_model_path)
+    if os.path.isdir(local_model_path) == False:
+        #read the model from HF repo
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id, token=access_token)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, 
+            quantization_config=bnb_config,
+            token=access_token, 
+            torch_dtype=torch.bfloat16 # or torch.float16 depending on your hardware
+            #attn_implementation="flash_attention_2" # if your hardware supports it
+        )
+
+        # save model to local storage
+        model.save_pretrained(local_model_path)
+        tokenizer.save_pretrained(local_model_path)
+
+    else:
+        #load the model from local storage
+
+        model_id = local_model_path
+
+        # Load the tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # Load the model
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            torch_dtype=torch.bfloat16,
+            quantization_config=bnb_config,
+            trust_remote_code=True,
+            device_map=device,
+            #attn_implementation="flash_attention_2" # currently not sup[ported by Intel
+        )
+
+
+    #configure pad and eos tokens to awvoid warning messages
+    tokenizer.pad_token_id = tokenizer.eos_token_id
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
+
+    return model, tokenizer
+
+def format_model_input(tokenizer, context, question):
+    #format inputs into chat template
+    messages = [
+        {"role": "system", "content": context},
+        {"role": "user", "content": question},
+    ]
+
+    #convert to tokens
+    inputs = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        return_tensors="np"
+    )
+
+    return inputs
+
+def preprocess_dataset(ds, tokenizer, preprocessed_dataset_name):
+    #This function creates a dataset with one additional column correspondingt to LLM input,
+    #and saves it in the local storage
+
+    if not os.path.isdir(preprocessed_dataset_name):
+    #if os.path.isdir(preprocessed_dataset_name):
+        inputs_tokenized = []
+        for entry in ds:
+            #format message for model input
+            messages = [
+                {"role": "system", "content": entry['context']},
+                {"role": "user", "content": entry['question']}
+            ]
+            
+            #tokenize model input
+            input_tokens = tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                return_tensors="np"
+            )
+        
+            #inputs_tokenized.append(input_tokens.squeeze(0))
+            inputs_tokenized.append(input_tokens.flatten())
+
+        # Add the new column to the dataset
+        ds = ds.add_column("inputs_tokenized", inputs_tokenized)
+
+        ds.save_to_disk(preprocessed_dataset_name)
+    els
+Structured error description: I am toggling torch.compile true/false, and seeing 3x drop in tokens/sec with torch.compile=True
+Minimal reproducible example: from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer
+from transformers import BitsAndBytesConfig
+import torch
+import os
+import time
+import numpy as np
+from datasets import load_dataset, load_from_disk
+from threading import Thread
+import json
+
+
+def model_load(model_id, access_token, bnb_config=None, device='auto'):
+
+    local_model_path = model_id.split("/")[-1]
+    local_model_path = os.path.join(".", local_model_path)
+    if os.path.isdir(local_model_path) == False:
+        #read the model from HF repo
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id, token=access_token)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, 
+            quantization_config=bnb_config,
+            token=access_token, 
+            torch_dtype=torch.bfloat16 # or torch.float16 depending on your hardware
+            #attn_implementation="flash_attention_2" # if your hardware supports it
+        )
+
+        # save model to local storage
+        model.save_pretrained(local_model_path)
+        tokenizer.save_pretrained(local_model_path)
+
+    else:
+        #load the model from local storage
+
+        model_id = local_model_path
+
+        # Load the tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # Load the model
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            torch_dtype=torch.bfloat16,
+            quantization_config=bnb_config,
+            trust_remote_code=True,
+            device_map=device,
+            #attn_implementation="flash_attention_2" # currently not sup[ported by Intel
+        )
+
+
+    #configure pad and eos tokens to awvoid warning messages
+    tokenizer.pad_token_id = tokenizer.eos_token_id
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
+
+    return model, tokenizer
+
+def format_model_input(tokenizer, context, question):
+    #format inputs into chat template
+    messages = [
+        {"role": "system", "content": context},
+        {"role": "user", "content": question},
+    ]
+
+    #convert to tokens
+    inputs = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        return_tensors="np"
+    )
+
+    return inputs
+
+def preprocess_dataset(ds, tokenizer, preprocessed_dataset_name):
+    #This function creates a dataset with one additional column correspondingt to LLM input,
+    #and saves it in the local storage
+
+    if not os.path.isdir(preprocessed_dataset_name):
+    #if os.path.isdir(preprocessed_dataset_name):
+        inputs_tokenized = []
+        for entry in ds:
+            #format message for model input
+            messages = [
+                {"role": "system", "content": entry['context']},
+                {"role": "user", "content": entry['question']}
+            ]
+            
+            #tokenize model input
+            input_tokens = tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                return_tensors="np"
+            )
+        
+            #inputs_tokenized.append(input_tokens.squeeze(0))
+            inputs_tokenized.append(input_tokens.flatten())
+
+        # Add the new column to the dataset
+        ds = ds.add_column("inputs_tokenized", inputs_tokenized)
+
+        ds.save_to_disk(preprocessed_dataset_name)
+    els
+Trigger conditions: {"backend": "", "dtype": "bfloat16", "input_shape": "batch_size: 8, max_length: 100", "other_conditions": "torch.compile=True, cache_implementation: static"}
+Environment: {"pytorch_version": "", "python_version": "", "os": "", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

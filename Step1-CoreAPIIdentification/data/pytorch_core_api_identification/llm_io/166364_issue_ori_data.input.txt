@@ -1,0 +1,216 @@
+Bug Report:
+Title: Flex Attention does not support learnable scalar
+Issue ID: 166364
+Original bug description: ### 🐛 Describe the bug
+
+Flex Attention does not support learnable scaler.
+
+1. Without compiling: Cause error: `vmap(<lambda>(), ...): () can not return a BatchedTensor when out_dim is None` in backward. Forward works well.
+2. With compiling: Forward fails too. 
+
+reproduce code: 
+```
+temp = nn.Parameter(torch.tensor(0.0))
+    def score_mod(score, b, h, q, kv):
+        #print(f"const: {const}")
+        score = score + temp
+        return score
+```
+
+
+After several tries, I found following code can work: 
+```
+temp = nn.Parameter(torch.randn(B, ))) # where be is Batch size. 
+    def score_mod(score, b, h, q, kv):
+        #print(f"const: {const}")
+        score = score + temp[b]
+        return score
+```
+
+Here is a fully reproducible code
+
+```
+import torch
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+import torch.nn as nn
+def test_flex_attention(use_compile=False):
+    """
+    Test function to verify score_works works with flex_attention.
+    This tests both forward and backward passes to catch compilation errors.
+
+    Args:
+        use_compile: If True, use torch.compile(flex_attention)
+    """
+    print(f"Testing SeLU flex_attention (use_compile={use_compile})...")
+
+    # Setup parameters
+    B, H, T, D = 2, 4, 128, 64  # batch, heads, seq_len, head_dim
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.bfloat16
+
+    # Create sample Q, K, V tensors
+    q = torch.randn(B, H, T, D, device=device, dtype=dtype, requires_grad=True)
+    k = torch.randn(B, H, T, D, device=device, dtype=dtype, requires_grad=True)
+    v = torch.randn(B, H, T, D, device=device, dtype=dtype, requires_grad=True)
+
+    # Create causal mask
+    def causal_mask(b, h, q_idx, kv_idx):
+        return q_idx >= kv_idx
+
+    block_mask = create_block_mask(causal_mask, B, H, T, T, device=device)
+    # create a learnbale scalar 
+    temp = nn.Parameter(torch.zeros((1,), dtype=dtype, device=device))
+
+    def score_mod(score, b, h, q, kv):
+        #print(f"const: {const}")
+        score = score + temp
+        return score
+    try:
+        # Create score_mod function using SeLU transformation
+        
+
+        # Optionally compile flex_attention
+        flex_attn_fn = flex_attention
+        if use_compile:
+            print("  Compiling flex_attention...")
+            flex_attn_fn = torch.compile(flex_attention, dynamic=True)
+
+        print("  Running forward pass...")
+        # Forward pass
+        out = flex_attn_fn(q, k, v, score_mod=score_mod)
+        print(f"  ✓ Forward pass succeeded. Output shape: {out.shape}")
+
+        print("  Running backward pass...")
+        # Backward pass
+        loss = out.sum()
+        loss.backward()
+        print(f"  ✓ Backward pass succeeded.")
+
+        print("✅ Test passed!")
+        return True
+
+    except Exception as e:
+        print(f"❌ Test failed with error:")
+        print(f"  {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("Test 1: Without torch.compile")
+    print("=" * 60)
+    test_flex_attention(use_compile=False)
+
+    print("\n" + "=" * 60)
+    print("Test 2: With torch.compile")
+    print("=" * 60)
+    test_flex_attention(use_compile=True)
+```
+
+I also found if use second solution for my code
+
+my code for training
+```
+    r0 = torch.randn((H, ), device=device, requires_grad=True) # Head dim
+    r2 = torch.randn((H, ), device=device, requires_grad=True) # which means each head has 4 learnable scalars.
+    t0 = torch.randn((H, ), device=device, requires_grad=True)
+    t2 = torch.randn((H, ), device=device, requires_grad=True)
+   def score_mod(score, b, h, q, kv):
+        score = torch.where(r0[h] > score, score + t0[b] * (r0[h] - score), score)
+        score = torch.where(r2[h] > score, score + t2[b] * (r2[h] - score)**2, score)
+        return score
+```
+
+The training speed compare with F.spda is significantly decreased. I got around 145062 tps during trainin
+Structured error description: Flex Attention does not support learnable scaler. 1. Without compiling: Cause error: `vmap(<lambda>(), ...): () can not return a BatchedTensor when out_dim is None` in backward. Forward works well. 2. With compiling: Forward fails too.
+Minimal reproducible example: import torch
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+import torch.nn as nn
+def test_flex_attention(use_compile=False):
+    """
+    Test function to verify score_works works with flex_attention.
+    This tests both forward and backward passes to catch compilation errors.
+
+    Args:
+        use_compile: If True, use torch.compile(flex_attention)
+    """
+    print(f"Testing SeLU flex_attention (use_compile={use_compile})...")
+
+    # Setup parameters
+    B, H, T, D = 2, 4, 128, 64  # batch, heads, seq_len, head_dim
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.bfloat16
+
+    # Create sample Q, K, V tensors
+    q = torch.randn(B, H, T, D, device=device, dtype=dtype, requires_grad=True)
+    k = torch.randn(B, H, T, D, device=device, dtype=dtype, requires_grad=True)
+    v = torch.randn(B, H, T, D, device=device, dtype=dtype, requires_grad=True)
+
+    # Create causal mask
+    def causal_mask(b, h, q_idx, kv_idx):
+        return q_idx >= kv_idx
+
+    block_mask = create_block_mask(causal_mask, B, H, T, T, device=device)
+    # create a learnbale scalar 
+    temp = nn.Parameter(torch.zeros((1,), dtype=dtype, device=device))
+
+    def score_mod(score, b, h, q, kv):
+        #print(f"const: {const}")
+        score = score + temp
+        return score
+    try:
+        # Create score_mod function using SeLU transformation
+        
+
+        # Optionally compile flex_attention
+        flex_attn_fn = flex_attention
+        if use_compile:
+            print("  Compiling flex_attention...")
+            flex_attn_fn = torch.compile(flex_attention, dynamic=True)
+
+        print("  Running forward pass...")
+        # Forward pass
+        out = flex_attn_fn(q, k, v, score_mod=score_mod)
+        print(f"  ✓ Forward pass succeeded. Output shape: {out.shape}")
+
+        print("  Running backward pass...")
+        # Backward pass
+        loss = out.sum()
+        loss.backward()
+        print(f"  ✓ Backward pass succeeded.")
+
+        print("✅ Test passed!")
+        return True
+
+    except Exception as e:
+        print(f"❌ Test failed with error:")
+        print(f"  {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("Test 1: Without torch.compile")
+    print("=" * 60)
+    test_flex_attention(use_compile=False)
+
+    print("\n" + "=" * 60)
+    print("Test 2: With torch.compile")
+    print("=" * 60)
+    test_flex_attention(use_compile=True)
+Trigger conditions: {"backend": "cuda", "dtype": "torch.bfloat16", "input_shape": "B=2, H=4, T=128, D=64", "other_conditions": "Using flex_attention with score_mod function that adds a learnable scalar parameter (nn.Parameter with shape (1,))"}
+Environment: {"pytorch_version": "unknown", "python_version": "unknown", "os": "unknown", "hardware": "unknown"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

@@ -1,0 +1,83 @@
+Bug Report:
+Title: [dynamo] Codegen error when Python code has local and cell with same name
+Issue ID: 161542
+Original bug description: ```python
+import torch
+
+keys = range(10)
+allowed = [0, 1, 2, 3]
+
+
+def fn(x):
+    x = x + 1
+    torch._dynamo.graph_break()
+    key = [key for key in keys if key in allowed]
+
+    def inner():
+        nonlocal key
+
+    return x + key[0]
+
+
+torch.compile(fn, backend="eager")(torch.ones(3))
+```
+gives error
+```
+...
+  File "/data/users/williamwen/pytorch/torch/_dynamo/resume_execution.py", line 296, in lookup
+    cls.cache[code][key] = cls.generate(code, lineno, *key)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/williamwen/pytorch/torch/_dynamo/resume_execution.py", line 505, in generate
+    new_code, _ = transform_code_object(code, update)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/williamwen/pytorch/torch/_dynamo/bytecode_transformation.py", line 1469, in transform_code_object
+    _, bytecode = clean_and_assemble_instructions(instructions, keys, code_options)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/williamwen/pytorch/torch/_dynamo/bytecode_transformation.py", line 1485, in clean_and_assemble_instructions
+    fix_vars(instructions, code_options, varname_from_oparg=varname_from_oparg)
+  File "/data/users/williamwen/pytorch/torch/_dynamo/bytecode_transformation.py", line 1379, in fix_vars
+    instructions[i].arg = varnames[instructions[i].argval]
+                          ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+torch._dynamo.exc.InternalTorchDynamoError: KeyError: key
+
+from user code:
+   File "/data/users/williamwen/pytorch/playground3.py", line 11, in fn
+    torch._dynamo.graph_break()
+```
+
+This is because the original code refers to `key` as both a cell and a local variable, but the resume function revers to `key` only as a free variable.
+
+This was discovered due to an internal inductor test failure (https://www.internalfb.com/intern/test/562950131984224): `test/inductor/test_triton_kernels.py -k test_autotune_unbacked`
+
+cc @chauhang @penguinwu @voznesenskym @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @chenyang78 @kadeng @amjames @Lucaskabela
+Structured error description: This is because the original code refers to `key` as both a cell and a local variable, but the resume function revers to `key` only as a free variable.
+Minimal reproducible example: import torch
+
+keys = range(10)
+allowed = [0, 1, 2, 3]
+
+
+def fn(x):
+    x = x + 1
+    torch._dynamo.graph_break()
+    key = [key for key in keys if key in allowed]
+
+    def inner():
+        nonlocal key
+
+    return x + key[0]
+
+
+torch.compile(fn, backend="eager")(torch.ones(3))
+Trigger conditions: {"backend": "eager", "dtype": "", "input_shape": "", "other_conditions": "Python code has a variable that is both a local and a cell variable with the same name, and torch._dynamo.graph_break() is called"}
+Environment: {"pytorch_version": "", "python_version": "", "os": "", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

@@ -1,0 +1,90 @@
+Bug Report:
+Title: Support checkPoolLiveAllocations with pluggable device
+Issue ID: 163257
+Original bug description: ### 🚀 The feature, motivation and pitch
+
+# Summary 
+
+Pytorch currently supports using separate device allocators via `torch.cuda.memory.change_memory_allocator`.  However, this breaks torch compile functionality:
+
+```
+RuntimeError: pluggable does not yet support checkPoolLiveAllocations. If you need it, please file an issue describing your use case.
+```
+
+I'd like to request pytorch support `checkPoolLiveAllocations` when using non-standard memory pool allocators.
+
+## Use Case
+
+I am doing performance optimizations for a neural operator network with a complicated preprocessing pipeline.  For optimal performance, and memory management, it's critical to share the memory pool between pytorch and rapids, via the rapids memory manager:
+
+```python
+    import rmm
+    from rmm.allocators.torch import rmm_torch_allocator
+    import torch
+
+    rmm.reinitialize(pool_allocator=True)
+    torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+```
+
+The preprocessing pipeline needs to compute a kNN operation, and the `cuml` kNN is the most performant for this workload.
+
+On the other hand, on H100 the model itself has relatively small kernels and gpu utilization is poor: the GPU is finishing nearly every kernel before the next one can launch.  This would straightforward to improve with cuda graphs and triton fusions via `torch.compile`, however, the changed memory allocator and end-to-end model compilation are incompatible.  The full traceback is here:
+
+```
+[rank0]:W0918 06:55:44.376000 537275 torch/_logging/_internal.py:1130] [0/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+Error executing job with overrides: []
+Traceback (most recent call last):
+  File "/user_data/workdir/physicsnemo-domino-inference/examples/cfd/external_aerodynamics/domino/src/train.py", line 548, in main
+    avg_loss = train_epoch(
+               ^^^^^^^^^^^^
+  File "/user_data/workdir/physicsnemo-domino-inference/examples/cfd/external_aerodynamics/domino/src/train.py", line 188, in train_epoch
+    prediction_vol, prediction_surf = model(sampled_batched)
+                                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/user_data/workdir/physicsnemo-domino-inference/physicsnemo/models/domino/model.py", line 1910, in forward
+    encoding_g_vol = self.geo_rep_volume(geo_centers_vol, p_grid, sdf_grid)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/_dynamo/eval_frame.py", line 658, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/user_data/workdir/physicsnemo-domino-inference/physicsnemo/models/domino/model.py", line 618, in forward
+    scaled_sdf = scale_sdf(sdf)
+                 ^^^^^^^^^^^^^^
+  File "/user_data/workdir/physicsnemo-domino-inference/physicsnemo/models/domino/model.py", line 85, in scale_sdf
+    def scale_sdf(sdf: torch.Tensor) -> torch.Tensor:
+  File "/usr/local/lib/python3.12/dist-packages/torch/_dynamo/eval_frame.py", line 850, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/_functorch/aot_autograd.py", line 1207, in forward
+    return compiled_fn(full_args)
+           ^^^^
+Structured error description: Pytorch currently supports using separate device allocators via `torch.cuda.memory.change_memory_allocator`. However, this breaks torch compile functionality with the error: RuntimeError: pluggable does not yet support checkPoolLiveAllocations. If you need it, please file an issue describing your use case.
+Minimal reproducible example: import rmm
+    from rmm.allocators.torch import rmm_torch_allocator
+    import torch
+
+    rmm.reinitialize(pool_allocator=True)
+    torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+Trigger conditions: {"backend": "CUDA", "dtype": "", "input_shape": "", "other_conditions": "Using pluggable device allocator (RMM allocator) with torch.compile"}
+Environment: {"pytorch_version": "", "python_version": "3.12", "os": "", "hardware": "H100 GPU"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

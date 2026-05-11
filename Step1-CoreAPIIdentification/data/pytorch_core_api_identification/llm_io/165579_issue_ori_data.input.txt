@@ -1,0 +1,152 @@
+Bug Report:
+Title: Inductor bug when compiling Gemma
+Issue ID: 165579
+Original bug description: ### 🐛 Describe the bug
+
+Install optimum-executorch with 
+
+```
+pip install git+https://github.com/huggingface/optimum-executorch.git@main --no-deps
+pip install git+https://github.com/meta-pytorch/tokenizers.git@main
+```
+
+The error disappear if we won't use max-autotune or remove `SDPBackend.MATH`, but for our specific use cases we do requires both of them (executorch + aoti delegate use case). The original bug is with AOTI, but I can reproduce the same bug with torch.compile as below.
+
+```
+import logging
+import os
+os.environ["TORCH_LOGS"] = "+inductor"
+import typing
+
+import torch
+
+from optimum.exporters.executorch.recipes.cuda import export_to_executorch_with_cuda
+
+# from optimum.executorch import ExecuTorchModelForMultiModalToText
+from optimum.exporters.executorch.tasks.multimodal_text_to_text import (
+    load_multimodal_text_to_text_model,
+)
+from torch.nn.attention import SDPBackend
+
+logging.basicConfig(level=logging.DEBUG)
+
+def main():
+    model_id = "google/gemma-3-4b-it"
+    device = "cuda"
+    dtype = torch.bfloat16
+
+    print("loading model from et optimum")
+    module = load_multimodal_text_to_text_model(
+        model_id,
+        device=device,
+        use_custom_sdpa=False,
+        use_custom_kv_cache=False,
+        dtype=dtype,
+    )
+
+    torch._inductor.config.max_autotune=True
+
+    with torch.nn.attention.sdpa_kernel([SDPBackend.MATH]), torch.no_grad():
+        eps = module.export()
+        ep = eps["vision_encoder"]
+        gm = ep.module()
+        compiled = torch.compile(gm)
+        compiled(**ep.example_inputs[1])
+
+if __name__ == "__main__":
+
+    main()
+
+```
+
+
+
+The error looks like:
+
+```
+Traceback (most recent call last):
+  File "/home/shangdiy/run_folder/gemma_run.py", line 44, in <module>
+    main()
+  File "/home/shangdiy/run_folder/gemma_run.py", line 40, in main
+    compiled(**ep.example_inputs[1])
+  File "/home/shangdiy/miniconda3/envs/optimum-executorch/lib/python3.11/site-packages/torch/_dynamo/eval_frame.py", line 418, in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/shangdiy/miniconda3/envs/optimum-executorch/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1777, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/shangdiy/miniconda3/envs/optimum-executorch/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1788, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/shangdiy/miniconda3/envs/optimum-executorch/lib/python3.11/site-packages/torch/_dynamo/eval_frame.py", line 899, in compile_wrapper
+    raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/shangdiy/miniconda3/envs/optimum-executorch/lib/python3.11/site-packages/torch/_inductor/compile_fx.py", line 993, in _compile_fx_inner
+    raise InductorError(e, currentframe()).with_traceback(
+  File "/home/shangdiy/miniconda3/envs/optimum-executorch/lib/python3.11/site-packages/torch/_inductor/compile_fx.py", line 977, in _compile_fx_inner
+    mb_compiled_graph = fx_codegen_and_compile(
+                        ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/shangdiy/miniconda3/envs/optimum-executorch/lib/python3.11/site-packages/torch/_inductor/compile_fx.py", line 1696, in fx_codegen_and_compile
+    return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/shangdiy/miniconda3/envs/optimum-executorch/lib/python3.11/site-packages/torch/_inductor/compile_fx.py", line 1506, in codegen_and_compile
+    compiled_module = graph.compile_to_module()
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/shangdiy/miniconda3/envs/optimum-executorch/lib/python3.11/site-packages/torch/_inductor/graph.py", line 2359, in compile_to_module
+    return
+Structured error description: The error occurs when using torch.compile with max_autotune=True and SDPBackend.MATH together. The error disappears if either max-autotune is not used or SDPBackend.MATH is removed. The original bug is with AOTI, but can be reproduced with torch.compile.
+Minimal reproducible example: import logging
+import os
+os.environ["TORCH_LOGS"] = "+inductor"
+import typing
+
+import torch
+
+from optimum.exporters.executorch.recipes.cuda import export_to_executorch_with_cuda
+
+# from optimum.executorch import ExecuTorchModelForMultiModalToText
+from optimum.exporters.executorch.tasks.multimodal_text_to_text import (
+    load_multimodal_text_to_text_model,
+)
+from torch.nn.attention import SDPBackend
+
+logging.basicConfig(level=logging.DEBUG)
+
+def main():
+    model_id = "google/gemma-3-4b-it"
+    device = "cuda"
+    dtype = torch.bfloat16
+
+    print("loading model from et optimum")
+    module = load_multimodal_text_to_text_model(
+        model_id,
+        device=device,
+        use_custom_sdpa=False,
+        use_custom_kv_cache=False,
+        dtype=dtype,
+    )
+
+    torch._inductor.config.max_autotune=True
+
+    with torch.nn.attention.sdpa_kernel([SDPBackend.MATH]), torch.no_grad():
+        eps = module.export()
+        ep = eps["vision_encoder"]
+        gm = ep.module()
+        compiled = torch.compile(gm)
+        compiled(**ep.example_inputs[1])
+
+if __name__ == "__main__":
+
+    main()
+Trigger conditions: {"backend": "CUDA", "dtype": "torch.bfloat16", "input_shape": "", "other_conditions": "torch._inductor.config.max_autotune=True and SDPBackend.MATH used together"}
+Environment: {"pytorch_version": "unknown", "python_version": "3.11", "os": "unknown", "hardware": "CUDA (GPU)"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

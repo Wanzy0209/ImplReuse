@@ -1,0 +1,87 @@
+The user wants to identify the single core PyTorch API responsible for the bug described in the report.
+
+**1. Analyze the Bug Report:**
+
+*   **Title:** "Stack trace and annotation on node is 'wrong' after aot_export_joint_with_descriptors because of regenerate_from_base"
+*   **Description:**
+    *   The user runs `aot_export_joint_with_descriptors`.
+    *   The output graph has a node `slice_2` with a wrong stack trace and annotation.
+    *   Before `dead_code_eliminate`, there were two slice nodes: `slice_1` (correct stack trace, unused) and `slice_2` (used).
+    *   The issue is that `all_to_all_single` seems to have created a new `slice_2` node (or the graph transformation logic did) that inherited the wrong metadata (stack trace/annotation) from `all_to_all_single` or its context, rather than preserving the metadata from the original slice operation or handling it correctly.
+    *   The annotation `{'EP': 'combine'}` appears on `slice_2` in the output, which is wrong because it belongs to the `all_to_all_single` call.
+    *   The stack trace points to `all_to_all_single` code, but the operation is a slice.
+
+**2. Identify the Key Components:**
+
+*   **The API being called:** `aot_export_joint_with_descriptors` (from `torch._functorch.aot_autograd`).
+*   **The operation involved in the graph:** `torch.ops._c10d_functional.all_to_all_single.default`.
+*   **The operation affected:** `torch.ops.aten.slice.Tensor`.
+*   **The mechanism:** The bug mentions "because of regenerate_from_base". This suggests a graph rewriting or regeneration step where nodes are recreated.
+
+**3. Determine the "Core API":**
+
+The prompt asks for the "single core PyTorch API" responsible for triggering the bug.
+
+*   Is it `aot_export_joint_with_descriptors`? This is the high-level entry point where the issue manifests. However, usually, these prompts look for the specific operator or functional API causing the logic error within the system.
+*   Is it `torch.ops.aten.slice.Tensor`? This is the victim of the wrong metadata, not the cause.
+*   Is it `torch.ops._c10d_functional.all_to_all_single.default`? The description says: "Somehow `all_to_all_single` created a new `slice_2` node that is used." This implies that the functional collective op is doing something (likely a functionalization pass or a decomposition) that regenerates the graph nodes, and in doing so, it messes up the metadata (stack trace/annotation) of the `slice` node it generates or interacts with.
+
+Let's look closer at the description: "Somehow `all_to_all_single` created a new `slice_2` node that is used."
+And: "Annotation: {'EP': 'combine'} File: ... in all_to_all_single ... slice_2: ... = torch.ops.aten.slice.Tensor(...)"
+
+The annotation `{'EP': 'combine'}` is explicitly associated with `all_to_all_single` in the code comments, but it leaks onto `slice_2`. The stack trace for `slice_2` points to the `all_to_all_single` file.
+
+This strongly suggests that the implementation of `all_to_all_single` (or the functionalization logic surrounding it) is regenerating the graph nodes (specifically the slice) and incorrectly propagating its own metadata (stack trace/annotations) to the regenerated slice node.
+
+The bug title mentions "regenerate_from_base". This is likely a method used in the functionalization of distributed ops.
+
+Therefore, the API whose internal logic or interaction with the graph compiler is causing the metadata corruption is `all_to_all_single`.
+
+**4. Verification:**
+
+*   The bug is about incorrect stack traces and annotations.
+*   The incorrect stack trace points to `all_to_all_single`.
+*   The incorrect annotation belongs to `all_to_all_single`.
+*   The node `slice_2` is the one carrying this wrong info.
+*   The text says "Somehow `all_to_all_single` created a new `slice_2` node".
+
+While `aot_export_joint_with_descriptors` is the context, the specific operator causing the node regeneration and metadata leakage is `all_to_all_single`.
+
+**5. Final Selection:**
+
+The API is `torch.ops._c10d_functional.all_to_all_single`. I should probably shorten this to the most recognizable name for the API, which is `all_to_all_single` or `torch.ops._c10d_functional.all_to_all_single`. Given the constraints, usually the function name is sufficient.
+
+Let's check if `aot_export_joint_with_descriptors` is a better fit. The bug is "after aot_export_joint_with_descriptors". But the *cause* is the behavior of `all_to_all_single` inside that process. The prompt asks for the API "responsible for triggering the bug". The bug is the wrong stack trace. The wrong stack trace comes from `all_to_all_single`.
+
+Let's look at the "Trigger conditions": `using aot_export_joint_with_descriptors`.
+However, the "Structured error description" says: "Somehow `all_to_all_single` created a new `slice_2` node that is used."
+
+If I have to choose between the compiler entry point and the operator causing the specific node issue, the operator is usually the "core API" in these types of bug classification tasks unless it's a general compiler failure. Here, it's a specific interaction with `all_to_all_single`.
+
+The API name is `torch.ops._c10d_functional.all_to_all_single`.
+
+Let's refine the name. The code uses `torch.distributed._functional_collectives.all_to_all_single` or `torch.ops._c10d_functional.all_to_all_single.default`.
+The simplest, most standard name is `all_to_all_single`.
+
+Let's double check if `regenerate_from_base` is an API. It sounds like an internal method. The prompt asks for a "PyTorch API". `all_to_all_single` is a public API (in `torch.distributed._functional_collectives`).
+
+The bug report explicitly mentions: "Somehow `all_to_all_single` created a new `slice_2` node that is used."
+
+I will go with `torch.ops._c10d_functional.all_to_all_single`.
+
+Wait, looking at the provided text, the import is `from torch.distributed._functional_collectives import all_to_all_single`.
+The op in the graph is `torch.ops._c10d_functional.all_to_all_single.default`.
+
+I will provide `torch.ops._c10d_functional.all_to_all_single`.
+
+One more check: Is it `aot_export_joint_with_descriptors`?
+The bug title says "Stack trace ... is wrong after aot_export_joint_with_descriptors".
+But the *reason* is "because of regenerate_from_base".
+And the *actor* is `all_to_all_single`.
+
+If I say `aot_export_joint_with_descriptors`, it's too broad. The bug is specific to how `all_to_all_single` interacts with the graph.
+If I say `all_to_all_single`, it pinpoints the operator whose logic is leaking metadata.
+
+Let's look at the annotation leakage. The annotation `{'EP': 'combine'}` is on `all_to_all_single`. It appears on `slice_2`. This confirms `all_to_all_single` is the source of the error.
+
+Final decision: `torch.ops._c10d_functional.all_to_all_single`.torch.ops._c10d_functional.all_to_all_single

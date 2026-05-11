@@ -1,0 +1,53 @@
+{
+  "title": "torch.compile() + DDP fails even for the simplest custom autograd.Function when optimize_ddp=True",
+  "issue_id": "166305",
+  "bug_description": "### 🐛 Describe the bug\n\nEven the **simplest possible DDP+compile test** fails when `torch._dynamo.config.optimize_ddp=True`.\nThe error is raised **even for a minimal custom autograd.Function** that just multiplies the tensor by 2 in forward/backward.\nThis means **\"the most minimal possible code\" already triggers DDPOptimizer backend failure**.\n\n## Minimal Repro Code\n```python\n# ddp_compile_test.py\nimport os, torch\nimport torch.nn as nn, torch.nn.functional as F\nimport torch._dynamo as dynamo\nimport torch.distributed as dist\nfrom torch.nn.parallel import DistributedDataParallel as DDP\n\ndynamo.config.optimize_ddp = True  # <== necessary for the bug\n\nLOCAL_RANK = int(os.getenv(\"LOCAL_RANK\", -1))\ndist.init_process_group(backend=\"nccl\" if dist.is_nccl_available() else \"gloo\")\n\nclass SimplistDoubleFn(torch.autograd.Function):\n    @staticmethod\n    def forward(ctx, x): return x * 2\n    @staticmethod\n    def backward(ctx, grad_out): return grad_out * 2\n\nclass DoubleLayer(nn.Module):\n    def forward(self, x): return SimplistDoubleFn.apply(x)\n\ndef main():\n    device = torch.device(f\"cuda:{LOCAL_RANK}\")\n    model = nn.Sequential(nn.Conv2d(3,3,3,padding=1), DoubleLayer()).to(device)\n    model = torch.compile(model)\n    model = DDP(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK, find_unused_parameters=True)\n    opt = torch.optim.SGD(model.parameters(), lr=1e-4)\n\n    for it in range(3):\n        x = torch.rand(2,3,256,256, device=device)\n        out = model(x)\n        loss = F.mse_loss(out, x)\n        opt.zero_grad(set_to_none=True)\n        loss.backward()\n        opt.step()\n        print(f\"[rank{LOCAL_RANK}] iter={it+1} loss={loss.item():.6f}\")\n\n    dist.destroy_process_group()\n\nif __name__ == \"__main__\":\n    main()\n```\n\n## Run script\n```bash\n#!/usr/bin/env bash\nexport CUDA_VISIBLE_DEVICES=0,1\nexport MASTER_PORT=$(shuf -i 2000-65000 -n 1)\ntorchrun --nproc_per_node=2 --master_port=$MASTER_PORT ddp_compile_test.py > log_ddp_compile_test.txt 2>&1\n```\n\n### Error Log (excerpt)\n```\nNotImplementedError: DDPOptimizer backend: Found a higher order op in the graph.\nThis is not supported. Please turn off DDP optimizer using torch._dynamo.config.optimize_ddp=False.\nNote that this can cause performance degradation...\n```\n\n\n### Error logs\n\n[rank0]: Traceback (most recent call last):\n[rank0]:   File \"ddp_compile_test.py\", line 64, in <module>\n[rank0]:     main()\n[rank0]:   File \"ddp_compile_test.py\", line 52, in main\n[rank0]:     out = model(x)\n[rank0]:   File \"/home/porsche3/miniforge3/envs/compress-ai-lab/lib/python3.8/site-packages/torch/nn/modules/module.py\", line 1553, in _wrapped_call_impl\n[rank0]:     return self._call_impl(*args, **kwargs)\n[rank0]:   File \"/home/porsche3/miniforge3/envs/compress-ai-lab/lib/python3.8/site-packages/torch/nn/modules/module.py\", line 1562, in _call_impl\n[rank0]:     return forward_call(*args, **kwargs)\n[rank0]:   File \"/home/porsche3/miniforge3/envs/compress-ai-lab/lib/python3.8/site-packages/torch/nn/parallel/distributed.py\", line 1636, in forward\n[rank0]:     else self._run_ddp_forward(*inputs, **kwargs)\n[rank0]:   File \"/home/porsche3/miniforge3/envs/compress-ai-lab/lib/python3.8/site-packages/torch/nn/parallel/distributed.py\", line 1454, in _run_ddp_forward\n[rank0]:     return self.module(*inputs, **kwargs)  # type: ignore[index]\n[rank0]:   File \"/home/porsche3/miniforge3/envs/compress-ai-lab/lib/python3.8/site-packages/torch/nn/modules/module.py\", line 1553, in _wrapped_call_impl\n[rank0]:     return self._call_impl(*args, **kwargs)\n[rank0]:   File \"/home/porsche3/miniforge3/envs/compress-ai-lab/lib/python3.8/site-packages/torch/nn/modules/module.py\", line 1562, in _call_impl\n[rank0]:     return forward_call(*args, **kwargs)\n[rank0]:   File \"/home/porsche3/miniforge3/envs/compress-ai-lab/lib/python3.8/site-packages/torch/_dynamo/eval_frame.py\", line 433, in _fn\n[rank0]:     return fn(*args, **kwargs)\n[rank0]:   File \"/home/porsche3/miniforge3/envs/compress-ai-lab/lib/python3.8/site-packages/torch/_dynamo",
+  "apis": [
+    "self.compile_and_call_fx_graph",
+    "dist.init_process_group",
+    "torch.device",
+    "ndist.init_process_group",
+    "model.parameters",
+    "torch.optim.SGD"
+  ],
+  "best_code": "# ddp_compile_test.py\nimport os, torch\nimport torch.nn as nn, torch.nn.functional as F\nimport torch._dynamo as dynamo\nimport torch.distributed as dist\nfrom torch.nn.parallel import DistributedDataParallel as DDP\n\ndynamo.config.optimize_ddp = True  # <== necessary for the bug\n\nLOCAL_RANK = int(os.getenv(\"LOCAL_RANK\", -1))\ndist.init_process_group(backend=\"nccl\" if dist.is_nccl_available() else \"gloo\")\n\nclass SimplistDoubleFn(torch.autograd.Function):\n    @staticmethod\n    def forward(ctx, x): return x * 2\n    @staticmethod\n    def backward(ctx, grad_out): return grad_out * 2\n\nclass DoubleLayer(nn.Module):\n    def forward(self, x): return SimplistDoubleFn.apply(x)\n\ndef main():\n    device = torch.device(f\"cuda:{LOCAL_RANK}\")\n    model = nn.Sequential(nn.Conv2d(3,3,3,padding=1), DoubleLayer()).to(device)\n    model = torch.compile(model)\n    model = DDP(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK, find_unused_parameters=True)\n    opt = torch.optim.SGD(model.parameters(), lr=1e-4)\n\n    for it in range(3):\n        x = torch.rand(2,3,256,256, device=device)\n        out = model(x)\n        loss = F.mse_loss(out, x)\n        opt.zero_grad(set_to_none=True)\n        loss.backward()\n        opt.step()\n        print(f\"[rank{LOCAL_RANK}] iter={it+1} loss={loss.item():.6f}\")\n\n    dist.destroy_process_group()\n\nif __name__ == \"__main__\":\n    main()",
+  "pull_urls": [],
+  "_meta": {
+    "file": "166305_issue_ori_data.json",
+    "generated_at": "2026-04-21 05:23:19",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\166305_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\166305_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-10 07:57:12",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\166305_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\166305_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "Even the simplest possible DDP+compile test fails when `torch._dynamo.config.optimize_ddp=True`. The error is raised even for a minimal custom autograd.Function that just multiplies the tensor by 2 in forward/backward. This means \"the most minimal possible code\" already triggers DDPOptimizer backend failure.",
+  "repro_code": "# ddp_compile_test.py\nimport os, torch\nimport torch.nn as nn, torch.nn.functional as F\nimport torch._dynamo as dynamo\nimport torch.distributed as dist\nfrom torch.nn.parallel import DistributedDataParallel as DDP\n\ndynamo.config.optimize_ddp = True  # <== necessary for the bug\n\nLOCAL_RANK = int(os.getenv(\"LOCAL_RANK\", -1))\ndist.init_process_group(backend=\"nccl\" if dist.is_nccl_available() else \"gloo\")\n\nclass SimplistDoubleFn(torch.autograd.Function):\n    @staticmethod\n    def forward(ctx, x): return x * 2\n    @staticmethod\n    def backward(ctx, grad_out): return grad_out * 2\n\nclass DoubleLayer(nn.Module):\n    def forward(self, x): return SimplistDoubleFn.apply(x)\n\ndef main():\n    device = torch.device(f\"cuda:{LOCAL_RANK}\")\n    model = nn.Sequential(nn.Conv2d(3,3,3,padding=1), DoubleLayer()).to(device)\n    model = torch.compile(model)\n    model = DDP(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK, find_unused_parameters=True)\n    opt = torch.optim.SGD(model.parameters(), lr=1e-4)\n\n    for it in range(3):\n        x = torch.rand(2,3,256,256, device=device)\n        out = model(x)\n        loss = F.mse_loss(out, x)\n        opt.zero_grad(set_to_none=True)\n        loss.backward()\n        opt.step()\n        print(f\"[rank{LOCAL_RANK}] iter={it+1} loss={loss.item():.6f}\")\n\n    dist.destroy_process_group()\n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "torch.compile() + DDP fails even for the simplest custom autograd.Function when optimize_ddp=True",
+  "affected_api": "torch.compile, torch.nn.parallel.DistributedDataParallel, torch.autograd.Function, torch._dynamo.config.optimize_ddp",
+  "trigger_conditions": {
+    "backend": "nccl or gloo",
+    "dtype": "",
+    "input_shape": "(2, 3, 256, 256)",
+    "other_conditions": "torch._dynamo.config.optimize_ddp=True is necessary for the bug"
+  },
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "3.8",
+    "os": "",
+    "hardware": "CUDA"
+  },
+  "labels": [],
+  "core_api_identification": {
+    "core_api": "1.  **Analyze the Request:**",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\166305_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\166305_issue_ori_data.output.events.json"
+  }
+}

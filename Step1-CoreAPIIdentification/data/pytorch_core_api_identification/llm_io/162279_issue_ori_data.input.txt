@@ -1,0 +1,145 @@
+Bug Report:
+Title: torch.export incorrect output shape when exporting two models
+Issue ID: 162279
+Original bug description: ### 🐛 Describe the bug
+
+The following code provides the setup. Basically we defined two models, which run any.dims, one with an empty dim list, and the other with a null dim list. And then we have a "process" function to run eager mode and export
+
+```python
+import torch
+import torch.nn as nn
+
+class AnyDimsModelEmpty(nn.Module):
+    def __init__(self):
+        super(AnyDimsModelEmpty, self).__init__()
+
+    def forward(self, x):
+        print('input shape:', x.shape)
+        y = torch.ops.aten.any.dims(x, [], False)
+        print('output shape:', y.shape)
+        return y
+
+class AnyDimsModelNull(nn.Module):
+    def __init__(self):
+        super(AnyDimsModelNull, self).__init__()
+
+    def forward(self, x):
+        print('input shape:', x.shape)
+        y = torch.ops.aten.any.dims(x, None, False)
+        print('output shape:', y.shape)
+        return y
+
+def process(model, x):
+    print('model:', model)
+    print('running eager mode...')
+    model(x)
+    print('exporting...')
+    torch.export.export(model, (x,))
+    print()
+```
+
+If we only process one model, then everything is fine, but if we process both models, one after the other, the output shape during export is incorrect for the second model. It doesn't matter which one we process first and which one we process second. I think this must be related to some sort of caching?
+
+```python
+model_empty = AnyDimsModelEmpty()
+model_null = AnyDimsModelNull()
+x = torch.ones([2, 3])
+
+process(model_empty, x)
+process(model_null, x)
+```
+terminal output:
+```
+model: AnyDimsModelEmpty()
+running eager mode...
+input shape: torch.Size([2, 3])
+output shape: torch.Size([2, 3])
+exporting...
+input shape: torch.Size([2, 3])
+output shape: torch.Size([2, 3])
+
+model: AnyDimsModelNull()
+running eager mode...
+input shape: torch.Size([2, 3])
+output shape: torch.Size([])
+exporting...
+input shape: torch.Size([2, 3])
+output shape: torch.Size([2, 3])  ---> incorrect, it should match the eager mode shape
+```
+
+Notice that if we only run one model, the output shape will be correct:
+```python
+model_empty = AnyDimsModelEmpty()
+model_null = AnyDimsModelNull()
+x = torch.ones([2, 3])
+
+# process(model_empty, x)
+process(model_null, x)
+```
+terminal output:
+```
+model: AnyDimsModelNull()
+running eager mode...
+input shape: torch.Size([2, 3])
+output shape: torch.Size([])
+exporting...
+input shape: torch.Size([2, 3])
+output shape: torch.Size([])
+```
+
+
+### Versions
+
+nightly
+
+cc @chauhang @penguinwu @avikchaudhuri @gmagogsfm @zhxchen17 @tugsbayasgalan @angelayi @suo @ydwu4
+Structured error description: When exporting two models sequentially using torch.export.export, the output shape during export is incorrect for the second model. The models use torch.ops.aten.any.dims with different dimension parameters (empty list [] vs None). If only one model is processed, the output shape is correct. The issue suggests this might be related to caching.
+Minimal reproducible example: import torch
+import torch.nn as nn
+
+class AnyDimsModelEmpty(nn.Module):
+    def __init__(self):
+        super(AnyDimsModelEmpty, self).__init__()
+
+    def forward(self, x):
+        print('input shape:', x.shape)
+        y = torch.ops.aten.any.dims(x, [], False)
+        print('output shape:', y.shape)
+        return y
+
+class AnyDimsModelNull(nn.Module):
+    def __init__(self):
+        super(AnyDimsModelNull, self).__init__()
+
+    def forward(self, x):
+        print('input shape:', x.shape)
+        y = torch.ops.aten.any.dims(x, None, False)
+        print('output shape:', y.shape)
+        return y
+
+def process(model, x):
+    print('model:', model)
+    print('running eager mode...')
+    model(x)
+    print('exporting...')
+    torch.export.export(model, (x,))
+    print()
+
+model_empty = AnyDimsModelEmpty()
+model_null = AnyDimsModelNull()
+x = torch.ones([2, 3])
+
+process(model_empty, x)
+process(model_null, x)
+Trigger conditions: {"backend": "", "dtype": "", "input_shape": "[2, 3]", "other_conditions": "Exporting two models sequentially that use torch.ops.aten.any.dims with different dimension parameters (empty list [] vs None)"}
+Environment: {"pytorch_version": "nightly", "python_version": "", "os": "", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

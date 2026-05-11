@@ -1,0 +1,95 @@
+Bug Report:
+Title: [dynamo] empty FX graph generated on graph break
+Issue ID: 160437
+Original bug description: Consider this code:
+```python
+import torch
+
+
+@torch.compile(backend="eager")
+def fn(x, i):
+    if i == 1:
+        torch._dynamo.graph_break()
+    return x + 1
+
+
+inp = torch.randn(3)
+fn(inp, 0)
+fn(inp, 1)
+fn(inp, 2)
+```
+
+which generates graphs:
+```
+TRACED GRAPH
+ ===== __compiled_fn_1_b54d6f60_4a6c_48f7_af5a_5d8637dc9101 =====
+ /data/users/williamwen/pytorch3/torch/fx/_lazy_graph_module.py class GraphModule(torch.nn.Module):
+    def forward(self, L_x_: "f32[3][1]cpu"):
+        l_x_ = L_x_
+        
+         # File: /data/users/williamwen/pytorch3/playground3.py:8 in fn, code: return x + 1
+        add: "f32[3][1]cpu" = l_x_ + 1;  l_x_ = None
+        return (add,)
+        
+
+TRACED GRAPH
+ ===== __compiled_fn_4_7b89acc6_24c3_4d27_b288_55c865735053 =====
+ /data/users/williamwen/pytorch3/torch/fx/_lazy_graph_module.py class GraphModule(torch.nn.Module):
+    def forward(self):
+        return ()
+        
+
+TRACED GRAPH
+ ===== __compiled_fn_7_a84df19b_25ce_4a8f_8f73_199f5aa3d685 =====
+ /data/users/williamwen/pytorch3/torch/fx/_lazy_graph_module.py class GraphModule(torch.nn.Module):
+    def forward(self, L_x_: "f32[3][1]cpu"):
+        l_x_ = L_x_
+        
+         # File: /data/users/williamwen/pytorch3/playground3.py:8 in torch_dynamo_resume_in_fn_at_7, code: return x + 1
+        add: "f32[3][1]cpu" = l_x_ + 1;  l_x_ = None
+        return (add,)
+        
+
+TRACED GRAPH
+ ===== __compiled_fn_9_b21379e5_8d71_4e7f_81ca_1d019102cb18 =====
+ /data/users/williamwen/pytorch3/torch/fx/_lazy_graph_module.py class GraphModule(torch.nn.Module):
+    def forward(self, L_x_: "f32[3][1]cpu"):
+        l_x_ = L_x_
+        
+         # File: /data/users/williamwen/pytorch3/playground3.py:8 in fn, code: return x + 1
+        add: "f32[3][1]cpu" = l_x_ + 1;  l_x_ = None
+        return (add,)
+```
+
+Perhaps we don't wish to actually compile the 2nd graph, which is empty. We already have logic in `output_graph.py` that doesn't compile empty graphs, but this case seems to slip through the cracks since in the second graph, there is a check for `i == 1` that gets pruned from the graph.
+
+This could be as simple as adding an exit from `compile_and_call_fx_graph`, but I haven't checked if this breaks other things yet.
+
+cc @chauhang @penguinwu @voznesenskym @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @chenyang78 @kadeng @amjames @Lucaskabela
+Structured error description: An empty FX graph is generated when using torch.compile with a graph break. The second traced graph is empty because a check for `i == 1` gets pruned from the graph. There is existing logic in `output_graph.py` that doesn't compile empty graphs, but this case slips through the cracks.
+Minimal reproducible example: import torch
+
+
+@torch.compile(backend="eager")
+def fn(x, i):
+    if i == 1:
+        torch._dynamo.graph_break()
+    return x + 1
+
+
+inp = torch.randn(3)
+fn(inp, 0)
+fn(inp, 1)
+fn(inp, 2)
+Trigger conditions: {"backend": "eager", "dtype": "f32", "input_shape": "[3]", "other_conditions": "conditional graph break that gets pruned from the graph"}
+Environment: {"pytorch_version": "unknown", "python_version": "unknown", "os": "unknown", "hardware": "unknown"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

@@ -1,0 +1,57 @@
+{
+  "title": "Inconsistent output with same input using equivalent block masks created via different methods in Flex Attention",
+  "issue_id": "165838",
+  "bug_description": "### 🐛 Describe the bug\n\nI observed that Flex Attention produces different outputs when using logically identical block masks created through different implementations.\n\nFor example, the following two functions both create equivalent causal masks in logic:\n```python\ndef block_mask_fn_1(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):\n    causal_mask = (q >= kv)\n    return causal_mask\n\ndef block_mask_fn_2(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):\n    causal_mask = hand_made_causal_mask[q, kv]\n    return causal_mask\n```\nHowever, the outputs can differ even when the inputs are fixed.\nThis discrepancy does not always occur — it happens around 6 times out of 500 when `seq_len = 16`, but becomes much worse at longer sequence lengths (370 out of 500 when `seq_len = 2048`).\n\n\n**Environment**\nPyTorch:  2.10.0.dev20250914+cu128\nGPU: L20 x1\n\nThis is the code to reproduce this problem.\n```python\nfrom typing import Union\nimport torch\nfrom torch import Tensor\nfrom torch.nn.attention.flex_attention import flex_attention, create_block_mask\n\ncompiled_flex_attention_hf = torch.compile(flex_attention,fullgraph=True)\ndef block_mask_fn_1(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):\n    causal_mask = (q >= kv)\n    return causal_mask\n\ndef block_mask_fn_2(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):\n    causal_mask = hand_made_causal_mask[q, kv]\n    return causal_mask\n\nseq_len = 2048\nquery_head = 16\nkv_head = 8\nhead_dim = 128\n\nkernel_options: dict[str, Union[int, bool]] = {\n        \"FORCE_USE_FLEX_ATTENTION\": True,\n        \"BLOCK_M\": 16,\n        \"BLOCK_N\": 16,\n        \"IS_DIVISIBLE\": False,\n    }\n\nattention_mask = torch.ones((1, seq_len), dtype=torch.bool).cuda()\n# hand made causal mask\nhand_made_causal_mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=attention_mask.device))\n\nfor i in range(500):\n    query_hf = torch.randn((1, query_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()\n    key_hf = torch.randn((1, kv_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()\n    value_hf = torch.randn((1, kv_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()\n\n    print('-'*50)\n    # first method to create block mask\n    block_mask_hf_1 = create_block_mask(block_mask_fn_1, 1, None, seq_len, seq_len, BLOCK_SIZE=(16, 16), device='cuda')\n    y1 = compiled_flex_attention_hf(query_hf,key_hf,\n            value_hf,\n            block_mask=block_mask_hf_1,\n            scale=None,\n            enable_gqa=True,\n            score_mod=None,\n            kernel_options=kernel_options,\n        )\n    # second method to create block mask\n    block_mask_hf_2 = create_block_mask(block_mask_fn_2, 1, None, seq_len, seq_len, BLOCK_SIZE=(16, 16), device='cuda')\n    y2 = compiled_flex_attention_hf(\n            query_hf,\n            key_hf,\n            value_hf,\n            block_mask=block_mask_hf_2,\n            scale=None,\n            enable_gqa=True,\n            score_mod=None,\n            kernel_options=kernel_options,\n        )\n    print('Different element count',torch.sum((y1-y2)!=0), 'Sum difference', (y1.float().sum()-y2.float().sum()).abs())\n```\n\n### Versions\n\nPyTorch version: 2.10.0.dev20250914+cu128\nIs debug build: False\nCUDA used to build PyTorch: 12.8\nROCM used to build PyTorch: N/A\n\nOS: Ubuntu 22.04.5 LTS (x86_64)\nGCC version: (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0\nClang version: Could not collect\nCMake version: version 4.1.0\nLibc version: glibc-2.35\n\nPython version: 3.12.3 | packaged by Anaconda, Inc. | (main, May  6 2024, 19:46:43) [GCC 11.2.0] (64-bit runtime)\nPython platform: Linux-5.15.0-91-generic-x86_64-with-glibc2.35\nIs CUDA available: True\nCUDA runtime version: 12.8.93\nCUDA_MODULE_LOADING set to: \nGPU models and configuration: GPU 0: NVIDIA L20\nNvidia driver version: 580.65.06\ncuDNN version: Probably one of the following:\n/usr/lib/x86_64-linux-gnu/libcudnn.so.9.8.0\n/usr/lib/x86_64-linux-gnu/libcudnn_adv.so.9.8.0\n/usr/lib/x86_64-linux-gnu/libcudnn_cnn.so.9.8.0\n/usr/lib/x86_64-linux-gnu/libcudnn_engines_precompiled.so.9",
+  "apis": [
+    "torch.randn",
+    "numpy",
+    "torch.sum",
+    "torch.compile",
+    "torch.ones",
+    "y1.float"
+  ],
+  "best_code": "from typing import Union\nimport torch\nfrom torch import Tensor\nfrom torch.nn.attention.flex_attention import flex_attention, create_block_mask\n\ncompiled_flex_attention_hf = torch.compile(flex_attention,fullgraph=True)\ndef block_mask_fn_1(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):\n    causal_mask = (q >= kv)\n    return causal_mask\n\ndef block_mask_fn_2(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):\n    causal_mask = hand_made_causal_mask[q, kv]\n    return causal_mask\n\nseq_len = 2048\nquery_head = 16\nkv_head = 8\nhead_dim = 128\n\nkernel_options: dict[str, Union[int, bool]] = {\n        \"FORCE_USE_FLEX_ATTENTION\": True,\n        \"BLOCK_M\": 16,\n        \"BLOCK_N\": 16,\n        \"IS_DIVISIBLE\": False,\n    }\n\nattention_mask = torch.ones((1, seq_len), dtype=torch.bool).cuda()\n# hand made causal mask\nhand_made_causal_mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=attention_mask.device))\n\nfor i in range(500):\n    query_hf = torch.randn((1, query_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()\n    key_hf = torch.randn((1, kv_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()\n    value_hf = torch.randn((1, kv_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()\n\n    print('-'*50)\n    # first method to create block mask\n    block_mask_hf_1 = create_block_mask(block_mask_fn_1, 1, None, seq_len, seq_len, BLOCK_SIZE=(16, 16), device='cuda')\n    y1 = compiled_flex_attention_hf(query_hf,key_hf,\n            value_hf,\n            block_mask=block_mask_hf_1,\n            scale=None,\n            enable_gqa=True,\n            score_mod=None,\n            kernel_options=kernel_options,\n        )\n    # second method to create block mask\n    block_mask_hf_2 = create_block_mask(block_mask_fn_2, 1, None, seq_len, seq_len, BLOCK_SIZE=(16, 16), device='cuda')\n    y2 = compiled_flex_attention_hf(\n            query_hf,\n            key_hf,\n            value_hf,\n            block_mask=block_mask_hf_2,\n            scale=None,\n            enable_gqa=True,\n            score_mod=None,\n            kernel_options=kernel_options,\n        )\n    print('Different element count',torch.sum((y1-y2)!=0), 'Sum difference', (y1.float().sum()-y2.float().sum()).abs())",
+  "pull_urls": [],
+  "_meta": {
+    "file": "165838_issue_ori_data.json",
+    "generated_at": "2026-04-21 04:59:33",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\165838_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\165838_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-10 07:14:37",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\165838_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\165838_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "Flex Attention produces different outputs when using logically identical block masks created through different implementations. Two functions both create equivalent causal masks in logic, but the outputs can differ even when the inputs are fixed. This discrepancy happens around 6 times out of 500 when seq_len = 16, but becomes much worse at longer sequence lengths (370 out of 500 when seq_len = 2048).",
+  "repro_code": "from typing import Union\nimport torch\nfrom torch import Tensor\nfrom torch.nn.attention.flex_attention import flex_attention, create_block_mask\n\ncompiled_flex_attention_hf = torch.compile(flex_attention,fullgraph=True)\ndef block_mask_fn_1(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):\n    causal_mask = (q >= kv)\n    return causal_mask\n\ndef block_mask_fn_2(batch: Tensor, h: Tensor, q: Tensor, kv: Tensor):\n    causal_mask = hand_made_causal_mask[q, kv]\n    return causal_mask\n\nseq_len = 2048\nquery_head = 16\nkv_head = 8\nhead_dim = 128\n\nkernel_options: dict[str, Union[int, bool]] = {\n        \"FORCE_USE_FLEX_ATTENTION\": True,\n        \"BLOCK_M\": 16,\n        \"BLOCK_N\": 16,\n        \"IS_DIVISIBLE\": False,\n    }\n\nattention_mask = torch.ones((1, seq_len), dtype=torch.bool).cuda()\n# hand made causal mask\nhand_made_causal_mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=attention_mask.device))\n\nfor i in range(500):\n    query_hf = torch.randn((1, query_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()\n    key_hf = torch.randn((1, kv_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()\n    value_hf = torch.randn((1, kv_head, seq_len, head_dim),dtype=torch.bfloat16).cuda()\n\n    print('-'*50)\n    # first method to create block mask\n    block_mask_hf_1 = create_block_mask(block_mask_fn_1, 1, None, seq_len, seq_len, BLOCK_SIZE=(16, 16), device='cuda')\n    y1 = compiled_flex_attention_hf(query_hf,key_hf,\n            value_hf,\n            block_mask=block_mask_hf_1,\n            scale=None,\n            enable_gqa=True,\n            score_mod=None,\n            kernel_options=kernel_options,\n        )\n    # second method to create block mask\n    block_mask_hf_2 = create_block_mask(block_mask_fn_2, 1, None, seq_len, seq_len, BLOCK_SIZE=(16, 16), device='cuda')\n    y2 = compiled_flex_attention_hf(\n            query_hf,\n            key_hf,\n            value_hf,\n            block_mask=block_mask_hf_2,\n            scale=None,\n            enable_gqa=True,\n            score_mod=None,\n            kernel_options=kernel_options,\n        )\n    print('Different element count',torch.sum((y1-y2)!=0), 'Sum difference', (y1.float().sum()-y2.float().sum()).abs())",
+  "repro_output": "Inconsistent output with same input using equivalent block masks created via different methods in Flex Attention",
+  "affected_api": "flex_attention, create_block_mask",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.bfloat16",
+    "input_shape": "query: (1, 16, seq_len, 128), key: (1, 8, seq_len, 128), value: (1, 8, seq_len, 128)",
+    "other_conditions": "seq_len values tested include 16 and 2048; BLOCK_SIZE=(16, 16); kernel_options with FORCE_USE_FLEX_ATTENTION=True, BLOCK_M=16, BLOCK_N=16, IS_DIVISIBLE=False; enable_gqa=True"
+  },
+  "environment": {
+    "pytorch_version": "2.10.0.dev20250914+cu128",
+    "python_version": "3.12.3",
+    "os": "Ubuntu 22.04.5 LTS (x86_64)",
+    "hardware": "NVIDIA L20 GPU"
+  },
+  "labels": [
+    "bug",
+    "flex_attention",
+    "attention"
+  ],
+  "core_api_identification": {
+    "core_api": "1.  **Analyze the Bug Report:**",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\165838_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\165838_issue_ori_data.output.events.json"
+  }
+}

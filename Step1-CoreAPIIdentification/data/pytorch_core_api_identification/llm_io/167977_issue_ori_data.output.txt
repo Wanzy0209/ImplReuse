@@ -1,0 +1,105 @@
+1.  **Analyze the Request:**
+    *   Input: A bug report about PyTorch DTensor.
+    *   Task: Identify the *single core PyTorch API* responsible for the bug.
+    *   Output format: Only the API name, or None. No JSON, Markdown, explanation, punctuation, or quotes.
+
+2.  **Analyze the Bug Report:**
+    *   **Title:** [DTensor]Sharding propagation failed for custom operation with Tensor in kwargs
+    *   **Description:** The user is trying to register a sharding strategy for a custom operation (specifically `aten.min.dim_min`) using `@register_sharding`. The operation has Tensor parameters in kwargs (specifically `out=(value, indices)`).
+    *   **Error:** `AssertionError` in `expand_to_full_mesh_op_strategy`.
+    *   **Root Cause:** `input_args_strategy` only considers DTensors in args, while `input_specs` contains strategies for DTensors in args *and* kwargs. This mismatch causes the assertion failure.
+    *   **Code Snippet:**
+        ```python
+        from torch.distributed.tensor.experimental import register_sharding
+        # ...
+        @register_sharding(aten.min.dim_min)
+        def custom_strategy(x, dim, keepdim, min, min_indices):
+            # ...
+        # ...
+        torch.min(x, dim=1, keepdim=True, out=(value, indices))
+        ```
+
+3.  **Identify the Core API:**
+    *   The bug occurs during "sharding propagation".
+    *   The user is explicitly using `@register_sharding` to define a custom strategy.
+    *   The error happens inside `expand_to_full_mesh_op_strategy`, which is called by the custom strategy wrapper.
+    *   The specific operation being called is `torch.min` (or `aten.min.dim_min`).
+    *   However, the bug is about the *mechanism* of registering strategies for operations that have tensor kwargs.
+    *   Is the bug in `torch.min`? No, `torch.min` works fine in standard PyTorch. It fails specifically in the context of DTensor sharding propagation when a custom strategy is registered.
+    *   Is the bug in `register_sharding`? The error happens *because* of how `register_sharding` sets up the strategy and how the propagation logic handles the inputs. The assertion failure `assert len(input_specs) == len(input_args_strategy)` happens inside `expand_to_full_mesh_op_strategy`, which is a utility used by the registered strategy.
+    *   Let's look at the traceback:
+        ```python
+        File ".../torch/distributed/tensor/experimental/_register_sharding.py", line 98, in custom_strategy
+            return expand_to_full_mesh_op_strategy(
+        File ".../torch/distributed/tensor/_ops/utils.py", line 332, in expand_to_full_mesh_op_strategy
+            assert len(input_specs) == len(input_args_strategy)
+        ```
+    *   The user is calling `torch.min`.
+    *   The user is using `register_sharding`.
+    *   The bug is that `register_sharding` (or the underlying propagation logic it relies on) doesn't correctly handle tensor kwargs when expanding strategies.
+
+    *   *Candidate 1:* `torch.distributed.tensor.experimental.register_sharding`. This is the decorator the user is applying. The bug is triggered by the interaction between this decorator and operations with tensor kwargs.
+    *   *Candidate 2:* `torch.min`. This is the operation being called. But the bug isn't in `min` itself, but in how DTensor handles it.
+    *   *Candidate 3:* `expand_to_full_mesh_op_strategy`. This is the internal function where the crash happens. But usually, "API" refers to the public-facing API the user interacts with or the high-level component causing the issue.
+
+    *   Let's re-read the prompt: "Identify the single core PyTorch API from a bug report."
+    *   The bug report title says: "[DTensor]Sharding propagation failed for custom operation with Tensor in kwargs".
+    *   The description says: "I try to register strategy for my custom operation by `@register_sharding`".
+    *   The issue is that `register_sharding` (or the logic it invokes) fails when the op has tensor kwargs.
+    *   The most specific API mentioned that is central to the bug is `register_sharding`. Without using this API, the bug (the assertion error in propagation) wouldn't occur in this specific way (standard propagation might handle it differently or fail differently, but the specific error here is tied to the custom strategy registration path).
+
+    *   However, looking at the code, the user calls `torch.min`. The `register_sharding` is a setup. The *trigger* is the call to `torch.min`.
+    *   But the bug is about the *registration* mechanism failing to support kwargs.
+    *   Let's look at the "Structured error description": "Using DTensor with custom sharding strategy registration, operation has Tensor parameters in kwargs".
+    *   The API `register_sharding` is the one being reported as faulty/limited.
+
+    *   Let's consider `torch.distributed.tensor.experimental.register_sharding`.
+    *   Is there a more generic API? `torch.distributed.tensor`? Too broad.
+    *   Is it `torch.min`? The bug isn't that `min` calculates wrong, it's that the *sharding propagation* fails. This is a DTensor specific issue.
+
+    *   Let's look at the traceback again.
+        `File ".../torch/distributed/tensor/experimental/_register_sharding.py", line 98, in custom_strategy`
+        The function `custom_strategy` is the wrapper created by `register_sharding`.
+        It calls `expand_to_full_mesh_op_strategy`.
+        The assertion fails.
+
+    *   The user is trying to extend DTensor. The API they are using to do so is `register_sharding`. The bug is that this API (or the infrastructure supporting it) doesn't handle tensor kwargs correctly.
+    *   Therefore, `register_sharding` is the most relevant API.
+
+    *   Let's check if `torch.min` is a better answer. If I just call `torch.min` with DTensors without `register_sharding`, does it crash? The bug report implies the crash happens *because* of the custom strategy registration. "I try to register strategy for my custom operation... During sharding propagation, an AssertionError... occurs".
+    *   So the bug is in the `register_sharding` path.
+
+    *   The API name is `torch.distributed.tensor.experimental.register_sharding`.
+    *   Shortened to `register_sharding`? The prompt asks for "one API name". Usually, the fully qualified name is safer, but often the short name is accepted if unique. Given the context of "core PyTorch API", `register_sharding` is the specific function.
+
+    *   Let's double check if `expand_to_full_mesh_op_strategy` is considered a "core API". It's an internal utility (`_ops/utils.py`). It's not really a user-facing API in the same way `register_sharding` is. The user interacts with `register_sharding`.
+
+    *   Decision: `register_sharding`.
+
+4.  **Final Verification:**
+    *   Bug: Sharding propagation fails for custom ops with tensor kwargs.
+    *   Mechanism: User uses `@register_sharding`.
+    *   Error: Assertion error in the logic handling the strategy provided via `register_sharding`.
+    *   Responsible API: `register_sharding`.
+
+    *   Wait, is it `torch.distributed.tensor`? No, that's a module.
+    *   Is it `torch.min`? No, that's the op being wrapped.
+    *   Is it `distribute_tensor`? No, that's just creating the inputs.
+
+    *   The bug is specifically about the *registration* of the strategy.
+    *   API: `torch.distributed.tensor.experimental.register_sharding`.
+
+    *   I will provide the short name `register_sharding` as it is the specific function identifier. Or `torch.distributed.tensor.experimental.register_sharding`. The prompt asks for "one API name". Usually, for these tasks, the specific function name is best.
+
+    *   Let's look at the provided solution format. "Reply with only one API name".
+    *   I will use `torch.distributed.tensor.experimental.register_sharding` to be precise, or just `register_sharding`. Given the import `from torch.distributed.tensor.experimental import register_sharding`, `register_sharding` is the name used in the code.
+
+    *   Let's consider if the bug is actually in `expand_to_full_mesh_op_strategy`. The user doesn't call this directly. The user calls `register_sharding`. The bug is a limitation/bug in `register_sharding`'s implementation.
+
+    *   Let's try to find if there is a more "core" API. The bug is in DTensor. The API is `register_sharding`.
+
+    *   One more check: The title says "[DTensor]Sharding propagation failed...". The description says "I try to register strategy... by @register_sharding".
+    *   The bug is that `register_sharding` does not support tensor kwargs.
+    *   So `register_sharding` is the API.
+
+    *   I will output `torch.distributed.tensor.experimental.register_sharding`. It is unambiguous.torch.distributed.tensor.experimental.register_sharding

@@ -1,0 +1,107 @@
+Bug Report:
+Title: [Fuzzer][Eager/Compile Divergence] assert len(self.stride) == len(order)
+Issue ID: 166270
+Original bug description: ```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1061983224)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_4 = arg_0 # size=(4,), stride=(1,), dtype=bool, device=cuda
+    var_node_3 = torch.chunk(var_node_4, 4, dim=0)[0] # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_2 = torch.squeeze(var_node_3) # size=(), stride=(), dtype=bool, device=cuda
+    var_node_1 = torch.stack([var_node_2], dim=0) # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_0 = torch.reshape(var_node_1, [1]) # size=(1,), stride=(1,), dtype=bool, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(0, 2, (4,), dtype=torch.int8).bool(), (4,), (1,))
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+```
+
+```
+   ✅ eager success
+   Traceback (most recent call last):
+     File "/tmp/torchfuzz/fuzz_4fc36e68.py", line 27, in <module>
+       result_compiled = compiled_program(*args)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 749, in compile_wrapper
+       raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 923, in _compile_fx_inner
+       raise InductorError(e, currentframe()).with_traceback(
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 907, in _compile_fx_inner
+       mb_compiled_graph = fx_codegen_and_compile(
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 1578, in fx_codegen_and_compile
+       return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 1377, in codegen_and_compile
+       graph.run(*example_inputs)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/graph.py", line 921, in run
+       return super().run(*args)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/fx/interpreter.py", line 173, in run
+       self.env[node] = self.run_node(node)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/graph.py", line 1674, in run_node
+       result = ir.ExternKernel.require_stride_order(
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/ir.py", line 5663, in require_stride_order
+       return cls.require_strides(x, order=order, allow_padding=allow_padding)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/ir.py", line 5551, in require_strides
+       (order and x.get_layout().is_stride_ordered(order))
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_inductor/ir.py", line 3504, in is_stride_ordered
+       assert len(self.stride) == len(order)
+   torch._inductor.exc.InductorError: AssertionError: 
+   Set TORCHDYNAMO_VERBOSE=1 for the internal stack trace (please do this especially if you're reporting a bug to PyTorch). For even more developer context, set TORCH_LOGS="+dynamo"
+```
+
+cc @chauhang @penguinwu @ezyang @voznesenskym @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @ipiszy @chenyang78 @kadeng @muchulee8 @amjames @aakhundov @coconutruben
+Structured error description: An AssertionError occurs when running a compiled PyTorch program with torch.compile using fullgraph=True and dynamic=True. The error happens in torch._inductor.ir.py at line 3504 with the assertion 'assert len(self.stride) == len(order)'. The eager execution succeeds, but the compiled version fails during the require_stride_order check in ExternKernel.
+Minimal reproducible example: import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1061983224)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_4 = arg_0 # size=(4,), stride=(1,), dtype=bool, device=cuda
+    var_node_3 = torch.chunk(var_node_4, 4, dim=0)[0] # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_2 = torch.squeeze(var_node_3) # size=(), stride=(), dtype=bool, device=cuda
+    var_node_1 = torch.stack([var_node_2], dim=0) # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_0 = torch.reshape(var_node_1, [1]) # size=(1,), stride=(1,), dtype=bool, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(0, 2, (4,), dtype=torch.int8).bool(), (4,), (1,))
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+Trigger conditions: {"backend": "CUDA", "dtype": "bool", "input_shape": "(4,)", "other_conditions": "torch._dynamo.config.capture_scalar_outputs = True, torch.compile with fullgraph=True and dynamic=True"}
+Environment: {"pytorch_version": "unknown", "python_version": "3.10", "os": "Linux", "hardware": "CUDA"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

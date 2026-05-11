@@ -1,0 +1,68 @@
+{
+  "title": "[Fuzzer][Eager/Compile Divergence] unsupported operand type(s) for divmod(): 'SymInt' and 'int'",
+  "issue_id": "163457",
+  "bug_description": "### 🐛 Describe the bug\n\n```\nimport torch\nimport sys\ntorch._dynamo.config.capture_scalar_outputs = True\ntorch._dynamo.config.capture_dynamic_output_shape_ops = True\ntorch._inductor.config.emulate_precision_casts = True\n\ndef foo(arg0, arg1, arg2):\n    t0 = arg0 # size=(3, 395, 202, 357), stride=(239370, 79790, 202, 1), dtype=bfloat16, device=cuda\n    t1 = arg1 # size=(1,), stride=(1,), dtype=int64, device=cuda\n    t2 = arg2 # size=(395,), stride=(1,), dtype=bfloat16, device=cuda\n    t3 = torch.nn.functional.group_norm(t0, 1, weight=t2, bias=t2) # size=(3, 395, 202, 357), stride=(28485030, 72114, 357, 1), dtype=bfloat16, device=cuda\n    t4 = t3.max(dim=0).values # size=(395, 202, 357), stride=(72114, 357, 1), dtype=bfloat16, device=cuda\n    t5 = torch.sigmoid(t4) # size=(395, 202, 357), stride=(72114, 357, 1), dtype=bfloat16, device=cuda\n    output = t5  # output tensor\n    return output\n\narg0 = torch.rand([3, 395, 202, 357], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(3, 395, 202, 357), stride=(239370, 79790, 202, 1), dtype=bfloat16, device=cuda\narg1 = torch.randint(0, 1000, [1], dtype=torch.int64, device='cuda') # size=(1,), stride=(1,), dtype=int64, device=cuda\narg2 = torch.rand([395], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(395,), stride=(1,), dtype=bfloat16, device=cuda\nif __name__ == '__main__':\n    out_eager = foo(arg0, arg1, arg2)\n    out_eager.sum().backward()\n    print('Eager Success! ✅')\n    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)\n    out_compiled = compiled_foo(arg0, arg1, arg2)\n    out_compiled.sum().backward()\n    print('Compile Success! ✅')\n    # Compare outputs (forward)\n    out_eager_sum = out_eager.sum()\n    out_compiled_sum = out_compiled.sum()\n    diff = (out_eager_sum - out_compiled_sum).abs().item()\n    rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100\n    print(f'Relative diff (sum): {rel_diff:.6f}%')\n    if rel_diff > 5:\n        print(f'❌ Forward output sums differ significantly (relative)!')\n        print('out_eager_sum:', out_eager_sum.item())\n        print('out_compiled_sum:', out_compiled_sum.item())\n        print('Absolute diff:', diff)\n        print('Relative diff (%):', rel_diff)\n        sys.exit(1)\n```\n\nProduces\n\n```\nEager Success! ✅\n/data/users/bobren/a/pytorch/torch/autograd/graph.py:841: UserWarning: Error detected in NativeGroupNormBackward0. Traceback of forward call that caused the error:\n  File \"/tmp/torchfuzz/fuzz_6509eef54371b51e.py\", line 11, in foo\n    t3 = torch.nn.functional.group_norm(t0, 1, weight=t2, bias=t2) # size=(3, 395, 202, 357), stride=(28485030, 72114, 357, 1), dtype=bfloat16, device=cuda\n (Triggered internally at /data/users/bobren/a/pytorch/torch/csrc/autograd/python_anomaly_mode.cpp:122.)\n  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass\nTraceback (most recent call last):\n  File \"/tmp/torchfuzz/fuzz_6509eef54371b51e.py\", line 25, in <module>\n    out_compiled = compiled_foo(arg0, arg1, arg2)\n  File \"/data/users/bobren/a/pytorch/torch/_dynamo/eval_frame.py\", line 843, in compile_wrapper\n    raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1\n  File \"/data/users/bobren/a/pytorch/torch/_dynamo/output_graph.py\", line 2125, in _call_user_compiler\n    raise BackendCompilerFailed(\n  File \"/data/users/bobren/a/pytorch/torch/_dynamo/output_graph.py\", line 2100, in _call_user_compiler\n    compiled_fn = compiler_fn(gm, example_inputs)\n  File \"/data/users/bobren/a/pytorch/torch/_dynamo/repro/after_dynamo.py\", line 156, in __call__\n    compiled_gm = compiler_fn(gm, example_inputs)\n  File \"/data/users/bobren/a/pytorch/torch/__init__.py\", line 2380, in __call__\n    return compile_fx(model_, inputs_, config_patches=self.config)\n  File \"/data/users/bobren/a/pytorch/torch/_inductor/compile_fx.py\", line 2666, in compile_fx\n    return aot_autograd(\n  File \"/data/users/bobren/a/pytorch/torch/_dynamo/backends/common.py\", line 117, in __call__\n ",
+  "apis": [
+    "Variable._execution_engine.run_backward",
+    "out_compiled_sum.item",
+    "out_eager_sum.item",
+    "self.create_arg",
+    "out_eager.sum",
+    "make_fx_tracer.trace"
+  ],
+  "best_code": "import torch\nimport sys\ntorch._dynamo.config.capture_scalar_outputs = True\ntorch._dynamo.config.capture_dynamic_output_shape_ops = True\ntorch._inductor.config.emulate_precision_casts = True\n\ndef foo(arg0, arg1, arg2):\n    t0 = arg0 # size=(3, 395, 202, 357), stride=(239370, 79790, 202, 1), dtype=bfloat16, device=cuda\n    t1 = arg1 # size=(1,), stride=(1,), dtype=int64, device=cuda\n    t2 = arg2 # size=(395,), stride=(1,), dtype=bfloat16, device=cuda\n    t3 = torch.nn.functional.group_norm(t0, 1, weight=t2, bias=t2) # size=(3, 395, 202, 357), stride=(28485030, 72114, 357, 1), dtype=bfloat16, device=cuda\n    t4 = t3.max(dim=0).values # size=(395, 202, 357), stride=(72114, 357, 1), dtype=bfloat16, device=cuda\n    t5 = torch.sigmoid(t4) # size=(395, 202, 357), stride=(72114, 357, 1), dtype=bfloat16, device=cuda\n    output = t5  # output tensor\n    return output\n\narg0 = torch.rand([3, 395, 202, 357], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(3, 395, 202, 357), stride=(239370, 79790, 202, 1), dtype=bfloat16, device=cuda\narg1 = torch.randint(0, 1000, [1], dtype=torch.int64, device='cuda') # size=(1,), stride=(1,), dtype=int64, device=cuda\narg2 = torch.rand([395], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(395,), stride=(1,), dtype=bfloat16, device=cuda\nif __name__ == '__main__':\n    out_eager = foo(arg0, arg1, arg2)\n    out_eager.sum().backward()\n    print('Eager Success! ✅')\n    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)\n    out_compiled = compiled_foo(arg0, arg1, arg2)\n    out_compiled.sum().backward()\n    print('Compile Success! ✅')\n    # Compare outputs (forward)\n    out_eager_sum = out_eager.sum()\n    out_compiled_sum = out_compiled.sum()\n    diff = (out_eager_sum - out_compiled_sum).abs().item()\n    rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100\n    print(f'Relative diff (sum): {rel_diff:.6f}%')\n    if rel_diff > 5:\n        print(f'❌ Forward output sums differ significantly (relative)!')\n        print('out_eager_sum:', out_eager_sum.item())\n        print('out_compiled_sum:', out_compiled_sum.item())\n        print('Absolute diff:', diff)\n        print('Relative diff (%):', rel_diff)\n        sys.exit(1)",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/163434",
+    "https://github.com/pytorch/pytorch/pull/163414",
+    "https://github.com/pytorch/pytorch/pull/163482",
+    "https://github.com/pytorch/pytorch/pull/163412",
+    "https://github.com/pytorch/pytorch/pull/163481",
+    "https://github.com/pytorch/pytorch/pull/163386",
+    "https://github.com/pytorch/pytorch/pull/163393",
+    "https://github.com/pytorch/pytorch/pull/163422",
+    "https://github.com/pytorch/pytorch/pull/163520",
+    "https://github.com/pytorch/pytorch/pull/163419"
+  ],
+  "_meta": {
+    "file": "163457_issue_ori_data.json",
+    "generated_at": "2026-04-21 03:09:39",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\163457_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\163457_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-10 04:04:41",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163457_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163457_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "A divergence between eager mode and compiled mode when using torch.compile with fullgraph=True and dynamic=True. The code runs successfully in eager mode but fails during compilation with an error related to unsupported operand type(s) for divmod(): 'SymInt' and 'int'. The error occurs during the backward pass of NativeGroupNormBackward0.",
+  "repro_code": "import torch\nimport sys\ntorch._dynamo.config.capture_scalar_outputs = True\ntorch._dynamo.config.capture_dynamic_output_shape_ops = True\ntorch._inductor.config.emulate_precision_casts = True\n\ndef foo(arg0, arg1, arg2):\n    t0 = arg0 # size=(3, 395, 202, 357), stride=(239370, 79790, 202, 1), dtype=bfloat16, device=cuda\n    t1 = arg1 # size=(1,), stride=(1,), dtype=int64, device=cuda\n    t2 = arg2 # size=(395,), stride=(1,), dtype=bfloat16, device=cuda\n    t3 = torch.nn.functional.group_norm(t0, 1, weight=t2, bias=t2) # size=(3, 395, 202, 357), stride=(28485030, 72114, 357, 1), dtype=bfloat16, device=cuda\n    t4 = t3.max(dim=0).values # size=(395, 202, 357), stride=(72114, 357, 1), dtype=bfloat16, device=cuda\n    t5 = torch.sigmoid(t4) # size=(395, 202, 357), stride=(72114, 357, 1), dtype=bfloat16, device=cuda\n    output = t5  # output tensor\n    return output\n\narg0 = torch.rand([3, 395, 202, 357], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(3, 395, 202, 357), stride=(239370, 79790, 202, 1), dtype=bfloat16, device=cuda\narg1 = torch.randint(0, 1000, [1], dtype=torch.int64, device='cuda') # size=(1,), stride=(1,), dtype=int64, device=cuda\narg2 = torch.rand([395], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(395,), stride=(1,), dtype=bfloat16, device=cuda\nif __name__ == '__main__':\n    out_eager = foo(arg0, arg1, arg2)\n    out_eager.sum().backward()\n    print('Eager Success! ✅')\n    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)\n    out_compiled = compiled_foo(arg0, arg1, arg2)\n    out_compiled.sum().backward()\n    print('Compile Success! ✅')\n    # Compare outputs (forward)\n    out_eager_sum = out_eager.sum()\n    out_compiled_sum = out_compiled.sum()\n    diff = (out_eager_sum - out_compiled_sum).abs().item()\n    rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100\n    print(f'Relative diff (sum): {rel_diff:.6f}%')\n    if rel_diff > 5:\n        print(f'❌ Forward output sums differ significantly (relative)!')\n        print('out_eager_sum:', out_eager_sum.item())\n        print('out_compiled_sum:', out_compiled_sum.item())\n        print('Absolute diff:', diff)\n        print('Relative diff (%):', rel_diff)\n        sys.exit(1)",
+  "repro_output": "[Fuzzer][Eager/Compile Divergence] unsupported operand type(s) for divmod(): 'SymInt' and 'int'",
+  "affected_api": "torch.nn.functional.group_norm",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "bfloat16, int64",
+    "input_shape": "arg0=(3, 395, 202, 357), arg1=(1,), arg2=(395,)",
+    "other_conditions": "torch.compile with fullgraph=True and dynamic=True, torch._dynamo.config.capture_scalar_outputs = True, torch._dynamo.config.capture_dynamic_output_shape_ops = True, torch._inductor.config.emulate_precision_casts = True"
+  },
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "CUDA"
+  },
+  "labels": [
+    "fuzzer",
+    "eager/compile divergence",
+    "group_norm"
+  ],
+  "core_api_identification": {
+    "core_api": "python",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163457_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163457_issue_ori_data.output.events.json"
+  }
+}

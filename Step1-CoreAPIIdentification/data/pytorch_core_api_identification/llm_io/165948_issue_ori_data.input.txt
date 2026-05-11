@@ -1,0 +1,117 @@
+Bug Report:
+Title: _dynamo_graph_capture_for_export cannot trace flex_attention with block_mask kwarg
+Issue ID: 165948
+Original bug description: ### 🐛 Describe the bug
+
+```python
+
+import torch
+
+from torch._dynamo.functional_export import _dynamo_graph_capture_for_export
+
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+
+class FlexAttentionModule(torch.nn.Module):
+    def __init__(self, head_dim=64):
+        super().__init__()
+        self.head_dim = head_dim
+
+    def forward(self, query, key, value, block_mask=None):
+        return flex_attention(query, key, value, block_mask=block_mask)
+
+flex_model = FlexAttentionModule(head_dim=64)
+
+batch_size = 2
+num_heads = 4
+seq_len = 128
+head_dim = 64
+
+query = torch.randn(batch_size, num_heads, seq_len, head_dim)
+key = torch.randn(batch_size, num_heads, seq_len, head_dim)
+value = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+def causal_mask(b, h, q_idx, kv_idx):
+    return q_idx >= kv_idx
+
+block_mask = create_block_mask(
+    causal_mask, batch_size, num_heads, seq_len, seq_len, device="cpu"
+)
+
+flex_inputs = (query, key, value)
+flex_kwargs = {"block_mask": block_mask}
+
+eager_out = flex_model(*flex_inputs, **flex_kwargs)
+
+with torch._dynamo.config.patch(install_free_tensors=True):
+    gm = _dynamo_graph_capture_for_export(flex_model)(*flex_inputs, **flex_kwargs)
+```
+
+
+Error message:
+```
+Traceback (most recent call last):
+  File "/data/users/yimingzhou/pytorch/demo.py", line 173, in <module>
+    gm = _dynamo_graph_capture_for_export(flex_model)(*flex_inputs, **flex_kwargs)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/yimingzhou/pytorch/torch/_dynamo/functional_export.py", line 571, in inner
+    assert isinstance(source, torch._dynamo.source.GetItemSource)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+### Versions
+
+main
+
+cc @chauhang @penguinwu @avikchaudhuri @gmagogsfm @zhxchen17 @tugsbayasgalan @angelayi @suo @ydwu4
+Structured error description: The _dynamo_graph_capture_for_export function fails when trying to trace flex_attention with a block_mask keyword argument, resulting in an assertion error: assert isinstance(source, torch._dynamo.source.GetItemSource)
+Minimal reproducible example: import torch
+
+from torch._dynamo.functional_export import _dynamo_graph_capture_for_export
+
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+
+class FlexAttentionModule(torch.nn.Module):
+    def __init__(self, head_dim=64):
+        super().__init__()
+        self.head_dim = head_dim
+
+    def forward(self, query, key, value, block_mask=None):
+        return flex_attention(query, key, value, block_mask=block_mask)
+
+flex_model = FlexAttentionModule(head_dim=64)
+
+batch_size = 2
+num_heads = 4
+seq_len = 128
+head_dim = 64
+
+query = torch.randn(batch_size, num_heads, seq_len, head_dim)
+key = torch.randn(batch_size, num_heads, seq_len, head_dim)
+value = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+def causal_mask(b, h, q_idx, kv_idx):
+    return q_idx >= kv_idx
+
+block_mask = create_block_mask(
+    causal_mask, batch_size, num_heads, seq_len, seq_len, device="cpu"
+)
+
+flex_inputs = (query, key, value)
+flex_kwargs = {"block_mask": block_mask}
+
+eager_out = flex_model(*flex_inputs, **flex_kwargs)
+
+with torch._dynamo.config.patch(install_free_tensors=True):
+    gm = _dynamo_graph_capture_for_export(flex_model)(*flex_inputs, **flex_kwargs)
+Trigger conditions: {"backend": "cpu", "dtype": "unknown", "input_shape": "batch_size=2, num_heads=4, seq_len=128, head_dim=64", "other_conditions": "Using flex_attention with block_mask kwarg, using _dynamo_graph_capture_for_export with install_free_tensors=True"}
+Environment: {"pytorch_version": "main", "python_version": "unknown", "os": "unknown", "hardware": "cpu"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

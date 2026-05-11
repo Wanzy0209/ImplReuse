@@ -1,0 +1,67 @@
+{
+  "title": "[Fuzzer][Eager/Compile Divergence] 8+% numerical difference between eager and compile",
+  "issue_id": "163449",
+  "bug_description": "### 🐛 Describe the bug\n\n```\nimport torch\nimport sys\ntorch._dynamo.config.capture_scalar_outputs = True\ntorch._dynamo.config.capture_dynamic_output_shape_ops = True\ntorch._inductor.config.emulate_precision_casts = True\n\ndef foo(arg0, arg1, arg2, arg3, arg4):\n    t0 = arg0 # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda\n    t1 = arg1 # size=(5, 1024), stride=(1024, 1), dtype=bfloat16, device=cuda\n    t2 = arg2 # size=(1024, 4), stride=(4, 1), dtype=bfloat16, device=cuda\n    t3 = torch.addmm(t0, t1, t2) # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda\n    t4 = t3.norm() # size=(), stride=(), dtype=bfloat16, device=cuda\n    t5 = arg3 # size=(3, 4, 5, 2), stride=(40, 10, 2, 1), dtype=float32, device=cuda\n    t6 = t5.var(dim=0) # size=(4, 5, 2), stride=(10, 2, 1), dtype=float32, device=cuda\n    t7 = t6.var() # size=(), stride=(), dtype=float32, device=cuda\n    t8 = arg4 # size=(), stride=(), dtype=float32, device=cuda\n    t9 = torch.nn.functional.relu(t8) # size=(), stride=(), dtype=float32, device=cuda\n    t10 = t7 + t4 + t9 # size=(), stride=(), dtype=float32, device=cuda\n    t11 = torch.pow(torch.pow(t4, t7), t10) # size=(), stride=(), dtype=float32, device=cuda\n    output = t11  # output tensor\n    return output\n\narg0 = torch.rand([5, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda\narg1 = torch.rand([5, 1024], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5, 1024), stride=(1024, 1), dtype=bfloat16, device=cuda\narg2 = torch.rand([1024, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(1024, 4), stride=(4, 1), dtype=bfloat16, device=cuda\narg3 = torch.rand([3, 4, 5, 2], dtype=torch.float32, device='cuda', requires_grad=True) # size=(3, 4, 5, 2), stride=(40, 10, 2, 1), dtype=float32, device=cuda\narg4 = torch.rand([], dtype=torch.float32, device='cuda', requires_grad=True) # size=(), stride=(), dtype=float32, device=cuda\nif __name__ == '__main__':\n    out_eager = foo(arg0, arg1, arg2, arg3, arg4)\n    out_eager.sum().backward()\n    print('Eager Success! ✅')\n    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)\n    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4)\n    out_compiled.sum().backward()\n    print('Compile Success! ✅')\n    # Compare outputs (forward)\n    out_eager_sum = out_eager.sum()\n    out_compiled_sum = out_compiled.sum()\n    diff = (out_eager_sum - out_compiled_sum).abs().item()\n    rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100\n    print(f'Relative diff (sum): {rel_diff:.6f}%')\n    if rel_diff > 5:\n        print(f'❌ Forward output sums differ significantly (relative)!')\n        print('out_eager_sum:', out_eager_sum.item())\n        print('out_compiled_sum:', out_compiled_sum.item())\n        print('Absolute diff:', diff)\n        print('Relative diff (%):', rel_diff)\n        sys.exit(1)\n```\n\n```\n(/home/bobren/local/a/pytorch-env) [23:56] devgpu035:/home/bobren/local/a/pytorch/torchfuzz python /tmp/torchfuzz/fuzz_535504a32190ff09.py \nEager Success! ✅\nCompile Success! ✅\nRelative diff (sum): 8.251728%\n❌ Forward output sums differ significantly (relative)!\nout_eager_sum: 11884969328640.0\nout_compiled_sum: 10904254021632.0\nAbsolute diff: 980715307008.0\nRelative diff (%): 8.251727706563829\n```\n\n### Versions\n\nN/A\n\ncc @chauhang @penguinwu @voznesenskym @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @ipiszy @chenyang78 @kadeng @muchulee8 @amjames @aakhundov @coconutruben",
+  "apis": [
+    "out_compiled_sum.item",
+    "t3.norm",
+    "t0.view",
+    "out_eager_sum.item",
+    "torch.addmm",
+    "t7.view"
+  ],
+  "best_code": "import torch\nimport sys\ntorch._dynamo.config.capture_scalar_outputs = True\ntorch._dynamo.config.capture_dynamic_output_shape_ops = True\ntorch._inductor.config.emulate_precision_casts = True\n\ndef foo(arg0, arg1, arg2, arg3, arg4):\n    t0 = arg0 # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda\n    t1 = arg1 # size=(5, 1024), stride=(1024, 1), dtype=bfloat16, device=cuda\n    t2 = arg2 # size=(1024, 4), stride=(4, 1), dtype=bfloat16, device=cuda\n    t3 = torch.addmm(t0, t1, t2) # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda\n    t4 = t3.norm() # size=(), stride=(), dtype=bfloat16, device=cuda\n    t5 = arg3 # size=(3, 4, 5, 2), stride=(40, 10, 2, 1), dtype=float32, device=cuda\n    t6 = t5.var(dim=0) # size=(4, 5, 2), stride=(10, 2, 1), dtype=float32, device=cuda\n    t7 = t6.var() # size=(), stride=(), dtype=float32, device=cuda\n    t8 = arg4 # size=(), stride=(), dtype=float32, device=cuda\n    t9 = torch.nn.functional.relu(t8) # size=(), stride=(), dtype=float32, device=cuda\n    t10 = t7 + t4 + t9 # size=(), stride=(), dtype=float32, device=cuda\n    t11 = torch.pow(torch.pow(t4, t7), t10) # size=(), stride=(), dtype=float32, device=cuda\n    output = t11  # output tensor\n    return output\n\narg0 = torch.rand([5, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda\narg1 = torch.rand([5, 1024], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5, 1024), stride=(1024, 1), dtype=bfloat16, device=cuda\narg2 = torch.rand([1024, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(1024, 4), stride=(4, 1), dtype=bfloat16, device=cuda\narg3 = torch.rand([3, 4, 5, 2], dtype=torch.float32, device='cuda', requires_grad=True) # size=(3, 4, 5, 2), stride=(40, 10, 2, 1), dtype=float32, device=cuda\narg4 = torch.rand([], dtype=torch.float32, device='cuda', requires_grad=True) # size=(), stride=(), dtype=float32, device=cuda\nif __name__ == '__main__':\n    out_eager = foo(arg0, arg1, arg2, arg3, arg4)\n    out_eager.sum().backward()\n    print('Eager Success! ✅')\n    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)\n    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4)\n    out_compiled.sum().backward()\n    print('Compile Success! ✅')\n    # Compare outputs (forward)\n    out_eager_sum = out_eager.sum()\n    out_compiled_sum = out_compiled.sum()\n    diff = (out_eager_sum - out_compiled_sum).abs().item()\n    rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100\n    print(f'Relative diff (sum): {rel_diff:.6f}%')\n    if rel_diff > 5:\n        print(f'❌ Forward output sums differ significantly (relative)!')\n        print('out_eager_sum:', out_eager_sum.item())\n        print('out_compiled_sum:', out_compiled_sum.item())\n        print('Absolute diff:', diff)\n        print('Relative diff (%):', rel_diff)\n        sys.exit(1)",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/163434",
+    "https://github.com/pytorch/pytorch/pull/163414",
+    "https://github.com/pytorch/pytorch/pull/163412",
+    "https://github.com/pytorch/pytorch/pull/163481",
+    "https://github.com/pytorch/pytorch/pull/163386",
+    "https://github.com/pytorch/pytorch/pull/163393",
+    "https://github.com/pytorch/pytorch/pull/163422",
+    "https://github.com/pytorch/pytorch/pull/163520",
+    "https://github.com/pytorch/pytorch/pull/163419",
+    "https://github.com/pytorch/pytorch/pull/163398"
+  ],
+  "_meta": {
+    "file": "163449_issue_ori_data.json",
+    "generated_at": "2026-04-21 03:08:34",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\163449_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\163449_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-10 04:04:24",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163449_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163449_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "A numerical divergence between eager mode and compiled mode (using torch.compile) in PyTorch. The relative difference in output sums is about 8.25%, which exceeds the 5% threshold considered significant.",
+  "repro_code": "import torch\nimport sys\ntorch._dynamo.config.capture_scalar_outputs = True\ntorch._dynamo.config.capture_dynamic_output_shape_ops = True\ntorch._inductor.config.emulate_precision_casts = True\n\ndef foo(arg0, arg1, arg2, arg3, arg4):\n    t0 = arg0 # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda\n    t1 = arg1 # size=(5, 1024), stride=(1024, 1), dtype=bfloat16, device=cuda\n    t2 = arg2 # size=(1024, 4), stride=(4, 1), dtype=bfloat16, device=cuda\n    t3 = torch.addmm(t0, t1, t2) # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda\n    t4 = t3.norm() # size=(), stride=(), dtype=bfloat16, device=cuda\n    t5 = arg3 # size=(3, 4, 5, 2), stride=(40, 10, 2, 1), dtype=float32, device=cuda\n    t6 = t5.var(dim=0) # size=(4, 5, 2), stride=(10, 2, 1), dtype=float32, device=cuda\n    t7 = t6.var() # size=(), stride=(), dtype=float32, device=cuda\n    t8 = arg4 # size=(), stride=(), dtype=float32, device=cuda\n    t9 = torch.nn.functional.relu(t8) # size=(), stride=(), dtype=float32, device=cuda\n    t10 = t7 + t4 + t9 # size=(), stride=(), dtype=float32, device=cuda\n    t11 = torch.pow(torch.pow(t4, t7), t10) # size=(), stride=(), dtype=float32, device=cuda\n    output = t11  # output tensor\n    return output\n\narg0 = torch.rand([5, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda\narg1 = torch.rand([5, 1024], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5, 1024), stride=(1024, 1), dtype=bfloat16, device=cuda\narg2 = torch.rand([1024, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(1024, 4), stride=(4, 1), dtype=bfloat16, device=cuda\narg3 = torch.rand([3, 4, 5, 2], dtype=torch.float32, device='cuda', requires_grad=True) # size=(3, 4, 5, 2), stride=(40, 10, 2, 1), dtype=float32, device=cuda\narg4 = torch.rand([], dtype=torch.float32, device='cuda', requires_grad=True) # size=(), stride=(), dtype=float32, device=cuda\nif __name__ == '__main__':\n    out_eager = foo(arg0, arg1, arg2, arg3, arg4)\n    out_eager.sum().backward()\n    print('Eager Success! ✅')\n    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)\n    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4)\n    out_compiled.sum().backward()\n    print('Compile Success! ✅')\n    # Compare outputs (forward)\n    out_eager_sum = out_eager.sum()\n    out_compiled_sum = out_compiled.sum()\n    diff = (out_eager_sum - out_compiled_sum).abs().item()\n    rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100\n    print(f'Relative diff (sum): {rel_diff:.6f}%')\n    if rel_diff > 5:\n        print(f'❌ Forward output sums differ significantly (relative)!')\n        print('out_eager_sum:', out_eager_sum.item())\n        print('out_compiled_sum:', out_compiled_sum.item())\n        print('Absolute diff:', diff)\n        print('Relative diff (%):', rel_diff)\n        sys.exit(1)",
+  "repro_output": "[Fuzzer][Eager/Compile Divergence] 8+% numerical difference between eager and compile",
+  "affected_api": "torch.addmm, tensor.norm(), tensor.var(), torch.nn.functional.relu, torch.pow, torch.compile",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "bfloat16, float32",
+    "input_shape": "(5, 4), (5, 1024), (1024, 4), (3, 4, 5, 2), scalar ()",
+    "other_conditions": "torch.compile with fullgraph=True and dynamic=True"
+  },
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "CUDA"
+  },
+  "labels": [
+    "Fuzzer",
+    "Eager/Compile Divergence"
+  ],
+  "core_api_identification": {
+    "core_api": "1.  **Analyze the Bug Report:**",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163449_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\163449_issue_ori_data.output.events.json"
+  }
+}

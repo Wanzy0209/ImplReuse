@@ -1,0 +1,254 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** Metal Performance Shaders (MPS) Bug on very simple linear regression.
+    *   **Description:** The model doesn't learn on MPS (Apple Silicon GPU) because weights aren't updated. It works on CPU. The user suspects "manual parameter updates using .data" are the culprit.
+    *   **Code Snippet:**
+        ```python
+        # ... setup ...
+        for epoch in range(100):
+            pred = data_aug @ w
+            loss = torch.abs(y - pred).mean()
+            # ... grad zero ...
+            loss.backward()
+
+            with torch.no_grad():
+                w.data -= 0.01 * w.grad  # <--- The specific line mentioned
+                w.grad.zero_()
+        ```
+    *   **Trigger Conditions:** Backend: MPS, manual parameter updates using `.data`.
+
+2.  **Identify the Core Issue:**
+    *   The user explicitly points to `w.data -= 0.01 * w.grad`.
+    *   This operation involves in-place modification of the tensor's data.
+    *   The bug is specific to the MPS backend.
+    *   The operation is an in-place subtraction (`__isub__` or `sub_`) on the `.data` attribute of a tensor.
+
+3.  **Determine the API:**
+    *   The operation is `w.data -= ...`.
+    *   In Python, `a -= b` calls `a.__isub__(b)`.
+    *   For PyTorch tensors, this maps to `Tensor.sub_` (in-place subtraction).
+    *   However, the user is accessing `.data`. While `.data` is technically a property, the *operation* causing the issue is the in-place modification.
+    *   Is the API `Tensor.data`? Or `Tensor.sub_`? Or `torch.no_grad`?
+    *   The description says: "manual parameter updates using .data do not behave correctly on MPS".
+    *   The specific syntax is `w.data -= ...`.
+    *   If I have to pick the *single core API*, I need to look at what function is being called that fails on MPS but works on CPU.
+    *   The operation is an in-place subtraction.
+    *   The API is `Tensor.sub_` (or `torch.sub` with `out` argument, or the in-place operator).
+    *   However, the user specifically highlights `.data`.
+    *   Let's look at the constraints: "Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug."
+    *   The bug is about the *in-place update* on the MPS backend.
+    *   The specific method invoked is `sub_`.
+    *   Is there a more specific API? The user mentions "manual parameter updates using .data".
+    *   If I say `Tensor.data`, that's a property access, not the operation failing. The operation failing is the subtraction.
+    *   If I say `Tensor.sub_`, that captures the in-place nature.
+    *   Let's consider the context of MPS bugs. Often, in-place operations on MPS have synchronization or copy issues.
+    *   The code is `w.data -= 0.01 * w.grad`.
+    *   This expands to `w.data.sub_(0.01 * w.grad)`.
+    *   The API is `Tensor.sub_`.
+
+    *   *Alternative interpretation:* Is the API `Tensor.data`? The user says "manual parameter updates using .data do not behave correctly". This implies the interaction between `.data` and the in-place op.
+    *   However, usually, when identifying the API for a bug report, we look for the function call. The function call is the in-place subtraction.
+    *   Let's check if there's a more generic "in-place operation" API. No, usually it's the specific op.
+    *   Let's look at the "Trigger conditions": "manual parameter updates using .data".
+    *   If I have to choose between `Tensor.data` and `Tensor.sub_`, `Tensor.sub_` is the actual computation failing. `Tensor.data` is just accessing the storage.
+    *   However, the user's hypothesis is specifically about `.data`.
+    *   Let's look at the code again. `w.data -= 0.01 * w.grad`.
+    *   If I remove `.data` and just do `w -= ...`, it might work (or fail differently). The user specifically uses `.data` to avoid the autograd graph tracking (though `torch.no_grad` is already there).
+    *   The bug is likely that `w.data` returns a view or a tensor that, when modified in-place on MPS, doesn't update the underlying storage correctly or has a synchronization issue.
+    *   But the *API* being called is the in-place subtraction.
+    *   Let's consider `Tensor.copy_`. Sometimes `a -= b` is implemented as `a = a - b` (out of place) or `a.sub_(b)` (in place). For tensors, it is in-place.
+    *   Is there a specific MPS API? No, the task asks for the PyTorch API.
+
+    *   Let's refine. The user says "manual parameter updates using .data".
+    *   The operation is `w.data -= ...`.
+    *   The API is `Tensor.sub_`.
+    *   Why? Because that is the function executing the logic that fails on MPS.
+    *   Is it `Tensor.data`? If I just access `w.data`, nothing happens. The bug happens during the update.
+    *   Is it `torch.no_grad`? The bug happens inside the block, but the block itself isn't the issue (it works on CPU).
+    *   Is it `loss.backward`? The gradients are calculated (presumably), the update fails.
+    *   So it's the update step.
+    *   The update step uses `-=`.
+    *   The API is `Tensor.sub_`.
+
+    *   Let's double check if `Tensor.data` is considered the API here. The user frames the issue as "manual parameter updates using .data". This suggests the *pattern* of using `.data` is the problem. But the API is the interface. The interface used for the update is the in-place subtraction operator.
+    *   However, looking at similar bug reports, often the "API" is the method name.
+    *   If I look at the code `w.data -= 0.01 * w.grad`, the method called is `__isub__`, which maps to `sub_`.
+    *   Let's consider if the user meant `Tensor.data` is the API. The prompt asks for the "single core PyTorch API". `Tensor.data` is a property. `Tensor.sub_` is a method.
+    *   The bug is likely related to how MPS handles in-place modifications on tensors accessed via `.data`.
+    *   But the *trigger* is the in-place operation.
+    *   Let's try to find if there is a more specific API related to MPS. No, the prompt asks for the PyTorch API.
+    *   Let's assume the API is `Tensor.sub_`.
+
+    *   Wait, let's look at the "Trigger conditions" again: `{"backend": "MPS", "dtype": "float", ..., "other_conditions": "manual parameter updates using .data"}`.
+    *   The user explicitly identifies "manual parameter updates using .data" as the condition.
+    *   Is `Tensor.data` the API?
+    *   If I write `x = w.data`, nothing breaks.
+    *   If I write `w.data -= 1`, it breaks.
+    *   The operation is the subtraction.
+    *   However, the user might be reporting a bug about the `.data` attribute behavior on MPS (e.g., it returns a copy instead of a view, or the view doesn't sync).
+    *   If the bug is that `.data` behaves differently on MPS, then `Tensor.data` is the API.
+    *   If the bug is that in-place ops on MPS are broken, then `Tensor.sub_` is the API.
+    *   The user says: "This suggests that manual parameter updates using .data do not behave correctly on MPS".
+    *   This phrasing points to the usage of `.data` as the distinguishing factor.
+    *   However, `Tensor.data` is just a getter. The *behavior* (update) is the issue.
+    *   Let's look at the constraints: "Prefer the API whose behavior change... best explains the observed bug."
+    *   The observed bug is "weights are not updated".
+    *   The code attempting to update is `w.data -= ...`.
+    *   This is `Tensor.sub_`.
+    *   If I have to pick one, `Tensor.sub_` is the active function. `Tensor.data` is the object being acted upon.
+    *   Usually, in these tasks, if an operator is used (like `+=`, `*=`), we map it to the method name (`add_`, `mul_`).
+    *   So `Tensor.sub_` seems the most accurate technical description of the API call failing.
+
+    *   Let's reconsider `Tensor.data`. Is it possible the user considers `.data` the API? "manual parameter updates using .data".
+    *   If the bug is that `w.data` on MPS returns a detached tensor that doesn't share storage with `w` (which would be weird, but possible in a bug), then accessing `.data` is the issue.
+    *   But the code *does* `w.data -= ...`. If `w.data` was a copy, `w` wouldn't update. That matches the symptom ("weights are not updated").
+    *   So the bug is likely that `w.data` on MPS returns a copy (or behaves like one) instead of a view/reference to the data.
+    *   In that case, the API responsible is `Tensor.data`.
+    *   However, the operation `w.data -= ...` is the trigger.
+    *   Let's look at the "Structured error description": "manual parameter updates using .data do not behave correctly".
+    *   This strongly suggests the user views `.data` as the key component.
+    *   But is `.data` an "API"? Yes, it's a property of the Tensor API.
+    *   Is `sub_` an API? Yes.
+    *   Which one is "core"?
+    *   The bug is specific to the *interaction*.
+    *   Let's look at the provided solution in similar examples. Usually, it's the function name.
+    *   Example: `torch.matmul`, `nn.Linear`, `Tensor.backward`.
+    *   Here, the operation is an in-place subtraction.
+    *   But the user's diagnosis is about `.data`.
+    *   Let's think about what "API" means in the context of PyTorch bug tracking. It usually refers to the function or method being called.
+    *   The method being called is `__isub__` -> `sub_`.
+    *   The object is `w.data`.
+    *   If I say `Tensor.sub_`, it ignores the `.data` aspect which the user highlighted.
+    *   If I say `Tensor.data`, it ignores the `sub_` aspect.
+    *   However, the user says "manual parameter updates using .data". This implies the *pattern*.
+    *   Let's look at the code again.
+    *   `w.data -= 0.01 * w.grad`
+    *   If I change this to `w -= 0.01 * w.grad` (inside `no_grad`), does it work? The user didn't test, but implies `.data` is the specific way they are doing it.
+    *   Actually, `w -= ...` inside `no_grad` is the modern way. Using `.data` is legacy/deprecated style.
+    *   The bug is that this legacy style fails on MPS.
+    *   The API involved in the legacy style is `Tensor.data`.
+    *   But the *operation* is `sub_`.
+    *   Let's try to find the most specific API that encompasses the failure.
+    *   The failure is "weights are not updated".
+    *   This happens because `w.data -= ...` doesn't affect `w`.
+    *   This implies `w.data` is not a view of `w`'s storage on MPS.
+    *   Therefore, the API `Tensor.data` is behaving incorrectly (returning a copy instead of a view).
+    *   If `Tensor.data` returned a view, `sub_` would work fine.
+    *   So the root cause API is `Tensor.data`.
+
+    *   Counter-argument: The user is performing an in-place operation. In-place operations on MPS are notoriously tricky (synchronization). Maybe `sub_` is the issue.
+    *   But the user says "manual parameter updates using .data do not behave correctly". They contrast it with CPU. On CPU, `.data` works (returns a view). On MPS, it seems to fail (returns a copy or doesn't sync).
+    *   This points to `Tensor.data`.
+
+    *   Let's check the "Trigger conditions" string again: "manual parameter updates using .data".
+    *   This is a strong hint.
+    *   Also, the title is "MPS Bug on very simple linear regression". Not helpful.
+    *   The description: "manual parameter updates using .data do not behave correctly on MPS".
+    *   I will go with `Tensor.data`.
+
+    *   Wait, let me reconsider `Tensor.sub_`.
+    *   If the bug was just "in-place ops don't work on MPS", the user would say "in-place ops don't work".
+    *   The user specifically mentions `.data`.
+    *   The code is `w.data -= ...`.
+    *   If I report this bug, I would tag it with `module: mps` and maybe `topic: data`.
+    *   But the question asks for the "single core PyTorch API".
+    *   Is `Tensor.data` an API? Yes.
+    *   Is it the *core* API? It's a property.
+    *   Is `Tensor.sub_` the core API? It's a method.
+    *   Let's look at the "Minimal reproducible example". The line causing the issue is `w.data -= 0.01 * w.grad`.
+    *   If I have to choose the *function* being called, it's `sub_`.
+    *   If I have to choose the *attribute* causing the context, it's `data`.
+    *   Let's look at the prompt instructions: "Prefer the API whose behavior change... best explains the observed bug."
+    *   The observed bug is that `w` is not updated.
+    *   The code updates `w.data`.
+    *   For `w` to be updated, `w.data` must be a view of `w`.
+    *   The behavior change is that `w.data` is not a view on MPS (or doesn't update `w`).
+    *   Therefore, the API `Tensor.data` has a behavior change (view vs copy) on MPS.
+    *   The API `Tensor.sub_` performs the subtraction. If `sub_` failed to subtract, the value of `w.data` wouldn't change. But the user says "weights are not updated". This implies `w` (the parameter) isn't updated. `w.data` might be updated locally, but `w` doesn't see it. Or `w.data` is a copy.
+    *   This points squarely to `Tensor.data`.
+
+    *   Let's verify if `Tensor.data` is considered a "core API". It's a fundamental property of Tensors.
+    *   Let's try to see if there's any other interpretation.
+    *   Could it be `torch.no_grad`? No.
+    *   Could it be `torch.backends.mps`? No, that's the backend, not the API used in the code.
+    *   Could it be `Tensor.backward`? No.
+
+    *   Decision: `Tensor.data`.
+    *   Reasoning: The user explicitly identifies "manual parameter updates using .data" as the source of the problem. The bug manifests as the parameter `w` not being updated when `w.data` is modified. This indicates a failure in the view/copy semantics of the `.data` property on the MPS backend. While `sub_` is the operation, the *reason* the update fails to propagate to the model parameter is the behavior of `.data`.
+
+    *   Wait, let me check if `Tensor.sub_` is a better fit.
+    *   If I say `Tensor.sub_`, I am saying "the subtraction operation is broken".
+    *   If I say `Tensor.data`, I am saying "the data accessor is broken".
+    *   The user says "manual parameter updates using .data do not behave correctly".
+    *   This phrasing treats "using .data" as the method/technique.
+    *   In PyTorch, `tensor.data` is the API to access the underlying tensor.
+    *   I will stick with `Tensor.data`.
+
+    *   Let's double check the "API" definition in these tasks. Usually, it's the function name.
+    *   Is `Tensor.data` a function? It's a property.
+    *   Is `Tensor.sub_` a function? Yes.
+    *   The code `w.data -= ...` calls `w.data.__isub__(...)`.
+    *   The object `w.data` is a Tensor.
+    *   The method is `sub_`.
+    *   If the bug was "w.data is None", that's `Tensor.data`.
+    *   If the bug is "w.data -= ... doesn't update w", that's `Tensor.data` (view semantics).
+    *   If the bug is "w.data -= ... crashes", that could be `sub_`.
+    *   The bug is "weights are not updated". This is a semantic bug with `.data`.
+    *   Therefore, `Tensor.data` is the most responsible API.
+
+    *   Let's try to find a reason to pick `sub_`.
+    *   If `w.data` was a view, `sub_` would update it.
+    *   If `w.data` is a copy, `sub_` updates the copy.
+    *   The bug is that `w` (the original) is not updated.
+    *   This is purely about the relationship between `w` and `w.data`.
+    *   That relationship is defined by the `Tensor.data` API.
+    *   So `Tensor.data` is the correct answer.
+
+    *   One more check: Is there any other API?
+    *   `torch.device("mps")`? No.
+    *   `torch.cat`? No.
+    *   `torch.abs`? No.
+    *   `Tensor.mean`? No.
+    *   `Tensor.backward`? No.
+    *   `Tensor.zero_`? No.
+
+    *   Final check on the exact string to return.
+    *   "Tensor.data" or "torch.Tensor.data"?
+    *   Usually just "Tensor.data" or "data".
+    *   The prompt asks for "one API name".
+    *   "Tensor.data" seems appropriate.
+    *   Or just "data".
+    *   Looking at previous examples, "Tensor.backward", "torch.nn.functional.linear".
+    *   "Tensor.data" fits the pattern.
+
+    *   Wait, is it possible the API is `torch.no_grad`?
+    *   The code is inside `with torch.no_grad():`.
+    *   But the user says "manual parameter updates using .data".
+    *   The `no_grad` context is standard. The `.data` usage is the specific pattern highlighted.
+    *   Also, `no_grad` works on CPU. The bug is specific to MPS + `.data`.
+
+    *   Let's consider if the API is `Tensor.copy_`.
+    *   Sometimes `a -= b` is implemented as `a.copy_(a - b)`.
+    *   But `sub_` is the direct in-place op.
+
+    *   Let's go back to `Tensor.data`.
+    *   The user's description: "manual parameter updates using .data do not behave correctly on MPS".
+    *   This is the strongest signal.
+    *   The API is `Tensor.data`.
+
+    *   Let's verify if `Tensor.sub_` is a better candidate.
+    *   If I search for "MPS bug in-place sub", I might find something.
+    *   But the user's diagnosis is specific.
+    *   The user is reporting a bug about the *behavior* of `.data` on MPS.
+    *   Therefore, `Tensor.data` is the API.
+
+    *   Let's try to be very precise.
+    *   The code is `w.data -= 0.01 * w.grad`.
+    *   The API used to access the tensor to be modified is `Tensor.data`.
+    *   The API used to modify it is `Tensor.sub_`.
+    *   The bug is that the modification doesn't affect the original tensor `w`.
+    *   This is a property of `Tensor.data`.
+    *   If `Tensor.sub_` was broken, `w.data` itself wouldn't change (or would crash).
+    *   But the user says "weights are not updated". This implies `w` is the target, and `w.data` is the mechanism that failed.
+    *   So `Tensor.data` is the mechanism.
+
+    *   Final decision: `Tensor.data`.Tensor.data

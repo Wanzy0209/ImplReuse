@@ -1,0 +1,143 @@
+Bug Report:
+Title: MPS Random in-place operations fail silently on non-contiguous tensors (macOS < 15.0)
+Issue ID: 165257
+Original bug description: ### 🐛 Describe the bug
+
+## Description
+
+All implemented random in-place operations (`normal_`, `uniform_`, `exponential_`, `random_`, `bernoulli_`) silently fail when called on non-contiguous tensors on the MPS backend. The operations complete without error but the tensor remains unchanged (all zeros).
+
+This affects 7 commonly-used operations and impacts all Apple Silicon users on macOS < 15.0.
+
+## Reproduction
+
+```python
+import torch
+
+# Test each operation on CPU and MPS
+ops = [
+    ("normal_(0,1)", lambda t: t.normal_(0, 1)),
+    ("uniform_(0,1)", lambda t: t.uniform_(0, 1)),
+    ("exponential_(1)", lambda t: t.exponential_(1.0)),
+    ("bernoulli_(0.5)", lambda t: t.bernoulli_(0.5)),
+    ("random_()", lambda t: t.random_()),
+    ("random_(10)", lambda t: t.random_(10)),
+    ("random_(0,10)", lambda t: t.random_(0, 10)),
+]
+
+print(f"{'Operation':<20} {'CPU Max':<12} {'MPS Max':<12} {'Status'}")
+print("-" * 60)
+
+for name, op_func in ops:
+    # CPU: works correctly
+    t_cpu = torch.zeros(50, 50, device='cpu').T.clone()  # Non-contiguous
+    op_func(t_cpu)
+    cpu_max = t_cpu.max().item()
+
+    # MPS: fails silently
+    t_mps = torch.zeros(50, 50, device='mps').T.clone()  # Non-contiguous
+    op_func(t_mps)
+    mps_max = t_mps.max().item()
+
+    status = "✓ OK" if mps_max != 0.0 else "✗ BUG"
+    print(f"{name:<20} {cpu_max:<12.4f} {mps_max:<12.4f} {status}")
+```
+
+### Output
+
+```
+Operation            CPU Max      MPS Max      Status
+------------------------------------------------------------
+normal_(0,1)         3.1322       0.0000       ✗ BUG
+uniform_(0,1)        0.9998       0.0000       ✗ BUG
+exponential_(1)      7.9249       0.0000       ✗ BUG
+bernoulli_(0.5)      1.0000       0.0000       ✗ BUG
+random_()            16751859.0000 0.0000       ✗ BUG
+random_(10)          9.0000       0.0000       ✗ BUG
+random_(0,10)        9.0000       0.0000       ✗ BUG
+```
+
+All operations fail on MPS but work correctly on CPU.
+
+## Root Cause
+
+In `aten/src/ATen/native/mps/operations/Distributions.mm`, the `random_mps_impl()` function (lines 61-165) uses the `Placeholder` class to handle tensor data preparation. On macOS < 15.0, when a non-contiguous tensor is passed:
+
+1. `Placeholder` internally creates a contiguous temporary buffer using `gatherViewTensor()` (via `needsGather()` check)
+2. The MPS graph operation populates this temporary buffer
+3. **Missing step**: The results are never copied back to the original non-contiguous tensor
+
+
+## Related Issues
+
+This issue identifies the root cause of #124029 (`rand_like()` fails on permuted tensors). The cause is that `rand_like` internally calls `uniform_()` on a non-contiguous tensor, and `uniform_()` (along with all other random in-place operations) fails to handle non-contiguous tensors on macOS < 15.0.
+
+----
+
+I will make a PR with a fix and some tests shortly!
+
+
+### Versions
+
+PyTorch version: 2.8.0
+Is debug build: False
+CUDA used to build PyTorch: None
+ROCM used to build PyTorch: N/A
+
+OS: macOS 14.4 (arm64)
+Clang version: 15.0.0 (clang-1500.3.9.4)
+CMake version: version 3.28.4
+
+Python version: 3.12.11
+Is CUDA available: False
+Is XNNPACK available: True
+
+CPU:
+Apple M3 Max
+
+Versions of relevant libraries:
+[pip3] torch==2.8.0
+
+cc @kulinseth @malfet @DenisVieriu97 @jhavukainen
+Structured error description: All implemented random in-place operations (`normal_`, `uniform_`, `exponential_`, `random_`, `bernoulli_`) silently fail when called on non-contiguous tensors on the MPS backend. The operations complete without error but the tensor remains unchanged (all zeros).
+Minimal reproducible example: import torch
+
+# Test each operation on CPU and MPS
+ops = [
+    ("normal_(0,1)", lambda t: t.normal_(0, 1)),
+    ("uniform_(0,1)", lambda t: t.uniform_(0, 1)),
+    ("exponential_(1)", lambda t: t.exponential_(1.0)),
+    ("bernoulli_(0.5)", lambda t: t.bernoulli_(0.5)),
+    ("random_()", lambda t: t.random_()),
+    ("random_(10)", lambda t: t.random_(10)),
+    ("random_(0,10)", lambda t: t.random_(0, 10)),
+]
+
+print(f"{'Operation':<20} {'CPU Max':<12} {'MPS Max':<12} {'Status'}")
+print("-" * 60)
+
+for name, op_func in ops:
+    # CPU: works correctly
+    t_cpu = torch.zeros(50, 50, device='cpu').T.clone()  # Non-contiguous
+    op_func(t_cpu)
+    cpu_max = t_cpu.max().item()
+
+    # MPS: fails silently
+    t_mps = torch.zeros(50, 50, device='mps').T.clone()  # Non-contiguous
+    op_func(t_mps)
+    mps_max = t_mps.max().item()
+
+    status = "✓ OK" if mps_max != 0.0 else "✗ BUG"
+    print(f"{name:<20} {cpu_max:<12.4f} {mps_max:<12.4f} {status}")
+Trigger conditions: {"backend": "MPS", "dtype": "", "input_shape": "non-contiguous tensors (e.g., .T.clone() on 50x50 tensor)", "other_conditions": "macOS < 15.0"}
+Environment: {"pytorch_version": "2.8.0", "python_version": "3.12.11", "os": "macOS 14.4 (arm64)", "hardware": "Apple M3 Max"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

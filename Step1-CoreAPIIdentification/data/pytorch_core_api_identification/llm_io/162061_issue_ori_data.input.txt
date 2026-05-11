@@ -1,0 +1,158 @@
+Bug Report:
+Title: Dynamo-based ONNX exporter adds seemingly unnecessary operations to the graph
+Issue ID: 162061
+Original bug description: ### 🐛 Describe the bug
+
+Exporting an ONNX model through the new Dynamo-based exporter adds some unnecessary operations around pixel shuffle.
+
+Code to reproduce:
+
+```python
+import torch
+import torch.nn as nn
+import onnx
+from torchsummary import summary
+
+
+class Model(nn.Module):
+    def __init__(self, kernel_size=3, upscale_factor=2):
+        super(Model, self).__init__()
+        self.conv = nn.Conv2d(1, 4, kernel_size=kernel_size, padding="same")
+        self.pixel_shuffle = nn.PixelShuffle(upscale_factor)
+
+    def forward(self, input):
+        x = self.conv(input)
+        x = self.pixel_shuffle(x)
+        return x
+
+
+model = Model()
+summary(model.cuda(), (1, 128, 128))
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+x = torch.ones((1, 1, 128, 128))
+x = x.to(device)
+torch.onnx.export(
+    model,
+    x,
+    f"dynamo.onnx",
+    dynamo=True,
+    external_data=False,
+    opset_version=20,
+    input_names=["input"],
+    output_names=["output"],
+    dynamic_shapes={"input": {0: "batch", 2: "width", 3: "height"}},
+)
+```
+The image below has the graph using Dynamo on the left, and the graph using the old Torchscript-based exporter on the right:
+<img width="850" height="1800" alt="Image" src="https://github.com/user-attachments/assets/ecc051d9-09b1-461d-8d82-918a87611bf1" />
+
+### Versions
+
+Collecting environment information...
+HIP Library Path: C:\Users\joao\.conda\envs\torch\Lib\site-packages\_rocm_sdk_core\bin\amdhip64_7.dll
+PyTorch version: 2.9.0a0+rocm7.0.0rc20250826
+Is debug build: False
+CUDA used to build PyTorch: N/A
+ROCM used to build PyTorch: 7.0.51830-a7cb7816d
+
+OS: Microsoft Windows 11 Pro (10.0.26100 64-bit)
+GCC version: (MinGW-W64 x86_64-msvcrt-posix-seh, built by Brecht Sanders) 13.1.0
+Clang version: Could not collect
+CMake version: Could not collect
+Libc version: N/A
+
+Python version: 3.13.5 | packaged by conda-forge | (main, Jun 16 2025, 08:20:19) [MSC v.1943 64 bit (AMD64)] (64-bit runtime)
+Python platform: Windows-11-10.0.26100-SP0
+Is CUDA available: True
+CUDA runtime version: Could not collect
+CUDA_MODULE_LOADING set to:
+GPU models and configuration: AMD Radeon RX 9070 XT (gfx1201)
+Nvidia driver version: Could not collect
+cuDNN version: Could not collect
+Is XPU available: False
+HIP runtime version: 7.0.51830
+MIOpen runtime version: 3.5.0
+Is XNNPACK available: True
+
+CPU:
+Name: AMD Ryzen 5 5600X 6-Core Processor
+Manufacturer: AuthenticAMD
+Family: 107
+Architecture: 9
+ProcessorType: 3
+DeviceID: CPU0
+CurrentClockSpeed: 3701
+MaxClockSpeed: 3701
+L2CacheSize: 3072
+L2CacheSpeed: None
+Revision: 8448
+
+Versions of relevant libraries:
+[pip3] numpy==2.2.6
+[pip3] onnx==1.19.0
+[pip3] onnx-ir==0.1.7
+[pip3] onnxscript==0.4.0
+[pip3] torch==2.9.0a0+rocm7.0.0rc20250826
+[pip3] torchaudio==2.8.0a0+rocm7.0.0rc20250826
+[pip3] torchsummary==1.5.1
+[pip3] torchvision==0.24.0a0+rocm7.0.0rc20250826
+[conda] numpy                     2.2.6                    pypi_0    pypi
+[conda] torch                     2.9.0a0+rocm7.0.0rc20250826          pypi_0    pypi
+[conda] torchaudio                2.8.0a0+rocm7.0.0rc20250826          pypi_0    pypi
+[conda] torchsummary              1.5.1                    pypi_0    pypi
+[conda] torchvision               0.24.0a0+rocm7.0.0rc20250826          pypi_0    pypi
+
+cc @justinchuby @titaiwangms
+Structured error description: Exporting an ONNX model through the new Dynamo-based exporter adds some unnecessary operations around pixel shuffle.
+Minimal reproducible example: import torch
+import torch.nn as nn
+import onnx
+from torchsummary import summary
+
+
+class Model(nn.Module):
+    def __init__(self, kernel_size=3, upscale_factor=2):
+        super(Model, self).__init__()
+        self.conv = nn.Conv2d(1, 4, kernel_size=kernel_size, padding="same")
+        self.pixel_shuffle = nn.PixelShuffle(upscale_factor)
+
+    def forward(self, input):
+        x = self.conv(input)
+        x = self.pixel_shuffle(x)
+        return x
+
+
+model = Model()
+summary(model.cuda(), (1, 128, 128))
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+x = torch.ones((1, 1, 128, 128))
+x = x.to(device)
+torch.onnx.export(
+    model,
+    x,
+    f"dynamo.onnx",
+    dynamo=True,
+    external_data=False,
+    opset_version=20,
+    input_names=["input"],
+    output_names=["output"],
+    dynamic_shapes={"input": {0: "batch", 2: "width", 3: "height"}},
+)
+Trigger conditions: {"backend": "CUDA", "dtype": "unknown", "input_shape": "(1, 1, 128, 128)", "other_conditions": "dynamo=True, opset_version=20, dynamic_shapes={'input': {0: 'batch', 2: 'width', 3: 'height'}}"}
+Environment: {"pytorch_version": "2.9.0a0+rocm7.0.0rc20250826", "python_version": "3.13.5", "os": "Microsoft Windows 11 Pro (10.0.26100 64-bit)", "hardware": "AMD Radeon RX 9070 XT (gfx1201), AMD Ryzen 5 5600X 6-Core Processor"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

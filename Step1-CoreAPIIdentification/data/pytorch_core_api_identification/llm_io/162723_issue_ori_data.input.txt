@@ -1,0 +1,174 @@
+Bug Report:
+Title: torch.compile Introduces Significant Numerical Errors in Boltzmann Machine Model
+Issue ID: 162723
+Original bug description: ### 🐛 Describe the bug
+
+Description
+When using torch.compile() on a custom Boltzmann Machine model, the compiled version produces significantly different numerical results compared to the original model. The compilation process introduces substantial errors in hidden layer activations, energy calculations, and sampling behavior, making the compiled model functionally incorrect.
+code:
+'''
+import torch
+import torch.nn as nn
+class BoltzmannMachine(nn.Module):
+    def __init__(self, num_visible, num_hidden, learning_rate=0.01, k=1):
+        super(BoltzmannMachine, self).__init__()
+        self.num_visible = num_visible
+        self.num_hidden = num_hidden
+        self.k = k
+        self.learning_rate = learning_rate
+        self.weights = nn.Parameter(torch.randn(num_visible, num_hidden) * 0.01)
+        self.visible_bias = nn.Parameter(torch.zeros(num_visible))
+        self.hidden_bias = nn.Parameter(torch.zeros(num_hidden))
+    def sample_hidden(self, visible_prob):
+        hidden_activations = torch.matmul(visible_prob, self.weights) + self.hidden_bias
+        hidden_prob = torch.sigmoid(hidden_activations)
+        return torch.bernoulli(hidden_prob), hidden_prob
+    def sample_visible(self, hidden_prob):
+        visible_activations = torch.matmul(hidden_prob, self.weights.t()) + self.visible_bias
+        visible_prob = torch.sigmoid(visible_activations)
+        return torch.bernoulli(visible_prob), visible_prob
+    def contrastive_divergence(self, visible_data):
+        batch_size = visible_data.shape[0]
+        pos_hidden_prob = torch.sigmoid(torch.matmul(visible_data, self.weights) + self.hidden_bias)
+        pos_hidden_sample = torch.bernoulli(pos_hidden_prob)
+        pos_associations = torch.matmul(visible_data.t(), pos_hidden_prob)
+        neg_visible = visible_data.clone()
+        for _ in range(self.k):
+            neg_hidden_sample, neg_hidden_prob = self.sample_hidden(neg_visible)
+            neg_visible_sample, neg_visible_prob = self.sample_visible(neg_hidden_sample)
+            neg_visible = neg_visible_prob
+        neg_associations = torch.matmul(neg_visible.t(), neg_hidden_prob)
+        self.weights.data += self.learning_rate * (pos_associations - neg_associations) / batch_size
+        self.visible_bias.data += self.learning_rate * torch.mean(visible_data - neg_visible, dim=0)
+        self.hidden_bias.data += self.learning_rate * torch.mean(pos_hidden_prob - neg_hidden_prob, dim=0)
+        error = torch.mean((visible_data - neg_visible) ** 2)
+        return error.item()
+    def free_energy(self, v):
+        vbias_term = torch.matmul(v, self.visible_bias)
+        wx_b = torch.matmul(v, self.weights) + self.hidden_bias
+        hidden_term = torch.sum(torch.log(1 + torch.exp(wx_b)), dim=1)
+        return -hidden_term - vbias_term
+    def forward(self, visible_data, n_gibbs=100):
+        samples = visible_data.clone()
+        for _ in range(n_gibbs):
+            _, hidden_prob = self.sample_hidden(samples)
+            samples, _ = self.sample_visible(hidden_prob)
+        return samples
+
+
+if __name__ == "__main__":
+    torch.manual_seed(42)
+    torch.cuda.manual_seed_all(42)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    num_visible = 784
+    num_hidden = 128
+    batch_size = 8
+    learning_rate = 0.01
+
+    input_tensor = torch.randint(0, 2, (batch_size, num_visible), dtype=torch.float32)
+    initial_state = torch.randint(0, 2, (5, num_visible), dtype=torch.float32)
+
+    model = BoltzmannMachine(num_visible, num_hidden, learning_rate)
+    for param in model.parameters():
+        param.requires_grad = False
+
+    model.eval()
+    with torch.no_grad():
+        samples_normal = model(initial_state)
+        energy_normal = model.free_energy(input_tensor)
+        recon_error_normal = model.contrastive_divergence(input_tensor)
+        _, hidden_prob_normal = model.sample_hidden(input_tensor)
+        _, visible_prob_normal = model.sample_visible(hidden_prob_normal)
+
+    compiled_m
+Structured error description: When using torch.compile() on a custom Boltzmann Machine model, the compiled version produces significantly different numerical results compared to the original model. The compilation process introduces substantial errors in hidden layer activations, energy calculations, and sampling behavior, making the compiled model functionally incorrect.
+Minimal reproducible example: import torch
+import torch.nn as nn
+class BoltzmannMachine(nn.Module):
+    def __init__(self, num_visible, num_hidden, learning_rate=0.01, k=1):
+        super(BoltzmannMachine, self).__init__()
+        self.num_visible = num_visible
+        self.num_hidden = num_hidden
+        self.k = k
+        self.learning_rate = learning_rate
+        self.weights = nn.Parameter(torch.randn(num_visible, num_hidden) * 0.01)
+        self.visible_bias = nn.Parameter(torch.zeros(num_visible))
+        self.hidden_bias = nn.Parameter(torch.zeros(num_hidden))
+    def sample_hidden(self, visible_prob):
+        hidden_activations = torch.matmul(visible_prob, self.weights) + self.hidden_bias
+        hidden_prob = torch.sigmoid(hidden_activations)
+        return torch.bernoulli(hidden_prob), hidden_prob
+    def sample_visible(self, hidden_prob):
+        visible_activations = torch.matmul(hidden_prob, self.weights.t()) + self.visible_bias
+        visible_prob = torch.sigmoid(visible_activations)
+        return torch.bernoulli(visible_prob), visible_prob
+    def contrastive_divergence(self, visible_data):
+        batch_size = visible_data.shape[0]
+        pos_hidden_prob = torch.sigmoid(torch.matmul(visible_data, self.weights) + self.hidden_bias)
+        pos_hidden_sample = torch.bernoulli(pos_hidden_prob)
+        pos_associations = torch.matmul(visible_data.t(), pos_hidden_prob)
+        neg_visible = visible_data.clone()
+        for _ in range(self.k):
+            neg_hidden_sample, neg_hidden_prob = self.sample_hidden(neg_visible)
+            neg_visible_sample, neg_visible_prob = self.sample_visible(neg_hidden_sample)
+            neg_visible = neg_visible_prob
+        neg_associations = torch.matmul(neg_visible.t(), neg_hidden_prob)
+        self.weights.data += self.learning_rate * (pos_associations - neg_associations) / batch_size
+        self.visible_bias.data += self.learning_rate * torch.mean(visible_data - neg_visible, dim=0)
+        self.hidden_bias.data += self.learning_rate * torch.mean(pos_hidden_prob - neg_hidden_prob, dim=0)
+        error = torch.mean((visible_data - neg_visible) ** 2)
+        return error.item()
+    def free_energy(self, v):
+        vbias_term = torch.matmul(v, self.visible_bias)
+        wx_b = torch.matmul(v, self.weights) + self.hidden_bias
+        hidden_term = torch.sum(torch.log(1 + torch.exp(wx_b)), dim=1)
+        return -hidden_term - vbias_term
+    def forward(self, visible_data, n_gibbs=100):
+        samples = visible_data.clone()
+        for _ in range(n_gibbs):
+            _, hidden_prob = self.sample_hidden(samples)
+            samples, _ = self.sample_visible(hidden_prob)
+        return samples
+
+
+if __name__ == "__main__":
+    torch.manual_seed(42)
+    torch.cuda.manual_seed_all(42)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    num_visible = 784
+    num_hidden = 128
+    batch_size = 8
+    learning_rate = 0.01
+
+    input_tensor = torch.randint(0, 2, (batch_size, num_visible), dtype=torch.float32)
+    initial_state = torch.randint(0, 2, (5, num_visible), dtype=torch.float32)
+
+    model = BoltzmannMachine(num_visible, num_hidden, learning_rate)
+    for param in model.parameters():
+        param.requires_grad = False
+
+    model.eval()
+    with torch.no_grad():
+        samples_normal = model(initial_state)
+        energy_normal = model.free_energy(input_tensor)
+        recon_error_normal = model.contrastive_divergence(input_tensor)
+        _, hidden_prob_normal = model.sample_hidden(input_tensor)
+        _, visible_prob_normal = model.sample_visible(hidden_prob_normal)
+
+    compiled_m
+Trigger conditions: {"backend": "", "dtype": "torch.float32", "input_shape": "batch_size=8, num_visible=784, num_hidden=128", "other_conditions": "torch.compile(), torch.manual_seed(42), torch.cuda.manual_seed_all(42), torch.backends.cudnn.deterministic = True, torch.backends.cudnn.benchmark = False"}
+Environment: {"pytorch_version": "", "python_version": "", "os": "", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

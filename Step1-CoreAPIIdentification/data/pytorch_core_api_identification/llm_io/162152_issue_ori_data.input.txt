@@ -1,0 +1,149 @@
+Bug Report:
+Title: torch.nn.DataParallel not fully supports custom backend.
+Issue ID: 162152
+Original bug description: ### 🐛 Describe the bug
+
+I implemented broadcast, broadcast_out, broadcast_coalesced, scatter, scatter_out, gather, gather_out on my own backend, then binding to python and monkey patch to torch._C.
+after that, I tested DataParallel module, code:
+
+```python
+import torch
+import torch.nn as nn
+from torch.nn import DataParallel
+
+class SimpleModel(nn.Module):
+    def __init__(self, input_size=10, hidden_size=20, output_size=5):
+        super(SimpleModel, self).__init__()
+        self.linear1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.linear2(x)
+        return x
+
+if torch.<mybackend>.is_available() and torch.<mybackend>.device_count() > 1:
+    print(f"检测到 {torch.<mybackend>.device_count()} 个GPU")
+
+    model = SimpleModel()
+    model = model.<mybackend>()  # 移到GPU 0
+
+    model = DataParallel(model, device_ids=[0,1,2,3])
+
+    batch_size = 20
+    input_data = torch.randn(batch_size, 10).<mybackend>()
+
+    output = model(input_data)
+    print("success")
+else:
+    raise
+```
+
+I got errors:
+
+```
+Traceback (most recent call last):
+  File "/data/application/sunjb/projects/test/tmp1.py", line 37, in <module>
+
+  File "/data/application/sunjb/projects/pytorch271/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/data/application/sunjb/projects/pytorch271/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/data/application/sunjb/projects/pytorch271/torch/nn/parallel/data_parallel.py", line 193, in forward
+    replicas = self.replicate(self.module, self.device_ids[: len(inputs)])
+  File "/data/application/sunjb/projects/pytorch271/torch/nn/parallel/data_parallel.py", line 200, in replicate
+    return replicate(module, device_ids, not torch.is_grad_enabled())
+  File "/data/application/sunjb/projects/pytorch271/torch/nn/parallel/replicate.py", line 126, in replicate
+    param_copies = _broadcast_coalesced_reshape(params, devices, detach)
+  File "/data/application/sunjb/projects/pytorch271/torch/nn/parallel/replicate.py", line 95, in _broadcast_coalesced_reshape
+    tensor_copies = Broadcast.apply(devices, *tensors)
+  File "/data/application/sunjb/projects/pytorch271/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+  File "/data/application/sunjb/projects/pytorch271/torch/nn/parallel/_functions.py", line 23, in forward
+    outputs = comm.broadcast_coalesced(inputs, ctx.target_gpus)
+  File "/data/application/sunjb/projects/pytorch271/torch/nn/parallel/comm.py", line 66, in broadcast_coalesced
+    return torch._C._broadcast_coalesced(tensors, devices, buffer_size)
+```
+
+It seems like function `parallel_apply` in torch/nn/parallel/parallel_apply.py, it still has cuda related functions, like
+- `torch.cuda.current_stream`
+- `torch.cuda.device`
+- `torch.cuda.stream`
+- `torch.amp.autocast("cuda"..)`
+
+I need to monkey patch DataParallel module to support my privateuse1 device.
+
+so I think it not fully decoupled from cuda in DP module.
+
+
+### Versions
+
+Collecting environment information...
+PyTorch version: 2.7.1a0+gite2d141d
+Is debug build: True
+CUDA used to build PyTorch: Could not collect
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.1 LTS (x86_64)
+GCC version: (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0
+Clang version: 14.0.0-1ubuntu1.1
+CMake version: version 3.31.2
+Libc version: glibc-2.35
+
+Python version: 3.10.16 (main, Dec 11 2024, 16:24:50) [GCC 11.2.0] (64-bit runtime)
+Python platform: Linux-5.15.0-43-generic-x86_64-with-glibc2.35
+Is CUDA available: False
+CUDA runtime version: 12.1.66
+CUDA_MODULE_LOADING set to: N/A
+GPU models and configuration: GPU 0: NVIDIA GeForce RTX 4090
+Nvidia driver version: 575.57.08
+cuDNN version: Probably one of the following:
+/usr/lib/x86_64-linux-gnu/libcudnn.so.9.10.2
+/usr/
+Structured error description: I implemented broadcast, broadcast_out, broadcast_coalesced, scatter, scatter_out, gather, gather_out on my own backend, then binding to python and monkey patch to torch._C. After testing DataParallel module, I got errors. It seems like function `parallel_apply` in torch/nn/parallel/parallel_apply.py, it still has cuda related functions, like torch.cuda.current_stream, torch.cuda.device, torch.cuda.stream, torch.amp.autocast("cuda"..). I need to monkey patch DataParallel module to support my privateuse1 device. so I think it not fully decoupled from cuda in DP module.
+Minimal reproducible example: import torch
+import torch.nn as nn
+from torch.nn import DataParallel
+
+class SimpleModel(nn.Module):
+    def __init__(self, input_size=10, hidden_size=20, output_size=5):
+        super(SimpleModel, self).__init__()
+        self.linear1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.linear2(x)
+        return x
+
+if torch.<mybackend>.is_available() and torch.<mybackend>.device_count() > 1:
+    print(f"检测到 {torch.<mybackend>.device_count()} 个GPU")
+
+    model = SimpleModel()
+    model = model.<mybackend>()  # 移到GPU 0
+
+    model = DataParallel(model, device_ids=[0,1,2,3])
+
+    batch_size = 20
+    input_data = torch.randn(batch_size, 10).<mybackend>()
+
+    output = model(input_data)
+    print("success")
+else:
+    raise
+Trigger conditions: {"backend": "custom backend (privateuse1)", "dtype": "unknown", "input_shape": "batch_size=20, input_size=10", "other_conditions": "Using DataParallel with custom backend, device_ids=[0,1,2,3]"}
+Environment: {"pytorch_version": "2.7.1a0+gite2d141d", "python_version": "3.10.16", "os": "Ubuntu 22.04.1 LTS (x86_64)", "hardware": "NVIDIA GeForce RTX 4090"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

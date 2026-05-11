@@ -1,0 +1,109 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** ROCm context parallel backward lse not scaled.
+    *   **Description:** Mentions a previous fix for the forward pass that didn't apply to the backward pass. The fix involves dividing `logsumexp` by a constant (0.693147..., which is $\ln(2)$).
+    *   **Location:** `torch/distributed/tensor/experimental/_attention.py` line 498.
+    *   **Context:** ROCm backend, context parallel, backward pass, attention mechanism (implied by file path `_attention.py` and variable `logsumexp`).
+    *   **Minimal Repro:** `logsumexp /= 0.6931471805599453` (This is the fix, not the trigger, but it points to the operation being modified).
+
+2.  **Identify the Core API:**
+    *   The bug is specifically about the scaling of `logsumexp` during the backward pass of an attention operation in a distributed context.
+    *   The file path is `torch/distributed/tensor/experimental/_attention.py`.
+    *   The variable is `logsumexp`.
+    *   The operation is a division (scaling) of this value.
+    *   The high-level functionality is "Context Parallel Attention" or "Scaled Dot Product Attention" (SDPA) in a distributed setting.
+    *   However, the prompt asks for the *single core PyTorch API*.
+    *   Is it `torch.logsumexp`? The variable is named `logsumexp`, but the bug is about the *scaling* of this value in the backward pass of a specific distributed attention implementation.
+    *   Is it `torch.nn.functional.scaled_dot_product_attention`? This is the standard API for attention. The bug is in an experimental distributed implementation of this.
+    *   Is it `torch.distributed`? Too broad.
+    *   Let's look at the specific code location mentioned: `torch/distributed/tensor/experimental/_attention.py`. This file usually implements the backend for `torch.nn.functional.scaled_dot_product_attention` when using DTensor or specific distributed strategies.
+    *   The bug report mentions "ROCm context parallel backward lse not scaled". The "lse" stands for LogSumExp.
+    *   The fix is `logsumexp /= 0.6931471805599453`.
+    *   The issue is that the gradient calculation (backward) for the attention mechanism is incorrect because the LSE wasn't scaled.
+    *   The API that users call to trigger this code path is likely `torch.nn.functional.scaled_dot_product_attention` (often abbreviated as `F.scaled_dot_product_attention`).
+    *   Alternatively, since it's in `torch.distributed.tensor.experimental`, it might be a specific API exposed there, but usually, these are backends for the main functional API.
+    *   Let's consider the variable name `logsumexp`. Is there a `torch.logsumexp` API? Yes. But here, `logsumexp` is a computed tensor within the attention kernel, not necessarily a direct call to `torch.logsumexp` (though it computes the log-sum-exp of the attention scores).
+    *   The bug is about the *backward pass* of the attention mechanism.
+    *   The most specific, high-level API that encompasses this logic is `torch.nn.functional.scaled_dot_product_attention`.
+
+3.  **Refining the API choice:**
+    *   The bug is in the implementation of attention for ROCm context parallelism.
+    *   The user-facing API that invokes this path is `torch.nn.functional.scaled_dot_product_attention`.
+    *   Is there a more specific API? The file is `_attention.py`. The class/function names inside are usually internal.
+    *   The prompt asks for the "single core PyTorch API".
+    *   If I look at the previous issue (#156012) mentioned in the report, it likely discusses the forward pass scaling.
+    *   The core operation being fixed is the scaling of the LSE in the backward pass.
+    *   However, the *API* responsible for triggering the bug is the one that runs this attention code.
+    *   `torch.nn.functional.scaled_dot_product_attention` is the standard API for this.
+    *   Could it be `torch.logsumexp`? The bug is about the *value* of the logsumexp, but the API causing the crash/incorrectness is the attention function.
+    *   Let's look at the "Minimal reproducible example": `logsumexp /= 0.6931471805599453`. This is the fix. It implies the variable `logsumexp` exists.
+    *   The bug is "ROCm context parallel backward lse not scaled".
+    *   The API is `torch.nn.functional.scaled_dot_product_attention`.
+
+4.  **Double Check:**
+    *   Is it `torch.distributed`? No, that's a module.
+    *   Is it `torch.autograd`? No.
+    *   Is it `torch.nn.MultiheadAttention`? That uses SDPA.
+    *   The most direct API is `torch.nn.functional.scaled_dot_product_attention`.
+
+    Let's reconsider if the API is `torch.logsumexp`. The bug is specifically about the `logsumexp` variable not being scaled. However, `torch.logsumexp` is a reduction function. The bug is inside a complex kernel (or python implementation) of attention. The user isn't calling `torch.logsumexp` directly and getting a wrong result; they are calling attention and getting wrong gradients. The `logsumexp` is an intermediate value in the attention formula.
+    Therefore, the API is the attention API.
+
+    Is there a specific "Context Parallel" API? `torch.distributed.tensor.experimental._attention` suggests it's an experimental feature, likely hooked into `scaled_dot_product_attention`.
+
+    Let's verify the file path `torch/distributed/tensor/experimental/_attention.py`. This file contains the implementation of `scaled_dot_product_attention` for distributed tensors.
+
+    So, the API is `torch.nn.functional.scaled_dot_product_attention`.
+
+    Wait, looking at the "Minimal reproducible example" again. It's just the line of code to fix it. It doesn't show the user code.
+    The "Trigger conditions" says: "ROCm context parallel backward pass".
+    This confirms it's the backward pass of the attention mechanism.
+
+    Is there any other candidate?
+    Maybe `torch.nn.functional.flash_attention`? No, that's usually internal or deprecated in favor of SDPA.
+    Maybe `torch.ops.aten._scaled_dot_product_flash_attention`? That's an operator, but the public API is `scaled_dot_product_attention`.
+
+    Let's stick with `torch.nn.functional.scaled_dot_product_attention`.
+
+    One more thought: The bug report title says "ROCm context parallel backward lse not scaled".
+    The "lse" refers to the log-sum-exp value.
+    Is it possible the API is `torch.logsumexp`?
+    If the bug was "torch.logsumexp returns wrong value on ROCm", then yes.
+    But here, the bug is inside the attention implementation where it calculates an LSE internally.
+    The user calls attention.
+    So `torch.nn.functional.scaled_dot_product_attention` is the correct answer.
+
+    Let's check if there is a more specific API mentioned in the file path. `torch.distributed.tensor.experimental`. This is a module. The function is likely `scaled_dot_product_attention`.
+
+    Final decision: `torch.nn.functional.scaled_dot_product_attention`.
+
+    Wait, I should check if the API is simply `torch.logsumexp` because the bug is literally about the scaling of the logsumexp value.
+    However, the bug is *not* in the implementation of `torch.logsumexp`. It is in the implementation of attention, which *uses* a logsumexp calculation (or a value named logsumexp) that needs scaling.
+    The bug report says "The fix patched forward but did not patch backward." This refers to the attention forward/backward.
+    The API is the one that has the forward and backward passes being patched. That is the attention API.
+
+    Therefore: `torch.nn.functional.scaled_dot_product_attention`.
+
+    Let's try to be precise. The file is `torch/distributed/tensor/experimental/_attention.py`.
+    The function defined there is likely `scaled_dot_product_attention`.
+    The public API is `torch.nn.functional.scaled_dot_product_attention`.
+
+    Is there any chance it's `torch.distributed`? No.
+    Is there any chance it's `torch.nn.attention`? No.
+
+    I will provide `torch.nn.functional.scaled_dot_product_attention`.
+
+    Wait, looking at the constraints: "Return only one API name".
+    Is `torch.nn.functional.scaled_dot_product_attention` considered one API name? Yes.
+    Is there a shorter name? `F.scaled_dot_product_attention`? No, use the full path.
+
+    Let's verify if the bug is actually in `torch.logsumexp`.
+    The fix is `logsumexp /= 0.6931471805599453`.
+    This is a scaling factor.
+    If the user called `torch.logsumexp`, they would expect the mathematical logsumexp.
+    Here, the code is computing a value *named* logsumexp, but in the context of ROCm context parallel attention, it needs to be scaled by 1/ln(2) (which is approx 1.44, but here they divide by 0.693... which is ln(2), so they are multiplying by 1/ln(2)? No, dividing by ln(2) is multiplying by 1/ln(2)).
+    Wait, 0.693 is ln(2).
+    If they divide by ln(2), they are scaling it.
+    This is specific to the attention implementation on ROCm.
+    So the API is definitely the attention one.
+
+    Final check: `torch.nn.functional.scaled_dot_product_attention`.torch.nn.functional.scaled_dot_product_attention

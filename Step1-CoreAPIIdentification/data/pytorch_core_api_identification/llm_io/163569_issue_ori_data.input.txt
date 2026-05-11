@@ -1,0 +1,115 @@
+Bug Report:
+Title: [Fuzzer][Eager/Compile Divergence] torch.nn.functional.conv1d works in eager but fails compile
+Issue ID: 163569
+Original bug description: ### 🐛 Describe the bug
+
+```
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0 # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda
+    t1 = t0.max(dim=0).values # size=(261, 17, 358), stride=(358, 93438, 1), dtype=bfloat16, device=cuda
+    t2 = t1.transpose(1, 0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=bfloat16, device=cuda
+    t3 = arg1 # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+    t4 = torch.exp(t3) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+    t5 = arg2 # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda
+    t6 = t5.transpose(2, 1) # size=(261, 64, 1), stride=(16704, 64, 1), dtype=float32, device=cuda
+    t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    t8 = t7.clone(); t8.zero_() # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    t9 = t2 * t7 * t8 # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    output = t9  # output tensor
+    return output
+
+arg0 = torch.rand([2, 261, 17, 358], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda
+arg1 = torch.rand([17, 64, 358], dtype=torch.float32, device='cuda', requires_grad=True) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+arg2 = torch.rand([261, 1, 64], dtype=torch.float32, device='cuda', requires_grad=True) # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+```
+
+```
+(/home/bobren/local/a/pytorch-env) [14:51] devgpu035:/home/bobren/local/a/pytorch/torchfuzz python fuzzer.py --seed 25226
+Running fuzzer with max_depth=3, seed=25226, output=None
+Generated program written to: /tmp/torchfuzz/fuzz_3d3a00c41e9598b3.py
+Running generated program...
+Selected CUDA_VISIBLE_DEVICES=7
+=== Program Output (Failure) ===
+Eager Success! ✅
+
+Traceback (most recent call last):
+  File "/tmp/torchfuzz/fuzz_3d3a00c41e9598b3.py", line 29, in <module>
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+  File "/data/users/bobren/a/pytorch/torch/_dynamo/eval_frame.py", line 830, in compile_wrapper
+    return fn(*args, **kwargs)
+  File "/tmp/torchfuzz/fuzz_3d3a00c41e9598b3.py", line 7, in foo
+    def foo(arg0, arg1, arg2):
+  File "/data/users/bobren/a/pytorch/torch/_dynamo/eval_frame.py", line 1035, in _fn
+    return fn(*args, **kwargs)
+  File "/data/users/bobren/a/pytorch/torch/_functorch/aot_autograd.py", line 1130, in forward
+    return compiled_fn(full_args)
+  File "/data/users/bobren/a/pytorch/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 339, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+  File "/data/users/bobren/a/pytorch/torch/_functorch/_aot_autograd/utils.py", line 129, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/data/users/bobren/a/pytorch/torch/_functorch/_aot_autograd/utils.py", line 103, in g
+    return f(*args)
+  File "/data/users/bobren/a/pytorch/torch/autograd/function.py", line 581, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+  File "/data/users/bobren/a/pytorch/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 2118, in forward
+    fw_outs = call_func_at_runtime_with_args(
+  File "/data/users/bobren/a/pytorch/torch/_functorch/_aot_autograd/utils.py", line 129, in call_func_at_runtime_with_args
+    out = normaliz
+Structured error description: torch.nn.functional.conv1d works in eager mode but fails when compiled with torch.compile. The code runs successfully in eager mode but throws an error during compilation.
+Minimal reproducible example: import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0 # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda
+    t1 = t0.max(dim=0).values # size=(261, 17, 358), stride=(358, 93438, 1), dtype=bfloat16, device=cuda
+    t2 = t1.transpose(1, 0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=bfloat16, device=cuda
+    t3 = arg1 # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+    t4 = torch.exp(t3) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+    t5 = arg2 # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda
+    t6 = t5.transpose(2, 1) # size=(261, 64, 1), stride=(16704, 64, 1), dtype=float32, device=cuda
+    t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    t8 = t7.clone(); t8.zero_() # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    t9 = t2 * t7 * t8 # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    output = t9  # output tensor
+    return output
+
+arg0 = torch.rand([2, 261, 17, 358], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda
+arg1 = torch.rand([17, 64, 358], dtype=torch.float32, device='cuda', requires_grad=True) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+arg2 = torch.rand([261, 1, 64], dtype=torch.float32, device='cuda', requires_grad=True) # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+Trigger conditions: {"backend": "CUDA", "dtype": "bfloat16, float32", "input_shape": "(2, 261, 17, 358), (17, 64, 358), (261, 1, 64)", "other_conditions": "torch.compile with fullgraph=True and dynamic=True"}
+Environment: {"pytorch_version": "unknown", "python_version": "unknown", "os": "Linux", "hardware": "CUDA/GPU (CUDA_VISIBLE_DEVICES=7)"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

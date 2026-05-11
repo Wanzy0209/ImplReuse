@@ -1,0 +1,59 @@
+Bug Report:
+Title: c10::intrusive_ptr::reset_() may never delet object due to incorrect weakcount handling
+Issue ID: 165262
+Original bug description: ### 🐛 Describe the bug
+
+Hi, I'm new to PyTorch, and I'm trying to understand whether the `reset_()` implementation of `c10::intrusive_ptr` is correct.
+
+After reviewing both the previous and the updated implementation from Pull Request #163394, I noticed a potential issue where the target object might never be deleted.
+
+Specifically, lines [338-359 in this commit](https://github.com/pytorch/pytorch/blob/281f8f407ed0925f73f25f89868b89dfbe895987/c10/util/intrusive_ptr.h#L338-L359).
+
+https://github.com/pytorch/pytorch/blob/281f8f407ed0925f73f25f89868b89dfbe895987/c10/util/intrusive_ptr.h#L338-L359
+
+At line 341, the first `should_delete` is defined as:
+
+```cpp
+bool should_delete = (combined_refcount == detail::kWeakReferenceCountOne);
+```
+
+This makes sense — since the weak count is always one greater than the actual number of weak references, the object can be deleted when `weakcount == 1`.
+
+However, once we enter the branch at line 346 (`if (!should_delete)`), it means the weak count must be **2 or higher** (i.e., there are still active weak references). Then, at line 353, we see the following:
+
+```cpp
+should_delete = detail::atomic_weakcount_decrement(target_->combined_refcount_) == 0;
+```
+
+This line assumes that decrementing the weak count can make it reach 0, which would trigger the final deletion. But according to the invariant above, `weakcount` can never become 0 by decreasing it by 1 when it's 2 or higher.
+
+**Therefore, `should_delete` will never become true in this path, meaning the `delete target_` statement that follows will never be executed.**
+As a result, the object might never be freed even when both strong and weak references are gone.
+
+---
+
+I have create a minimal reproduce example for this potential problem.
+
+https://github.com/mayeths/torch-intrusive_ptr-minimal
+
+
+
+### Versions
+
+No specific runtime environment can be provided since this was observed on an in-house cluster. However, I can confirm that the issue reproduces consistently across many PyTorch versions, including 2.7 and 2.8, which I'm currently using.
+
+cc @ezyang @bhosmer @smessmer @ljk53 @bdhirsh
+Structured error description: The reset_() implementation of c10::intrusive_ptr may never delete the target object due to incorrect weakcount handling. At line 341, should_delete is defined as bool should_delete = (combined_refcount == detail::kWeakReferenceCountOne);, which makes sense because the weak count is always one greater than the actual number of weak references. However, once entering the branch at line 346 (if (!should_delete)), the weak count must be 2 or higher. Then at line 353, should_delete = detail::atomic_weakcount_decrement(target_->combined_refcount_) == 0; assumes that decrementing the weak count can make it reach 0, but according to the invariant, weakcount can never become 0 by decreasing it by 1 when it's 2 or higher. Therefore, should_delete will never become true in this path, and the object might never be freed even when both strong and weak references are gone.
+Minimal reproducible example: should_delete = detail::atomic_weakcount_decrement(target_->combined_refcount_) == 0;
+Trigger conditions: {"backend": "", "dtype": "", "input_shape": "", "other_conditions": ""}
+Environment: {"pytorch_version": "2.7 and 2.8", "python_version": "unknown", "os": "unknown", "hardware": "unknown"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

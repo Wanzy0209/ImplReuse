@@ -1,0 +1,63 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** Recomputed values for the following tensors have different metadata than during the forward pass.
+    *   **Context:** The user is using a custom `LoRALinear` module wrapping `nn.Linear`. The model is wrapped with FSDP2 and Activation Checkpointing (AC).
+    *   **Error:** `torch.utils.checkpoint.CheckpointError: torch.utils.checkpoint: Recomputed values for the following tensors have different metadata than during the forward pass.`
+    *   **Specific Mismatch:**
+        *   Saved metadata shape: `[4096, 4096]`
+        *   Recomputed metadata shape: `[1, 4096, 4096]`
+    *   **Code Snippet:**
+        ```python
+        class LoRALinear(nn.Module):
+            # ... init ...
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                lora_x = self.dropout(x) @ self.lora_A @ self.lora_B
+                output = self.original_layer(x) + lora_x
+                return output
+        ```
+    *   **Traceback:** The error originates from `torch.utils.checkpoint.py` inside `unpack_hook` and `check_recomputed_tensors_match`.
+
+2.  **Identify the Core Mechanism:**
+    *   The error happens during the backward pass, specifically inside the activation checkpointing logic.
+    *   Activation checkpointing (AC) saves inputs to a checkpointed region during the forward pass and deletes intermediate activations to save memory.
+    *   During the backward pass, it re-runs the forward pass (recomputation) using the saved inputs to regenerate the intermediate activations needed for gradient calculation.
+    *   The error explicitly states that the *recomputed* tensor has a different shape than the *saved* tensor. This implies that the forward pass logic behaves differently when run the second time (during backward) compared to the first time (during forward), or the inputs being fed into the recomputation are different in shape than expected.
+
+3.  **Analyze the Shape Mismatch:**
+    *   Saved: `[4096, 4096]` (2D)
+    *   Recomputed: `[1, 4096, 4096]` (3D)
+    *   The user is using FSDP2 (Fully Sharded Data Parallel). FSDP often manipulates tensor shapes (sharding/unsharding).
+    *   The user is using LoRA. LoRA involves low-rank decomposition.
+    *   The error is raised by `torch.utils.checkpoint`.
+
+4.  **Determine the Responsible API:**
+    *   The error is a `CheckpointError` raised by `torch.utils.checkpoint`.
+    *   The mechanism failing is the *recomputation* logic within the checkpointing utility.
+    *   While FSDP2 is involved in the setup (and likely causes the state change that leads to the shape mismatch, e.g., unsharding behavior changing between forward and backward contexts), the API that detects the error and enforces the consistency check is `torch.utils.checkpoint`.
+    *   The prompt asks for the "single core PyTorch API from a bug report".
+    *   The error message is `torch.utils.checkpoint.CheckpointError`.
+    *   The traceback points to `torch/utils/checkpoint.py`.
+    *   The functionality failing is the activation checkpointing mechanism.
+
+5.  **Refining the Choice:**
+    *   Is it `torch.autograd`? The error happens in backward, but it's specifically triggered by the checkpointing logic.
+    *   Is it `torch.distributed.fsdp`? FSDP is the environment, but the error is about the mismatch detected by the checkpointing system. The bug report title describes the error message from checkpointing.
+    *   Is it `torch.nn.Linear`? The user code uses this, but the error isn't a Linear error.
+    *   Is it `torch.utils.checkpoint`? Yes. The error is explicitly `torch.utils.checkpoint.CheckpointError`. The logic that compares the saved vs recomputed metadata resides here. The issue is that the checkpointing mechanism assumes deterministic behavior (same input -> same output shape), but the interaction with FSDP2 (likely handling of batch dimensions or sharding) violates this assumption during the recompute phase.
+
+6.  **Final Selection:** The API is `torch.utils.checkpoint`.
+
+7.  **Formatting:** The user requested *only* the API name.
+
+    *   Candidate: `torch.utils.checkpoint`
+
+    Let's double check if there is a more specific function. `torch.utils.checkpoint.checkpoint` is the function usually called. The class is `torch.utils.checkpoint.CheckpointError`. The module is `torch.utils.checkpoint`. Usually, the module name is the safest "API" identifier unless a specific function is clearly the culprit. The error is a generic failure of the checkpointing mechanism to verify consistency.
+
+    The prompt asks for "one API name". `torch.utils.checkpoint` fits best.
+
+    Let's consider if `torch.distributed.fsdp` is the "core" API. The bug report mentions "wrap the model blocks with FSDP2 and AC". The error is a *symptom* of FSDP2 interacting poorly with AC. However, the error is raised *by* AC. The title is the error message from AC. The traceback is in AC. The bug is likely that AC doesn't handle the FSDP2 state changes correctly. But the API *from the bug report* (the error source) is `torch.utils.checkpoint`.
+
+    If I have to pick the API that is *responsible for triggering the bug* (i.e., the code that raises the exception or the mechanism failing), it is `torch.utils.checkpoint`.
+
+    Let's verify the constraints. "Reply with only one API name".
+
+    Result: `torch.utils.checkpoint`torch.utils.checkpoint

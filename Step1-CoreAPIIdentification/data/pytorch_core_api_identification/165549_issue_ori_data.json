@@ -1,0 +1,53 @@
+{
+  "title": "Operations likeabs(dispatched via CompositeExplicitAutograd) return empty tensors when run through cpu_fallback",
+  "issue_id": "165549",
+  "bug_description": "### 🐛 Describe the bug\n\nWhen a custom device backend relies on CPU fallback for unimplemented operations, `CompositeExplicitAutograd` operations fail to return properly sized tensors. This affects operations like `abs`, `isfinite`, `isinf`, and `isnan`.\n\nassuming we have implemented the minimal set of ops as described: https://docs.pytorch.org/docs/main/accelerator/operators.html for a privateuse1 out-of-tree backend, and implementing the cpu fallback as described (just a call to `at::native::cpu_fallback(op, stack);`)\n\n```python\n# This fails - returns tensor with shape [0]\nt = torch.randn(4, 4, device='privateuse1')\nresult = torch.abs(t)  # result.shape == torch.Size([0])\n\n# But these work correctly\ntorch.abs(t, out=pre_allocated_tensor)  # Works\nt.abs_()  # Works (in-place)\ntorch.neg(t)  # Works (uses structured_delegate)\n```\n\n## Possible Root Cause\n\n### 1. Implementation Pattern\n\nIn `pytorch/aten/src/ATen/native/UnaryOps.cpp`:\n\n```cpp\n// Line 471-480\ntemplate <typename OutImpl>\nstatic inline Tensor unary_op_impl_with_complex_to_float(const Tensor& self, OutImpl& out_impl) {\n  if (self.is_complex()) {\n    const auto float_type = c10::toRealValueType(self.scalar_type());\n    Tensor result = at::empty_like(self, self.options().dtype(float_type));\n    return out_impl(result, self);\n  }\n\n  Tensor result = at::empty({0}, self.options());  // Creates placeholder with shape [0]\n  return out_impl(result, self);  // Expects out_impl to resize\n}\n\n// Line 546-548\nTensor abs(const Tensor& self) {\n  return unary_op_impl_with_complex_to_float(self, at::abs_out);\n}\n```\n\nThe pattern creates an empty tensor with shape `[0]` as a placeholder, expecting the `.out` variant (`at::abs_out`) to resize it appropriately.\n\n### 2. How the Resize is Expected to Happen\n\nWhen `out_impl(result, self)` is called with the empty `[0]` shaped tensor, here's the expected resize chain:\n\n1. **`at::abs_out()` is called** (UnaryOps.cpp:543-544):\n   ```cpp\n   Tensor& abs_out(const Tensor& self, Tensor& result) {\n     return unary_op_impl_with_complex_to_float_out(result, self, abs_stub, false);\n   }\n   ```\n\n2. **Creates TensorIterator** (UnaryOps.cpp:405-408):\n   ```cpp\n   Tensor& unary_op_impl_out(Tensor& result, const Tensor& self, Stub& stub) {\n     auto iter = TensorIterator::unary_op(result, self);  // KEY: This should handle resize\n     stub(iter.device_type(), iter);\n     return result;\n   }\n   ```\n\n3. **TensorIterator detects empty tensor and marks for resize** (TensorIterator.cpp:1203-1210):\n   ```cpp\n   if (!output.defined()) {\n     operands_[i].will_resize = true;\n   }\n   if (output.defined() && !output.sizes().equals(shape_)) {\n     if (config.resize_outputs_ && !operands_[i].is_read_write) {\n       operands_[i].will_resize = true;  // Marks empty [0] tensor for resize\n     }\n   }\n   ```\n\n4. **TensorIterator allocates/resizes output** (TensorIterator.cpp:574-601):\n   ```cpp\n   // In allocate_or_resize_outputs()\n   if (!op.tensor_base().defined() || op.will_resize) {\n     // Calculates correct shape and strides\n     set_output_raw_strided(i, tensor_shape, tensor_stride, original_options(op), names_);\n   }\n   ```\n\n5. **Actual resize happens** (TensorIterator.cpp:1644-1651):\n   ```cpp\n   if (!op.tensor_base().defined()) {\n     // Creates new tensor with correct shape\n     op.tensor(c10::MaybeOwned<TensorBase>::owned(at::empty(sizes, options)));\n   } else if (op.will_resize) {\n     // Resizes existing tensor to correct shape\n     at::native::resize_output(op.tensor(), sizes);\n   }\n   ```\n\n### 3. Why the Resize is Lost\n\nWhen the operation goes through CPU fallback (`pytorch/aten/src/ATen/native/CPUFallback.cpp`):\n\n1. **Input Conversion** (lines 114-147):\n   ```cpp\n   // Simplified from CPUFallback.cpp\n   auto ivalue = (*stack)[idx];\n   if (ivalue.isTensor()) {\n     auto src_tensor = ivalue.toTensor();\n     // Convert to CPU tensor\n     (*stack)[idx] = c10::IValue(src_tensor.cpu());\n   }\n   ```\n   - Custom device tensors are converted to CPU tensors\n   - The ",
+  "apis": [
+    "t.abs_",
+    "nt.abs_",
+    "iter.device_type",
+    "output.sizes",
+    "output.defined",
+    "src_tensor.cpu"
+  ],
+  "best_code": "# This fails - returns tensor with shape [0]\nt = torch.randn(4, 4, device='privateuse1')\nresult = torch.abs(t)  # result.shape == torch.Size([0])\n\n# But these work correctly\ntorch.abs(t, out=pre_allocated_tensor)  # Works\nt.abs_()  # Works (in-place)\ntorch.neg(t)  # Works (uses structured_delegate)",
+  "pull_urls": [],
+  "_meta": {
+    "file": "165549_issue_ori_data.json",
+    "generated_at": "2026-04-21 04:49:59",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\165549_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\165549_issue_ori_data.output.txt",
+    "parse_error": false,
+    "core_api_identification": {
+      "generated_at": "2026-05-10 06:59:15",
+      "model": "glm-4.7",
+      "prompt_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\165549_issue_ori_data.input.txt",
+      "response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\165549_issue_ori_data.output.txt",
+      "prompt_only": false
+    }
+  },
+  "error_description": "When a custom device backend relies on CPU fallback for unimplemented operations, `CompositeExplicitAutograd` operations fail to return properly sized tensors. This affects operations like `abs`, `isfinite`, `isinf`, and `isnan`.",
+  "repro_code": "# This fails - returns tensor with shape [0]\nt = torch.randn(4, 4, device='privateuse1')\nresult = torch.abs(t)  # result.shape == torch.Size([0])\n\n# But these work correctly\ntorch.abs(t, out=pre_allocated_tensor)  # Works\nt.abs_()  # Works (in-place)\ntorch.neg(t)  # Works (uses structured_delegate)",
+  "repro_output": "Operations likeabs(dispatched via CompositeExplicitAutograd) return empty tensors when run through cpu_fallback",
+  "affected_api": "torch.abs, torch.isfinite, torch.isinf, torch.isnan",
+  "trigger_conditions": {
+    "backend": "privateuse1",
+    "dtype": "unknown",
+    "input_shape": "(4, 4)",
+    "other_conditions": "Using CPU fallback for unimplemented operations, specifically operations dispatched via CompositeExplicitAutograd"
+  },
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "unknown"
+  },
+  "labels": [],
+  "core_api_identification": {
+    "core_api": "The user wants to identify the single core PyTorch API responsible for the bug described in the report",
+    "parse_error": false,
+    "raw_response_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\165549_issue_ori_data.output.txt",
+    "raw_response_events_file": "Step1-CoreAPIIdentification\\data\\pytorch_core_api_identification\\llm_io\\165549_issue_ori_data.output.events.json"
+  }
+}

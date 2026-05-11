@@ -1,0 +1,73 @@
+Bug Report:
+Title: [MPS] On MacOS-26 torch.full fails for 4+Gb tensors
+Issue ID: 161265
+Original bug description: ### 🐛 Describe the bug
+
+If one runs following example on macOS Tahoe
+```python
+import torch
+a = torch.ones(2, (1 << 31) + 5, dtype=torch.int8, device='mps')
+print(a[1, -2])
+print(a[:, -2])
+```
+
+result will be
+```
+tensor(0, device='mps:0', dtype=torch.int8)
+tensor([1, 1], device='mps:0', dtype=torch.int8)
+```
+But should have been 1 in both cases 
+Reason for that are relying on unsupported use of `fillBuffer` that for some reason stopped working for length exceeding 4Gb
+https://github.com/pytorch/pytorch/blob/639b8cc51ddebf10361f3840a6b0a244eb6092a1/aten/src/ATen/mps/MPSStream.mm#L161
+
+
+I.e. following Swift script returns non-unfirom values on MacOS Tahoe
+```swift
+import Metal
+
+let bufferSize = 1<<32 + 4
+
+guard let device = MTLCreateSystemDefaultDevice() else { fatalError("No Metal device found") }
+guard let buffer = device.makeBuffer(length: bufferSize, options: .storageModeShared) else { fatalError("Failed to create buffer") }
+
+guard let cmdQueue = device.makeCommandQueue() else { fatalError("Failed to create command queue") }
+guard let cmdBuffer = cmdQueue.makeCommandBuffer() else { fatalError("Failed to create command buffer") }
+guard let blitEncoder = cmdBuffer.makeBlitCommandEncoder() else { fatalError("Failed to create blit encoder") }
+
+blitEncoder.fill(buffer: buffer, range: 0..<bufferSize, value: 0x42)
+blitEncoder.endEncoding()
+
+cmdBuffer.commit()
+cmdBuffer.waitUntilCompleted()
+
+let tailOffs = 8
+let hostPtr = buffer.contents().bindMemory(to: UInt8.self, capacity: bufferSize)
+let tail = Array(UnsafeBufferPointer(start: hostPtr + (bufferSize - tailOffs), count: tailOffs))
+
+for (idx, val) in tail.enumerated() {
+    print("Offs 0x\(String(bufferSize - tailOffs + idx, radix: 16)): 0x\(String(val, radix: 16))")
+}
+```
+
+### Versions
+
+2.8.0, nightly
+
+cc @kulinseth @albanD @DenisVieriu97 @jhavukainen
+Structured error description: If one runs following example on macOS Tahoe, the result will be tensor(0, device='mps:0', dtype=torch.int8) and tensor([1, 1], device='mps:0', dtype=torch.int8) but should have been 1 in both cases. Reason for that are relying on unsupported use of `fillBuffer` that for some reason stopped working for length exceeding 4Gb.
+Minimal reproducible example: import torch
+a = torch.ones(2, (1 << 31) + 5, dtype=torch.int8, device='mps')
+print(a[1, -2])
+print(a[:, -2])
+Trigger conditions: {"backend": "MPS", "dtype": "torch.int8", "input_shape": "(2, (1 << 31) + 5)", "other_conditions": "macOS Tahoe, tensors larger than 4Gb"}
+Environment: {"pytorch_version": "2.8.0, nightly", "python_version": "", "os": "macOS Tahoe", "hardware": ""}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

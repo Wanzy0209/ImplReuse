@@ -1,0 +1,231 @@
+Bug Report:
+Title: Voxtral + Export/AOTI
+Issue ID: 162762
+Original bug description: ### 🐛 Describe the bug
+
+Issues when running Voxtral after exporting and compiling with AOTI:
+  ✅ Voxtral + CPU + Export: Works as expected
+  ❌ Voxtral + CPU + Export + AOTI: Numerical error in the audio encoder ([output](https://gist.github.com/manuelcandales/2673016dfa31b3fc63184e1a692b854f))
+
+#### Setup:
+Install **Optimum-Executorch**
+```
+git clone https://github.com/huggingface/optimum-executorch.git
+cd optimum-executorch
+python install_dev.py
+```
+
+Install earliest compatible version of **transformers**
+```
+pip install git+https://github.com/huggingface/transformers@6121e9e46c4fc4e5c91d9f927aef5490691850cf#egg=transformers
+```
+
+For **MPS**, need to checkout this PR and reinstall optimum-executorch with these changes: https://github.com/huggingface/optimum-executorch/pull/142
+Run the following to avoid overriding other deps:
+```
+cd optimum-executorch
+pip install --no-deps --no-build-isolation .
+```
+
+Install **mistral-common**
+```
+pip install mistral-common
+```
+
+#### Script:
+```python
+import logging
+import os
+
+import torch
+from transformers import AutoConfig, AutoProcessor, AutoTokenizer
+
+from optimum.executorch import ExecuTorchModelForMultiModalToText
+from optimum.exporters.executorch.tasks.multimodal_text_to_text import load_multimodal_text_to_text_model
+
+
+logging.basicConfig(level=logging.DEBUG)
+
+
+def compile_with_aoti(exported_programs, output_dir: str = "./voxtral_aoti_compiled"):
+    """
+    Compile exported programs with AOTI
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    compiled_programs = {}
+
+    print(f"\nCompiling with AOTI to {output_dir}...")
+
+    for name, exported_program in exported_programs.items():
+        # text_decoder takes a while, better to skip it while debugging audio encoder
+        # if name == "text_decoder":
+        #     continue
+        print(f"Compiling {name}...")
+
+        # Use AOTI to compile the exported program
+        package_path = os.path.join(output_dir, f"{name}.pt2")
+        output_path = torch._inductor.aoti_compile_and_package(
+            exported_program,
+            package_path=package_path,
+        )
+        print(f"✓ {name} compiled to {output_path}")
+
+        # Load the compiled program
+        aoti_compiled_program = torch._inductor.aoti_load_package(output_path)
+        print(f"✓ Loaded {name}")
+
+        compiled_programs[name] = aoti_compiled_program
+
+    return compiled_programs
+
+
+def main(device, aoti_compile):
+    model_id = "mistralai/Voxtral-Mini-3B-2507"
+    config = AutoConfig.from_pretrained(model_id)
+    module = load_multimodal_text_to_text_model(
+        model_id,
+        device=device,
+        use_custom_sdpa=True,
+        use_custom_kv_cache=True,
+    )
+
+    ep = module.export()
+
+    if aoti_compile:
+        compiled_programs = compile_with_aoti(ep)
+
+    # Generate
+    print(f"\nGenerating...")
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    conversation = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "audio",
+                    "url": "https://huggingface.co/datasets/eustlb/audio-samples/resolve/main/dude_where_is_my_car.wav",
+                },
+                {"type": "text", "text": "What can you tell me about this audio?"},
+            ],
+        }
+    ]
+    processor = AutoProcessor.from_pretrained(model_id)
+    inputs = processor.apply_chat_template(conversation)
+
+    for name in inputs:
+        inputs[name] = inputs[name].to(device)
+
+    input_ids = inputs["input_ids"]
+    print("Producing token embeddings with exported program ...")
+    token_embeddings_ep = ep["token_embedding"].module().forward(input=input_ids)
+    if aoti_compile:
+        print("Producing token embeddings with AOTI ...")
+        token_embeddings = compiled_programs["token_embedding"](input_ids)
+        if torch.allclose(token_embeddings, token_embeddings_ep, atol=1e-4):
+            print("✓ Token embeddings are the same")
+        else:
+            print("❌ Token embeddings are different")
+Structured error description: Issues when running Voxtral after exporting and compiling with AOTI: Voxtral + CPU + Export works as expected, but Voxtral + CPU + Export + AOTI has a numerical error in the audio encoder.
+Minimal reproducible example: import logging
+import os
+
+import torch
+from transformers import AutoConfig, AutoProcessor, AutoTokenizer
+
+from optimum.executorch import ExecuTorchModelForMultiModalToText
+from optimum.exporters.executorch.tasks.multimodal_text_to_text import load_multimodal_text_to_text_model
+
+
+logging.basicConfig(level=logging.DEBUG)
+
+
+def compile_with_aoti(exported_programs, output_dir: str = "./voxtral_aoti_compiled"):
+    """
+    Compile exported programs with AOTI
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    compiled_programs = {}
+
+    print(f"\nCompiling with AOTI to {output_dir}...")
+
+    for name, exported_program in exported_programs.items():
+        # text_decoder takes a while, better to skip it while debugging audio encoder
+        # if name == "text_decoder":
+        #     continue
+        print(f"Compiling {name}...")
+
+        # Use AOTI to compile the exported program
+        package_path = os.path.join(output_dir, f"{name}.pt2")
+        output_path = torch._inductor.aoti_compile_and_package(
+            exported_program,
+            package_path=package_path,
+        )
+        print(f"✓ {name} compiled to {output_path}")
+
+        # Load the compiled program
+        aoti_compiled_program = torch._inductor.aoti_load_package(output_path)
+        print(f"✓ Loaded {name}")
+
+        compiled_programs[name] = aoti_compiled_program
+
+    return compiled_programs
+
+
+def main(device, aoti_compile):
+    model_id = "mistralai/Voxtral-Mini-3B-2507"
+    config = AutoConfig.from_pretrained(model_id)
+    module = load_multimodal_text_to_text_model(
+        model_id,
+        device=device,
+        use_custom_sdpa=True,
+        use_custom_kv_cache=True,
+    )
+
+    ep = module.export()
+
+    if aoti_compile:
+        compiled_programs = compile_with_aoti(ep)
+
+    # Generate
+    print(f"\nGenerating...")
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    conversation = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "audio",
+                    "url": "https://huggingface.co/datasets/eustlb/audio-samples/resolve/main/dude_where_is_my_car.wav",
+                },
+                {"type": "text", "text": "What can you tell me about this audio?"},
+            ],
+        }
+    ]
+    processor = AutoProcessor.from_pretrained(model_id)
+    inputs = processor.apply_chat_template(conversation)
+
+    for name in inputs:
+        inputs[name] = inputs[name].to(device)
+
+    input_ids = inputs["input_ids"]
+    print("Producing token embeddings with exported program ...")
+    token_embeddings_ep = ep["token_embedding"].module().forward(input=input_ids)
+    if aoti_compile:
+        print("Producing token embeddings with AOTI ...")
+        token_embeddings = compiled_programs["token_embedding"](input_ids)
+        if torch.allclose(token_embeddings, token_embeddings_ep, atol=1e-4):
+            print("✓ Token embeddings are the same")
+        else:
+            print("❌ Token embeddings are different")
+Trigger conditions: {"backend": "CPU", "dtype": "", "input_shape": "", "other_conditions": "Using Voxtral model with Export and AOTI compilation"}
+Environment: {"pytorch_version": "", "python_version": "", "os": "", "hardware": "CPU"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

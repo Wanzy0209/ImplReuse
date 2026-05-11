@@ -1,0 +1,250 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** Error in logging `torch/distributed/launcher/api.py`, line 221.
+    *   **Issue ID:** 166630.
+    *   **Description:** A format string argument `signals_to_handle` is missing in the logging statement, causing a logging error.
+    *   **Code Snippet:** Shows a `logger.info(...)` call. The format string contains placeholders like `%(entrypoint)s`, `%(min_nodes)s`, etc. It *also* contains `%(duplicate_stdout_filters)s` and `%(duplicate_stderr_filters)s`. However, looking closely at the provided snippet in the "Minimal reproducible example" section, the format string is constructed by concatenating multiple strings.
+    *   **The specific error:** The traceback shows `TypeError: format requires a mapping`. This happens when `logger.info(msg, args)` is called where `msg` contains `%` style placeholders and `args` is a dictionary, but the placeholders in `msg` don't match the keys in `args` or the structure of `args` is wrong.
+    *   **The discrepancy:** The description says `signals_to_handle` is missing. Let's look at the code snippet provided in the "Minimal reproducible example".
+        *   The format string ends with `... "  numa_options             : %(numa_options)s\", "  duplicate_stdout_filters : %(duplicate_stdout_filters)s\", "  duplicate_stderr_filters : %(duplicate_stderr_filters)s\",`.
+        *   Wait, the snippet in the description shows the format string *does not* have `%(signals_to_handle)s`.
+        *   The dictionary passed as the argument *does* have `"signals_to_handle": config.signals_to_handle`.
+        *   The traceback says `TypeError: format requires a mapping`. This usually happens if the logging call receives multiple arguments (e.g., `logger.info("string %s", dict)`) instead of a single dictionary argument for `%` style formatting, or if the format string is malformed.
+        *   Actually, looking at the traceback: `msg = msg % self.args`. If `self.args` is a tuple containing a dictionary, Python tries to format the string using that tuple. If the string expects a mapping (because it uses `%(key)s`), but `self.args` is a tuple `(dict,)`, it might fail depending on the Python version or specific logging implementation details if it doesn't unwrap it correctly, or if there are extra arguments.
+        *   Let's look at the code structure in the snippet:
+            ```python
+            logger.info(
+                "String part 1... %(numa_options)s",
+                "String part 2... %(duplicate_stdout_filters)s",
+                "String part 3... %(duplicate_stderr_filters)s",
+                { ... dictionary ... }
+            )
+            ```
+            `logger.info` takes `msg` and `*args`. Here, `msg` is the first string. The subsequent strings and the dictionary are passed as `*args`.
+            So `msg` is just the first string. The dictionary is inside `args`.
+            The format string in `msg` ends with `%(numa_options)s`.
+            The dictionary contains `numa_options`.
+            However, the dictionary *also* contains `signals_to_handle`, `duplicate_stdout_filters`, etc.
+            The `msg` string *doesn't* contain placeholders for `duplicate_stdout_filters` or `duplicate_stderr_filters` (those are in the subsequent string arguments which are ignored by the formatting of the first string).
+            Wait, the bug description says: "Format string arg `signals_to_handle` missing in logging statement".
+            If the intention was to log `signals_to_handle`, the format string needs `%(signals_to_handle)s`.
+            The provided code snippet shows the format string is split across multiple arguments to `logger.info`.
+            Argument 1: `"... %(numa_options)s\"`
+            Argument 2: `"  duplicate_stdout_filters : %(duplicate_stdout_filters)s\"`
+            Argument 3: `"  duplicate_stderr_filters : %(duplicate_stderr_filters)s\"`
+            Argument 4: `{ ... "signals_to_handle": ... }`
+
+            When `logger.info` is called like this, it treats the first argument as the message format string. The rest are arguments to be formatted into it.
+            Since the first argument ends with `%(numa_options)s`, and the dictionary is passed as an argument (likely the 4th argument), `logger.info` receives `args = ("  duplicate_stdout_filters...", "  duplicate_stderr_filters...", {dict})`.
+            The logging module tries to format the first string using the tuple of args.
+            `"... %(numa_options)s" % ("  duplicate_stdout_filters...", "  duplicate_stderr_filters...", {dict})`.
+            This is a type mismatch. The string expects a mapping (because of `%(key)s`), but it got a tuple. Hence `TypeError: format requires a mapping`.
+
+    *   **The Core Issue:** The code is calling `logger.info` incorrectly. It's passing multiple strings and a dictionary as separate arguments, instead of concatenating the strings into one format string and passing the dictionary as the single argument.
+
+2.  **Identify the API:**
+    *   The error occurs inside `torch/distributed/launcher/api.py`.
+    *   The function call causing the crash is `logger.info(...)`.
+    *   `logger` is a standard Python `logging.Logger` instance.
+    *   However, the context is PyTorch's distributed launcher.
+    *   The user is asking for the "single core PyTorch API".
+    *   Is `logger.info` a PyTorch API? No, it's Python's standard library.
+    *   Is there a PyTorch API wrapping this? The file is `torch/distributed/launcher/api.py`.
+    *   The traceback shows:
+        `File ".../torch/distributed/launcher/api.py", line 165, in __call__ return launch_agent(self._config, self._entrypoint, list(args))`
+        `File ".../torch/distributed/launcher/api.py", line 221, in launch_agent logger.info(...)`
+    *   The bug is in the implementation of `launch_agent` inside `torch.distributed.launcher`.
+    *   The user asks for the API *from* the bug report.
+    *   The bug report title mentions "Error in logging torch/distributed/launcher/api.py".
+    *   The code snippet shows `logger.info`.
+    *   Is there a specific PyTorch API being invoked that leads here?
+    *   The traceback shows `torch.distributed.run` -> `elastic_launch` -> `launch_agent`.
+    *   `elastic_launch` is a function in `torch.distributed.launcher.api`.
+    *   The bug is literally inside the implementation of `launch_agent`.
+    *   However, usually, when these prompts ask for the "API", they mean the function or class that the user calls or that is central to the feature.
+    *   The bug is a typo/formatting error in a logging statement within `launch_agent`.
+    *   Is `launch_agent` the API? Or `elastic_launch`?
+    *   The traceback shows `elastic_launch` calls `launch_agent`.
+    *   The error happens *inside* `launch_agent`.
+    *   The "API" usually refers to the public interface. `torch.distributed.elastic.launch` or `torch.distributed.run`.
+    *   But the specific line causing the issue is `logger.info`.
+    *   Let's look at the constraints: "Infer which single API is most responsible for triggering the bug."
+    *   The bug is triggered by the execution of `launch_agent`.
+    *   The bug is a code error in `launch_agent`.
+    *   Is `logger.info` considered a PyTorch API here? No.
+    *   Is `launch_agent` a public API? It's in `api.py`, but often internal.
+    *   Let's look at the traceback again.
+        `File ".../torch/distributed/launcher/api.py", line 165, in __call__ return launch_agent(self._config, self._entrypoint, list(args))`
+        The class is likely `ElasticLauncher` (based on `__call__`).
+        The function `launch_agent` is defined in the same file.
+    *   The bug is in `launch_agent`.
+    *   However, the user interacts with `torchrun` or `elastic_launch`.
+    *   If I have to pick the API *where the bug is*, it's `launch_agent`.
+    *   If I have to pick the API *the user calls*, it's `elastic_launch` (or `torch.distributed.run`).
+    *   The prompt asks to identify the API *from* the bug report.
+    *   The bug report title says "Error in logging torch/distributed/launcher/api.py".
+    *   The code snippet shows `logger.info`.
+    *   The error is a `TypeError` inside `logger.info`.
+    *   But `logger.info` is standard Python.
+    *   The PyTorch API context is `torch.distributed.launcher`.
+    *   The specific function containing the bug is `launch_agent`.
+    *   Let's consider the "API" as the PyTorch function/method being executed when the bug occurs.
+    *   The traceback points to `launch_agent`.
+    *   Is `launch_agent` the API? It's a function in `torch.distributed.launcher.api`.
+    *   Let's check if `elastic_launch` is the wrapper. Yes, `elastic_launch` returns an instance of a class (likely `ElasticLauncher`) whose `__call__` invokes `launch_agent`.
+    *   The bug is strictly in the logging statement inside `launch_agent`.
+    *   If I say `logger.info`, it's technically correct but not a PyTorch API.
+    *   If I say `launch_agent`, it's the function containing the bug.
+    *   If I say `elastic_launch`, it's the entry point.
+    *   Usually, for these tasks, if the bug is in a specific function implementation, that function is the answer.
+    *   Let's look at the file path: `torch/distributed/launcher/api.py`.
+    *   The function is `launch_agent`.
+    *   Let's verify if `launch_agent` is exposed. `torch.distributed.launcher.api.launch_agent`.
+    *   The prompt asks for the "single core PyTorch API".
+    *   The bug is a formatting error in a log message.
+    *   The API responsible for the *execution path* is `launch_agent`.
+    *   Let's assume the question asks for the function where the bug resides.
+    *   Function: `launch_agent`.
+
+    *   Alternative interpretation: The bug is in `torch.distributed.elastic.launch`.
+    *   But the specific line is `logger.info`.
+    *   Let's look at the "Minimal reproducible example". It shows the code block.
+    *   The code block is inside `launch_agent`.
+    *   The traceback confirms `launch_agent`.
+    *   Therefore, `launch_agent` is the most specific PyTorch API involved in the bug's location.
+
+    *   Let's double check if `logger` is a PyTorch wrapper. `torch._logging._internal` is in the traceback. `record.message = record.getMessage()`. This suggests PyTorch might have some logging instrumentation, but the error is `TypeError: format requires a mapping` coming from standard `logging/__init__.py`. The root cause is the arguments passed to `logger.info`.
+    *   The arguments are passed in `launch_agent`.
+    *   So `launch_agent` is the API.
+
+    *   Is there any other candidate?
+    *   `elastic_launch`? It calls `launch_agent`.
+    *   `torch.distributed.run`? It calls `elastic_launch`.
+    *   The bug is *in* `launch_agent`.
+    *   The prompt asks for the API *from* the bug report.
+    *   The bug report highlights the code in `torch/distributed/launcher/api.py`.
+    *   The function is `launch_agent`.
+
+    *   Let's refine the name. `torch.distributed.launcher.api.launch_agent`.
+    *   Just `launch_agent`? Or `torch.distributed.launcher`?
+    *   Usually, function names are preferred.
+    *   Let's check the traceback again.
+    *   `File ".../torch/distributed/launcher/api.py", line 221, in launch_agent logger.info(...)`
+    *   The error happens *at* `logger.info`.
+    *   But `logger.info` is not a PyTorch API.
+    *   The PyTorch API is the function `launch_agent`.
+
+    *   Let's consider if the question implies "Which API call failed?".
+    *   The call `logger.info` failed.
+    *   But `logger.info` is standard library.
+    *   If I must return a PyTorch API, it has to be the PyTorch function containing the bad code.
+    *   That is `launch_agent`.
+
+    *   Let's try to find if `launch_agent` is the intended answer.
+    *   The bug is about a missing format string arg.
+    *   The code is in `launch_agent`.
+    *   The API is `launch_agent`.
+
+    *   Wait, could it be `elastic_launch`?
+    *   The user calls `elastic_launch`.
+    *   `elastic_launch` creates a launcher object.
+    *   The launcher object calls `launch_agent`.
+    *   The bug is in `launch_agent`.
+    *   If I fix the bug, I edit `launch_agent`.
+    *   So `launch_agent` is the responsible API.
+
+    *   Let's check if there is a more specific API name.
+    *   `torch.distributed.elastic.launch`?
+    *   The file is `torch/distributed/launcher/api.py`.
+    *   The function is `launch_agent`.
+    *   I will go with `launch_agent`.
+
+    *   One more check: Is `logger` a PyTorch object?
+    *   `File ".../torch/_logging/_internal.py", line 888, in format`
+    *   PyTorch has a custom logging formatter.
+    *   But the error is `TypeError: format requires a mapping` raised by `logging/__init__.py`.
+    *   The error is caused by the arguments passed to `logger.info`.
+    *   The caller is `launch_agent`.
+
+    *   Decision: `launch_agent`.
+
+    *   Let's verify the exact string.
+    *   The traceback says `launch_agent`.
+    *   The code snippet is inside `launch_agent`.
+    *   The API is `launch_agent`.
+
+    *   Is it possible the answer is `torch.distributed.run`?
+    *   That's the command line tool / entry point.
+    *   But the bug is deep in the launcher logic.
+    *   `launch_agent` is the specific function.
+
+    *   Let's consider the phrase "single core PyTorch API".
+    *   `launch_agent` is a function in `torch.distributed.launcher.api`.
+    *   It seems the most accurate.
+
+    *   Let's check if `elastic_launch` is a better fit.
+    *   `elastic_launch` is the public factory function.
+    *   `launch_agent` is the internal implementation detail.
+    *   However, the bug is *in* `launch_agent`.
+    *   If the bug was in `elastic_launch`, I'd say `elastic_launch`.
+    *   Since the bug is in `launch_agent`, and `launch_agent` is an API (function) in the `api.py` module, it fits.
+
+    *   Let's look at the error message again.
+    *   `TypeError: format requires a mapping`
+    *   This happens because `logger.info` is called with multiple string arguments and a dict, instead of one string and a dict.
+    *   The code doing this is in `launch_agent`.
+
+    *   Final check: Is there any other API?
+    *   `torch.distributed.elastic.agent.server.api.ElasticAgent`? No.
+    *   `torch.distributed.elastic.multiprocessing.errors`? No, that's the wrapper in the traceback.
+
+    *   I will provide `launch_agent`.
+
+    *   Wait, looking at the snippet provided in the "Minimal reproducible example":
+    *   It shows the code block.
+    *   It doesn't explicitly name the function in the snippet, but the traceback does.
+    *   The traceback says `launch_agent`.
+
+    *   Is it possible the answer is `logger.info`?
+    *   The prompt asks for "the single core PyTorch API".
+    *   `logger.info` is Python standard library.
+    *   So it must be a PyTorch API.
+    *   `launch_agent` is the PyTorch API.
+
+    *   Let's try to be as specific as possible.
+    *   `torch.distributed.launcher.api.launch_agent`.
+    *   The prompt asks for "one API name".
+    *   `launch_agent` is sufficient.
+
+    *   Let's consider if the API is `torch.distributed.elastic.launch`.
+    *   The file is `torch/distributed/launcher/api.py`.
+    *   The function is `launch_agent`.
+    *   The class is `ElasticLauncher`.
+    *   The method `__call__` calls `launch_agent`.
+    *   The bug is in `launch_agent`.
+    *   I'll stick with `launch_agent`.
+
+    *   Re-reading the prompt: "Infer which single API is most responsible for triggering the bug."
+    *   The bug is triggered by the execution of `launch_agent`.
+    *   The bug is a code error in `launch_agent`.
+    *   So `launch_agent` is responsible.
+
+    *   What if the API is `torch.distributed.run`?
+    *   That's the script.
+    *   The API is `launch_agent`.
+
+    *   Let's check if `elastic_launch` is the API.
+    *   `elastic_launch` is the function that returns the launcher.
+    *   The launcher calls `launch_agent`.
+    *   The bug is in `launch_agent`.
+    *   If I have to choose between the entry point and the buggy function, the buggy function is usually the answer for "API responsible for the bug" (i.e., where the bug is).
+
+    *   Let's check the constraints: "Return only one API name".
+    *   `launch_agent`.
+
+    *   One edge case: Is `logger` a PyTorch logger?
+    *   `from torch._logging import get_logger`?
+    *   Even if it is, the method `info` is standard.
+    *   The bug is in the arguments passed to it.
+    *   The caller is `launch_agent`.
+
+    *   Final decision: `launch_agent`.launch_agent

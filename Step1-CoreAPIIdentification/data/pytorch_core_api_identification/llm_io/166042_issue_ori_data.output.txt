@@ -1,0 +1,37 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** `[Fuzzer][Eager/Compile Divergence] assert "int" in str(indices.get_dtype())`
+    *   **Description:** The error mentions an assertion failure checking if 'int' is in the string representation of `indices.get_dtype()`. This suggests an issue with index types, likely related to indexing operations.
+    *   **Code Snippet:** The code involves a lot of `torch.matmul`, `torch.full`, `torch.add`, `torch.div`, `torch.clamp`, and `torch.nn.functional.embedding`.
+    *   **Specific Line of Interest:** `var_node_24 = torch.nn.functional.embedding(torch.clamp(var_node_28.to(torch.int64), 0, var_node_25.size(0)-1), var_node_25)`
+    *   **Context:** The error is an "Eager/Compile Divergence". This usually happens when `torch.compile` (or `torch._dynamo`) tries to trace the graph and encounters a situation where the behavior differs from eager mode or where an internal assertion fails during the compilation process.
+    *   **Assertion:** `assert "int" in str(indices.get_dtype())`. This looks like an internal check within PyTorch's code generation or graph lowering logic (likely related to `torch.compile`/Inductor) to ensure indices are integers.
+
+2.  **Identify the Culprit:**
+    *   The code explicitly calls `torch.nn.functional.embedding`.
+    *   The `embedding` function takes `indices` as its first argument.
+    *   The code prepares the indices: `torch.clamp(var_node_28.to(torch.int64), 0, var_node_25.size(0)-1)`.
+    *   `var_node_28` comes from `torch.div(var_node_29, var_node_30)`.
+    *   The error message specifically mentions `indices.get_dtype()`. This strongly points to the function that consumes indices.
+    *   While `torch.div` produces the indices, the assertion failure is likely happening *inside* the handling of the embedding operation during the compilation pass, specifically checking the validity of the indices passed to it.
+    *   The title mentions "Eager/Compile Divergence". This often happens with `torch.nn.functional.embedding` when the indices are dynamic or when the compiler struggles to infer the type or shape correctly, leading to a mismatch or an internal assertion failure.
+    *   Looking at the specific assertion `assert "int" in str(indices.get_dtype())`, this is a check to ensure the indices are integer types. If the compiler passes a non-integer type (or a symbolic representation that doesn't resolve to an integer string correctly) to the backend kernel for embedding, this assertion would fire.
+
+3.  **Evaluate Candidates:**
+    *   `torch.matmul`: Used extensively, but doesn't involve indices in the sense of `indices.get_dtype()`.
+    *   `torch.div`: Produces the indices. However, the error is about the *consumer* of those indices failing a check on their dtype.
+    *   `torch.clamp`: Modifies indices, but again, the consumer is the one checking.
+    *   `torch.nn.functional.embedding`: This is the function that requires integer indices. The assertion is almost certainly located in the lowering or backend logic for this operator.
+
+4.  **Refine the Selection:**
+    *   The bug is triggered during compilation (`torch._dynamo`).
+    *   The specific assertion `assert "int" in str(indices.get_dtype())` is characteristic of a check performed before generating code for an embedding lookup.
+    *   Therefore, `torch.nn.functional.embedding` is the API most responsible for triggering the bug because it is the operation that imposes the constraint on the input `indices` which is failing or being mishandled by the compiler.
+
+5.  **Final Check:**
+    *   Does `torch.nn.functional.embedding` fit the description? Yes.
+    *   Is it a single API? Yes.
+    *   Is it the most responsible? Yes, the error is directly related to the indices passed to this function.
+
+6.  **Formatting:** The user requested *only* the API name.
+
+    API Name: `torch.nn.functional.embedding`torch.nn.functional.embedding

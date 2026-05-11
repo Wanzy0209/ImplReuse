@@ -1,0 +1,134 @@
+Bug Report:
+Title: Pipeline Parallelism Across Nodes Fails with EOFError
+Issue ID: 165143
+Original bug description: ## Summary
+
+When running **TorchTitan** with **pipeline parallelism (2 stages)** across **two nodes**, training fails with an  
+`EOFError: Ran out of input` during inter-stage communication.  
+
+The same configuration runs successfully when both ranks are launched on **the same node**,
+suggesting an issue with cross-node pipeline communication. 
+
+---
+
+## Configuration
+
+**Config file:**  
+`torchtitan/models/llama3/train_configs/debug_model.toml`  
+with `pipeline_parallel_degree = 2`
+
+---
+
+## Reproduction Steps
+
+1. **Single-node run (works):**
+Run these two commands on the same node:
+   ```bash
+    CUDA_VISIBLE_DEVICES=0 \
+    NCCL_DEBUG=INFO \
+    NCCL_DEBUG_SUBSYS=INIT,GRAPH \
+    TORCH_NCCL_ASYNC_ERROR_HANDLING=1 \
+    NCCL_SOCKET_IFNAME=eno3 \ # ib0 when using infiniband
+    GLOO_SOCKET_IFNAME=eno3 \ # ib0 when using infiniband
+    NCCL_IB_DISABLE=1 \ # 0 when using infiniband
+    TORCH_CPP_LOG_LEVEL=INFO \
+    TORCH_DISTRIBUTED_DEBUG=DETAIL \
+    python -m torch.distributed.run \
+    --nnodes 2 \
+    --node_rank 0 \
+    --nproc_per_node 1 \
+    --rdzv-endpoint=127.0.0.1:29510 \
+    --rdzv-id ttmultinode \
+    -m torchtitan.train \
+    --job.config_file torchtitan/models/llama3/train_configs/debug_model.toml
+   ```
+   ```bash
+    CUDA_VISIBLE_DEVICES=1 \
+    NCCL_DEBUG=INFO \
+    NCCL_DEBUG_SUBSYS=INIT,GRAPH \
+    TORCH_NCCL_ASYNC_ERROR_HANDLING=1 \
+    NCCL_SOCKET_IFNAME=eno3 \
+    GLOO_SOCKET_IFNAME=eno3 \
+    NCCL_IB_DISABLE=1 \ # 0 when using infiniband
+    TORCH_CPP_LOG_LEVEL=INFO \
+    TORCH_DISTRIBUTED_DEBUG=DETAIL \
+    python -m torch.distributed.run \
+    --nnodes 2 \
+    --node_rank 1 \
+    --nproc_per_node 1 \
+    --rdzv-endpoint=127.0.0.1:29510 \
+    --rdzv-id ttmultinode \
+    -m torchtitan.train \
+    --job.config_file torchtitan/models/llama3/train_configs/debug_model.toml
+   ```
+   ✅ Runs successfully.
+
+2. **Multi-node run (fails):**
+   The previous two commands ran on two different nodes, with adapted rdzv-endpoint.
+   ❌ Fails with `EOFError: Ran out of input`.
+
+3. Error occurs on rank 1 in last pipeline stage in `dist.recv_object_list()` during pipeline stage initialization.
+
+4. We can reproduce the error also using two nodes with two ranks each. In this case, FSDP is used.
+
+---
+
+## Observed Behavior
+
+When running across nodes, on rank 1 NCCL reports a **message truncation** warning and training crashes:
+
+```
+NCCL WARN NET/Socket : peer 10.183.75.13<54610> message truncated :
+receiving 8 bytes instead of 4
+```
+
+followed by:
+
+```
+EOFError: Ran out of input
+```
+
+On rank 0 in the first pipeline stage, the process just hangs. When pausing it manually in vscode, it seems to hang at this position:
+
+```
+embedding (\home\richard-rutmann\raid\venvs\torchtitan\lib\python3.10\site-packages\torch\nn\functional.py:2542)
+forward (\home\richard-rutmann\raid\venvs\torchtitan\lib\python3.10\site-packages\torch\nn\modules\sparse.py:192)
+_call_impl (\home\richard-rutmann\raid\venvs\torchtitan\lib\python3.10\site-packages\torch\nn\modules\module.py:1786)
+_wrapped_call_impl (\home\richard-rutmann\raid\venvs\torchtitan\lib\python3.10\site-packages\torch\nn\modules\module.py:1775)
+forward (\raid\richard-rutmann\repos\torchtitan\torchtitan\models\llama3\model\model.py:418)
+_call_impl (\home\richard-rutmann\raid\venvs\torchtitan\lib\python3.10\site-packages\torch\nn\modules\module.py:1786)
+_wrapped_call_impl (\home\richard-rutmann\raid\venvs\torchtitan\lib\python3.10\site-packages\torch\nn\modules\module.py:1775)
+_shape_inference (\home\richard-rutmann\raid\venvs\torchtitan\lib\python3.10\site-packages\torch\distributed\pipelining\stage.py:1441)
+_prepare_forward_infra (\home\richard-rutmann\raid\venvs\torchtitan\lib\python3.10\site-packages\torch\distributed\pipelining\stage.py:1510)
+_initialize_stage (\home\richard-rutmann\raid\venvs\torchtitan\lib\python3.10\site-packages\torch\distributed\pipelining\schedules.py:581)
+_step_microbatches (\home\richard-rutmann\raid\venvs\torchtitan\lib\python3.10\site-packages\torch\distributed\pi
+Structured error description: When running TorchTitan with pipeline parallelism (2 stages) across two nodes, training fails with an EOFError: Ran out of input during inter-stage communication. The same configuration runs successfully when both ranks are launched on the same node, suggesting an issue with cross-node pipeline communication.
+Minimal reproducible example: CUDA_VISIBLE_DEVICES=0 \
+NCCL_DEBUG=INFO \
+NCCL_DEBUG_SUBSYS=INIT,GRAPH \
+TORCH_NCCL_ASYNC_ERROR_HANDLING=1 \
+NCCL_SOCKET_IFNAME=eno3 \
+GLOO_SOCKET_IFNAME=eno3 \
+NCCL_IB_DISABLE=1 \
+TORCH_CPP_LOG_LEVEL=INFO \
+TORCH_DISTRIBUTED_DEBUG=DETAIL \
+python -m torch.distributed.run \
+--nnodes 2 \
+--node_rank 0 \
+--nproc_per_node 1 \
+--rdzv-endpoint=127.0.0.1:29510 \
+--rdzv-id ttmultinode \
+-m torchtitan.train \
+--job.config_file torchtitan/models/llama3/train_configs/debug_model.toml
+Trigger conditions: {"backend": "NCCL", "dtype": "unknown", "input_shape": "unknown", "other_conditions": "Pipeline parallelism with 2 stages across two nodes (not on the same node)"}
+Environment: {"pytorch_version": "unknown", "python_version": "3.10", "os": "unknown", "hardware": "unknown"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

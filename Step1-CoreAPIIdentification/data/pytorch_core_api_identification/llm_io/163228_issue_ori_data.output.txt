@@ -1,0 +1,405 @@
+The user wants to identify the single core PyTorch API responsible for the bug described in the report.
+
+**1. Analyze the Bug Report:**
+
+*   **Title:** `DISABLED test_int8_woq_mm_cuda_batch_size_17_mid_dim_8_in_features_128_out_features_65_cuda_bfloat16`
+*   **Issue ID:** 163228
+*   **Platform:** ROCm (AMD GPU)
+*   **Test File:** `inductor/test_cuda_select_algorithm.py`
+*   **Test Name:** `test_int8_woq_mm_cuda...`
+*   **Error Message:**
+    ```python
+    File "/var/lib/jenkins/pytorch/test/inductor/test_cuda_select_algorithm.py", line 125, in test_int8_woq_mm_cuda
+      self.assertEqual(counters["inductor"]["woq_matcher_count"], 1)
+    ...
+    AssertionError: Scalars are not equal!
+    Expected 1 but got 0.
+    ```
+*   **Context:** The test is checking if a specific optimization (WOQ - Weight Only Quantization) matcher was triggered during the compilation/execution of a model (likely a matrix multiplication, given the `mm` in the name and dimensions). The counter `woq_matcher_count` is 0, meaning the WOQ pattern wasn't found or applied, whereas the test expects it to be found (count = 1).
+*   **Repro Command:** `PYTORCH_TEST_WITH_ROCM=1 python test/inductor/test_cuda_select_algorithm.py TestSelectAlgorithmCudaCUDA.test_int8_woq_mm_cuda_batch_size_17_mid_dim_8_in_features_128_out_features_65_cuda_bfloat16`
+
+**2. Identify the Core API:**
+
+*   The test name contains `mm`, which usually stands for Matrix Multiplication.
+*   The dimensions `batch_size`, `mid_dim`, `in_features`, `out_features` suggest a Linear layer or a MatMul operation.
+*   The test is in `test_cuda_select_algorithm.py`, which tests the Inductor compiler's ability to select specific algorithms (kernels) for operations.
+*   The specific failure is about `woq_matcher_count`. This implies the test is looking for a specific pattern (Weight-Only Quantization) associated with a matrix multiplication.
+*   The underlying operation being optimized is a matrix multiplication.
+*   In PyTorch, the fundamental API for matrix multiplication is `torch.mm` (for 2D tensors) or `torch.matmul` (for general tensors, often aliased as `@`). Given the dimensions (batch, mid, in, out), it looks like a batched matmul or a linear layer.
+*   However, the test name explicitly says `mm`. In the context of Inductor and algorithm selection, the core operation being targeted is the matrix multiplication.
+*   Let's look at the error again. It's about the *matcher* count. The matcher looks for a pattern. The pattern is likely `torch.nn.functional.linear` or `torch.matmul` / `torch.mm`.
+*   The test name is `test_int8_woq_mm_cuda...`. The `mm` strongly points to `torch.mm` or `torch.matmul`.
+*   Since the dimensions include a batch size, it's technically a batched matrix multiplication. In PyTorch, `torch.bmm` or `torch.matmul` handles this. However, often in these tests, `mm` is used as a shorthand for the general matmul operation or specifically `torch.mm` if the batch dimension is handled separately (e.g., looped).
+*   Let's look at the file `test_cuda_select_algorithm.py` (mental simulation or search knowledge). This file tests `torch.compile` (Inductor) selecting specific kernels.
+*   The specific API being exercised and failing to match the WOQ pattern is the matrix multiplication operation.
+*   Is it `torch.mm` or `torch.matmul`? The test name says `mm`. The dimensions are `batch_size_17`, `mid_dim_8`, `in_features_128`, `out_features_65`. This looks like `(B, M, K) @ (K, N)` or `(B, M, K) @ (B, K, N)`.
+*   If it's a Linear layer, the underlying op is `matmul`.
+*   If the test name explicitly says `mm`, `torch.mm` is the most direct candidate, even if the inputs are technically 3D (which `torch.mm` doesn't support directly, so it might be `torch.matmul` or `torch.bmm`).
+*   However, looking at the naming convention in PyTorch tests, `mm` often refers to the general class of matrix multiplication kernels.
+*   Let's consider the "WOQ" part. WOQ is an optimization applied to Linear layers or MatMuls.
+*   The failure is that the matcher didn't trigger. This means the pattern matching logic in Inductor failed to recognize the operation as a candidate for WOQ.
+*   The operation itself is the matrix multiplication.
+*   Between `torch.mm`, `torch.matmul`, and `torch.nn.functional.linear`, which is the "core API"?
+*   The test name includes `mm`. `torch.mm` is a specific API. `torch.matmul` is more general.
+*   Given the test name `test_int8_woq_mm_cuda...`, the API being tested is likely `torch.mm` (or `torch.matmul` mapped to it).
+*   Let's assume the test constructs a model that performs a matrix multiplication.
+*   If I have to pick the *single* core API, `torch.mm` is the most specific match to the name `mm`. However, `torch.matmul` is the more general one.
+*   Let's look at the dimensions again: `batch_size_17`, `mid_dim_8`, `in_features_128`, `out_features_65`.
+    *   Input: (17, 8, 128)
+    *   Weight: (128, 65) (if Linear) or (17, 8, 65) (if BMM).
+    *   If it's a Linear layer, the API is `torch.nn.functional.linear`.
+    *   If it's a raw matmul, it's `torch.matmul`.
+*   The test name says `mm`. In PyTorch, `torch.mm` is strictly 2D. If the test uses 3D tensors, it must be using `torch.matmul` or `torch.bmm`.
+*   However, often tests are named `mm` to refer to the "Matrix Multiplication" kernel selection, regardless of the exact Python API used to invoke it.
+*   Let's look for clues in the error. `counters["inductor"]["woq_matcher_count"]`. This is an Inductor internal counter.
+*   The bug is about the *selection algorithm* for CUDA.
+*   The core operation is Matrix Multiplication.
+*   The most representative API for Matrix Multiplication in PyTorch is `torch.matmul`. `torch.mm` is a subset.
+*   However, if the test is specifically named `test_..._mm_...`, it might be explicitly calling `torch.mm` (perhaps by reshaping or iterating over the batch).
+*   Let's try to infer from the test name `test_int8_woq_mm_cuda`. The `mm` is the key.
+*   If I check similar PyTorch tests, `test_mm` usually refers to `torch.mm`.
+*   But wait, the dimensions include a batch size. `torch.mm` doesn't support batch dimensions. So the test *must* be using `torch.matmul` or `torch.bmm`, or it's a Linear layer.
+*   If it's a Linear layer, the API is `torch.nn.functional.linear`.
+*   If it's `torch.matmul`, the API is `torch.matmul`.
+*   Let's look at the file name `test_cuda_select_algorithm.py`. This file tests the `select_algorithm` backend.
+*   The specific test is `test_int8_woq_mm_cuda`.
+*   The failure is that the WOQ matcher didn't match.
+*   The WOQ matcher looks for `torch.nn.functional.linear` or `matmul` patterns with quantized weights.
+*   Given the ambiguity, `torch.matmul` is the safest bet for the general operation, but `torch.mm` is in the name.
+*   Let's reconsider the "Core API" definition. It's the API whose behavior change or compilation path explains the bug.
+*   The bug is that the WOQ kernel wasn't selected for a matrix multiplication.
+*   The API is the one performing the multiplication.
+*   If I have to choose between `torch.mm` and `torch.matmul`, `torch.matmul` is the more fundamental one that handles the batched case implied by the dimensions.
+*   However, looking at the test name `test_int8_woq_mm_cuda`, it's highly likely the test is specifically targeting the `mm` operator (perhaps via `torch.mm` on 2D slices or just a naming convention for the kernel).
+*   Let's look at the dimensions: `batch_size_17`, `mid_dim_8`, `in_features_128`, `out_features_65`.
+    *   This looks like a Linear layer: Input (17, 8, 128), Weight (128, 65), Output (17, 8, 65).
+    *   Or a BMM: Input (17, 8, 128), Other (17, 128, 65), Output (17, 8, 65).
+*   If it's a Linear layer, the API is `torch.nn.functional.linear`.
+*   If it's a BMM, the API is `torch.bmm`.
+*   If the test name says `mm`, it might be a misnomer for the general matmul op, or it's testing `torch.mm` specifically (maybe the batch dimension is handled outside the op).
+*   Let's assume the test name is the strongest hint. `mm` -> `torch.mm`.
+*   But `torch.mm` doesn't take 3D inputs.
+*   Maybe the test is `test_int8_woq_mm_cuda` where `mm` stands for the kernel type (GEMM).
+*   Let's look at the error again. It's in `inductor/test_cuda_select_algorithm.py`.
+*   The test is likely checking if `torch.compile` picks the WOQ kernel for a specific matmul configuration.
+*   The most generic API for matrix multiplication is `torch.matmul`.
+*   However, if I look at the specific string `test_int8_woq_mm_cuda`, the `mm` is distinct.
+*   Let's try to find if `torch.mm` is the intended answer. Even if the inputs are batched, the underlying kernel is a GEMM (General Matrix Multiply), which `torch.mm` invokes.
+*   But the user asks for the *PyTorch API*.
+*   If the test uses `torch.matmul`, that's the API.
+*   If the test uses `torch.nn.functional.linear`, that's the API.
+*   Let's look at the dimensions again. `batch_size_17`, `mid_dim_8`, `in_features_128`, `out_features_65`.
+    *   This looks like a Linear layer.
+    *   WOQ (Weight Only Quantization) is almost exclusively applied to Linear layers in PyTorch Inductor.
+    *   The API for a Linear layer is `torch.nn.functional.linear`.
+*   However, the test name says `mm`.
+*   Let's check if there is a `test_int8_woq_linear_cuda` test. Usually, tests are named after the op.
+*   If the test is named `mm`, it's likely testing `torch.mm` or `torch.matmul`.
+*   Let's assume the test is testing `torch.matmul` (which covers `mm` and `bmm`).
+*   But wait, `woq` (Weight Only Quantization) implies a static weight. `torch.matmul` usually implies two dynamic inputs (unless one is constant folded). A Linear layer has a static weight (the parameter).
+*   Therefore, it is highly probable that the test is using `torch.nn.functional.linear` (or `nn.Linear`), but the test name uses `mm` to refer to the underlying matrix multiplication kernel being selected.
+*   However, the prompt asks for the *single core PyTorch API*.
+*   If the test is `test_..._mm_...`, and the operation is a matrix multiplication, `torch.mm` is the most literal interpretation.
+*   But `torch.mm` doesn't support batching.
+*   Let's look at the dimensions: `batch_size_17`.
+*   If the test is using `torch.mm`, it would have to loop over the batch.
+*   If the test is using `torch.matmul`, it handles the batch.
+*   Given the "flaky" nature and "ROCm" context, this is likely a backend selection issue for the GEMM kernel.
+*   The API triggering the compilation is the one used in the test.
+*   Let's guess `torch.matmul` as the general case.
+*   Alternatively, `torch.nn.functional.linear` is the specific API for WOQ.
+*   Let's look at the test name again: `test_int8_woq_mm_cuda`.
+*   If I search for this test in my internal knowledge base (simulated), I recall that `test_cuda_select_algorithm.py` contains tests for `mm`, `bmm`, `linear`, etc.
+*   The specific test name `test_int8_woq_mm_cuda` suggests it is testing the `mm` operator.
+*   Even if `torch.mm` is 2D only, the test might be using `torch.mm` on 2D tensors, and the `batch_size` in the title refers to a parameterized test where `batch_size` might be 1 or handled differently, OR the test name is slightly misleading and uses `mm` to mean "matrix multiplication" generally (i.e., `matmul`).
+*   However, looking at the dimensions `batch_size_17`, `mid_dim_8`, `in_features_128`, `out_features_65`.
+    *   If it's `mm`, inputs are (M, K) and (K, N).
+    *   If it's `bmm`, inputs are (B, M, K) and (B, K, N).
+    *   If it's `linear`, input is (B, *, in_features), weight is (out_features, in_features).
+*   The dimensions `mid_dim_8` and `in_features_128` suggest the input is (17, 8, 128).
+*   If the weight is (128, 65), it's a Linear layer.
+*   If the second input is (17, 128, 65), it's BMM.
+*   WOQ is typically for Linear layers.
+*   So the API is likely `torch.nn.functional.linear`.
+*   BUT, the test name says `mm`.
+*   Let's look at the error: `counters["inductor"]["woq_matcher_count"]`.
+*   The WOQ matcher in Inductor matches `torch.nn.functional.linear` calls.
+*   So the API is `torch.nn.functional.linear`.
+*   Why is the test named `mm`? Maybe because the underlying kernel is a GEMM (often called `mm` in codebases).
+*   Or maybe the test is actually testing `torch.mm` with a constant weight (which is rare but possible).
+*   Let's check the file `test_cuda_select_algorithm.py` logic (simulated).
+    *   It likely defines a model.
+    *   If the test is `test_int8_woq_mm_cuda`, it might be testing `torch.mm` with a quantized weight tensor passed as an argument.
+*   Let's look at the dimensions again. `batch_size_17`.
+*   If the test is strictly `torch.mm`, it can't take a batch dimension.
+*   Maybe the test is `test_int8_woq_matmul_cuda`? No, the title says `mm`.
+*   Let's assume the test name is the primary source of truth for the API being tested.
+*   API: `torch.mm`.
+*   Even if it's technically `matmul` or `linear` under the hood, the test targets `mm`.
+*   However, `torch.mm` is a very specific API.
+*   Let's consider `torch.matmul`. It is the general matrix multiplication API.
+*   Let's consider `torch.nn.functional.linear`. It is the API for WOQ.
+*   If I have to pick the one "most responsible", and the test is about WOQ (Weight Only Quantization), the API that supports weights is `torch.nn.functional.linear`.
+*   But the test name is `test_..._mm_...`.
+*   Let's look at the dimensions: `batch_size_17`, `mid_dim_8`, `in_features_128`, `out_features_65`.
+    *   This looks like a 3D tensor input.
+    *   `torch.mm` does not support 3D.
+    *   Therefore, the test *cannot* be using `torch.mm` directly on these dimensions.
+    *   It must be using `torch.matmul` or `torch.bmm` or `torch.nn.functional.linear`.
+    *   If it's `torch.bmm`, the API is `torch.bmm`.
+    *   If it's `torch.matmul`, the API is `torch.matmul`.
+    *   If it's `torch.nn.functional.linear`, the API is `torch.nn.functional.linear`.
+*   Given the name `mm`, and the fact that `mm` is often used as a shorthand for the kernel, but the API must support the dimensions...
+*   `torch.matmul` is the most likely candidate for a general "matrix multiplication" test that handles batches.
+*   However, WOQ is strongly associated with `linear`.
+*   Let's look at the test name again. `test_int8_woq_mm_cuda`.
+*   Maybe the test is testing `torch.mm` with `batch_size=1`? But the title says `batch_size_17`.
+*   This implies the test is parameterized.
+*   If the test is parameterized and includes `batch_size_17`, and the name is `mm`, there is a contradiction if we assume strict API naming.
+*   Unless... the test is named `mm` but uses `matmul`.
+*   Or, the test is named `mm` but uses `linear`.
+*   Let's look at the error location: `test/inductor/test_cuda_select_algorithm.py`.
+*   Let's try to infer the API from the "WOQ" part. WOQ stands for Weight-Only Quantization.
+*   In PyTorch Inductor, WOQ is an optimization for `torch.nn.functional.linear`.
+*   It replaces the standard GEMM with a quantized GEMM.
+*   The test checks if the `woq_matcher_count` is 1.
+*   This confirms the test is checking if the Linear operation was matched by the WOQ pattern.
+*   So the API is `torch.nn.functional.linear`.
+*   Why is it called `mm` in the title? Probably because the kernel being selected is a Matrix Multiplication kernel (GEMM), and the test file is about selecting algorithms for these kernels. The test author might have used `mm` to denote the kernel type rather than the Python API.
+*   However, the prompt asks for the "single core PyTorch API".
+*   If the test is testing the WOQ optimization, it is testing the `torch.nn.functional.linear` API (or `nn.Linear`).
+*   If I return `torch.mm`, it's technically incorrect because `torch.mm` doesn't support the dimensions in the title.
+*   If I return `torch.matmul`, it's plausible but WOQ is specific to Linear layers (static weights).
+*   If I return `torch.nn.functional.linear`, it fits the WOQ context perfectly.
+*   Let's check if `torch.matmul` can be WOQ optimized. Generally, no, unless one input is a constant. But `linear` is the standard API for that.
+*   Therefore, `torch.nn.functional.linear` is the most accurate API responsible for the bug (the bug being the failure to match the WOQ pattern for a Linear layer).
+
+*   Let's double check. Is there any other API?
+*   `torch.bmm`? No WOQ.
+*   `torch.addmm`? Maybe, but less likely.
+*   The dimensions `in_features`, `out_features` are terminology used for Linear layers.
+*   So the operation is a Linear layer.
+*   The API is `torch.nn.functional.linear`.
+
+*   Wait, let me reconsider the `mm` in the title.
+*   Could it be `torch.mm` inside a loop?
+*   If the test is `test_int8_woq_mm_cuda`, and it's in `test_cuda_select_algorithm.py`, it might be testing the `mm` operator specifically.
+*   But the dimensions `batch_size_17`...
+*   Maybe the test is `test_int8_woq_matmul_cuda` and the user truncated it or I'm misinterpreting the title format?
+*   Title: `test_int8_woq_mm_cuda_batch_size_17_mid_dim_8_in_features_128_out_features_65_cuda_bfloat16`
+*   This looks like a parameterized test name generated by a test runner (like pytest).
+*   The base test name is `test_int8_woq_mm_cuda`.
+*   The parameters are `batch_size_17`, `mid_dim_8`, etc.
+*   If the base name is `test_int8_woq_mm_cuda`, the developer named it `mm`.
+*   If the developer named it `mm`, they likely meant `torch.mm`.
+*   But `torch.mm` doesn't support batch size.
+*   Maybe the test is checking if `torch.mm` works, and the `batch_size` parameter is ignored or set to None/1 for this specific test case?
+*   But the failing case has `batch_size_17`.
+*   This suggests the test *does* run with batch size 17.
+*   If it runs with batch size 17 and is named `mm`, it's likely using `torch.matmul` (which handles broadcasting) or `torch.bmm`.
+*   Or, it's using `torch.nn.functional.linear`.
+*   Given "WOQ", `linear` is the strongest candidate.
+*   However, if I must choose the API that is *most responsible* and the test is named `mm`, I should consider if `torch.mm` is the intended answer despite the dimension mismatch (maybe the test reshapes?).
+*   Actually, `torch.nn.functional.linear` can be viewed as a `matmul` + bias.
+*   Let's look at the error message again. `counters["inductor"]["woq_matcher_count"]`.
+*   This counter is specific to the WOQ matcher.
+*   The WOQ matcher matches `torch.nn.functional.linear`.
+*   So the API is `torch.nn.functional.linear`.
+
+*   Let's try to find a reason why it would be `torch.mm`.
+*   Maybe the test is testing `torch.mm` with a quantized tensor?
+*   But WOQ is "Weight Only". Weights are parameters. `torch.mm` takes two tensors.
+*   It's much more likely to be a Linear layer.
+*   Why is it named `mm`? In the context of `test_cuda_select_algorithm`, the tests are often grouped by the *kernel* they select. The kernel is a GEMM (mm). The API is `linear`.
+*   The prompt asks for the "single core PyTorch API".
+*   If I say `torch.nn.functional.linear`, it explains the WOQ context.
+*   If I say `torch.mm`, it explains the name but conflicts with dimensions and WOQ context.
+*   If I say `torch.matmul`, it explains dimensions but is less specific to WOQ than `linear`.
+
+*   Let's look at the file `test_cuda_select_algorithm.py` in a real PyTorch repo (mental check).
+*   It contains tests like `test_mm`, `test_bmm`, `test_linear`.
+*   If the test is `test_int8_woq_mm_cuda`, it's likely testing the `mm` op.
+*   But wait, `test_int8_woq` implies quantization.
+*   There is a specific pattern for `mm` with quantization? `torch._quantized.weight_only_int8_mm`? No, that's an internal op.
+*   The user facing API is `torch.nn.functional.linear` with quantized weights.
+*   Let's assume the test name is `test_int8_woq_mm_cuda` because it tests the `mm` kernel path within a Linear layer.
+*   But the API is `torch.nn.functional.linear`.
+
+*   Let's try to find if there is a `torch.mm` variant that supports WOQ.
+*   There is `torch.ops.aten._weight_int8_mm` or similar internal ops.
+*   But the test is likely using the high level API.
+*   The high level API for WOQ is `torch.nn.functional.linear` (with `weight_int8pack` or similar).
+*   Let's go with `torch.nn.functional.linear`.
+
+*   Wait, let me look at the dimensions again. `mid_dim_8`.
+*   Input: (17, 8, 128).
+*   Weight: (128, 65).
+*   Output: (17, 8, 65).
+*   This is exactly `torch.nn.functional.linear`.
+*   If it were `torch.mm`, the input would be (17*8, 128) -> (136, 128).
+*   If it were `torch.bmm`, the second input would be (17, 128, 65).
+*   The parameter name `in_features` and `out_features` is the smoking gun. These are terms specific to Linear layers (`nn.Linear(in_features, out_features)`).
+*   `torch.mm` and `torch.matmul` use `M, N, K` or `size` arguments, not `in_features`/`out_features`.
+*   Therefore, the API is definitely `torch.nn.functional.linear` (or `nn.Linear`).
+*   The `mm` in the test name likely refers to the underlying kernel (GEMM) being selected.
+
+*   So, the API is `torch.nn.functional.linear`.
+
+*   Let's double check if `torch.matmul` is ever described with `in_features`. No.
+*   Let's double check if `torch.mm` is ever described with `in_features`. No.
+*   So the API is `torch.nn.functional.linear`.
+
+*   Is there any other possibility?
+*   `torch.nn.quantized.Linear`? No, this is Inductor (torch.compile), which works on eager tensors (float/bfloat16) and optimizes them. The weights might be quantized, but the API is the standard one.
+*   So `torch.nn.functional.linear`.
+
+*   Final check: The prompt asks for the "single core PyTorch API".
+*   The bug is about the WOQ matcher not matching.
+*   The WOQ matcher matches `torch.nn.functional.linear`.
+*   The test parameters (`in_features`, `out_features`) confirm it's a Linear layer.
+*   The test name `mm` is a reference to the kernel, not the API.
+*   Therefore, `torch.nn.functional.linear` is the correct API.
+
+*   Wait, could it be `torch.nn.Linear` (the module)?
+*   The prompt asks for the API. `torch.nn.functional.linear` is the functional API. `torch.nn.Linear` is the module.
+*   Usually, "API" refers to the function call or the module. `torch.nn.functional.linear` is the core operation.
+*   I will provide `torch.nn.functional.linear`.
+
+*   Let me reconsider if `torch.mm` is the intended answer because of the strict naming in the title.
+*   If the test is `test_int8_woq_mm_cuda`, and I say `torch.nn.functional.linear`, is that a mismatch?
+*   The test name is generated. The base name is `test_int8_woq_mm_cuda`.
+*   If the test author wrote `def test_int8_woq_mm_cuda(...)`, they named it `mm`.
+*   Why would they name a Linear test `mm`?
+*   Maybe because they are testing the `mm` kernel selection specifically?
+*   But the parameters are `in_features` and `out_features`.
+*   It is highly contradictory to have `in_features` in a `torch.mm` test.
+*   Therefore, the test name `mm` is likely a misnomer or a shorthand for "matrix multiplication kernel".
+*   The parameters define the actual operation.
+*   The operation is a Linear layer.
+*   The API is `torch.nn.functional.linear`.
+
+*   Let's try to search for this specific test case online (simulated).
+*   Search query: `test_int8_woq_mm_cuda_batch_size_17_mid_dim_8_in_features_128_out_features_65_cuda_bfloat16`
+*   Result (simulated): This test is part of `test_cuda_select_algorithm.py`.
+*   The test likely looks like:
+    ```python
+    def test_int8_woq_mm_cuda(self, batch_size, mid_dim, in_features, out_features, dtype):
+        # ...
+        # Defines a Linear layer or a MatMul
+        # Checks woq_matcher_count
+    ```
+*   Given `in_features` and `out_features`, it's a Linear layer.
+*   The API is `torch.nn.functional.linear`.
+
+*   One more possibility: `torch.matmul` is used, but the test parameters are named `in_features` and `out_features` by the author (who is thinking in terms of Linear layers).
+*   But `torch.nn.functional.linear` is the standard API for this.
+*   I will stick with `torch.nn.functional.linear`.
+
+*   Wait, looking at the error message again.
+*   `File "/var/lib/jenkins/pytorch/test/inductor/test_cuda_select_algorithm.py", line 125, in test_int8_woq_mm_cuda`
+*   The test function name is `test_int8_woq_mm_cuda`.
+*   If I look at the PyTorch source code for `test_cuda_select_algorithm.py` (simulated access):
+    *   There are tests for `mm`, `bmm`, `linear`.
+    *   The `test_int8_woq_mm_cuda` test might actually be testing `torch.mm` with a specific setup?
+    *   But `in_features`?
+    *   Maybe the test is parameterized and the parameters are reused?
+    *   If the test is `test_int8_woq_mm_cuda`, it implies the operation is `mm`.
+    *   If the operation is `mm`, the API is `torch.mm`.
+    *   But `torch.mm` doesn't support batch size.
+    *   Maybe the test is `test_int8_woq_matmul_cuda` and the title in the bug report is truncated or I am misreading `mm` vs `matmul`?
+    *   The title says `test_int8_woq_mm_cuda...`.
+    *   It explicitly says `mm`.
+    *   If I have to choose between the name `mm` and the parameters `in_features`, which is stronger?
+    *   The parameters describe the data shape. `in_features` is specific to Linear layers.
+    *   `mm` is a generic term for matrix multiplication.
+    *   It is more likely that the test is for a Linear layer (using `linear` API) and named `mm` (referring to the kernel) than the test is for `torch.mm` (API) and uses `in_features` (parameter name) incorrectly.
+    *   Also, WOQ is a Linear layer feature.
+    *   So `torch.nn.functional.linear` is the best fit.
+
+*   Let's check if `torch.mm` can be used for WOQ.
+*   There is `torch.ops.aten._weight_int8_mm`.
+*   But the test is checking `woq_matcher_count` in Inductor.
+*   Inductor's WOQ matcher targets `torch.nn.functional.linear`.
+*   So the API is `torch.nn.functional.linear`.
+
+*   Final decision: `torch.nn.functional.linear`.
+
+*   Wait, I should check if `torch.matmul` is the answer.
+*   If the test is `test_int8_woq_mm_cuda`, and it's testing `torch.matmul`, then `torch.matmul` is the API.
+*   But `in_features`?
+*   Let's assume the test is `test_int8_woq_linear_cuda` but the bug report title has a typo or I am misinterpreting.
+*   No, the title is explicit.
+*   Let's assume the test name is correct: `test_int8_woq_mm_cuda`.
+*   And the parameters are correct: `in_features`, `out_features`.
+*   This implies a Linear layer.
+*   The API is `torch.nn.functional.linear`.
+*   The `mm` in the name is likely because the test is in `test_cuda_select_algorithm` which focuses on selecting the *algorithm* (kernel) for the operation. The algorithm is a GEMM (mm).
+*   So the API is `torch.nn.functional.linear`.
+
+*   Let's try to find a counter-argument.
+*   Could it be `torch.bmm`?
+*   `bmm` takes `(B, M, K)` and `(B, K, N)`.
+*   Parameters: `batch_size`, `mid_dim` (M), `in_features` (K), `out_features` (N).
+*   This fits `bmm` perfectly if we rename `in_features` to `K` and `out_features` to `N`.
+*   But the parameter names are `in_features` and `out_features`.
+*   These names are strongly associated with `nn.Linear`.
+*   `nn.Linear` applies `y = xA^T + b`.
+*   Input `x`: `(*, in_features)`. Weight `A`: `(out_features, in_features)`.
+*   Here: `batch_size=17`, `mid_dim=8`, `in_features=128`.
+*   Input shape: `(17, 8, 128)`.
+*   Weight shape: `(65, 128)`.
+*   Output shape: `(17, 8, 65)`.
+*   This fits `nn.Linear` perfectly.
+*   So the API is `torch.nn.functional.linear`.
+
+*   What if the API is `torch.mm`?
+*   If the test loops over the batch dimension and calls `torch.mm` on `(8, 128)` and `(128, 65)`.
+*   Then the API is `torch.mm`.
+*   But the test name includes `batch_size_17`.
+*   If it loops, the batch size is just the loop count.
+*   But the test is likely vectorized (using `matmul` or `linear`) to test the CUDA kernel selection efficiently.
+*   Also, WOQ is a pattern match on the graph. `torch.mm` in a loop is harder to match or optimize as a single kernel launch (unless the loop is unrolled/compiled away).
+*   Inductor compiles the whole graph.
+*   If the input is `(17, 8, 128)`, and the op is `linear`, it's a single kernel call (or batched kernel).
+*   If the op is `mm` in a loop, it's 17 kernel calls (or 17*8?).
+*   The test is `test_cuda_select_algorithm`. It wants to test the selection of the WOQ algorithm.
+*   WOQ is a batched GEMM optimization.
+*   So it needs a batched input.
+*   So it must be `linear` or `matmul`.
+*   Given `in_features`, it's `linear`.
+
+*   Conclusion: The API is `torch.nn.functional.linear`.
+
+*   One detail: The prompt asks for "single core PyTorch API".
+*   `torch.nn.functional.linear` is the functional API.
+*   `torch.nn.Linear` is the module.
+*   Usually, `torch.nn.functional.linear` is considered the core API for the operation itself.
+*   I will use `torch.nn.functional.linear`.
+
+*   Let me check if `torch.matmul` is a better answer.
+*   `torch.matmul` is more general.
+*   But `in_features` is specific.
+*   I'll stick with `torch.nn.functional.linear`.
+
+*   Wait, looking at the test name `test_int8_woq_mm_cuda`.
+*   If I search for this test in the PyTorch repo...
+*   (Simulated search result)
+*   The test `test_int8_woq_mm_cuda` does not exist in the main branch as of my last training data cutoff (or it's very new).
+*   However, `test_cuda_select_algorithm.py` exists.
+*   It contains `test_mm`, `test_bmm`, `test_linear`.
+*   There is a test `test_int8_woq_linear_cuda`?
+*   If the bug report says `test_int8_woq_mm_cuda`, I must trust the bug report.
+*   If the bug report says `mm`, and the parameters say `in_features`, there is a conflict.
+*   However, `mm` is often used as a suffix for "matrix multiplication" tests.
+*   If I have to pick the API that explains the bug (WOQ matcher count), it is `torch.nn.functional.linear`.
+*   The WOQ matcher matches `linear`.
+*   It does not match `mm` (usually).
+*   So if the test expects `woq_matcher_count` to be 1, it *must* be using `linear`.
+*   Therefore, the API is `torch.nn.functional.linear`.
+
+*   Final check: Is there any other API?
+*   `torch._C._nn.linear`? No.
+*   `torch.ops.aten.linear`? No.
+*   `torch.nn.functional.linear` is the standard.
+
+*   I will provide `torch.nn.functional.linear`.torch.nn.functional.linear

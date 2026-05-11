@@ -1,0 +1,137 @@
+Bug Report:
+Title: baddbmm with out_dtype=torch.float32 does not validate batch broadcast, silently gives incorrect result
+Issue ID: 163816
+Original bug description: ### 🐛 Describe the bug
+
+first, a known-good baseline: we do a baddbmm where the input tensor has batch 2 but the weight and bias have batch 1.  
+baddbmm() rejects this and tells me to ensure the batch dims match:
+
+```python
+device=torch.device('cuda')
+in_features = 80
+out_features = 128
+dtype=torch.bfloat16
+weight = torch.zeros(out_features, in_features, dtype=dtype, device=device)
+bias = torch.zeros(out_features, dtype=dtype, device=device)
+input = torch.zeros(2, 64, in_features, dtype=dtype, device=device)
+print(torch.baddbmm(
+    input=bias.view(1, 1, out_features),
+    batch1=input,
+    batch2=weight.mT.unsqueeze(0),
+).shape)
+Traceback (most recent call last):
+  File "<string>", line 8, in <module>
+RuntimeError: Expected size for first two dimensions of batch2 tensor to be: [2, 80] but got: [1, 80].
+```
+
+this is _annoying_ (why not just broadcast it for me? the [docs](https://docs.pytorch.org/docs/stable/generated/torch.baddbmm.html) say an input broadcastable with the weights is supported), but whatever, nothing catastrophic.
+
+but now we try the same example with just one change:
+
+```diff
+  device=torch.device('cuda')
+  in_features = 80
+  out_features = 128
+  dtype=torch.bfloat16
+  weight = torch.zeros(out_features, in_features, dtype=dtype, device=device)
+  bias = torch.zeros(out_features, dtype=dtype, device=device)
+  input = torch.zeros(2, 64, in_features, dtype=dtype, device=device)
+  print(torch.baddbmm(
+      input=bias.view(1, 1, out_features),
+      batch1=input,
+      batch2=weight.mT.unsqueeze(0),
++     out_dtype=torch.float32,
+  ).shape)
+```
+
+and instead of a validation error like above, or a correct broadcast as I'd prefer: it outputs the wrong shape entirely:
+
+```
+torch.Size([1, 1, 128])
+```
+
+we're expecting either `([2, 1, 128])` (if broadcast is supported) or a validation error, so a batch dim of 1 is surprising.
+
+### Versions
+
+```
+PyTorch version: 2.8.0
+Is debug build: False
+CUDA used to build PyTorch: 12.9
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.5 LTS (x86_64)
+GCC version: (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0
+Clang version: Could not collect
+CMake version: version 4.0.3
+Libc version: glibc-2.35
+
+Python version: 3.10.12 (main, May 27 2025, 17:12:29) [GCC 11.4.0] (64-bit runtime)
+Python platform: Linux-6.5.13-65-650-4141-22041-coreweave-amd64-85c45edc-x86_64-with-glibc2.35
+Is CUDA available: True
+CUDA runtime version: 12.9.86
+CUDA_MODULE_LOADING set to: LAZY
+GPU models and configuration: 
+GPU 0: NVIDIA H100 80GB HBM3
+GPU 1: NVIDIA H100 80GB HBM3
+
+Nvidia driver version: 570.172.08
+cuDNN version: Probably one of the following:
+/usr/lib/x86_64-linux-gnu/libcudnn.so.9.8.0
+/usr/lib/x86_64-linux-gnu/libcudnn_adv.so.9.8.0
+/usr/lib/x86_64-linux-gnu/libcudnn_cnn.so.9.8.0
+/usr/lib/x86_64-linux-gnu/libcudnn_engines_precompiled.so.9.8.0
+/usr/lib/x86_64-linux-gnu/libcudnn_engines_runtime_compiled.so.9.8.0
+/usr/lib/x86_64-linux-gnu/libcudnn_graph.so.9.8.0
+/usr/lib/x86_64-linux-gnu/libcudnn_heuristic.so.9.8.0
+/usr/lib/x86_64-linux-gnu/libcudnn_ops.so.9.8.0
+Is XPU available: False
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: True
+
+CPU:
+Architecture:                       x86_64
+CPU op-mode(s):                     32-bit, 64-bit
+Address sizes:                      46 bits physical, 57 bits virtual
+Byte Order:                         Little Endian
+CPU(s):                             128
+On-line CPU(s) list:                0-127
+Vendor ID:                          GenuineIntel
+Model name:                         Intel(R) Xeon(R) Platinum 8462Y+
+CPU family:                         6
+Model:                              143
+Thread(s) per core:                 2
+Core(s) per socket:                 32
+Socket(s):                          2
+Stepping:                           8
+CPU max MHz:                        4100.0000
+CPU min MHz:                        800.0000
+BogoMIPS:                           5600.00
+Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtr
+Structured error description: When using torch.baddbmm with out_dtype=torch.float32, the function does not validate batch broadcast and silently produces an incorrect output shape. Without out_dtype, it correctly raises a RuntimeError when batch dimensions don't match. With out_dtype=torch.float32, it outputs torch.Size([1, 1, 128]) instead of either torch.Size([2, 1, 128]) (if broadcast is supported) or a validation error.
+Minimal reproducible example: device=torch.device('cuda')
+in_features = 80
+out_features = 128
+dtype=torch.bfloat16
+weight = torch.zeros(out_features, in_features, dtype=dtype, device=device)
+bias = torch.zeros(out_features, dtype=dtype, device=device)
+input = torch.zeros(2, 64, in_features, dtype=dtype, device=device)
+print(torch.baddbmm(
+    input=bias.view(1, 1, out_features),
+    batch1=input,
+    batch2=weight.mT.unsqueeze(0),
+    out_dtype=torch.float32,
+).shape)
+Trigger conditions: {"backend": "CUDA", "dtype": "bfloat16 (input), float32 (output via out_dtype)", "input_shape": "batch1: [2, 64, 80], batch2: [1, 80, 128], input (bias): [1, 1, 128]", "other_conditions": "out_dtype=torch.float32 specified, batch dimensions don't match (batch1 has batch 2, batch2 and bias have batch 1)"}
+Environment: {"pytorch_version": "2.8.0", "python_version": "3.10.12", "os": "Ubuntu 22.04.5 LTS (x86_64)", "hardware": "NVIDIA H100 80GB HBM3, CUDA available"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

@@ -1,0 +1,223 @@
+1.  **Analyze the Request:**
+    *   Input: A bug report regarding PyTorch Inductor and Triton.
+    *   Task: Identify the *single core PyTorch API* responsible for the bug.
+    *   Output format: Only the API name, or None. No JSON, Markdown, explanation, punctuation, or quotes.
+
+2.  **Analyze the Bug Report:**
+    *   **Title:** [inductor][triton] Inductor fails on triton main branch.
+    *   **Description:** The script fails on PyTorch nightly and Triton main branch.
+    *   **Code:**
+        ```python
+        import triton
+        import torch
+        import torch._inductor.config as inductor_config
+
+        # ... tensor setup ...
+        f = lambda a, mat1, mat2: torch.addmm(a, mat1, mat2)
+
+        with inductor_config.patch(
+            max_autotune=True,
+            max_autotune_gemm_backends="TRITON",
+            autotune_fallback_to_aten=False,):
+            compiled = torch.compile(f, dynamic=False)
+            compiled(a, mat1, mat2)
+        ```
+    *   **Error Log:** Shows autotuning choices for `triton_mm_*` kernels. The traceback points to `torch._inductor.compile_fx`.
+    *   **Trigger Conditions:** Backend "TRITON", dtype float32, specific input shapes.
+    *   **Environment:** PyTorch nightly, Python 3.12, CUDA.
+
+3.  **Identify the Core API:**
+    *   The user is calling `torch.compile`.
+    *   Inside the compiled function, the operation being performed is `torch.addmm`.
+    *   The bug is specifically about the Inductor backend failing when trying to compile/optimize `torch.addmm` using Triton kernels.
+    *   The error happens during the compilation/execution phase triggered by `torch.compile`.
+    *   However, the specific operation that is failing to be lowered or executed correctly via the Triton path is `torch.addmm`.
+    *   Is the bug in `torch.compile` generally? Or is it specific to how `torch.addmm` is handled?
+    *   The title says "Inductor fails on triton main branch". Inductor is the backend for `torch.compile`.
+    *   The code explicitly sets `max_autotune_gemm_backends="TRITON"`.
+    *   The operation being compiled is `torch.addmm`.
+    *   Usually, when a bug report involves a specific operator failing under a compiler backend, the operator itself is the "core API" that is the subject of the failure, or the compiler API if it's a general compilation failure.
+    *   Looking at the error log: `AUTOTUNE addmm(20120x512, 20120x1536, 1536x512)`. The system is trying to generate Triton kernels for `addmm`.
+    *   The traceback cuts off at `fx_codegen_and_compile`.
+    *   The bug is likely an interaction between `torch.compile` (Inductor) and the specific operator `torch.addmm`.
+    *   If I have to pick the *single* core API, `torch.compile` is the entry point that triggers the complex logic. However, `torch.addmm` is the specific function being compiled.
+    *   Let's look at the constraints: "Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug."
+    *   The bug is about the *compilation path* of `torch.addmm` failing when targeting Triton.
+    *   Often, for compiler bugs, the API is `torch.compile`. But if the bug is specific to an operator not lowering correctly, the operator is the key.
+    *   Let's re-read the title: "Inductor fails on triton main branch". This suggests the issue is with the backend (Inductor) handling Triton.
+    *   However, the user code calls `torch.compile`.
+    *   Let's look at the function `f`. It calls `torch.addmm`.
+    *   If I say `torch.compile`, it covers the whole process. If I say `torch.addmm`, it covers the specific op.
+    *   In many similar bug tracking systems (like PyTorch's GitHub issues), the "API" field often refers to the high-level function the user is calling that breaks, or the specific operator if it's a functional correctness issue.
+    *   Here, the user calls `torch.compile`. The failure is a crash during compilation.
+    *   However, the log shows `AUTOTUNE addmm`. The failure is specifically related to the `addmm` lowering.
+    *   Let's consider `torch.addmm`. It is the mathematical operation being performed.
+    *   Let's consider `torch.compile`. It is the mechanism causing the failure.
+    *   Usually, if a script fails *because* of `torch.compile`, `torch.compile` is the API. If a script fails because `torch.addmm` returns wrong values (even in eager mode), it's `torch.addmm`. Here, it fails *inside* `torch.compile`.
+    *   But wait, the bug title mentions "Inductor". Inductor is the backend.
+    *   Let's look at the "Trigger conditions": `backend: "TRITON"`.
+    *   The code snippet: `f = lambda a, mat1, mat2: torch.addmm(a, mat1, mat2)`.
+    *   The failure is `InductorError`.
+    *   If I have to choose the *single* core API, `torch.compile` is the most distinct API being used here that invokes Inductor. `torch.addmm` is a standard math op. The bug is not that `torch.addmm` is broken in eager mode (presumably), but that `torch.compile` breaks on it.
+    *   However, looking at the prompt's instruction: "Prefer the API whose behavior change, compilation path, backend dispatch... best explains the observed bug."
+    *   The bug is about the *compilation path* of `torch.addmm`.
+    *   Let's look at the error log again. It's benchmarking `triton_mm` kernels. `addmm` is being decomposed or mapped to these.
+    *   Is there a more specific API? `torch._inductor.compile_fx`? That's internal.
+    *   Between `torch.compile` and `torch.addmm`:
+        *   `torch.compile` is the wrapper.
+        *   `torch.addmm` is the payload.
+    *   If I report a bug saying "torch.compile crashes on this function", the API is `torch.compile`.
+    *   If I report a bug saying "torch.addmm is broken with Triton backend", the API is `torch.addmm`.
+    *   The title says "Inductor fails". Inductor is the backend of `torch.compile`.
+    *   Let's assume the question asks for the public API the user is interacting with that is failing. The user calls `torch.compile`.
+    *   However, often in these tasks, if a specific operator is the focus of the compilation failure (e.g., "addmm fails to compile"), the operator is the answer.
+    *   Let's look at the "Structured error description": "The error occurs during compilation/execution when using torch.compile...".
+    *   The minimal reproducible example relies on `torch.compile`.
+    *   Let's try to find if there is a specific API mentioned in the traceback that is the "core" one. The traceback is cut off.
+    *   Let's look at the function `f`. It is `torch.addmm`.
+    *   If I remove `torch.compile`, the code likely works (eager mode). Therefore, `torch.compile` is the API introducing the failure.
+    *   However, the failure is specific to the *content* of the function, which is `torch.addmm`.
+    *   Let's consider the "API" definition in the context of PyTorch bug tracking. Usually, it's the function name.
+    *   If I have to pick one, `torch.compile` is the most likely candidate for a "compilation failure" bug. But `torch.addmm` is the operation being compiled.
+    *   Let's look at the "Trigger conditions" again. `max_autotune_gemm_backends="TRITON"`. This is a config for Inductor.
+    *   The bug is that Inductor fails to generate code for `addmm` using Triton.
+    *   Is `torch.addmm` the core API? Or `torch.compile`?
+    *   Let's think about the "single core PyTorch API".
+    *   If the bug was "torch.addmm gives wrong result", it's `torch.addmm`.
+    *   If the bug is "torch.compile crashes", it's `torch.compile`.
+    *   The error is `InductorError`. This is raised by `torch.compile` (Inductor backend).
+    *   The user is using `torch.compile`.
+    *   I will go with `torch.compile` because the bug is explicitly about the compilation process failing (Inductor/Triton interaction), not the mathematical operation itself failing in eager execution. The bug report title highlights "Inductor", which is the backend of `torch.compile`.
+
+    *   *Self-Correction/Refinement*: Wait, looking at the log, it says `AUTOTUNE addmm`. The system is trying to tune `addmm`. The failure happens *after* autotuning (or during the final selection/compilation).
+    *   If I look at similar examples in datasets for this task, usually if a specific op is being compiled and fails, the op is often the answer if the bug is about the *lowering* of that op. But if it's a general crash in the compiler, it's `torch.compile`.
+    *   The title says "Inductor fails on triton main branch". This implies a compatibility issue between the compiler (Inductor) and the kernel language (Triton).
+    *   The user code is `torch.compile`.
+    *   Let's check if `torch.addmm` is considered the "core API". The bug is triggered by compiling `torch.addmm`.
+    *   Let's look at the "Structured error description" again. "The error occurs during compilation/execution when using torch compile...".
+    *   The prompt asks for the API *from a bug report*.
+    *   The bug report is about `torch.compile` (Inductor) failing.
+    *   However, the specific operation is `torch.addmm`.
+    *   Let's consider the possibility that the answer is `torch.addmm`. Why? Because if you replaced `torch.addmm` with `torch.mm`, it might work. The bug is specific to the `addmm` pattern.
+    *   But `torch.compile` is the mechanism.
+    *   Let's look at the constraints: "Prefer the API whose behavior change, compilation path, backend dispatch... best explains the observed bug."
+    *   The compilation path of `torch.addmm` is failing.
+    *   If I say `torch.compile`, it's too broad. `torch.compile` works for many things.
+    *   If I say `torch.addmm`, it pinpoints the operator causing the crash in the compiler.
+    *   Let's look at the error log: `AUTOTUNE addmm`.
+    *   The traceback is inside `torch._inductor.compile_fx`.
+    *   Let's try to find the most specific public API.
+    *   The user calls `torch.compile`.
+    *   The function passed is `torch.addmm`.
+    *   The bug is "Inductor fails".
+    *   I will bet on `torch.compile` being the intended answer for a "compilation failure" bug, or `torch.addmm` if the focus is on the operator lowering.
+    *   Let's look at the title again: "[inductor][triton] Inductor fails on triton main branch". It doesn't mention `addmm` in the title.
+    *   However, the description says "The following script will fail...". The script uses `torch.compile`.
+    *   Let's assume the question asks for the API that is *failing*. The compilation is failing.
+    *   Let's try to find a reason to pick `torch.addmm`. The log shows `AUTOTUNE addmm`. The failure is specific to the `addmm` kernel generation.
+    *   Let's try to find a reason to pick `torch.compile`. The error is `InductorError`.
+    *   Let's look at the "Trigger conditions": `backend: "TRITON"`.
+    *   If I have to choose the *single* core API, `torch.compile` is the high-level API.
+    *   However, in many "API extraction" tasks for bugs, if a specific operator is the subject of the report (e.g. "addmm is slow/wrong/crashing"), that operator is the API. Here, the report is "Inductor fails". Inductor is the backend of `torch.compile`.
+    *   Let's look at the code again.
+    *   `compiled = torch.compile(f, dynamic=False)`
+    *   `compiled(a, mat1, mat2)`
+    *   The crash happens on the second line.
+    *   The API being invoked is the compiled function, which is `torch.compile`.
+    *   Let's consider `torch.addmm`. It is the operation inside.
+    *   Let's consider `torch._inductor.config`. It's used to patch config.
+    *   Let's consider `torch.compile`.
+    *   I will go with `torch.compile`. It is the primary API being used to trigger the Inductor backend.
+
+    *   *Alternative view*: The bug is about the `addmm` kernel generation. The API `torch.addmm` is the one being compiled. If the bug was "torch.compile fails on a function containing a loop", the API might be `torch.compile`. If it's "torch.compile fails on addmm", is it `torch.compile` or `torch.addmm`?
+    *   Usually, the "API" is the function the user calls. The user calls `torch.compile`.
+    *   Let's check if there is any other API. `torch.randn`? No. `torch.cuda`? No.
+    *   It's between `torch.compile` and `torch.addmm`.
+    *   The error is `InductorError`. This is specific to `torch.compile`.
+    *   The title mentions "Inductor".
+    *   I'll stick with `torch.compile`.
+
+    *   *Wait*, let me reconsider. The bug report title is "Inductor fails on triton main branch". The description says "The following script will fail...". The script uses `torch.compile`.
+    *   However, the *content* of the script is `torch.addmm`.
+    *   If I look at the "Trigger conditions", it lists `input_shape`, `dtype`, `backend`.
+    *   If I look at the "Structured error description", it says "The error occurs during compilation/execution when using torch compile...".
+    *   This strongly points to `torch.compile`.
+
+    *   Let's double check if `torch.addmm` is a better fit.
+    *   If the bug was "torch.addmm returns NaN", it's `torch.addmm`.
+    *   If the bug is "torch.compile crashes when compiling torch.addmm", the *trigger* is `torch.compile`.
+    *   The prompt asks for the "single core PyTorch API from a bug report".
+    *   The bug report is about the *compiler* failing.
+    *   Therefore, `torch.compile`.
+
+    *   Let's verify if there's any ambiguity.
+    *   The user calls `torch.compile`.
+    *   The error is in `torch._inductor`.
+    *   The operation is `torch.addmm`.
+    *   The bug is about the interaction.
+    *   But `torch.compile` is the API that enables Inductor.
+    *   I will provide `torch.compile`.
+
+    *   *Second thought*: What if the "core API" refers to the operator that is the subject of the compilation?
+    *   Example: "Bug: torch.matmul fails with XLA backend". API: `torch.matmul`.
+    *   Example: "Bug: torch.compile fails with dynamic shapes". API: `torch.compile`.
+    *   Here: "Bug: Inductor fails on triton main branch". The script uses `torch.addmm`.
+    *   The failure is specific to `addmm` (implied by the log `AUTOTUNE addmm`).
+    *   If the script used `torch.mm`, it might not fail.
+    *   So the bug is specific to `torch.addmm`.
+    *   However, the *mechanism* of failure is the compilation.
+    *   Let's look at the "Trigger conditions" again. `max_autotune_gemm_backends="TRITON"`. This is a config for `torch.compile`.
+    *   The bug is that `torch.compile` (Inductor) cannot handle `torch.addmm` with the Triton backend on the main branch.
+    *   Which is the "core" API?
+    *   If I have to pick one, `torch.compile` is the overarching feature. `torch.addmm` is just the workload.
+    *   But often, bugs are categorized by the operator.
+    *   Let's look at the error log again. `AUTOTUNE addmm`.
+    *   The traceback is in `compile_fx`.
+    *   Let's assume the question implies "What is the API that is broken?".
+    *   Is `torch.compile` broken? Only for this specific case.
+    *   Is `torch.addmm` broken? Only when compiled with Triton.
+    *   The title says "Inductor fails". Inductor is the backend of `torch.compile`.
+    *   I will go with `torch.compile`.
+
+    *   *Third thought*: Let's look at the provided solution format. "Reply with only one API name".
+    *   Common APIs: `torch.compile`, `torch.addmm`, `torch.nn.functional`, etc.
+    *   The bug report is filed under "inductor".
+    *   The user is using `torch.compile`.
+    *   I'll stick with `torch.compile`.
+
+    *   *Fourth thought*: Let's look at the "Structured error description" again. "The error occurs during compilation/execution when using torch compile...".
+    *   This explicitly names `torch.compile` as the context of the error.
+    *   The "Trigger conditions" mention `backend: "TRITON"`.
+    *   The "Minimal reproducible example" shows `torch.compile`.
+    *   The "Title" mentions "Inductor".
+    *   Everything points to the compilation stack.
+    *   Therefore, `torch.compile`.
+
+    *   *Final check*: Is there any chance it's `torch.addmm`?
+    *   If the bug was "torch.addmm is slow", it's `torch.addmm`.
+    *   If the bug is "Inductor fails", it's the compiler.
+    *   The user is reporting a failure of the compiler.
+    *   So `torch.compile`.
+
+    *   Wait, looking at the log: `AUTOTUNE addmm`.
+    *   The error happens *after* autotuning.
+    *   The error is `InductorError`.
+    *   The API `torch.compile` is the one that raises this (via its backend).
+    *   I will output `torch.compile`.
+
+    *   *Re-evaluating based on "API from a bug report"*:
+    *   Sometimes, the API is the one being tested.
+    *   Here, the user is testing `torch.compile`'s ability to handle `addmm` with Triton.
+    *   The failure is in `torch.compile`.
+    *   If I say `torch.addmm`, it implies the function itself is broken. But it works in eager mode (implied, as the bug is specific to Inductor/Triton).
+    *   So `torch.compile` is the correct answer.
+
+    *   Let's try to find a counter-argument.
+    *   The bug is about the *lowering* of `addmm`.
+    *   The "core API" might be the one being lowered.
+    *   But the prompt says "Prefer the API whose behavior change, compilation path... best explains the observed bug."
+    *   The *compilation path* of `torch.compile` is what is failing.
+    *   The *behavior change* is in `torch.compile` (or Inductor).
+    *   So `torch.compile` fits the preference criteria better.
+
+    *   Final decision: `torch.compile`.torch.compile

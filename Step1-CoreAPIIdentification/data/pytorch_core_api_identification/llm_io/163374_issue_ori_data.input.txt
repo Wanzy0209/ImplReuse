@@ -1,0 +1,101 @@
+Bug Report:
+Title: [DTensor] Inplace ops preduces wrong result
+Issue ID: 163374
+Original bug description: ```
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import torch
+from torch import distributed as dist
+from torch.utils.debug_mode import DebugMode
+
+
+if __name__ == '__main__':
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    partial_dt = in_dtensor.sum()
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        out = partial_dt.clamp_(max=2)
+        full = out.full_tensor()
+
+    if rank == 0:
+        print(debug_mode.debug_string())
+        # redistribute_input(0, [P] -> [R])
+        #   _c10d_functional::all_reduce(t: f32[], sum, 0)
+        #   _c10d_functional::wait_tensor(t: f32[])
+        # aten::clamp_(t: f32[], None, 2)
+        # _c10d_functional::all_reduce(t: f32[], sum, 0)
+        # _c10d_functional::wait_tensor(t: f32[])
+        # aten::view(t: f32[], [])
+
+        print(out.placements)
+        # (Partial(sum),)
+        # Expected (Replicate(),)
+
+        print(full)
+        # tensor(144., device='cuda:0')
+        # Expected tensor(2., device='cuda:0')
+``` 
+
+Placement is wrong, it should be replicated, instead of Partial(sum)
+Tensor output value is also wrong. 
+_local_tensor value is also wrong. 
+
+
+
+
+
+
+cc @ezyang @gchanan @zou3519 @kadeng @msaroufim @H-Huang @awgu @wanchaol @fegin @fduwjj @wz337 @wconstab @d4l3k @pragupta @dcci @tianyu-l @XilunWu
+Structured error description: Placement is wrong, it should be replicated, instead of Partial(sum). Tensor output value is also wrong. _local_tensor value is also wrong.
+Minimal reproducible example: from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import torch
+from torch import distributed as dist
+from torch.utils.debug_mode import DebugMode
+
+
+if __name__ == '__main__':
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    partial_dt = in_dtensor.sum()
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        out = partial_dt.clamp_(max=2)
+        full = out.full_tensor()
+
+    if rank == 0:
+        print(debug_mode.debug_string())
+        # redistribute_input(0, [P] -> [R])
+        #   _c10d_functional::all_reduce(t: f32[], sum, 0)
+        #   _c10d_functional::wait_tensor(t: f32[])
+        #   aten::clamp_(t: f32[], None, 2)
+        # _c10d_functional::all_reduce(t: f32[], sum, 0)
+        # _c10d_functional::wait_tensor(t: f32[])
+        #   aten::view(t: f32[], [])
+
+        print(out.placements)
+        # (Partial(sum),)
+        # Expected (Replicate(),)
+
+        print(full)
+        # tensor(144., device='cuda:0')
+        # Expected tensor(2., device='cuda:0')
+Trigger conditions: {"backend": "nccl", "dtype": "f32", "input_shape": "(12, 12)", "other_conditions": "Using DTensor with Shard(0) distribution, then sum() to get partial, then clamp_() operation"}
+Environment: {"pytorch_version": "unknown", "python_version": "unknown", "os": "unknown", "hardware": "cuda"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

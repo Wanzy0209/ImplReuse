@@ -1,0 +1,88 @@
+Bug Report:
+Title: [RISC-V][RVV][GCC 14.2] GCC ICE when building DepthwiseConvKernel.cpp
+Issue ID: 166057
+Original bug description: ### 🐛 Describe the bug
+
+## Description
+
+While building PyTorch for RISC‑V with RVV enabled (`-march=rv64gcv`), GCC 14.2 hits an internal compiler error (ICE) when compiling `aten/src/ATen/native/cpu/DepthwiseConvKernel.cpp`. The crash is triggered by statements that use an RVV intrinsic `__riscv_vset_v_f32m1_f32m1x4` to write results directly back to a dereferenced pointer in the same expression, effectively doing read-modify-write on the same `MEM_REF`.
+
+Refactoring these sites to first load into a temporary vector, perform `vset` operations on the temporary, and then write back once, avoids the ICE. Clang does not reproduce the issue; it compiles the original code fine (See https://github.com/pytorch/pytorch/pull/127867).
+
+## Affected file and code sites (current main)
+
+- Patterns like the following in `DepthwiseConvKernel.cpp` trigger the ICE:
+``` c
+*transform = __riscv_vset_v_f32m1_f32m1x4(*transform, 0, g0);
+*transform = __riscv_vset_v_f32m1_f32m1x4(*transform, 1, vmuladdq_f32(half_g0_plus_g2, const_half, g1));
+*transform = __riscv_vset_v_f32m1_f32m1x4(*transform, 2, vmulsubq_f32(half_g0_plus_g2, const_half, g1));
+*transform = __riscv_vset_v_f32m1_f32m1x4(*transform, 3, g2);
+```
+
+## Build environment and logs
+
+- Docker image: `pytorch-linux-noble-riscv64-py3.12-gcc14-4ffbab398e5f1c74f6434e5abb00e0b148d36e3f`
+- Compiler: GCC 14.2 (cross-compile)
+  - C++ compiler: `/usr/bin/riscv64-linux-gnu-g++-14`
+  - C++ compiler id: GNU
+  - C++ compiler version: 14.2.0
+  - Key flags: `-march=rv64gcv -fcf-protection=none`
+- GCC ICE occurs during the GIMPLE lower pass. Excerpt (full build log attached):
+
+```
+-- ******** Summary ********
+-- General:
+--   CMake version         : 4.0.0
+--   CMake command         : /usr/local/lib/python3.12/dist-packages/cmake/data/bin/cmake
+--   System                : Linux
+--   C++ compiler          : /usr/bin/riscv64-linux-gnu-g++-14
+--   C++ compiler id       : GNU
+--   C++ compiler version  : 14.2.0
+--   Using ccache if found : ON
+--   Found ccache          : /usr/bin/ccache
+--   CXX flags             : -march=rv64gcv -fcf-protection=none -fvisibility-inlines-hidden -DNDEBUG -DUSE_KINETO -DLIBKINETO_NOCUPTI -DLIBKINETO_NOROCTRACER -DLIBKINETO_NOXPUPTI=ON -DSYMBOLICATE_MOBILE_DEBUG_HANDLE -O2 -fPIC -DC10_NODEPRECATED -Wall -Wextra -Werror=return-type -Werror=non-virtual-dtor -Werror=range-loop-construct -Werror=bool-operation -Wnarrowing -Wno-missing-field-initializers -Wno-unknown-pragmas -Wno-unused-parameter -Wno-strict-overflow -Wno-strict-aliasing -Wno-stringop-overflow -Wsuggest-override -Wno-psabi -Wno-error=old-style-cast -faligned-new -Wno-maybe-uninitialized -fno-math-errno -fno-trapping-math -Werror=format -Wno-dangling-reference -Wno-error=dangling-reference -Wno-stringop-overflow
+--   Shared LD flags       :  -Wl,--no-as-needed -rdynamic
+--   Static LD flags       : 
+--   Module LD flags       : 
+--   Build type            : Release
+--   Compile definitions   : ONNX_ML=1;ONNXIFI_ENABLE_EXT=1;ONNX_NAMESPACE=onnx_torch;HAVE_MMAP=1;_FILE_OFFSET_BITS=64;HAVE_SHM_OPEN=1;HAVE_SHM_UNLINK=1;HAVE_MALLOC_USABLE_SIZE=1;HAVE_POSIX_FALLOCATE=1;USE_EXTERNAL_MZCRC;MINIZ_DISABLE_ZIP_READER_CRC32_CHECKS
+--   CMAKE_PREFIX_PATH     : 
+--   CMAKE_INSTALL_PREFIX  : /usr/local
+--   USE_GOLD_LINKER       : OFF
+-- 
+--   TORCH_VERSION         : 2.10.0
+--   BUILD_STATIC_RUNTIME_BENCHMARK: OFF
+--   BUILD_BINARY          : OFF
+--   BUILD_CUSTOM_PROTOBUF : ON
+--     Link local protobuf : ON
+--   BUILD_PYTHON          : ON
+--     Python version      : 3.12.3
+--     Python executable   : /workspace/venv/bin/python3
+--     Python library      : 
+--     Python includes     : /opt/sysroot/include/python3.12
+--     Python site-package : /workspace/venv/lib/python3.12/site-packages
+--   BUILD_SHARED_LIBS     : ON
+--   CAFFE2_USE_MSVC_STATIC_RUNTIME     : OFF
+--   BUILD_TEST            : OFF
+--   BUILD_JNI             : OFF
+--   BUILD_MOBILE_AUTOGRAD : OFF
+--   BUILD_LITE_INTERPRETER: OFF
+--   INTERN_BUILD_MOBILE   : 
+--   TRAC
+Structured error description: While building PyTorch for RISC‑V with RVV enabled (`-march=rv64gcv`), GCC 14.2 hits an internal compiler error (ICE) when compiling `aten/src/ATen/native/cpu/DepthwiseConvKernel.cpp`. The crash is triggered by statements that use an RVV intrinsic `__riscv_vset_v_f32m1_f32m1x4` to write results directly back to a dereferenced pointer in the same expression, effectively doing read-modify-write on the same `MEM_REF`.
+Minimal reproducible example: *transform = __riscv_vset_v_f32m1_f32m1x4(*transform, 0, g0);
+*transform = __riscv_vset_v_f32m1_f32m1x4(*transform, 1, vmuladdq_f32(half_g0_plus_g2, const_half, g1));
+*transform = __riscv_vset_v_f32m1_f32m1x4(*transform, 2, vmulsubq_f32(half_g0_plus_g2, const_half, g1));
+*transform = __riscv_vset_v_f32m1_f32m1x4(*transform, 3, g2);
+Trigger conditions: {"backend": "", "dtype": "f32", "input_shape": "", "other_conditions": "RISC-V with RVV enabled (`-march=rv64gcv`), GCC 14.2 compiler"}
+Environment: {"pytorch_version": "2.10.0", "python_version": "3.12.3", "os": "Linux", "hardware": "RISC-V (rv64gcv)"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

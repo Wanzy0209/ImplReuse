@@ -1,0 +1,39 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** PyTorch 2.8.0+rocm6.4 fails to generate images.
+    *   **Description:** The user is using ComfyUI (a UI for Stable Diffusion/Flux). They installed PyTorch 2.8.0 with ROCm 6.4. Using the `flux.1` checkpoint fails to generate images properly (likely produces garbage or black images, though the screenshot isn't visible, the text implies failure). Using the `v1.5` checkpoint works fine.
+    *   **Environment:** Ubuntu 24.04, ROCm 6.4.3, AMD RX 7900XT.
+    *   **Trigger Conditions:** Backend: ROCm, specific model: flux.1.
+
+2.  **Analyze the Context (Flux.1 vs v1.5):**
+    *   Stable Diffusion v1.5 is a standard UNet-based model using standard convolutional and attention layers.
+    *   Flux.1 is a newer architecture (Flow matching model) that relies heavily on specific attention mechanisms, often utilizing `torch.nn.functional.scaled_dot_product_attention` (SDPA) or specific implementations of attention (like Flash Attention).
+    *   Flux models are known to be sensitive to memory layout, precision (bf16/fp16), and specific attention kernel implementations.
+
+3.  **Identify the Core Issue:**
+    *   The issue is specific to ROCm (AMD backend) and a specific model architecture (Flux.1) that likely uses newer or more complex attention mechanisms compared to v1.5.
+    *   The failure happens during image generation, which implies a numerical error or a kernel failure during the forward pass.
+    *   In PyTorch 2.x, the attention mechanism is often dispatched to optimized kernels via `scaled_dot_product_attention`.
+    *   ROCm support for Flash Attention or specific SDPA backends (like Flash Attention or Memory Efficient Attention) can sometimes be lagging or buggy compared to CUDA, or specific versions might introduce regressions for certain input shapes or data types common in Flux models.
+
+4.  **Determine the API:**
+    *   The most likely culprit for a regression in a specific model architecture (Flux) that relies on modern attention mechanisms, while an older one (v1.5) works, is the attention dispatch mechanism.
+    *   The API responsible for this is `torch.nn.functional.scaled_dot_product_attention`.
+    *   Alternatively, it could be `torch.compile` if ComfyUI uses it, but usually, these UIs rely on eager execution or specific optimized kernels.
+    *   Another possibility is `torch.bmm` or `torch.matmul` if the issue is general matrix multiplication, but the specificity to Flux (which is attention-heavy) points to SDPA.
+    *   Looking at recent PyTorch/ROCm issues, SDPA on ROCm is a frequent source of bugs regarding specific attention implementations (Flash Attention vs Math).
+
+5.  **Refining the API choice:**
+    *   Flux.1 uses attention heavily. The difference between v1.5 and Flux.1 is often the specific type of attention or the scale/shape of the tensors.
+    *   The API that handles the dispatching of attention to the most efficient kernel (Flash Attention, etc.) is `torch.nn.functional.scaled_dot_product_attention`.
+    *   If the ROCm backend for Flash Attention is broken in 2.8.0 for the specific shapes used by Flux, this API is the trigger.
+
+6.  **Final Check:**
+    *   Is there a more specific API? Maybe `torch.nn.MultiheadAttention`? That calls SDPA.
+    *   Is it `torch.nn.functional.flash_attention`? That's usually internal or accessed via SDPA.
+    *   The public API that users interact with (or that libraries like Diffusers/ComfyUI use) is `torch.nn.functional.scaled_dot_product_attention`.
+
+7.  **Conclusion:** The bug is likely related to how attention is computed on ROCm for the Flux model. The core API handling this is `torch.nn.functional.scaled_dot_product_attention`.
+
+    *Self-Correction/Alternative:* Could it be `torch.nn.functional.grid_sample`? Flux uses specific layers, but attention is the main differentiator. Could it be `torch.nn.functional.conv2d`? Unlikely to break only Flux while v1.5 works, as both use convolutions. The attention mechanism is the most distinct and computationally intensive part where ROCm kernels often differ.
+
+    Therefore, `torch.nn.functional.scaled_dot_product_attention` is the best fit.torch.nn.functional.scaled_dot_product_attention

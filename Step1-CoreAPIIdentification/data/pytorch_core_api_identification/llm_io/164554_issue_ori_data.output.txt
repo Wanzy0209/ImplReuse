@@ -1,0 +1,62 @@
+1.  **Analyze the Bug Report:**
+    *   **Title:** "FSDP2 fails with 'Cannot copy out of meta tensor; no data!' when rank is left empty"
+    *   **Description:** A tensor of shape `[X, N]` causes an error when sharded with FSDP2 on >X GPUs. This happens because a rank gets an empty local tensor. The specific error message is "Cannot copy out of meta tensor; no data!".
+    *   **Code:**
+        *   Initializes distributed environment.
+        *   Creates a model on the "meta" device.
+        *   Applies `fully_shard` (FSDP2).
+        *   Calls `model.to_empty(device=local_rank)`.
+        *   Attempts a forward pass.
+    *   **Error Location:** The traceback points to `torch.distributed.fsdp._fully_shard._fsdp_param_group.py`, specifically inside `unshard` -> `foreach_all_gather`.
+    *   **Key Issue:** The interaction between `to_empty`, meta tensors, and FSDP2's sharding logic when a shard size is zero (empty tensor).
+
+2.  **Identify Potential APIs:**
+    *   `torch.distributed._composable.fsdp.fully_shard`: This is the main FSDP2 API being used.
+    *   `torch.nn.Module.to_empty`: This is the method used to move the meta tensors to actual devices without initializing data.
+    *   `torch.distributed._tensor.init_device_mesh`: Used to create the mesh.
+    *   `torch.distributed.fsdp._fully_shard._fsdp_param_group.foreach_all_gather`: The internal function failing.
+
+3.  **Evaluate Responsibility:**
+    *   The bug title explicitly mentions "FSDP2 fails".
+    *   The description says "I think it's because a rank has an empty local tensor, which is quite common."
+    *   The code uses `model.to_empty(device=local_rank)`. The user notes that `model.to(device=local_rank)` doesn't work (presumably because meta tensors can't be moved directly with `.to()` in this context or it's inefficient).
+    *   The error "Cannot copy out of meta tensor; no data!" usually happens when an operation tries to read data from a meta tensor, which has no storage.
+    *   The traceback shows the crash happens inside `foreach_all_gather` called by `unshard`.
+    *   However, the *root cause* seems to be how FSDP2 handles the state of parameters that were initialized via `to_empty` when the shard size is zero. If a shard is empty, `to_empty` creates an empty tensor. When `unshard` (all-gather) is called, it tries to gather these empty tensors. If the logic inside FSDP2 (specifically `fully_shard`'s handling of the parameter state) doesn't correctly handle the "empty" case derived from `to_empty`, it might try to access data that doesn't exist or treat it as a meta tensor still.
+    *   Is `to_empty` the culprit? `to_empty` is a standard PyTorch method. It creates an unitialized tensor. If the tensor is empty, it's valid.
+    *   Is `fully_shard` the culprit? `fully_shard` sets up the sharding. It needs to handle the case where a shard is empty. The error occurs during the forward pass (unsharding), which is managed by the state installed by `fully_shard`.
+    *   The error message "Cannot copy out of meta tensor" suggests that somewhere, the tensor is still considered "meta" or the operation being performed is invalid on the result of `to_empty`.
+    *   Looking at the traceback: `self._all_gather_result = foreach_all_gather(...)`.
+    *   The user says: "this testcase calls `model.to_empty(device=local_rank)`, and `model.to(device=local_rank)` doesn't work." This implies `to_empty` is the intended workaround for meta tensors in FSDP2, but it fails with empty shards.
+    *   The bug is specifically about FSDP2's interaction with empty tensors created via `to_empty`.
+    *   The most specific API mentioned in the title and the core of the issue is **FSDP2**, represented by the `fully_shard` API. The failure is in the FSDP2 logic (unsharding/gathering) failing to handle the specific state produced by `to_empty` on empty shards.
+
+4.  **Select the Single Core API:**
+    *   The bug is titled "FSDP2 fails...".
+    *   The code uses `fully_shard`.
+    *   The error occurs in `torch.distributed.fsdp._fully_shard._fsdp_param_group`.
+    *   While `to_empty` is involved, it is a standard utility. The bug is that FSDP2 (via `fully_shard`) crashes when using it in a specific (but valid) scenario (empty shards).
+    *   Therefore, the API responsible is `fully_shard`.
+
+5.  **Final Check:**
+    *   Does `fully_shard` explain the bug? Yes, it's the FSDP2 composable API that manages the sharding and unsharding logic where the crash happens.
+    *   Is it a single API name? Yes.
+    *   Is it None? No.
+
+    Let's double check if `to_empty` is the better answer. `to_empty` is doing what it's supposed to do (creating an empty tensor). The crash happens because FSDP2's `foreach_all_gather` or the surrounding logic doesn't like the result. The bug is in FSDP2's handling of that result. Thus, `fully_shard` is the API with the bug.
+
+    The prompt asks for the "single core PyTorch API from a bug report".
+    The bug report is about FSDP2.
+    The API is `fully_shard`.
+
+    Wait, looking at the traceback again:
+    `File "/usr/local/lib/python3.10/dist-packages/torch/distributed/fsdp/_fully_shard/_fsdp_param_group.py", line 333, in unshard`
+    `self._all_gather_result = foreach_all_gather(`
+    
+    The error "Cannot copy out of meta tensor; no data!" is a specific error often raised by `copy_` or similar operations when the source is meta.
+    
+    If I have to choose between `fully_shard` and `to_empty`:
+    The user is reporting a bug *in* FSDP2. The title says "FSDP2 fails".
+    The API `fully_shard` is the entry point for FSDP2 functionality.
+    
+    I will stick with `fully_shard`.fully_shard

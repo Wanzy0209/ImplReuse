@@ -1,0 +1,84 @@
+1.  **Analyze the Request:**
+    *   Input: A bug report about a disabled test `test_partial_qconfig_mapping` in `TestFXNumericSuiteNShadows`.
+    *   Task: Identify the single core PyTorch API responsible for the bug.
+    *   Output format: Only the API name, or None. No JSON, Markdown, etc.
+
+2.  **Analyze the Bug Report:**
+    *   **Title:** DISABLED test_partial_qconfig_mapping...
+    *   **Description:** The test is flaky on macOS. It fails in CI.
+    *   **Error Message:**
+        ```python
+        File "/Users/ec2-user/runner/_work/_temp/venv-3.12-1757305842/lib/python3.12/site-packages/torch/backends/quantized/__init__.py", line 37, in __set__
+            torch._C._set_qengine(_get_qengine_id(val))
+        RuntimeError: quantized engine NoQEngine is not supported
+        ```
+    *   **Context:** The error happens inside `override_quantized_engine` context manager when exiting (restoring the previous engine). The previous engine seems to be "NoQEngine" (or an invalid ID mapping to it), which isn't supported when trying to set it back.
+
+3.  **Trace the Execution Path:**
+    *   The test uses `override_quantized_engine("qnnpack")`.
+    *   Inside the context manager, it sets `torch.backends.quantized.engine`.
+    *   Upon exiting (`__exit__`), it tries to restore the `previous` engine.
+    *   The setter `torch.backends.quantized.engine` calls `torch._C._set_qengine(_get_qengine_id(val))`.
+    *   The error `RuntimeError: quantized engine NoQEngine is not supported` occurs here.
+
+4.  **Identify the Core API:**
+    *   The failure happens specifically when setting the quantized engine.
+    *   The property being accessed/set is `torch.backends.quantized.engine`.
+    *   The underlying C++ call is `torch._C._set_qengine`.
+    *   The context manager `override_quantized_engine` is a testing utility, not a core user-facing PyTorch API (though it lives in `torch.testing._internal`).
+    *   The actual state change causing the crash is the assignment to `torch.backends.quantized.engine`.
+
+5.  **Select the Best Candidate:**
+    *   `torch.backends.quantized.engine`: This is the public API property that triggers the internal logic.
+    *   `torch._C._set_qengine`: This is the internal binding.
+    *   `override_quantized_engine`: This is a test helper.
+
+    The prompt asks for the "single core PyTorch API". Usually, this refers to the public-facing API that the user interacts with or that is central to the feature being tested. The feature is quantization backends. The specific mechanism failing is setting the engine.
+
+    Looking at the traceback:
+    `torch.backends.quantized.engine = previous`
+
+    This is the line causing the crash. The API is `torch.backends.quantized.engine`.
+
+6.  **Refine the Selection:**
+    *   Is it `torch.backends.quantized`? That's a module.
+    *   Is it `torch.backends.quantized.engine`? That's the specific property.
+    *   Is it `torch._C._set_qengine`? That's the implementation detail.
+
+    The error message explicitly points to the setter of `torch.backends.quantized.engine`. The bug is about the state of the quantized engine being invalid ("NoQEngine") when trying to restore it.
+
+    Therefore, `torch.backends.quantized.engine` is the most accurate representation of the API involved.
+
+7.  **Final Check:**
+    *   Does the bug report mention any other API? The test name mentions `qconfig_mapping`, but the *crash* is in the engine setting.
+    *   The error is `RuntimeError: quantized engine NoQEngine is not supported`.
+    *   The code triggering it is `torch.backends.quantized.engine = previous`.
+
+    I will output `torch.backends.quantized.engine`.
+
+    Wait, looking at the constraints: "Return only one API name".
+    Is `torch.backends.quantized.engine` considered one API name? Yes, it's a property.
+    Alternatively, `torch.backends.quantized` is the module.
+    However, the specific interaction causing the bug is the assignment to the `engine` attribute.
+
+    Let's consider if `torch._C._set_qengine` is better. It's the C++ backend dispatch. But usually, "PyTorch API" implies the Python interface unless it's a very low-level dispatch issue. The error is raised by the Python wrapper's setter logic calling the C++ function.
+
+    Let's look at the traceback again:
+    `File ".../torch/backends/quantized/__init__.py", line 37, in __set__`
+    `torch._C._set_qengine(_get_qengine_id(val))`
+
+    The API is `torch.backends.quantized.engine`.
+
+    Let's double check if there is a more specific function. `torch.backends.quantized.set_engine`? No, it's a property setter.
+
+    I will stick with `torch.backends.quantized.engine`.
+
+    Another possibility: `torch.quantization`? No, the error is in `backends`.
+
+    Let's verify the exact string format. "torch.backends.quantized.engine".
+
+    Is it possible the API is `torch._C._set_qengine`? The prompt asks for the API "most responsible for triggering the bug". The bug is that the engine state is corrupted or invalid. The mechanism to change that state is the setter.
+
+    Let's consider the "core" aspect. `torch.backends.quantized.engine` is the public interface.
+
+    Final decision: `torch.backends.quantized.engine`.torch.backends.quantized.engine

@@ -1,0 +1,162 @@
+Bug Report:
+Title: Partitioning fx graph according instruction gives errors
+Issue ID: 166034
+Original bug description: ### 🐛 Describe the bug
+
+Hi, I am trying to partition an fx graph according to examples given here: https://github.com/pytorch/pytorch/blob/51319ca090bc7458168a8451c04ca7e021a72693/torch/fx/passes/split_modulepy#L55. But the example code gives error. The resulting graph module does not have the same input as the original module so it cannot run.
+
+
+
+My code:
+
+```py
+import torch
+from torch.fx.graph_module import GraphModule
+from torch.fx.node import Node
+from torch.fx.passes.split_module import split_module
+
+class MyModule(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.param = torch.nn.Parameter(torch.rand(3, 4))
+        self.linear = torch.nn.Linear(4, 5)
+
+    def forward(self, x, y):
+        z = self.linear(x + self.param).clamp(min=0.0, max=1.0)
+        w = self.linear(y).clamp(min=0.0, max=1.0)
+        return z + w
+
+# symbolically trace model
+my_module = MyModule()
+inputs = (torch.rand(3, 4), torch.rand(3, 4))
+my_module_traced = torch.export.export(my_module, inputs)
+
+# random mod partitioning
+partition_counter = 0
+NPARTITIONS = 3
+
+def mod_partition(node: Node):
+    global partition_counter
+    partition = partition_counter % NPARTITIONS
+    partition_counter = (partition_counter + 1) % NPARTITIONS
+    return partition
+
+# split module in module with submodules
+module_with_submodules = split_module(
+    my_module_traced, my_module, mod_partition
+)
+print(module_with_submodules)
+module_with_submodules(*inputs)
+```
+
+Output:
+```
+GraphModule(
+  (submod_0): GraphModule()
+  (submod_1): GraphModule()
+  (submod_2): GraphModule()
+)
+
+
+
+def forward(self, p_param, p_linear_weight, p_linear_bias, x, y):
+    submod_0 = self.submod_0(x, p_param, y, p_linear_weight, p_linear_bias);  x = p_param = y = None
+    getitem = submod_0[0]
+    getitem_1 = submod_0[1];  submod_0 = None
+    submod_1 = self.submod_1(getitem, p_linear_weight, p_linear_bias, getitem_1);  getitem = p_linear_weight = p_linear_bias = getitem_1 = None
+    getitem_2 = submod_1[0]
+    getitem_3 = submod_1[1];  submod_1 = None
+    submod_2 = self.submod_2(getitem_2, getitem_3);  getitem_2 = getitem_3 = None
+    return (submod_2,)
+    
+# To see more debug info, please use `graph_module.print_readable()`
+Traceback (most recent call last):
+  File "/home/other/partitioning_exp.py", line 37, in <module>
+    module_with_submodules(*inputs)
+  File "/usr/local/lib/python3.12/dist-packages/torch/fx/graph_module.py", line 845, in call_wrapped
+    return self._wrapped_call(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/fx/graph_module.py", line 415, in __call__
+    raise e
+  File "/usr/local/lib/python3.12/dist-packages/torch/fx/graph_module.py", line 402, in __call__
+    return super(self.cls, obj).__call__(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1780, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1791, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: forward() missing 3 required positional arguments: 'p_linear_bias', 'x', and 'y'
+```
+
+### Versions
+
+PyTorch version: 2.10.0.dev20251018+cu130
+Is debug build: False
+CUDA used to build PyTorch: 13.0
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 24.04.2 LTS (x86_64)
+GCC version: (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0
+Clang version: Could not collect
+CMake version: version 3.24.0
+Libc version: glibc-2.39
+
+Python version: 3.12.3 (main, Jun 18 2025, 17:59:45) [GCC 13.3.0] (64-bit runtime)
+Python platform: Linux-5.15.0-70-generic-x86_64-with-glibc2.39
+Is CUDA available: True
+CUDA runtime version: 13.0.48
+CUDA_MODULE_LOADING set to: 
+GPU models and configuration: GPU 0: NVIDIA A100 80GB PCIe
+Nv
+Structured error description: The user is trying to partition an fx graph according to examples given in the PyTorch documentation, but the example code gives error. The resulting graph module does not have the same input as the original module so it cannot run.
+Minimal reproducible example: import torch
+from torch.fx.graph_module import GraphModule
+from torch.fx.node import Node
+from torch.fx.passes.split_module import split_module
+
+class MyModule(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.param = torch.nn.Parameter(torch.rand(3, 4))
+        self.linear = torch.nn.Linear(4, 5)
+
+    def forward(self, x, y):
+        z = self.linear(x + self.param).clamp(min=0.0, max=1.0)
+        w = self.linear(y).clamp(min=0.0, max=1.0)
+        return z + w
+
+# symbolically trace model
+my_module = MyModule()
+inputs = (torch.rand(3, 4), torch.rand(3, 4))
+my_module_traced = torch.export.export(my_module, inputs)
+
+# random mod partitioning
+partition_counter = 0
+NPARTITIONS = 3
+
+def mod_partition(node: Node):
+    global partition_counter
+    partition = partition_counter % NPARTITIONS
+    partition_counter = (partition_counter + 1) % NPARTITIONS
+    return partition
+
+# split module in module with submodules
+module_with_submodules = split_module(
+    my_module_traced, my_module, mod_partition
+)
+print(module_with_submodules)
+module_with_submodules(*inputs)
+Trigger conditions: {"backend": "CUDA", "dtype": "unknown", "input_shape": "(3, 4)", "other_conditions": "Using torch.export.export for tracing, using split_module from torch.fx.passes.split_module"}
+Environment: {"pytorch_version": "2.10.0.dev20251018+cu130", "python_version": "3.12.3", "os": "Ubuntu 24.04.2 LTS (x86_64)", "hardware": "NVIDIA A100 80GB PCIe"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.

@@ -1,0 +1,83 @@
+Bug Report:
+Title: [Fuzzer][Eager/Compile Divergence] Inductor fails ont2.fill_diagonal_(t1.item())call
+Issue ID: 163420
+Original bug description: ### 🐛 Describe the bug
+
+Repro
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(arg0, arg1):
+    t0 = arg0 # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    t1 = arg1 # size=(), stride=(), dtype=float32, device=cuda
+    t2 = t0.clone(); t2.fill_diagonal_(t1.item()) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    return t2
+
+arg0 = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+arg1 = torch.empty([], dtype=torch.float32, device='cuda', requires_grad=True) # size=(), stride=(), dtype=float32, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+```
+
+Error
+```
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] Triton compilation failed: triton_poi_fused_fill_1
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] def triton_poi_fused_fill_1(out_ptr0, xnumel, XBLOCK : tl.constexpr):
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     xnumel = 1
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     xoffset = tl.program_id(0) * XBLOCK
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     xindex = xoffset + tl.arange(0, XBLOCK)[:]
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     xmask = tl.full([XBLOCK], True, tl.int1)
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     tmp0 = zuf0
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     tmp1 = tmp0.to(tl.float32)
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     tl.store(out_ptr0 + (tl.full([XBLOCK], 0, tl.int32)), tmp1, None)
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] 
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] metadata: {'signature': {'out_ptr0': '*fp32', 'xnumel': 'constexpr', 'XBLOCK': 'constexpr'}, 'device': 0, 'constants': {'xnumel': 1, 'XBLOCK': 1}, 'configs': [{(0,): [['tt.divisibility', 16]]}], 'device_type': 'cuda', 'num_warps': 1, 'num_stages': 1, 'debug': True, 'cc': 80}
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] Traceback (most recent call last):
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]   File "/data/users/bobren/a/pytorch/torch/_inductor/runtime/triton_heuristics.py", line 758, in _precompile_config
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     binary = triton.compile(*compile_args, **compile_kwargs)
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]   File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/triton/compiler/compiler.py", line 339, in compile
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     module = src.make_ir(options, codegen_fns, module_map, context)
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]   File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/triton/compiler/compiler.py", line 83, in make_ir
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] triton.compiler.errors.CompilationError: at 6:11:
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] def triton_poi_fused_fill_1(out_
+Structured error description: Inductor fails on t2.fill_diagonal_(t1.item()) call with Triton compilation error when using torch.compile with fullgraph=True and dynamic=True
+Minimal reproducible example: import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(arg0, arg1):
+    t0 = arg0 # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    t1 = arg1 # size=(), stride=(), dtype=float32, device=cuda
+    t2 = t0.clone(); t2.fill_diagonal_(t1.item()) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    return t2
+
+arg0 = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+arg1 = torch.empty([], dtype=torch.float32, device='cuda', requires_grad=True) # size=(), stride=(), dtype=float32, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+Trigger conditions: {"backend": "CUDA", "dtype": "float32", "input_shape": "arg0: [1, 1], arg1: [] (scalar)", "other_conditions": "torch._dynamo.config.capture_scalar_outputs = True, torch.compile with fullgraph=True and dynamic=True"}
+Environment: {"pytorch_version": "unknown", "python_version": "3.10", "os": "unknown", "hardware": "CUDA (compute capability 80)"}
+
+Task:
+Analyze the title, descriptions, reproducible code, trigger conditions, and environment.
+Infer which single API is most responsible for triggering the bug.
+
+Constraints:
+- Return only one API name, and nothing else.
+- Do not return JSON, Markdown, explanation, punctuation, or quotes.
+- If no responsible API can be identified, return None.
+- Prefer the API whose behavior change, compilation path, backend dispatch, RNG state semantics, or execution semantics best explains the observed bug.
