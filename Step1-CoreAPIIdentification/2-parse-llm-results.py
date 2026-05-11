@@ -268,20 +268,10 @@ def main():
     
     success_count = 0
     error_count = 0
-    skip_count = 0
     
     for output_file in output_files:
         base_name = output_file.stem.replace('.output', '')
         json_file = json_dir / f"{base_name}.json"
-        
-        if json_file.exists():
-            data = read_json(json_file)
-            if data and not args.overwrite:
-                existing_core_api = data.get("core_api_identification", {}).get("core_api")
-                if existing_core_api and existing_core_api != "None":
-                    print(f"  [SKIP] {base_name} already has core_api: {existing_core_api}")
-                    skip_count += 1
-                    continue
         
         core_api, parse_error = process_output_file(output_file, json_file)
         if core_api is not None:
@@ -295,7 +285,7 @@ def main():
             print(f"  [FAIL] {base_name}: Could not extract core_api")
             error_count += 1
     
-    print(f"\nDone. Success: {success_count}, Errors: {error_count}, Skipped: {skip_count}")
+    print(f"\nDone. Success: {success_count}, Errors: {error_count}")
 
 
 if __name__ == '__main__':

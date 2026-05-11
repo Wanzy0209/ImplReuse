@@ -1,26 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Generate prompts for similar APIs based on issue data and similarity lists.
+Generate prompts for similar APIs based on Step1 issue data, Step0 test cases,
+and Step2 per-issue similarity files.
 
-Reads issue data from Step0-DataCollection/data/pytorch_llm_processed_data_fix_code
-and similarity data from Step2-CalculateSimilarity/data/similar_api_list.json,
-then generates prompts for each similar API per issue.
+Reads issue data from Step1-CoreAPIIdentification/data/pytorch_core_api_identification,
+Step0 test cases from Step0-DataCollection/data/pytorch_test_case/executable and
+Step0-DataCollection/data/pytorch_test_case/non_executable, and similarity files from
+Step2-CalculateSimilarity/data/similar_api_list.
 """
 
 import argparse
 import json
-import os
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
 SCRIPT_DIR = Path(__file__).parent
 REPO_ROOT = SCRIPT_DIR.parent
-DEFAULT_ISSUE_DIR = REPO_ROOT / "Step0-DataCollection" / "data" / "pytorch_llm_processed_data_fix_code"
-DEFAULT_SIMILARITY_FILE = REPO_ROOT / "Step2-CalculateSimilarity" / "data" / "similar_api_list.json"
+DEFAULT_STEP1_DIR = REPO_ROOT / "Step1-CoreAPIIdentification" / "data" / "pytorch_core_api_identification"
+DEFAULT_TESTCASE_DIR = REPO_ROOT / "Step0-DataCollection" / "data" / "pytorch_test_case"
+DEFAULT_SIMILARITY_DIR = REPO_ROOT / "Step2-CalculateSimilarity" / "data" / "similar_api_list"
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "prompts"
+DEFAULT_PYTORCH_API_SOURCE = REPO_ROOT / "Step2-CalculateSimilarity" / "data" / "pytorch-api-extracted" / "source"
+DEFAULT_TENSORFLOW_API_SOURCE = REPO_ROOT / "Step2-CalculateSimilarity" / "data" / "tensorflow-api-extracted" / "source"
 
 
 def load_json(path: Path) -> Optional[Dict[str, Any]]:
@@ -36,6 +39,48 @@ def load_json(path: Path) -> Optional[Dict[str, Any]]:
 def save_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding='utf-8')
+
+
+def truncate_text(text: str, max_chars: int = 2000, max_lines: int = 40) -> str:
+    lines = text.strip().splitlines()
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+    short = "\n".join(lines)
+    if len(short) > max_chars:
+        short = short[:max_chars].rstrip() + "\n..."
+    return short.strip()
+
+
+def normalize_api_name_to_file_name(api_name: str) -> str:
+    name = api_name.strip()
+    name = name.replace('.', '_').replace('::', '_').replace('/', '_').replace('-', '_')
+    if name.startswith('torch_') or name.startswith('tf_'):
+        return f"{name}.py"
+    if name.startswith('torch'):
+        return f"{name}.py"
+    if name.startswith('tf'):
+        return f"{name}.py"
+    return f"{name}.py"
+
+
+def load_api_definition(api_name: str, source_dirs: List[Path]) -> Optional[str]:
+    candidate = normalize_api_name_to_file_name(api_name)
+    for source_dir in source_dirs:
+        candidate_path = source_dir / candidate
+        if candidate_path.exists():
+            try:
+                text = candidate_path.read_text(encoding='utf-8', errors='ignore')
+                return truncate_text(text, max_chars=1200, max_lines=30)
+            except Exception:
+                continue
+        alt_path = source_dir / candidate.lower()
+        if alt_path.exists():
+            try:
+                text = alt_path.read_text(encoding='utf-8', errors='ignore')
+                return truncate_text(text, max_chars=1200, max_lines=30)
+            except Exception:
+                continue
+    return None
 
 
 def is_sufficient_test_code(code: str) -> bool:
@@ -54,93 +99,127 @@ def is_sufficient_test_code(code: str) -> bool:
     return False
 
 
-def generate_prompt_for_similar_api(issue: Dict[str, Any], similar_api: Dict[str, Any], test_case: str) -> str:
-    """
-    Generate a prompt for a single similar API.
-    """
-    main_api = issue.get('core_api') or issue.get('api') or 'Unknown API'
-    title = issue.get('title', 'Unknown Title')
-    name = similar_api.get('name', 'Unknown API')
-    score = similar_api.get('score')
-    desc = similar_api.get('description', '')
-    similarity_type = similar_api.get('similarity_type', 'similar')
+def build_prompt(issue: Dict[str, Any], test_case: str, similar_api: Dict[str, Any], group: str) -> str:
+    issue_title = issue.get('title', '').strip()
+    issue_desc = issue.get('bug_description') or issue.get('error_description') or issue.get('repro_output') or ''
+    issue_desc = truncate_text(issue_desc, max_chars=1500, max_lines=40)
+    issue_id = issue.get('issue_id', '')
+    main_api = issue.get('core_api') or issue.get('affected_api') or 'Unknown API'
 
-    # Map similarity types to labels
-    similarity_labels = {
-        'semantic': 'Semantically Similar API',
-        'input_output': 'Input-Similar API',
-        'code': 'Code-Similar API',
-        'pr_code': 'PR Code-Similar API'
-    }
-    similarity_label = similarity_labels.get(similarity_type, 'Similar API')
+    api_name = similar_api.get('api_name') or similar_api.get('name') or 'Unknown API'
+    similarity_score = similar_api.get('similarity')
+    similarity_note = ''
+    reuse_description = ''
+    library_scope = ''
 
-    similarity_descs = {
-        'semantic': f"identified as semantically similar to {main_api}, sharing comparable functionality or purpose",
-        'input_output': f"identified as input-similar to {main_api}, meaning that it accepts similar input parameters",
-        'code': f"identified as code-similar to {main_api}, meaning it has a similar implementation structure",
-        'pr_code': f"identified as PR code-similar to {main_api}, meaning it has similar code changes from pull requests"
-    }
-    similarity_desc = similarity_descs.get(similarity_type, f"identified as similar to {main_api}")
+    if group == 'pytorch_to_tensorflow':
+        similarity_label = 'Cross-library similar API'
+        library_scope = 'Cross-library'
+        similarity_note = f"The API {api_name} is identified as cross-library similar to the original PyTorch API {main_api}."
+        reuse_description = (
+            "Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior."
+        )
+    elif group == 'pytorch_to_pytorch':
+        similarity_label = 'Same-library similar API'
+        library_scope = 'Same-library'
+        similarity_note = f"The API {api_name} is identified as same-library similar to the original PyTorch API {main_api}."
+        reuse_description = (
+            "Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API."
+        )
+    else:
+        similarity_label = 'Issue-to-API code similarity'
+        library_scope = 'Issue-to-API'
+        similarity_note = (
+            "This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. "
+            "Please generate a test case that reflects that relationship."
+        )
+        reuse_description = (
+            "Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse."
+        )
 
-    prompt = f"""Bug Report
-Bug Description: {title}
+    api_info = similar_api.get('description') or ''
+    if not api_info:
+        source_dirs = [DEFAULT_PYTORCH_API_SOURCE, DEFAULT_TENSORFLOW_API_SOURCE]
+        api_def = load_api_definition(api_name, source_dirs)
+        api_info = api_def if api_def else f"No extracted definition available for {api_name}."
+    api_info = truncate_text(api_info, max_chars=1200, max_lines=30)
+
+    prompt = f"""Issue ID: {issue_id}
+Title: {issue_title}
+Bug Description:
+{issue_desc}
+
 Original API Under Test: {main_api}
-Original Test Case Reproducing the Bug: {test_case}
-
-{similarity_label}: {name}
+Library Scope: {library_scope}
+Similarity Type: {similarity_label}
+Similar API: {api_name}
 """
 
-    if score is not None:
-        prompt += f"\nSimilarity score: {score}\n"
-    if desc:
-        prompt += f"\nSimilar API Description: {desc}\n"
+    if similarity_score is not None:
+        prompt += f"Similarity score: {similarity_score}\n"
+    prompt += f"\nSimilar API information:\n{api_info}\n"
+    prompt += f"\nOriginal Test Case:\n{truncate_text(test_case, max_chars=3000, max_lines=80)}\n"
+    prompt += f"\n{similarity_note}\n{reuse_description}\n"
+    prompt += (
+        "IMPORTANT:\n"
+        "1. Output only valid Python test case code.\n"
+        "2. Do not include explanations, analysis, or markdown.\n"
+        "3. Keep the test case runnable and minimal.\n"
+        "4. Include any necessary imports and assertions.\n"
+        "5. If the API is cross-library, translate semantics appropriately.\n"
+    )
 
-    prompt += f"\nThe API {name} is {similarity_desc}.\n"
-    prompt += f"Please generate a new test case that maintains the structure of the original test case while verifying the {similarity_type.replace('_', ' ')} API {name}.\n"
-    prompt += f"\nIMPORTANT INSTRUCTIONS: \n"
-    prompt += f"1. ONLY output the Python test case code, nothing else.\n"
-    prompt += f"2. Do NOT include any explanations, introductions, or additional text.\n"
-    prompt += f"3. Ensure the test case is complete, runnable, and follows the library's testing conventions.\n"
-    prompt += f"4. Control the length to ensure it is not truncated - keep it concise but complete.\n"
-    prompt += f"5. Make sure all necessary imports are included at the beginning.\n"
-    prompt += f"6. Include appropriate assertions to verify the API's functionality.\n"
+    if group == 'issue_to_api':
+        prompt += (
+            "6. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.\n"
+        )
 
     return prompt
+
+
+def find_test_case_file(issue_id: str, test_case_root: Path) -> Optional[Path]:
+    candidate = f"{issue_id}_issue_ori_data.py"
+    exec_path = test_case_root / 'executable' / candidate
+    if exec_path.exists():
+        return exec_path
+    non_exec_path = test_case_root / 'non_executable' / candidate
+    if non_exec_path.exists():
+        return non_exec_path
+    return None
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate prompts for similar APIs.")
     parser.add_argument(
-        "--issue-dir",
+        "--step1-dir",
         type=Path,
-        default=DEFAULT_ISSUE_DIR,
-        help="Directory containing issue JSON files."
+        default=DEFAULT_STEP1_DIR,
+        help="Directory containing Step1 issue JSON files."
     )
     parser.add_argument(
-        "--similarity-file",
+        "--test-case-dir",
         type=Path,
-        default=DEFAULT_SIMILARITY_FILE,
-        help="JSON file containing similarity lists."
+        default=DEFAULT_TESTCASE_DIR,
+        help="Root directory containing Step0 test cases (executable/non_executable)."
+    )
+    parser.add_argument(
+        "--similarity-dir",
+        type=Path,
+        default=DEFAULT_SIMILARITY_DIR,
+        help="Directory containing per-issue similarity JSON files."
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help="Output directory for prompts."
+        help="Output directory for generated prompt files."
     )
     parser.add_argument("--limit", type=int, default=0, help="Process only first N issues.")
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load similarity data
-    similarity_data = load_json(args.similarity_file)
-    if not similarity_data:
-        print(f"Failed to load similarity data from {args.similarity_file}")
-        return
-
-    # Get issue files
-    issue_files = list(args.issue_dir.glob("*.json"))
+    issue_files = sorted(args.step1_dir.glob("*_issue_ori_data.json"))
     if args.limit > 0:
         issue_files = issue_files[:args.limit]
 
@@ -151,25 +230,36 @@ def main():
         if not issue:
             continue
 
-        issue_id = issue.get('issue_id')
-        if not issue_id:
+        issue_id = issue.get('issue_id') or issue_file.stem.replace('_issue_ori_data', '')
+        test_case_file = find_test_case_file(issue_id, args.test_case_dir)
+        if not test_case_file:
+            print(f"Skipping {issue_id}: no test case file found")
             continue
 
-        test_case = issue.get('best_code') or issue.get('repro_code') or ''
+        test_case = test_case_file.read_text(encoding='utf-8', errors='ignore').strip()
         if not is_sufficient_test_code(test_case):
-            print(f"Skipping {issue_id}: insufficient test case")
+            print(f"Skipping {issue_id}: insufficient test case content")
             continue
 
-        similar_apis = similarity_data.get(issue_id, [])
-        if not similar_apis:
-            print(f"No similar APIs for {issue_id}")
+        similarity_file = args.similarity_dir / f"{issue_id}.json"
+        similarity_data = load_json(similarity_file)
+        if not similarity_data:
+            print(f"Skipping {issue_id}: missing similarity file")
             continue
 
-        for idx, similar_api in enumerate(similar_apis):
-            prompt = generate_prompt_for_similar_api(issue, similar_api, test_case)
-            prompt_file = args.output_dir / f"{issue_id}_{idx}.txt"
-            save_text(prompt_file, prompt)
-            print(f"Saved prompt: {prompt_file}")
+        similar_groups = similarity_data.get('similar_apis', {})
+        if not similar_groups:
+            print(f"Skipping {issue_id}: no similar APIs in file")
+            continue
+
+        for group, api_list in similar_groups.items():
+            if not api_list:
+                continue
+            for idx, similar_api in enumerate(api_list):
+                prompt_text = build_prompt(issue, test_case, similar_api, group)
+                prompt_file = args.output_dir / f"{issue_id}_{group}_{idx}.txt"
+                save_text(prompt_file, prompt_text)
+                print(f"Saved prompt: {prompt_file}")
 
 
 if __name__ == "__main__":

@@ -45,15 +45,15 @@ def get_top_similar_pytorch_to_tensorflow(core_api: str, data: List[dict], top_n
     return matches[:top_n]
 
 
-def get_top_similar_issue_api(core_api: str, data: List[dict], top_n: int = 10) -> List[dict]:
-    """Get top-N similar APIs for a given core_api from issue_api_similarity."""
+def get_top_similar_issue_api(issue_id: str, data: List[dict], top_n: int = 10) -> List[dict]:
+    """Get top-N similar APIs for a given issue_id from issue_api_similarity."""
     matches = []
     for item in data:
-        if item.get('api_name') == core_api:
+        if item.get('issue_id') == issue_id:
             matches.append({
-                'api_name': item['issue_id'],
+                'api_name': item.get('api_name') or item.get('api'),
                 'api_type': 'issue',
-                'similarity': item['similarity']
+                'similarity': item.get('similarity')
             })
     matches.sort(key=lambda x: x['similarity'], reverse=True)
     return matches[:top_n]
@@ -79,15 +79,15 @@ def main():
                         help='Path to Step1 JSON files')
     parser.add_argument('--similarity-dir', default='data',
                         help='Path to similarity JSONL files')
-    parser.add_argument('--output', default='data/similar_api_list.json',
-                        help='Output JSON file path')
-    parser.add_argument('--top-n', type=int, default=10,
+    parser.add_argument('--output-dir', default='data/similar_api_list',
+                        help='Output directory for per-issue JSON files')
+    parser.add_argument('--top-n', type=int, default=11,
                         help='Number of top similar APIs to return')
     args = parser.parse_args()
 
     step1_dir = Path(args.step1_dir)
     similarity_dir = Path(args.similarity_dir)
-    output_path = Path(args.output)
+    output_dir = Path(args.output_dir)
 
     print('Loading similarity data...')
     
@@ -126,19 +126,22 @@ def main():
             'core_api': core_api,
             'similar_apis': {
                 'pytorch_to_tensorflow': get_top_similar_pytorch_to_tensorflow(core_api, api_pairwise_data, args.top_n),
-                'issue_to_api': get_top_similar_issue_api(core_api, issue_api_data, args.top_n),
+                'issue_to_api': get_top_similar_issue_api(issue_id, issue_api_data, args.top_n),
                 'pytorch_to_pytorch': get_top_similar_pytorch_to_pytorch(core_api, pytorch_pairwise_data, args.top_n)
             }
         }
         
         results.append(result)
 
-    print(f'\nWriting results to {output_path}')
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open('w', encoding='utf-8') as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
-    
-    print(f'Done. Processed {len(results)} issues.')
+    print(f'\nWriting results to {output_dir}')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for result in results:
+        issue_id = result.get('issue_id') or 'unknown'
+        file_path = output_dir / f'{issue_id}.json'
+        with file_path.open('w', encoding='utf-8') as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+
+    print(f'Done. Processed {len(results)} issues. Saved {len(results)} JSON files in {output_dir}')
 
 
 if __name__ == '__main__':
