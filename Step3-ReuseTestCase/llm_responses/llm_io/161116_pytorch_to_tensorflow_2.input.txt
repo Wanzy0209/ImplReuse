@@ -1,0 +1,91 @@
+Issue ID: 161116
+Title: NCCL Segfault when initializing a process group on an NVL72
+Bug Description:
+### 🐛 Describe the bug
+
+We are trying to run distributed training with Torchtitan on a GB200 NVL72 cluster but using more than 10 trays (40 GPUs) fails with a NCCL segmentation fault. Using 10 and less trays works fine.
+
+We boiled it down to the creation of the process group, so even this simple example crashes when we increase the number of trays to 11:
+```python
+import torch
+import torch.distributed as dist
+import os
+def main():
+    gpu_id = int(os.environ["LOCAL_RANK"])
+    
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+    dist.init_process_group(backend='nccl',
+                            device_id=gpu_id,
+                            )
+    dist.barrier()
+    
+if __name__ == "__main__":
+    main()
+```
+Error log is enormous but this is the relevant part:
+```
+#1436 0x0000400079529e3c in ncclTopoSearchTryGpu (system=<optimized out>, graph=<optimized out>, saveGraph=<optimized out>, step=<optimized out>, backToNet=<optimized out>, backToFirstRank=<optimized out>, forcedOrder=<optimized out>, time=0x4000fc2e9d74, type=-1, index=-1, g=0) at graph/search.cc:343
+#1437 0x0000400079528a80 in ncclTopoSearchRec (system=system@entry=0x4000fc520010, graph=graph@entry=0x4000fc2e9d78, saveGraph=saveGraph@entry=0x8fa53f8, time=time@entry=0x4000fc2e9d74) at graph/search.cc:725
+#1438 0x000040007952dde4 in ncclTopoCompute (system=0x4000fc520010, graph=graph@entry=0x8fa53f8) at graph/search.cc:1011
+#1439 0x0000400079504524 in initTransportsRank (timers=<optimized out>, paren
+...
+
+Original API Under Test: torch.distributed.init_process_group
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.distribute.MirroredStrategy
+Similarity score: 0.9938892126083374
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.distribute.MirroredStrategy
+
+# --- tensorflow.python.distribute.experimental.mirrored_strategy.MirroredStrategy ---
+class MirroredStrategy(distribute_lib.Strategy):
+  """Synchronous training across multiple replicas on one machine.
+
+  This strategy is typically used for training on one machine with multiple
+  accelerators (GPUs/TPUs).
+
+  For example, a variable created under a `MirroredStrategy` is a distributed
+  variable with layout replicated on each dimension. The variables will be
+  placed on the `mesh` that is specified in the __init__.
+  """
+
+  def __init__(self, devices=None, cross_device_ops=None, *, mesh=None):
+    """Synchronous training across multiple replicas on one machine.
+
+    Args:
+      devices: a list of device strings, such as ['/gpu:0', '/gpu:1']. If both
+        `mesh` and `devices` are None, all the available GPU/TPU will be used.
+        If no accelerators are found, CPU is used.
+      cross_device_ops: optional, a descendant of `CrossDeviceOps`. The value is
+        ignored at the moment, and support will be added later.
+      mesh: optional DTensor mesh for the computation. Note that either `mesh`
+        or `device
+...
+
+Original Test Case:
+import torch
+import torch.distributed as dist
+import os
+def main():
+    gpu_id = int(os.environ["LOCAL_RANK"])
+    
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+    dist.init_process_group(backend='nccl',
+                            device_id=gpu_id,
+                            )
+    dist.barrier()
+    
+if __name__ == "__main__":
+    main()
+
+The API tf.compat.v1.distribute.MirroredStrategy is identified as cross-library similar to the original PyTorch API torch.distributed.init_process_group.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

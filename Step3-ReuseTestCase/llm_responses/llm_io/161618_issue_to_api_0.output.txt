@@ -1,0 +1,62 @@
+```python
+import torch
+import torch._inductor.config as inductor_config
+import numpy as np
+
+# Adapted from tf.keras.callbacks.TerminateOnNaN
+# This class reuses the logic pattern of the similar API to validate the output.
+class TerminateOnNaN:
+    """
+    Callback that terminates execution when a NaN or Inf is encountered in the output.
+    Logic adapted from tf.keras.callbacks.TerminateOnNaN.
+    """
+    def __init__(self):
+        pass
+
+    def on_batch_end(self, batch, logs=None):
+        logs = logs or {}
+        # Instead of 'loss', we check the 'output' of the compiled function
+        output = logs.get('output')
+        if output is not None:
+            # Mimic tf_utils.sync_to_numpy_or_python_type
+            val = output.cpu().numpy()
+            if np.isnan(val).any() or np.isinf(val).any():
+                raise RuntimeError(
+                    f"Batch {batch}: Invalid output (NaN/Inf detected), terminating test."
+                )
+
+def test_inductor_triton_addmm_with_nan_check():
+    # Setup from the original bug report
+    m = 20120
+    k = 1536
+    n = 512
+
+    a = torch.randn((m, n)).requires_grad_(False).cuda()
+    mat1 = torch.randn((m, k)).requires_grad_(False).cuda()
+    mat2 = torch.randn((k, n)).requires_grad_(False).cuda()
+    
+    f = lambda a, mat1, mat2: torch.addmm(a, mat1, mat2)
+
+    # Instantiate the callback logic adapted from the similar API
+    nan_checker = TerminateOnNaN()
+
+    # Run the original bug reproduction logic
+    with inductor_config.patch(
+        max_autotune=True,
+        max_autotune_gemm_backends="TRITON",
+        autotune_fallback_to_aten=False,
+    ):
+        compiled = torch.compile(f, dynamic=False)
+        result = compiled(a, mat1, mat2)
+
+    # Leverage the similar API pattern to check the result
+    # This ensures that if the inductor produces garbage (NaNs), the test catches it.
+    nan_checker.on_batch_end(batch=0, logs={'output': result})
+
+    # Basic assertion to ensure execution completed
+    assert result is not None
+    assert result.shape == (m, n)
+
+if __name__ == "__main__":
+    test_inductor_triton_addmm_with_nan_check()
+```

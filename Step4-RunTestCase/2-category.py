@@ -143,7 +143,7 @@ def classify_failure(log: str) -> str:
     return "Unknown Failure"
 
 
-def load_log(log_path: Path) -> Dict[str, Any]:
+def load_log(log_path: Path):
     """Load log file content."""
     try:
         return json.loads(log_path.read_text(encoding='utf-8'))
@@ -178,8 +178,12 @@ def main():
             continue
 
         returncode = log_data.get('returncode', -999)
-        stdout = log_data.get('stdout', '')
-        stderr = log_data.get('stderr', '')
+        stdout = log_data.get('stdout') or ''
+        stderr = log_data.get('stderr') or ''
+        if not isinstance(stdout, str):
+            stdout = str(stdout)
+        if not isinstance(stderr, str):
+            stderr = str(stderr)
         full_log = stdout + stderr
 
         if returncode == 0:

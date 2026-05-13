@@ -1,0 +1,62 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def run(rank, world_size):
+    """
+    Test function for torch.distributed.gather_object.
+    This test adapts the logic from the original bug report (nonzero + slicing)
+    to verify if gather_object can handle the resulting dynamic/unbacked tensor.
+    """
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Replicate the data generation logic from the bug report
+    # Original: x = torch.randn(3, 4)
+    x = torch.randn(3, 4)
+    
+    # Original: nz = x.nonzero()
+    nz = x.nonzero()
+    
+    # Original: return nz[:-1]
+    # This creates a tensor with a size dependent on runtime data (unbacked size in dynamo context)
+    obj_to_gather = nz[:-1]
+
+    # Setup for gather_object
+    if rank == 0:
+        gather_list = [None for _ in range(world_size)]
+    else:
+        gather_list = None
+
+    # Call the similar API: torch.distributed.gather_object
+    # We verify that it can handle the tensor resulting from the dynamic operation
+    dist.gather_object(obj_to_gather, gather_list, dst=0)
+
+    # Verification on the destination rank
+    if rank == 0:
+        print(f"Rank 0 gathered objects: {gather_list}")
+        assert len(gather_list) == world_size, "Gather list length mismatch"
+        
+        for i, obj in enumerate(gather_list):
+            assert isinstance(obj, torch.Tensor), f"Object at index {i} is not a tensor"
+            # Verify the slicing was preserved
+            # nz has shape (N, 2), nz[:-1] has shape (N-1, 2)
+            # We check if the gathered object matches the expected shape logic
+            # Note: Since x is random, N varies, but the relationship holds.
+            expected_nz = x.nonzero()
+            expected_shape = (expected_nz.shape[0] - 1, 2)
+            assert obj.shape == expected_shape, f"Shape mismatch for rank {i}: got {obj.shape}, expected {expected_shape}"
+        
+        print("Test passed: torch.distributed.gather_object handled dynamic sliced tensor correctly.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Use multiprocessing to simulate a distributed environment
+    world_size = 2
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)
+```

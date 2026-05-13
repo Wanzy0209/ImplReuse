@@ -1,0 +1,89 @@
+Issue ID: 161393
+Title: Hard error when slicing a tensor with unbacked sizes
+Bug Description:
+### 🐛 Describe the bug
+
+For below code:
+```python
+import torch
+
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def f(x):
+    nz = x.nonzero()
+    return nz[:-1]
+
+out = torch.compile(f, fullgraph=True)(torch.randn(3, 4))
+print(out)
+```
+I'm getting the following error:
+```python
+(pytorch) [yidi@devvm062.dkl0 ~/local/pytorch (f272b284)]$ TORCH_LOGS=+dynamic python test_slice.py 
+I0825 00:08:56.965000 3033571 torch/fx/experimental/symbolic_shapes.py:3781] [0/0] create_env
+I0825 00:08:56.978000 3033571 torch/fx/experimental/symbolic_shapes.py:4796] [0/0] create_unbacked_symint u0 [-int_oo, int_oo] nz = x.nonzero()  # test_slice.py:7 in f (_subclasses/fake_impls.py:695 in nonzero)
+V0825 00:08:56.978000 3033571 torch/fx/experimental/symbolic_shapes.py:6636] [0/0] _update_var_to_range u0 = VR[0, 12] (update)
+I0825 00:08:56.978000 3033571 torch/fx/experimental/symbolic_shapes.py:7864] [0/0] constrain_symbol_range u0 [0, 12]
+V0825 00:08:56.997000 3033571 torch/fx/experimental/symbolic_shapes.py:7721] [0/0] runtime_assert u0 >= 0 == True [statically known]
+I0825 00:08:57.001000 3033571 torch/fx/experimental/symbolic_shapes.py:7396] [0/0] could not evaluate Eq(u0, 0) due to data dependency, it was assumed to be False with no runtime assertions nz = x.nonzero()  # test_slice.py:7 in f (_ops.py:840 in __call__) 
+I0825 00:08:57.001000 3033571 torch/fx/experimental/symbolic_shapes.py:7396] [0/0] User Stack (most recent call la
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.dtensor.copy_to_mesh
+Similarity score: 0.9937996864318848
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.copy_to_mesh
+
+# --- tensorflow.dtensor.python.api.copy_to_mesh ---
+def copy_to_mesh(
+    tensor: Any,
+    layout: layout_lib.Layout,
+    source_layout: Optional[layout_lib.Layout] = None) -> tensor_lib.Tensor:
+  """Copies a tf.Tensor onto the DTensor device with the given layout.
+
+  Copies a regular tf.Tensor onto the DTensor device. Use the mesh attached to
+  `layout` as target mesh. This method currently only supports replicated
+  layouts, or one-to-one copies for sharded layouts.
+
+  Args:
+    tensor: A regular tf.Tensor to be copied as a DTensor.
+    layout: Target layout (and mesh) for the result DTensor.
+    source_layout: Source layout of the tensor before copy. This argument
+      is deprecated.
+
+  Returns:
+    A DTensor on the DTensor device with the given layout.
+  """
+  del source_layout
+  return relayout(tensor, layout)
+
+# --- tensorflow.dtensor.python.api.relayout ---
+def relayout(
+    tensor: tensor_lib.Tensor,
+    layout: layout_lib.Layout,
+    name: Optional[str] = None,
+
+Original Test Case:
+import torch
+
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def f(x):
+    nz = x.nonzero()
+    return nz[:-1]
+
+out = torch.compile(f, fullgraph=True)(torch.randn(3, 4))
+print(out)
+
+The API tf.experimental.dtensor.copy_to_mesh is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

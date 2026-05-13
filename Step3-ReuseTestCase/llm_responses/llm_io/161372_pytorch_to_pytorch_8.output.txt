@@ -1,0 +1,61 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_recv_object_list_dynamic_shapes(rank, world_size):
+    """
+    Test case for torch.distributed.recv_object_list.
+    
+    This test is adapted from a torch.compile regression (Issue 161372) where 
+    dynamic tensor shapes (changing from 77 to 78) caused recompilation failures.
+    Here, we verify that recv_object_list correctly handles receiving lists of 
+    objects where the tensor shapes change dynamically between sends.
+    """
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    
+    # Initialize process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    if rank == 0:
+        # Rank 0 acts as the sender.
+        # We send two lists of tensors. The second tensor has a different shape
+        # than the first, mimicking the dynamic shape issue in the bug report.
+        
+        # First send: size 77
+        tensor_1 = torch.randn(77)
+        dist.send_object_list([tensor_1], dst=1)
+        
+        # Second send: size 78 (Dynamic shape change)
+        tensor_2 = torch.randn(78)
+        dist.send_object_list([tensor_2], dst=1)
+        
+    else:
+        # Rank 1 acts as the receiver.
+        # We must ensure that recv_object_list can handle the changing 
+        # dimensions of the received objects without error.
+        
+        # Receive first list
+        recv_list_1 = [None]
+        dist.recv_object_list(recv_list_1, src=0)
+        
+        # Verify first tensor shape
+        assert isinstance(recv_list_1[0], torch.Tensor), "Expected a Tensor"
+        assert recv_list_1[0].size(0) == 77, f"Expected size 77, got {recv_list_1[0].size(0)}"
+        
+        # Receive second list (Dynamic shape)
+        recv_list_2 = [None]
+        dist.recv_object_list(recv_list_2, src=0)
+        
+        # Verify second tensor shape
+        assert isinstance(recv_list_2[0], torch.Tensor), "Expected a Tensor"
+        assert recv_list_2[0].size(0) == 78, f"Expected size 78, got {recv_list_2[0].size(0)}"
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_recv_object_list_dynamic_shapes, args=(world_size,), nprocs=world_size)
+```

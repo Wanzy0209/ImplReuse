@@ -1,0 +1,48 @@
+```python
+import torch
+from torch import nn
+import unittest
+
+class TestNestedTensorBackward(unittest.TestCase):
+    def test_nested_narrow_backward_with_anomaly_detection(self):
+        """
+        Test case for Issue 161818: NestedTensor raises NotImplementedError.
+        
+        This test reproduces the bug where backward pass on a NestedTensor 
+        (created via narrow) fails with 'aten::_is_any_true.default' when 
+        anomaly detection is enabled.
+        
+        The structure of the test leverages the pattern of the similar API 
+        (tf.compat.v1.enable_control_flow_v2) by wrapping the execution 
+        logic within a specific configuration context (anomaly detection).
+        """
+        # Setup model and inputs
+        module = nn.Linear(8, 12)
+        padded = torch.rand(9, 8)
+        lengths = torch.as_tensor([5, 4])
+
+        # The bug occurs specifically inside the anomaly detection context.
+        # This mirrors the state-setting pattern seen in the similar API 
+        # (enable_control_flow_v2), where a global flag is toggled for the 
+        # duration of the operation.
+        with torch.autograd.set_detect_anomaly(True):
+            out = module(padded)
+            
+            # Reproduce the specific call chain that triggers the error
+            nested_tensor = torch.nested.narrow(
+                out, dim=1, start=0, length=lengths, layout=torch.jagged
+            )
+            contiguous_tensor = nested_tensor.contiguous()
+            values = contiguous_tensor.values()
+
+            # Attempt backward pass
+            # If the bug exists, this raises NotImplementedError: aten::_is_any_true.default
+            # If fixed, this completes successfully.
+            try:
+                values.sum().backward()
+            except NotImplementedError as e:
+                self.fail(f"Backward pass failed with NotImplementedError: {e}")
+
+if __name__ == "__main__":
+    unittest.main()
+```

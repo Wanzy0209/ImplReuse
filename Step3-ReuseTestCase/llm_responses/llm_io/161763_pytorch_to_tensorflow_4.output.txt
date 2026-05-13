@@ -1,0 +1,83 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Disable v2 behavior to use compat.v1 APIs
+tf.compat.v1.disable_v2_behavior()
+
+def test_string_input_producer(strings, shuffle=False):
+    """
+    Adapted test case for tf.compat.v1.train.string_input_producer.
+    The original test verified arithmetic operations (neg+add) on uint8 tensors 
+    in eager vs compiled mode. 
+    Since string_input_producer is a data pipeline API (not a compiler or arithmetic op),
+    we adapt the logic to verify the core functionality: producing strings from a tensor.
+    """
+    # Original: c = torch.tensor(7, dtype=torch.uint8)
+    # Adaptation: Create a string tensor input
+    string_tensor = tf.constant(strings)
+
+    # Original: return c+x, torch.neg(c), torch.neg(c)+x
+    # Adaptation: Use string_input_producer to create a queue
+    # Note: This API is graph-based and requires a session to run.
+    queue = tf.compat.v1.train.string_input_producer(
+        string_tensor, 
+        shuffle=shuffle, 
+        capacity=32,
+        name="string_input_producer_test"
+    )
+    
+    # Dequeue operation to get results
+    dequeue_op = queue.dequeue()
+
+    results = []
+    with tf.compat.v1.Session() as sess:
+        # Initialize local variables (required for num_epochs if used, good practice here)
+        sess.run(tf.compat.v1.local_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
+        
+        # Start queue runners
+        coord = tf.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+        try:
+            # Original: res = foo(x); cres = cfoo(x)
+            # Adaptation: Run the dequeue op to retrieve the strings
+            # We retrieve as many items as are in the input list
+            for _ in range(len(strings)):
+                val = sess.run(dequeue_op)
+                # Decode bytes to string for comparison if necessary
+                if isinstance(val, bytes):
+                    val = val.decode('utf-8')
+                results.append(val)
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+    return results
+
+# Original: torch.manual_seed(0); x = torch.randn(...)
+# Adaptation: Define a list of strings as input
+input_strings = ["file1.png", "file2.png", "file3.png"]
+print(f"Input: {input_strings}")
+
+# Original: res = foo(x); cres = cfoo(x)
+# Adaptation: Run the producer test
+# We test with shuffle=False to verify order preservation (analogous to deterministic eager execution)
+output_ordered = test_string_input_producer(input_strings, shuffle=False)
+print(f"Output (Ordered): {output_ordered}")
+
+# Original: assert res[0] == cres[0] ...
+# Adaptation: Verify that the output matches the input
+assert output_ordered == input_strings, f"Ordered output mismatch: {output_ordered} != {input_strings}"
+
+# We also test with shuffle=True to verify functionality (analogous to the random seed usage in original)
+# Note: Randomness in TF v1 queues depends on graph-level seeds, omitted here for simplicity/minimalism
+output_shuffled = test_string_input_producer(input_strings, shuffle=True)
+print(f"Output (Shuffled): {output_shuffled}")
+
+# Verify shuffled output contains the same elements
+assert set(output_shuffled) == set(input_strings), f"Shuffled output content mismatch"
+
+print("Test passed.")
+```

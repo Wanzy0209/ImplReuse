@@ -1,0 +1,85 @@
+Issue ID: 161014
+Title: Inconsistent constant_pad_nd behavior with negative padding
+Bug Description:
+### 🕵️‍♂️ Detected with [FACTO](https://github.com/meta-pytorch/FACTO)
+
+### 🐛 Describe the bug
+
+The aten op `constant_pad_nd` allows for negative padding, as long as the absolute value of the padding is smaller than the size, and as long as the resulting output doesn't have negative size
+
+For example:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2]).shape
+torch.Size([5, 0])
+```
+Notice that the -1, -2 padding applies to the last dimension
+
+We can also pad the first dimension, by adding two more pads:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 0, 0]).shape
+torch.Size([5, 0])
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, -1, -1]).shape
+torch.Size([3, 0])
+```
+
+However, in the following case, it throws an error:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 1, 1]).shape
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/Users/mcandales/miniconda3/envs/facto/lib/python3.11/site-packages/torch/_ops.py", line 840, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: The input size 3, plus negative padding -1 and -2 resulted in a negative output size, which is invalid. Check dimension 1 of your input.
+```
+
+Notice that, if we make sure the output won't have size 0, we always avoid the bug:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -1, 1, 1])
+...
+
+Original API Under Test: torch.nn.functional.pad
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.MaxUnpool2d
+Similarity score: 0.9943414926528931
+
+Similar API information:
+# Extracted call chain for torch.nn.MaxUnpool2d
+
+# --- torch.nn.modules.pooling.MaxUnpool2d ---
+class MaxUnpool2d(_MaxUnpoolNd):
+    r"""Computes a partial inverse of :class:`MaxPool2d`.
+
+    :class:`MaxPool2d` is not fully invertible, since the non-maximal values are lost.
+
+    :class:`MaxUnpool2d` takes in as input the output of :class:`MaxPool2d`
+    including the indices of the maximal values and computes a partial inverse
+    in which all non-maximal values are set to zero.
+
+    Note:
+        This operation may behave nondeterministically when the input indices has repeat values.
+        See https://github.com/pytorch/pytorch/issues/80827 and :doc:`/notes/randomness` for more information.
+
+    .. note:: :class:`MaxPool2d` can map several input sizes to the same output
+              sizes. Hence, the inversion process can get ambiguous.
+              To accommodate this, you can provide the needed output size
+              as an additional argument :attr:`output_size` in the forward call.
+              See the Inputs and Example below.
+
+    Args:
+        kernel_size (int or tuple): Size of the max pooling window.
+        stride (int or tuple): Stride of the max pooling window.
+...
+
+Original Test Case:
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2]).shape
+torch.Size([5, 0])
+
+The API torch.nn.MaxUnpool2d is identified as same-library similar to the original PyTorch API torch.nn.functional.pad.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

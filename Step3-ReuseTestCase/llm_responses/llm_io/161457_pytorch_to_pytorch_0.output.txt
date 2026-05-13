@@ -1,0 +1,56 @@
+```python
+import torch
+import unittest
+import copy
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+class TestCompileCorrectness(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_meta_llama_bfloat16_compile(self):
+        """
+        Test case for Issue 161457: Correctness issue with torch.compile 
+        on meta-llama/Llama-3.2-1B using bfloat16.
+        """
+        model_name = "meta-llama/Llama-3.2-1B"
+        
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name, torch_dtype=torch.bfloat16, device_map="cuda"
+            )
+        except OSError:
+            self.skipTest(f"Model {model_name} not found or requires authentication.")
+
+        model.eval()
+        
+        # Configure generation settings relevant to the bug report
+        model.generation_config.use_cache = True
+        model.generation_config.cache_implementation = "static"
+
+        vocab_size = tokenizer.vocab_size
+        input_ids = torch.randint(
+            low=0, high=vocab_size, size=(1, 100), device="cuda", dtype=torch.long,
+        )
+        example_inputs = {"input_ids": input_ids}
+
+        # 1. Run Eager (Baseline)
+        with torch.no_grad():
+            res_eager = model(**example_inputs).logits
+
+        # 2. Run Compiled (Inductor backend)
+        model_compiled = copy.deepcopy(model)
+        # Compile the forward method as done in the original bug report
+        model_compiled.forward = torch.compile(model_compiled.forward)
+        
+        with torch.no_grad():
+            # Warmup run to trigger compilation
+            _ = model_compiled(**example_inputs).logits
+            # Actual run
+            res_compiled = model_compiled(**example_inputs).logits
+
+        # Assert correctness with tolerance suitable for bfloat16
+        self.assertTrue(torch.allclose(res_eager, res_compiled, atol=0.001))
+
+if __name__ == "__main__":
+    unittest.main()
+```

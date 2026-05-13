@@ -1,0 +1,117 @@
+Issue ID: 161186
+Title: Memory leak when custom autograd Function is used with AC due to early-stopping
+Bug Description:
+### 🐛 Describe the bug
+
+Originally reported by Alex Nichol in slack channel
+
+```python
+import torch
+import torch.utils.checkpoint
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary
+        return None
+
+
+def op_fn(inp):
+    return MyOp.apply(inp)[0]
+
+
+dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+for i in range(1000):
+    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+    full_out.sum().backward()
+    dummy_input.grad = None  # free gradient memory
+    print(i, torch.cuda.memory_allocated() / 1024**2, "MiB")
+```
+
+This leak happens when a custom autograd Function is the last operation in a checkpointed region (and the autograd Function saves an output for backward). It happens because AC raises an exception to exit the forward early prior to the proper clean up custom autograd Function needs to do when it saves tensors.
+
+Original API Under Test: torch.utils.checkpoint.checkpoint
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.nn.atrous_conv2d
+Similarity score: 0.9945926666259766
+
+Similar API information:
+# Extracted call chain for tf.nn.atrous_conv2d
+
+# --- tensorflow.python.ops.nn_ops.atrous_conv2d ---
+def atrous_conv2d(value, filters, rate, padding, name=None):
+  """Atrous convolution (a.k.a. convolution with holes or dilated convolution).
+
+  This function is a simpler wrapper around the more general
+  `tf.nn.convolution`, and exists only for backwards compatibility. You can
+  use `tf.nn.convolution` to perform 1-D, 2-D, or 3-D atrous convolution.
+
+  Computes a 2-D atrous convolution, also known as convolution with holes or
+  dilated convolution, given 4-D `value` and `filters` tensors. If the `rate`
+  parameter is equal to one, it performs regular 2-D convolution. If the `rate`
+  parameter is greater than one, it performs convolution with holes, sampling
+  the input values every `rate` pixels in the `height` and `width` dimensions.
+  This is equivalent to convolving the input with a set of upsampled filters,
+  produced by inserting `rate - 1` zeros between two consecutive values of the
+  filters along the `height` and `width` dimensions, hence the name atrous
+  convolution or convolution with holes (the French word trous means holes in
+  English).
+
+  More specifically:
+
+  ```
+..
+...
+
+Original Test Case:
+import torch
+import torch.utils.checkpoint
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary
+        return None
+
+
+def op_fn(inp):
+    return MyOp.apply(inp)[0]
+
+
+dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+for i in range(1000):
+    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+    full_out.sum().backward()
+    dummy_input.grad = None  # free gradient memory
+    print(i, torch.cuda.memory_allocated() / 1024**2, "MiB")
+
+The API tf.nn.atrous_conv2d is identified as cross-library similar to the original PyTorch API torch.utils.checkpoint.checkpoint.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

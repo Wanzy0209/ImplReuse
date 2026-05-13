@@ -1,0 +1,63 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_linear_operator_adjoint_with_2d_tensor_views():
+    """
+    Test case adapted from PyTorch Issue 161324.
+    
+    Original Bug: Data inconsistencies when using batch_isend_irecv with 2D tensor views.
+    Adaptation: Verify that tf.linalg.LinearOperatorAdjoint maintains data consistency
+    when constructed from or operating on 2D tensor slices (views).
+    """
+    # Setup parameters matching the original bug report
+    batch_size = 4
+    total_columns = 10
+    split_offsets = [0, 4, 6, 10]  # Defines slices [0:4] and [6:10]
+
+    # Create a base 2D tensor (simulating local_tensor in the bug)
+    # Using a fixed seed for reproducibility
+    local_tensor = tf.random.normal((batch_size, total_columns), seed=42)
+
+    # Create tensor slices (simulating the views used in the PyTorch bug)
+    # PyTorch: dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+    slice_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+    slice_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+
+    print(f"Original tensor shape: {local_tensor.shape}")
+    print(f"Slice 1 shape: {slice_t1.shape}")
+    print(f"Slice 2 shape: {slice_t2.shape}")
+
+    # Leverage the Similar API: tf.linalg.LinearOperatorAdjoint
+    # We create operators from the sliced tensors to test if the API handles
+    # the underlying memory/views correctly without data inconsistency.
+    # Note: LinearOperatorFullMatrix wraps the tensor.
+    op1 = tf.linalg.LinearOperatorAdjoint(tf.linalg.LinearOperatorFullMatrix(slice_t1))
+    op2 = tf.linalg.LinearOperatorAdjoint(tf.linalg.LinearOperatorFullMatrix(slice_t2))
+
+    # Perform operations (matmul) to trigger the computation
+    # We create input vectors matching the inner dimension of the slices
+    x1 = tf.ones((split_offsets[1] - split_offsets[0], 1))
+    x2 = tf.ones((split_offsets[3] - split_offsets[2], 1))
+
+    # Compute results using the LinearOperator
+    result_op1 = op1.matmul(x1)
+    result_op2 = op2.matmul(x2)
+
+    # Compute expected results using standard TensorFlow ops (Ground Truth)
+    # This checks if the Adjoint logic holds up on the slices
+    expected_result1 = tf.linalg.adjoint(slice_t1) @ x1
+    expected_result2 = tf.linalg.adjoint(slice_t2) @ x2
+
+    # Assertions to check for data consistency (the failure mode in the original bug)
+    try:
+        np.testing.assert_allclose(result_op1.numpy(), expected_result1.numpy(), rtol=1e-5)
+        np.testing.assert_allclose(result_op2.numpy(), expected_result2.numpy(), rtol=1e-5)
+        print("Test Passed: Data consistency maintained for 2D tensor slices with LinearOperatorAdjoint.")
+    except AssertionError as e:
+        print(f"Test Failed: Data inconsistency detected. {e}")
+        raise
+
+if __name__ == "__main__":
+    test_linear_operator_adjoint_with_2d_tensor_views()
+```

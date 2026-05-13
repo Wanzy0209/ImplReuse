@@ -1,0 +1,56 @@
+```python
+import tensorflow as tf
+import gc
+
+# The target API is tf.compat.v1.distributions.ReparameterizationType.
+# This API defines how gradients flow through distributions.
+# To adapt the PyTorch checkpointing memory leak test, we use TensorFlow's
+# equivalent of checkpointing (tf.recompute_grad) on a reparameterized
+# distribution operation.
+
+def test_reparameterization_checkpoint_memory():
+    # 1. Setup: Use a distribution that is FULLY_REPARAMETERIZED
+    # This utilizes the tf.compat.v1.distributions.ReparameterizationType concept.
+    dist = tf.compat.v1.distributions.Normal(loc=0.0, scale=1.0)
+    
+    # Verify the reparameterization type
+    assert dist.reparameterization_type == tf.compat.v1.distributions.FULLY_REPARAMETERIZED
+
+    # 2. Define a function that performs the operation (similar to op_fn in PyTorch)
+    # We use tf.recompute_grad here, which is the TensorFlow equivalent of 
+    # torch.utils.checkpoint.checkpoint.
+    @tf.recompute_grad
+    def recompute_sample_fn(x):
+        # Sample from the distribution. 
+        # Because it is FULLY_REPARAMETERIZED, gradients flow through the sampling path.
+        # This mimics the custom autograd function saving outputs for backward.
+        samples = dist.sample([2**20]) # Large tensor to stress memory
+        return tf.reduce_sum(x * samples)
+
+    # 3. Setup input variable
+    dummy_input = tf.Variable(tf.random.normal([2**20]))
+
+    print("Starting memory test loop...")
+    
+    # 4. Run the loop to check for memory leaks
+    for i in range(100):
+        with tf.GradientTape() as tape:
+            loss = recompute_sample_fn(dummy_input)
+        
+        grads = tape.gradient(loss, dummy_input)
+        
+        # Clean up references
+        del loss, grads
+        
+        # Force garbage collection to see if memory is retained improperly
+        if i % 10 == 0:
+            gc.collect()
+            # Note: TensorFlow memory reporting is different from PyTorch.
+            # We print the iteration to indicate progress.
+            print(f"Iteration {i} completed")
+
+    print("Test finished.")
+
+if __name__ == "__main__":
+    test_reparameterization_checkpoint_memory()
+```

@@ -1,0 +1,80 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_tf_name_scope_dynamic_shapes():
+    """
+    Adapted test case based on PyTorch Issue 161372.
+    
+    The original issue involved torch.compile failing due to dynamic shape changes
+    (sequence length 77 -> 78) causing a recompilation limit error.
+    
+    This test verifies that tf.compat.v1.name_scope handles operations with
+    dynamic shapes (specifically tf.where, which appeared in the original stack trace)
+    correctly without crashing or causing naming conflicts.
+    """
+    
+    # Enable variable initialization for TF 2.x
+    tf.compat.v1.disable_eager_execution() 
+    # Note: In TF 2.x, name_scope is primarily for graph organization.
+    # We use a Session to execute the graph, similar to how torch.compile
+    # executes a compiled graph.
+    
+    with tf.compat.v1.Session() as sess:
+        # Placeholder for input with dynamic batch/sequence dimension
+        # Mimicking the LLM input where sequence length changes
+        x = tf.compat.v1.placeholder(tf.float32, shape=[None, None], name="input_x")
+        
+        # Use the similar API: tf.compat.v1.name_scope
+        # This wraps the operations that caused issues in PyTorch
+        with tf.compat.v1.name_scope("dynamic_layer"):
+            # Create a mask and value to mimic the torch.where call in the bug report
+            # r = torch.where(mask, value, a)
+            mask = tf.greater(x, 0.5)
+            value = tf.ones_like(x) * 1.0
+            a = tf.ones_like(x) * 0.0
+            
+            # The operation that was present in the error log
+            result = tf.where(mask, value, a, name="where_op")
+            
+            # Simulate a cache-like operation (concatenation) that changes shape
+            # This mirrors the 'cache.cache[0][0]' size mismatch error
+            cache = tf.Variable(tf.zeros([1, 0, 1]), dtype=tf.float32, name="cache")
+            # Reshape x to be 3D for concatenation
+            x_3d = tf.expand_dims(x, axis=-1)
+            updated_cache = tf.concat([cache.read_value(), x_3d], axis=1, name="cache_update")
+            
+            update_op = tf.assign(cache, updated_cache)
+
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        # Test Case 1: Sequence length 77 (The "expected" size in the bug report)
+        input_data_77 = np.random.rand(1, 77).astype(np.float32)
+        # Ensure some values > 0.5 to trigger the where condition
+        input_data_77[0, 0] = 0.9 
+        
+        out_77, _ = sess.run([result, update_op], feed_dict={x: input_data_77})
+        assert out_77.shape == (1, 77), f"Shape mismatch for seq_len 77: {out_77.shape}"
+        
+        # Verify cache updated
+        cache_val_77 = sess.run(cache)
+        assert cache_val_77.shape == (1, 77, 1), f"Cache shape mismatch for seq_len 77: {cache_val_77.shape}"
+
+        # Test Case 2: Sequence length 78 (The "actual" size that triggered the bug)
+        input_data_78 = np.random.rand(1, 78).astype(np.float32)
+        input_data_78[0, 0] = 0.9
+        
+        # In PyTorch 2.8.0, this change in shape triggered a recompile limit error.
+        # We verify here that TensorFlow executes this successfully.
+        out_78, _ = sess.run([result, update_op], feed_dict={x: input_data_78})
+        assert out_78.shape == (1, 78), f"Shape mismatch for seq_len 78: {out_78.shape}"
+        
+        # Verify cache updated with new shape
+        cache_val_78 = sess.run(cache)
+        assert cache_val_78.shape == (1, 78, 1), f"Cache shape mismatch for seq_len 78: {cache_val_78.shape}"
+
+        print("Test passed: tf.compat.v1.name_scope handled dynamic shapes (77 -> 78) correctly.")
+
+if __name__ == "__main__":
+    test_tf_name_scope_dynamic_shapes()
+```

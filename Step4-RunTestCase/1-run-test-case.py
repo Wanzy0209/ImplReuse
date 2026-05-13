@@ -12,7 +12,7 @@ from typing import Dict, Any
 
 
 SCRIPT_DIR = Path(__file__).parent
-DEFAULT_TEST_CASE_DIR = SCRIPT_DIR / "test_cases"
+DEFAULT_TEST_CASE_DIR = SCRIPT_DIR.parent / "Step3-ReuseTestCase/test_cases"
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "test_results"
 
 

@@ -1,0 +1,52 @@
+```python
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+def test_torch_export_gemma_vmap_issue():
+    """
+    Test case for Issue #161563.
+    Verifies that torch.export.export correctly handles models that trigger
+    ProxyTorchDispatchMode registration issues (specifically observed with
+    the gemma-3-270m-it model).
+    """
+    model_id = "google/gemma-3-270m-it"
+
+    # Load model and tokenizer
+    # Note: This test requires the 'transformers' library.
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+    except Exception as e:
+        print(f"Skipping test: Failed to load model {model_id}. Error: {e}")
+        return
+
+    # Prepare inputs using the chat template
+    messages = [{"role": "user", "content": "Who are you?"}]
+    
+    inputs = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+    ).to(model.device)
+
+    example_inputs = (inputs["input_ids"], inputs["attention_mask"])
+
+    # The core API call being tested: torch.export.export
+    # Expected behavior: Should return an ExportedProgram without raising
+    # AssertionError: "Current active mode ... not registered"
+    try:
+        ep = torch.export.export(model, example_inputs)
+        assert ep is not None
+        print("Test Passed: Export successful.")
+    except AssertionError as e:
+        if "Current active mode" in str(e):
+            print(f"Test Failed: Bug reproduced - {e}")
+            raise
+        else:
+            raise
+
+if __name__ == "__main__":
+    test_torch_export_gemma_vmap_issue()
+```

@@ -1,0 +1,68 @@
+```python
+import tensorflow as tf
+import sys
+
+# Disable eager execution to use tf.compat.v1 queues (required for this API)
+tf.compat.v1.disable_eager_execution()
+
+def test_string_input_producer_preservation():
+    """
+    Adapted test case for tf.compat.v1.train.string_input_producer.
+    
+    Original Bug Logic: torch.compile didn't preserve stride with clone(memory_format=torch.preserve_format).
+    Adapted Logic: Verify that the input producer preserves the input data/order correctly 
+    (analogous to preserving format) within the graph execution context.
+    """
+    
+    # Define input data (strings)
+    input_strings = [f"file_{i}.dat" for i in range(5)]
+    
+    # Use the API: string_input_producer
+    # We set shuffle=False to test if the order/format is preserved
+    queue = tf.compat.v1.train.string_input_producer(
+        string_tensor=input_strings,
+        num_epochs=1,
+        shuffle=False,
+        capacity=32
+    )
+    
+    # Dequeue operation to retrieve data
+    dequeue_op = queue.dequeue()
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize local variables (required for num_epochs counter)
+        sess.run(tf.compat.v1.local_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
+        
+        # Coordinator to manage threads
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord)
+        
+        output_strings = []
+        try:
+            # Run the loop to dequeue all items
+            while True:
+                val = sess.run(dequeue_op)
+                # Decode bytes to string for comparison
+                output_strings.append(val.decode('utf-8'))
+        except tf.errors.OutOfRangeError:
+            # Expected when num_epochs is reached
+            pass
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+    # Assertion: Check if the output matches the input (Preservation check)
+    # In the original bug, stride() != clone().stride(). 
+    # Here we check if input != output.
+    if input_strings == output_strings:
+        print("Test Passed: string_input_producer preserved input order.")
+        return 0
+    else:
+        print(f"Test Failed: Input {input_strings} != Output {output_strings}")
+        return 1
+
+if __name__ == "__main__":
+    exit_code = test_string_input_producer_preservation()
+    sys.exit(exit_code)
+```

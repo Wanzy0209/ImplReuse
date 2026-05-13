@@ -1,0 +1,45 @@
+```python
+import torch
+import triton
+import torch._inductor.config as inductor_config
+
+def test_inductor_triton_addmm():
+    # Test case for Issue 161618: Inductor fails on triton main branch
+    # Verifies that torch.compile works with torch.addmm using TRITON backend.
+    
+    if not torch.cuda.is_available():
+        print("Test skipped: CUDA not available")
+        return
+
+    m = 20120
+    k = 1536
+    n = 512
+
+    a = torch.randn((m, n)).requires_grad_(False).cuda()
+    mat1 = torch.randn((m, k)).requires_grad_(False).cuda()
+    mat2 = torch.randn((k, n)).requires_grad_(False).cuda()
+    
+    # Define the function to be compiled
+    def func_to_compile(a, mat1, mat2):
+        return torch.addmm(a, mat1, mat2)
+
+    # Patch configuration to trigger the specific bug scenario
+    with inductor_config.patch(
+        max_autotune=True,
+        max_autotune_gemm_backends="TRITON",
+        autotune_fallback_to_aten=False,
+    ):
+        compiled = torch.compile(func_to_compile, dynamic=False)
+        
+        # Run eager mode for reference
+        expected = func_to_compile(a, mat1, mat2)
+        
+        # Run compiled mode
+        result = compiled(a, mat1, mat2)
+        
+        # Verify the output matches
+        assert torch.allclose(result, expected), "Output mismatch between eager and compiled modes"
+
+if __name__ == "__main__":
+    test_inductor_triton_addmm()
+```

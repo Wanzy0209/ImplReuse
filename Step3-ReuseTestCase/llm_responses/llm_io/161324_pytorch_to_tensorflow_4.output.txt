@@ -1,0 +1,63 @@
+```python
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+import numpy as np
+
+def test_logical_or_with_2d_tensor_views():
+    """
+    Adapted from PyTorch Issue #161324.
+    
+    Original Bug: Data inconsistencies when using batch_isend_irecv with 2D tensor views.
+    Adaptation: Verify that tf.experimental.numpy.logical_or handles 2D tensor views
+    (slices) correctly without data corruption or inconsistencies.
+    """
+    # Setup dimensions mimicking the original bug report
+    batch_size = 4
+    total_columns = 10
+    
+    # Define column splits to create views (slices)
+    # PyTorch code used split_offsets to slice columns
+    split_offsets = [0, 3, 5, 10] 
+    
+    # Initialize random boolean tensors
+    # Mimicking 'local_tensor' on Rank 0 and 'local_tensor_dst' on Rank 1
+    tensor_a = tnp.random.randint(0, 2, (batch_size, total_columns), dtype=bool)
+    tensor_b = tnp.random.randint(0, 2, (batch_size, total_columns), dtype=bool)
+
+    # Create 2D views/slices
+    # PyTorch: dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+    view_a1 = tensor_a[:, split_offsets[0]:split_offsets[1]]
+    view_a2 = tensor_a[:, split_offsets[2]:split_offsets[3]]
+
+    view_b1 = tensor_b[:, split_offsets[0]:split_offsets[1]]
+    view_b2 = tensor_b[:, split_offsets[2]:split_offsets[3]]
+
+    print(f"Shape of view_a1: {view_a1.shape}")
+    print(f"Shape of view_a2: {view_a2.shape}")
+
+    # Perform the operation on the views
+    # In the original bug, this was a batched send/recv. Here we perform a batched logical operation.
+    # We check if the API handles the non-contiguous memory (views) correctly.
+    try:
+        result1 = tnp.logical_or(view_a1, view_b1)
+        result2 = tnp.logical_or(view_a2, view_b2)
+    except Exception as e:
+        print(f"Error during logical_or operation on views: {e}")
+        raise
+
+    # Verification: Compare against standard NumPy behavior to ensure consistency
+    # This checks for the "data inconsistencies" mentioned in the bug report.
+    expected1 = np.logical_or(view_a1.numpy(), view_b1.numpy())
+    expected2 = np.logical_or(view_a2.numpy(), view_b2.numpy())
+
+    assert np.array_equal(result1.numpy(), expected1), \
+        f"Data inconsistency detected in view 1!\nExpected:\n{expected1}\nGot:\n{result1.numpy()}"
+    
+    assert np.array_equal(result2.numpy(), expected2), \
+        f"Data inconsistency detected in view 2!\nExpected:\n{expected2}\nGot:\n{result2.numpy()}"
+
+    print("Test Passed: tf.experimental.numpy.logical_or maintains data consistency with 2D tensor views.")
+
+if __name__ == "__main__":
+    test_logical_or_with_2d_tensor_views()
+```

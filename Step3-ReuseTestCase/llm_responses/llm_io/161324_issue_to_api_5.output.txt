@@ -1,0 +1,94 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_batch_isend_irecv_views(rank, world_size):
+    setup(rank, world_size)
+    
+    batch_size = 4
+    total_columns = 10
+    # Define non-contiguous split offsets to trigger the view issue
+    # Split 1: columns 0-4, Split 2: columns 6-10 (gap at 4-6)
+    split_offsets = [0, 4, 6, 10]
+    
+    tag1 = 0
+    tag2 = 1
+
+    if rank == 0:
+        # Sender rank
+        torch.manual_seed(0)
+        local_tensor = torch.randn(batch_size, total_columns)
+        
+        # Create views (slices)
+        dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+        dst_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+        
+        process_group = dist.group.WORLD
+        send_op1 = dist.P2POp(dist.isend, dst_t1, 1, process_group, tag1)
+        send_op2 = dist.P2POp(dist.isend, dst_t2, 1, process_group, tag2)
+        
+        # Batch send operations
+        reqs = dist.batch_isend_irecv([send_op1, send_op2])
+        for req in reqs:
+            req.wait()
+            
+        print(f"Rank {rank} sent tensors with shapes {dst_t1.shape} and {dst_t2.shape}")
+        
+        # Receive the result back from rank 1 for verification
+        # We use a standard send/recv for verification to avoid the bug affecting the check itself
+        result_tensor = torch.zeros(batch_size, total_columns)
+        dist.recv(result_tensor, src=1)
+        
+        # Verify data consistency
+        # The bug causes data inconsistencies when using views with batch_isend_irecv
+        assert torch.allclose(local_tensor, result_tensor), \
+            f"Data mismatch detected!\nExpected:\n{local_tensor}\nGot:\n{result_tensor}"
+        print("Rank 0: Data consistency check passed.")
+
+    elif rank == 1:
+        # Receiver rank
+        local_tensor_dst = torch.zeros(batch_size, total_columns)
+        
+        tensor_col_offset1 = split_offsets[0]
+        end_col_offset1 = split_offsets[1]
+        tensor_col_offset2 = split_offsets[2]
+        end_col_offset2 = split_offsets[3]
+        
+        # Create views (slices) into the destination tensor
+        receiving_tensor_view1 = local_tensor_dst[:, tensor_col_offset1:end_col_offset1]
+        receiving_tensor_view2 = local_tensor_dst[:, tensor_col_offset2:end_col_offset2]
+        
+        process_group = dist.group.WORLD
+        receive_op1 = dist.P2POp(dist.irecv, receiving_tensor_view1, 0, process_group, tag1)
+        receive_op2 = dist.P2POp(dist.irecv, receiving_tensor_view2, 0, process_group, tag2)
+        
+        # Batch receive operations
+        reqs = dist.batch_isend_irecv([receive_op1, receive_op2])
+        for req in reqs:
+            req.wait()
+            
+        print(f"Rank {rank} received data into views.")
+        
+        # Send the filled tensor back to rank 0 for verification
+        dist.send(local_tensor_dst, dst=0)
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_batch_isend_irecv_views,
+             args=(world_size,),
+             nprocs=world_size,
+             join=True)
+```

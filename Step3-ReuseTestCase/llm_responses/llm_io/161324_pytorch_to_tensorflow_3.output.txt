@@ -1,0 +1,62 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_logical_and_2d_tensor_slices():
+    """
+    Adapted from PyTorch Issue 161324.
+    
+    Original Bug: Data inconsistencies when using batch_isend_irecv with 2D tensor views.
+    Adaptation: Verifies tf.math.logical_and behavior with 2D tensor slices to ensure
+    data consistency and correctness when operating on non-contiguous tensor views.
+    """
+    
+    # Setup parameters mimicking the original bug report
+    batch_size = 4
+    total_columns = 10
+    
+    # Define split offsets for slicing the 2D tensor
+    # These mimic the split_offsets used in the PyTorch example
+    split_offsets = [0, 3, 3, 6]
+    
+    # Create a random boolean tensor (simulating the local_tensor)
+    # Using random uniform to generate boolean values
+    local_tensor = tf.random.uniform((batch_size, total_columns)) > 0.5
+    
+    # Create views (slices) of the 2D tensor
+    # In PyTorch: dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+    # In TensorFlow, slicing creates a new tensor, but we mimic the view logic here.
+    dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+    dst_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+    
+    print(f"Original tensor shape: {local_tensor.shape}")
+    print(f"Slice 1 shape: {dst_t1.shape}")
+    print(f"Slice 2 shape: {dst_t2.shape}")
+
+    # Perform the operation on the slices
+    # Original API: dist.isend/irecv (Communication)
+    # Target API: tf.math.logical_and (Computation)
+    # We perform logical_and between the two slices to check for data consistency
+    result_op = tf.math.logical_and(dst_t1, dst_t2)
+    
+    # Verification Step
+    # Calculate the expected result manually to detect any silent data inconsistencies
+    # We extract the same slices again to ensure the operation didn't corrupt memory or data
+    re_sliced_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+    re_sliced_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+    expected_result = tf.logical_and(re_sliced_t1, re_sliced_t2)
+    
+    # Assert that the result matches the expected calculation
+    # This checks for the "data inconsistencies" mentioned in the bug report
+    assert tf.reduce_all(tf.equal(result_op, expected_result)).numpy(), \
+        "Data inconsistency detected: tf.math.logical_and produced incorrect results on slices."
+    
+    # Additional check: Verify shapes are preserved correctly
+    assert result_op.shape == dst_t1.shape, \
+        f"Shape mismatch: expected {dst_t1.shape}, got {result_op.shape}"
+    
+    print("Test passed: tf.math.logical_and maintains data consistency with 2D tensor slices.")
+
+if __name__ == "__main__":
+    test_logical_and_2d_tensor_slices()
+```

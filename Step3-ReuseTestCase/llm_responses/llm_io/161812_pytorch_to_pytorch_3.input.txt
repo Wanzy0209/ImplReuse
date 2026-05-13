@@ -1,0 +1,86 @@
+Issue ID: 161812
+Title: Crash in jagged tensor stack/cat along dimension 0
+Bug Description:
+### 🐛 Describe the bug
+
+```python
+import torch as th
+x = th.nested.nested_tensor([th.ones(3, 2, 3), th.ones(4, 2, 3)], layout=th.jagged)
+th.cat([x, x])
+```
+fails with
+```
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/Users/monroe/.pyenv/versions/pyenv-311/lib/python3.11/site-packages/torch/nested/_internal/nested_tensor.py", line 367, in __torch_function__
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/monroe/.pyenv/versions/pyenv-311/lib/python3.11/site-packages/torch/nested/_internal/nested_tensor.py", line 332, in __torch_dispatch__
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/monroe/.pyenv/versions/pyenv-311/lib/python3.11/site-packages/torch/nested/_internal/ops.py", line 217, in inner
+    check_schema(schema_str, func, *args, **kwargs)
+  File "/Users/monroe/.pyenv/versions/pyenv-311/lib/python3.11/site-packages/torch/nested/_internal/ops.py", line 106, in check_schema
+    raise ValueError(
+ValueError: NestedTensor cat_default(tensors: any, dim: any): expected at least 2 arguments and at most 2 arguments, but got: 1 arguments
+```
+
+Variations that produce identical errors:
+* Passing an explicit `dim=0`
+* Calling `th.vstack` instead of `th.cat`
+* Calling `th.stack` instead of `th.cat` (except the traceback has `stack_default` in place of `cat_default`)
+
+Things that do work:
+* Passing any other `dim` argument besides 0 and the jagged dimension, including other dimensions be
+...
+
+Original API Under Test: torch.cat
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.triu
+Similarity score: 0.9986950159072876
+
+Similar API information:
+# Extracted call chain for torch.triu
+
+# --- test.functorch.test_dims.triu ---
+def triu(A):
+    i, j = dims()
+    a = A[i, j]
+    zero = torch.tensor(0, dtype=torch.float)  # XXX - torch.where is janky...
+    return torch.where(i <= j, a, zero).order(i, j)
+
+# --- functorch.dim._Tensor.dims ---
+def dims(lists=0):
+    frame = inspect.currentframe()
+    assert frame is not None
+    calling_frame = frame.f_back
+    assert calling_frame is not None
+    code, lasti = calling_frame.f_code, calling_frame.f_lasti
+    key = (code, lasti)
+    if key not in _cache:
+        first = lasti // 2 + 1
+        instructions = list(dis.get_instructions(calling_frame.f_code))
+        unpack = instructions[first]
+
+        if unpack.opname == "STORE_FAST" or unpack.opname == "STORE_NAME":
+            # just a single dim, not a list
+            name = unpack.argval
+            ctor = Dim if lists == 0 else DimList
+            _cache[key] = lambda: ctor(name=name)
+        else:
+            assert unpack.opname == "UNPACK_SEQUENCE"
+            ndims = unpack.argval
+
+Original Test Case:
+import torch as th
+x = th.nested.nested_tensor([th.ones(3, 2, 3), th.ones(4, 2, 3)], layout=th.jagged)
+th.cat([x, x])
+
+The API torch.triu is identified as same-library similar to the original PyTorch API torch.cat.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

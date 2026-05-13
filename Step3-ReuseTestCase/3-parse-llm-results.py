@@ -13,7 +13,7 @@ from typing import List, Optional
 
 
 SCRIPT_DIR = Path(__file__).parent
-DEFAULT_RESPONSE_DIR = SCRIPT_DIR / "llm_responses"
+DEFAULT_RESPONSE_DIR = SCRIPT_DIR / "llm_responses" / "llm_io"
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "test_cases"
 
 
@@ -147,7 +147,7 @@ def main():
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    response_files = list(args.response_dir.glob("*.txt"))
+    response_files = list(args.response_dir.glob("*.output.txt"))
     if args.limit > 0:
         response_files = response_files[:args.limit]
 

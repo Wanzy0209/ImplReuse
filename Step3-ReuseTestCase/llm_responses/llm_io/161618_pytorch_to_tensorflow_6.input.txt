@@ -1,0 +1,107 @@
+Issue ID: 161618
+Title: [inductor][triton] Inductor fails on triton main branch
+Bug Description:
+### 🐛 Describe the bug
+
+The following script will fail on the latest pytorch nightly and Triton main branch ( 2ac060b8b955cf4c6412458bea9df554342c1b1a):
+
+```python
+
+import triton
+import torch
+
+import torch._inductor.config as inductor_config
+
+m = 20120
+k = 1536
+n = 512
+
+a = torch.randn((m, n)).requires_grad_(False).cuda()
+mat1 = torch.randn((m, k)).requires_grad_(False).cuda()
+mat2 = torch.randn((k, n)).requires_grad_(False).cuda()
+f = lambda a, mat1, mat2: torch.addmm(a, mat1, mat2)
+
+with inductor_config.patch(
+    max_autotune=True,
+    max_autotune_gemm_backends="TRITON",
+    autotune_fallback_to_aten=False,):
+    compiled = torch.compile(f, dynamic=False)
+    compiled(a, mat1, mat2)
+```
+
+Error log:
+
+```
+  warnings.warn(
+Autotune Choices Stats:
+{"num_choices": 13, "num_triton_choices": 13, "best_kernel": "triton_mm_7", "best_kernel_desc": "ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=64, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4", "best_time": 1.4672640562057495, "best_triton_pos": 0}
+AUTOTUNE addmm(20120x512, 20120x1536, 1536x512)
+strides: [512, 1], [1536, 1], [512, 1]
+dtypes: torch.float32, torch.float32, torch.float32
+  triton_mm_7 1.4673 ms 100.0% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=64, BLOCK_N=128, EVEN_K=True, GROUP_M=8, USE_FAST_ACCUM=False, num_stages=3, num_warps=4
+  triton_mm_9 1.4692 ms 99.9% ACC_TYPE='tl.float32', ALLOW_TF32=False, BLOCK_K=32, BLOCK_M=128, BLOCK_N=64, EVEN_K=Tru
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.name_scope
+Similarity score: 0.9931139349937439
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.name_scope
+
+# --- tensorflow.python.framework.ops.name_scope ---
+def name_scope(
+    name, default_name=None, values=None, skip_on_eager=True,
+) -> ContextManager[Optional[str]]:
+  """Internal-only entry point for `name_scope*`.
+
+  Internal ops do not use the public API and instead rely on
+  `ops.name_scope` regardless of the execution mode. This function
+  dispatches to the correct `name_scope*` implementation based on
+  the arguments provided and the current mode. Specifically,
+
+  * if `values` contains a graph tensor `Graph.name_scope` is used;
+  * `name_scope_v1` is used in graph mode;
+  * `name_scope_v2` -- in eager mode.
+
+  Args:
+    name: The name argument that is passed to the op function.
+    default_name: The default name to use if the `name` argument is `None`.
+    values: The list of `Tensor` arguments that are passed to the op function.
+    skip_on_eager: Indicates to return NullContextmanager if executing eagerly.
+      By default this is True since naming tensors and operations in eager mode
+      have little use and cause unnecessary performance overhead. However, it is
+      important to preserve variable names since they are
+...
+
+Original Test Case:
+import triton
+import torch
+
+import torch._inductor.config as inductor_config
+
+m = 20120
+k = 1536
+n = 512
+
+a = torch.randn((m, n)).requires_grad_(False).cuda()
+mat1 = torch.randn((m, k)).requires_grad_(False).cuda()
+mat2 = torch.randn((k, n)).requires_grad_(False).cuda()
+f = lambda a, mat1, mat2: torch.addmm(a, mat1, mat2)
+
+with inductor_config.patch(
+    max_autotune=True,
+    max_autotune_gemm_backends="TRITON",
+    autotune_fallback_to_aten=False,):
+    compiled = torch.compile(f, dynamic=False)
+    compiled(a, mat1, mat2)
+
+The API tf.compat.v1.name_scope is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
