@@ -1,0 +1,80 @@
+```python
+import tensorflow as tf
+from tensorflow.experimental import dtensor
+import tempfile
+import os
+
+# This test case is inspired by Issue #160285 (Wrong-size gradients in Expert Parallel MoE).
+# The original issue reported that gradients for MoE layers were doubled (2x size) when 
+# Expert Parallel (EP) sharding was applied in PyTorch's DTensor.
+#
+# This test adapts that logic to TensorFlow's dtensor API. It verifies that 
+# tf.experimental.dtensor.name_based_save correctly handles sharded tensors
+# without corrupting the data (e.g., by summing local shards which would result
+# in value doubling, analogous to the reported gradient bug).
+
+class TestDTensorSaveShardingIntegrity(tf.test.TestCase):
+    def setUp(self):
+        super().setUp()
+        # Configure virtual CPUs to simulate a multi-device mesh
+        physical_devices = tf.config.list_physical_devices('CPU')
+        try:
+            tf.config.set_logical_device_configuration(
+                physical_devices[0],
+                [tf.config.LogicalDeviceConfiguration()] * 2
+            )
+        except RuntimeError:
+            # Devices already configured
+            pass
+
+    def test_name_based_save_preserves_sharded_values(self):
+        # Create a mesh with 2 devices to simulate the parallel environment
+        mesh = dtensor.create_mesh([("x", 2)], devices=["CPU:0", "CPU:1"])
+
+        # Define a global tensor with specific values to detect corruption (e.g., doubling)
+        # Global shape: [2, 2]
+        # Values: [[1.0, 2.0], [3.0, 4.0]]
+        expected_global_values = tf.constant([[1.0, 2.0], [3.0, 4.0]])
+
+        # Create a DTensor sharded on the first dimension (dim 0)
+        # Local on CPU:0: [[1.0, 2.0]]
+        # Local on CPU:1: [[3.0, 4.0]]
+        layout = dtensor.Layout([dtensor.ShardingDim(0)], mesh)
+        sharded_dtensor = dtensor.DTensor(expected_global_values, layout=layout)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_prefix = os.path.join(tmpdir, "ckpt")
+            name_tensor_dict = {"my_tensor": sharded_dtensor}
+
+            # Call the API under test
+            dtensor.name_based_save(mesh, checkpoint_prefix, name_tensor_dict)
+
+            # Verify the saved checkpoint data
+            # We use the standard TensorFlow checkpoint reader to inspect the file content
+            # directly, ensuring the values written to disk match the global tensor.
+            reader = tf.train.load_checkpoint(tmpdir)
+            
+            # Retrieve the tensor from the checkpoint
+            # Note: The exact key name might vary based on internal implementation,
+            # but typically corresponds to the dictionary key provided.
+            saved_tensor_shape = reader.get_tensor("my_tensor/.ATTRIBUTES/VARIABLE_VALUE")
+            
+            # In the context of the bug, if sharding caused a "doubling" effect,
+            # we would expect values like [[2.0, 4.0], [6.0, 8.0]] or incorrect shapes.
+            # We assert that the saved values are exactly the original global values.
+            
+            # Since name_based_save uses sharded_save, we check the restored content
+            # via a standard load to ensure the data integrity matches the input.
+            # (Here we assume the standard checkpoint structure for verification)
+            
+            # To be precise with the "doubling" check:
+            # We verify the values are NOT 2x the input.
+            self.assertAllEqual(saved_tensor_shape, expected_global_values.numpy())
+            
+            # Explicit check against the "doubling" hypothesis
+            doubled_values = expected_global_values * 2.0
+            self.assertNotAllClose(saved_tensor_shape, doubled_values.numpy())
+
+if __name__ == "__main__":
+    tf.test.main()
+```

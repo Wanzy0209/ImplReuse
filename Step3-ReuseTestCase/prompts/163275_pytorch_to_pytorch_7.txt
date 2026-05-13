@@ -1,0 +1,86 @@
+Issue ID: 163275
+Title: torch compile does not handle out_dtype argument in torch.mm (but succeeds with torch.bmm)
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+
+A = torch.rand((1024, 1024), device="cuda", dtype=torch.float16)
+B = torch.rand((1024, 1024), device="cuda", dtype=torch.float16)
+
+@torch.compile
+def linear(weight, input):
+    return torch.mm(input, weight, out_dtype=torch.float32)
+
+linear(A, B)
+```
+
+Output:
+```
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0] failed while attempting to run meta for aten.mm.dtype
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0] Traceback (most recent call last):
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0]   File "/usr/local/lib/python3.10/dist-packages/torch/_subclasses/fake_tensor.py", line 2717, in _dispatch_impl
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0]     r = func(*args, **kwargs)
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0]   File "/usr/local/lib/python3.10/dist-packages/torch/_ops.py", line 829, in __call__
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0]     return self._op(*args, **kwargs)
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0]   File "/usr/local/lib/python3.10/dist-packages/torch/_prims_common/wrappers.py", line 309, in _fn
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0]     result = fn(*args, **kwargs)
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0] TypeError: meta_mm() takes 2 posi
+...
+
+Original API Under Test: torch.mm
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.functional.softshrink
+Similarity score: 0.9920123815536499
+
+Similar API information:
+# Extracted call chain for torch.nn.functional.softshrink
+
+# --- torch._refs.nn.functional.softshrink ---
+def softshrink(a: TensorLikeType, lambd: float = 0.5):
+    # Formula for reference,
+    # softshrink(x) = x - lambd if x > lambd
+    #               = x + lambd if x < -lambd
+    #               = 0 otherwise
+    torch._check(
+        lambd >= 0,
+        lambda: f"lambda must be greater or equal to 0, but found to be {lambd}",
+    )
+    # We implement this in one torch.where to generate better code in the backward
+    # see https://github.com/pytorch/pytorch/pull/107052#discussion_r1293748211
+    # We multiply by 0 for dealing with nans
+    return torch.where(torch.abs(a) > lambd, a - torch.sign(a) * lambd, a * 0)
+
+# --- torch._prims_common.wrappers.out_wrapper ---
+def out_wrapper(
+    *out_names: str,
+    exact_dtype: bool = False,
+    pass_is_out: bool = False,
+    preserve_memory_format: bool = False,
+) -> Callable[[Callable[_P, _T]], Callable[_P, _T]]:
+    # The wrapped function needs to convert the output parameters to ensure
+    # compatibility between the Python API (which always uses "out" as the
+    # parameter name and may be a tuple) and the Aten API (which may have
+...
+
+Original Test Case:
+import torch
+
+A = torch.rand((1024, 1024), device="cuda", dtype=torch.float16)
+B = torch.rand((1024, 1024), device="cuda", dtype=torch.float16)
+
+@torch.compile
+def linear(weight, input):
+    return torch.mm(input, weight, out_dtype=torch.float32)
+
+linear(A, B)
+
+The API torch.nn.functional.softshrink is identified as same-library similar to the original PyTorch API torch.mm.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

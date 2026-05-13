@@ -1,0 +1,69 @@
+```python
+import torch
+import unittest
+
+class TestComplexIndexAddMPS(unittest.TestCase):
+    def test_index_add_complex_mps_consistency(self):
+        """
+        Test case for Issue 160845: index_add inconsistency on complex tensors.
+        
+        This test adapts the original bug reproduction logic to a context 
+        similar to tf.nn.ctc_beam_search_decoder by using 3D tensors 
+        (representing time, batch, and classes/beam dimensions).
+        """
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS not available, skipping MPS specific test")
+
+        # Setup parameters mimicking a sequence decoding scenario
+        # Shape: (max_time, batch_size, num_classes)
+        # Similar to inputs for tf.nn.ctc_beam_search_decoder
+        max_time = 50
+        batch_size = 10
+        num_classes = 20
+        shape = (max_time, batch_size, num_classes)
+        dim = 1  # Accumulating along the batch dimension
+
+        # Create indices to update
+        idx = torch.randint(0, batch_size, (100,), dtype=torch.long)
+
+        # Initialize target tensors on MPS and CPU
+        t_mps = torch.zeros(shape, dtype=torch.complex64, device="mps")
+        t_cpu = torch.zeros(shape, dtype=torch.complex64, device="cpu")
+
+        # Create source data
+        # We specifically test with a source that has a non-zero imaginary part
+        # to catch the bug where the imaginary component was ignored on MPS.
+        trailing = shape[dim+1:]
+        src_shape = (len(idx),) + trailing
+        
+        # Create purely imaginary source to strictly test the reported bug
+        # (Real part is zero, Imaginary part is random)
+        src_imag = torch.randn(src_shape, dtype=torch.float32)
+        src_real = torch.zeros_like(src_imag)
+        
+        # Move source to appropriate devices
+        src_mps = torch.complex(src_real, src_imag).to("mps")
+        src_cpu = torch.complex(src_real, src_imag).to("cpu")
+
+        # Perform index_add_
+        t_mps.index_add_(dim, idx.to(device="mps"), src_mps)
+        t_cpu.index_add_(dim, idx.to(device="cpu"), src_cpu)
+
+        # Verification
+        # 1. Check that MPS actually added the imaginary part (it was 0 in the bug)
+        mps_imag_sum = t_mps.imag.abs().sum().item()
+        cpu_imag_sum = t_cpu.imag.abs().sum().item()
+        
+        self.assertNotAlmostEqual(mps_imag_sum, 0.0, places=5, 
+                                   msg="MPS imaginary sum is zero, bug likely present.")
+        
+        # 2. Check consistency between MPS and CPU
+        max_diff = (t_mps.cpu() - t_cpu).abs().max().item()
+        
+        # Allow for small floating point errors, but the bug showed large diffs (~2.9)
+        self.assertLess(max_diff, 1e-4, 
+                        f"MPS and CPU results differ significantly. Max diff: {max_diff}")
+
+if __name__ == '__main__':
+    unittest.main()
+```

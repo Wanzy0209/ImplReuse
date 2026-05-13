@@ -1,0 +1,86 @@
+Issue ID: 161812
+Title: Crash in jagged tensor stack/cat along dimension 0
+Bug Description:
+### 🐛 Describe the bug
+
+```python
+import torch as th
+x = th.nested.nested_tensor([th.ones(3, 2, 3), th.ones(4, 2, 3)], layout=th.jagged)
+th.cat([x, x])
+```
+fails with
+```
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/Users/monroe/.pyenv/versions/pyenv-311/lib/python3.11/site-packages/torch/nested/_internal/nested_tensor.py", line 367, in __torch_function__
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/monroe/.pyenv/versions/pyenv-311/lib/python3.11/site-packages/torch/nested/_internal/nested_tensor.py", line 332, in __torch_dispatch__
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/monroe/.pyenv/versions/pyenv-311/lib/python3.11/site-packages/torch/nested/_internal/ops.py", line 217, in inner
+    check_schema(schema_str, func, *args, **kwargs)
+  File "/Users/monroe/.pyenv/versions/pyenv-311/lib/python3.11/site-packages/torch/nested/_internal/ops.py", line 106, in check_schema
+    raise ValueError(
+ValueError: NestedTensor cat_default(tensors: any, dim: any): expected at least 2 arguments and at most 2 arguments, but got: 1 arguments
+```
+
+Variations that produce identical errors:
+* Passing an explicit `dim=0`
+* Calling `th.vstack` instead of `th.cat`
+* Calling `th.stack` instead of `th.cat` (except the traceback has `stack_default` in place of `cat_default`)
+
+Things that do work:
+* Passing any other `dim` argument besides 0 and the jagged dimension, including other dimensions be
+...
+
+Original API Under Test: torch.cat
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.raw_ops.ZerosLike
+Similarity score: 0.992531418800354
+
+Similar API information:
+# Extracted call chain for tf.raw_ops.ZerosLike
+
+# --- tensorflow.python.ops.control_flow_state.ZerosLike ---
+def ZerosLike(op, index):
+  """Create zeros_like for the specified output of an op."""
+  if not util.IsSwitch(op):
+    return _ZerosLikeV2(op, index)
+  else:
+    return _ZerosLikeV1(op, index)
+
+# --- tensorflow.python.ops.control_flow_state._ZerosLikeV1 ---
+def _ZerosLikeV1(op, index):
+  """Branch of ZerosLike for TF1."""
+  val = op.outputs[index]
+  op_ctxt = op._get_control_flow_context()  # pylint: disable=protected-access
+  if op_ctxt:
+    # We are in a cond context. Use a switch to create zeros only when needed.
+    pred = op_ctxt.pred
+    branch = op_ctxt.branch
+    switch_val = control_flow_ops.switch(op.inputs[0], pred)[1 - branch]
+    # A op is created along the branch taken as control dependencies are on
+    # the whole op and not on the tensor output.
+    pivot = array_ops.identity(switch_val)
+    if val.dtype == dtypes.resource:
+      with ops.control_dependencies([pivot]):
+        return array_ops.zeros(
+            gen_resource_variable_ops.variable_shape(switch_val),
+            dtype=default_gradient.get_zeros_dtype(val))
+    zeros_shape = array_ops.shape_int
+...
+
+Original Test Case:
+import torch as th
+x = th.nested.nested_tensor([th.ones(3, 2, 3), th.ones(4, 2, 3)], layout=th.jagged)
+th.cat([x, x])
+
+The API tf.raw_ops.ZerosLike is identified as cross-library similar to the original PyTorch API torch.cat.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

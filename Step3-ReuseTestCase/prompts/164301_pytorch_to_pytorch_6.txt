@@ -1,0 +1,92 @@
+Issue ID: 164301
+Title: torch.compile regression: mxfp8 quantization along rows
+Bug Description:
+### 🐛 Describe the bug
+
+## Summary
+- Sometime between 09/12 and 09/30, torch.compile has had a major regression in the performance of inductor codgen for mxfp8 quantization along rows- i.e., (1 x block_size) scaling granularity
+
+## Repro
+
+1. Use machine with B200 GPUs and cuda 12.8
+2. Install torch nightly build for cuda 12.8: `pip3 install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128` 
+2. Clone torchao `git clone git@github.com:pytorch/ao.git`
+3. Run benchmark: `cd ao/benchmarks/mx_formats`
+4. `CUDA_VISIBLE_DEVICES=7 python cast_bench.py --mode dim0_mxfp8_floor`
+5. See ~1485gbps:
+```
+(torch) [danvm@devgpu007.snb3 ~/ao/benchmarks/mx_formats (mx-a2a-2)]$ CUDA_VISIBLE_DEVICES=7 python cast_bench.py --mode dim0_mxfp8_floor
+M 16384 K 16384 BLOCK_SIZE 32
+GPU: NVIDIA B200
+torch version: 2.10.0.[dev20250930](https://l.workplace.com/l.php?u=https%3A%2F%2Fwww.internalfb.com%2Fintern%2Fbunny%2F%3Fq%3Ddev20250930&h=AT3oNVz-GDTWsBu4uQV0JnkMocQLFmUI0vZFep5jacZOZsfQWFsUIunKLKusdxT9qpSa1BjidHVSCdH4ClhuNFQiqN7UJM_3tSoiRNyXK8YGz7Vd3FTiCoOhUeTFp4nT-72p4WKZTDnY7d8ok8i4Iw)+cu128
+triton version: 3.5.0
+mode: dim0_mxfp8_floor
+time_us 547.7439761161804
+mem_bw_gbps 1485.5388858305025
+```
+
+
+Now using older nightly from 09/12 and see ~5600gbps:
+
+```
+(torch) [danvm@devgpu007.snb3 ~/ao/benchmarks/mx_formats (mx-a2a-2)]$ CUDA_VISIBLE_DEVICES=7 python cast_bench.py --mode dim0_mxfp8_floor
+M 16384 K 16384 BLOCK_SIZE 32
+GPU: NVIDIA B200
+torch version: 2.10.0.dev20250912+cu128
+triton
+...
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.lobpcg
+Similarity score: 0.99420565366745
+
+Similar API information:
+# Extracted call chain for torch.lobpcg
+
+# --- torch._lobpcg.lobpcg ---
+def lobpcg(
+    A: Tensor,
+    k: Optional[int] = None,
+    B: Optional[Tensor] = None,
+    X: Optional[Tensor] = None,
+    n: Optional[int] = None,
+    iK: Optional[Tensor] = None,
+    niter: Optional[int] = None,
+    tol: Optional[float] = None,
+    largest: Optional[bool] = None,
+    method: Optional[str] = None,
+    tracker: None = None,
+    ortho_iparams: Optional[dict[str, int]] = None,
+    ortho_fparams: Optional[dict[str, float]] = None,
+    ortho_bparams: Optional[dict[str, bool]] = None,
+) -> tuple[Tensor, Tensor]:
+    """Find the k largest (or smallest) eigenvalues and the corresponding
+    eigenvectors of a symmetric positive definite generalized
+    eigenvalue problem using matrix-free LOBPCG methods.
+
+    This function is a front-end to the following LOBPCG algorithms
+    selectable via `method` argument:
+
+      `method="basic"` - the LOBPCG method introduced by Andrew
+      Knyazev, see [Knyazev2001]. A less robust method, may fail when
+      Cholesky is applied to singular input.
+
+Original Test Case:
+(torch) [danvm@devgpu007.snb3 ~/ao/benchmarks/mx_formats (mx-a2a-2)]$ CUDA_VISIBLE_DEVICES=7 python cast_bench.py --mode dim0_mxfp8_floor
+M 16384 K 16384 BLOCK_SIZE 32
+GPU: NVIDIA B200
+torch version: 2.10.0.[dev20250930](https://l.workplace.com/l.php?u=https%3A%2F%2Fwww.internalfb.com%2Fintern%2Fbunny%2F%3Fq%3Ddev20250930&h=AT3oNVz-GDTWsBu4uQV0JnkMocQLFmUI0vZFep5jacZOZsfQWFsUIunKLKusdxT9qpSa1BjidHVSCdH4ClhuNFQiqN7UJM_3tSoiRNyXK8YGz7Vd3FTiCoOhUeTFp4nT-72p4WKZTDnY7d8ok8i4Iw)+cu128
+triton version: 3.5.0
+mode: dim0_mxfp8_floor
+time_us 547.7439761161804
+mem_bw_gbps 1485.5388858305025
+
+The API torch.lobpcg is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

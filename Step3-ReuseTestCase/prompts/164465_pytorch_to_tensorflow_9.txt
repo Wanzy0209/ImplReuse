@@ -1,0 +1,101 @@
+Issue ID: 164465
+Title: inductor crash with int64 + arange + max
+Bug Description:
+I made a smaller repro from an internal xref: https://fb.workplace.com/groups/1075192433118967/permalink/760736793385589/
+
+```
+import torch
+
+@torch.compile
+def f(arg0_1, arg1_1):
+    embedding = torch.ops.aten.embedding.default(arg1_1, arg0_1)
+    view = torch.ops.aten.view.default(embedding, [64, 3072])
+    unsqueeze = torch.ops.aten.unsqueeze.default(view, 0)
+    expand = torch.ops.aten.expand.default(unsqueeze, [576, -1, -1])
+    view_1 = torch.ops.aten.view.default(expand, [2, 8, 36, 64, 3072])
+    permute = torch.ops.aten.permute.default(view_1, [0, 1, 3, 2, 4])
+    clone = torch.ops.aten.clone.default(permute, memory_format = torch.contiguous_format)
+    view_2 = torch.ops.aten.view.default(clone, [2, 18432, 3072])
+    iota = torch.ops.prims.iota.default(36, start = 0, step = 1, dtype = torch.int64, device = 'cuda', requires_grad = False)
+    view_3 = torch.ops.aten.view.default(iota, [1, 36])
+    max_1 = torch.ops.aten.max.default(view_3)
+    return (max_1,)
+
+
+x = torch.ones(1, 64, device='cuda', dtype=torch.int64)
+y = torch.randn(64, 3072, device='cuda', dtype=torch.bfloat16)
+out = f(x, y)
+```
+
+this crashes with:
+```
+  File "/home/hirsheybar/.conda/envs/pytorch/lib/python3.12/site-packages/triton/compiler/compiler.py", line 83, in make_ir
+    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch._inductor.exc.InductorError: Comp
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.name_scope
+Similarity score: 0.9931139349937439
+
+Similar API information:
+# Extracted call chain for tf.name_scope
+
+# --- tensorflow.python.framework.ops.name_scope ---
+def name_scope(
+    name, default_name=None, values=None, skip_on_eager=True,
+) -> ContextManager[Optional[str]]:
+  """Internal-only entry point for `name_scope*`.
+
+  Internal ops do not use the public API and instead rely on
+  `ops.name_scope` regardless of the execution mode. This function
+  dispatches to the correct `name_scope*` implementation based on
+  the arguments provided and the current mode. Specifically,
+
+  * if `values` contains a graph tensor `Graph.name_scope` is used;
+  * `name_scope_v1` is used in graph mode;
+  * `name_scope_v2` -- in eager mode.
+
+  Args:
+    name: The name argument that is passed to the op function.
+    default_name: The default name to use if the `name` argument is `None`.
+    values: The list of `Tensor` arguments that are passed to the op function.
+    skip_on_eager: Indicates to return NullContextmanager if executing eagerly.
+      By default this is True since naming tensors and operations in eager mode
+      have little use and cause unnecessary performance overhead. However, it is
+      important to preserve variable names since they are often use
+...
+
+Original Test Case:
+import torch
+
+@torch.compile
+def f(arg0_1, arg1_1):
+    embedding = torch.ops.aten.embedding.default(arg1_1, arg0_1)
+    view = torch.ops.aten.view.default(embedding, [64, 3072])
+    unsqueeze = torch.ops.aten.unsqueeze.default(view, 0)
+    expand = torch.ops.aten.expand.default(unsqueeze, [576, -1, -1])
+    view_1 = torch.ops.aten.view.default(expand, [2, 8, 36, 64, 3072])
+    permute = torch.ops.aten.permute.default(view_1, [0, 1, 3, 2, 4])
+    clone = torch.ops.aten.clone.default(permute, memory_format = torch.contiguous_format)
+    view_2 = torch.ops.aten.view.default(clone, [2, 18432, 3072])
+    iota = torch.ops.prims.iota.default(36, start = 0, step = 1, dtype = torch.int64, device = 'cuda', requires_grad = False)
+    view_3 = torch.ops.aten.view.default(iota, [1, 36])
+    max_1 = torch.ops.aten.max.default(view_3)
+    return (max_1,)
+
+
+x = torch.ones(1, 64, device='cuda', dtype=torch.int64)
+y = torch.randn(64, 3072, device='cuda', dtype=torch.bfloat16)
+out = f(x, y)
+
+The API tf.name_scope is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

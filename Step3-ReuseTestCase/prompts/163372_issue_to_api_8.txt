@@ -1,0 +1,129 @@
+Issue ID: 163372
+Title: Expand sometimes interpreted as Repeat by compiler
+Bug Description:
+### 🐛 Describe the bug
+
+This sample code leads to a huge amount or RAM allocated on GPU.
+It seems like torch.expand() is interpreted as torch.repeat(), leading the compiled code to try to allocate much more memory than needed instead of seeing it as a View.
+
+Versions to reproduce:
+* It works when NOT compiled with torch 2.5.1 / 2.7.1 / 2.8.0
+* It works when compiled with torch 2.5.1
+* It doesn't work (=huge RAM allocated) when compiled with torch 2.7.1 / 2.8.0
+
+Ablation:
+* It only fails with the Inductor backend
+* It fails with all 3 modes (default/reduce-overhead/max-autotune)
+
+```
+import torch
+
+BATCH_SIZE = 64
+CHANNELS, IMG_SIZE = 3, 224
+GRID_SIZE = 13
+
+class MyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.grid = torch.nn.Parameter(torch.randn((5000, GRID_SIZE, GRID_SIZE, 2), device='cuda'))
+        self.fc = torch.nn.Linear(GRID_SIZE*GRID_SIZE*CHANNELS, 16)
+
+    def forward(self, x):
+        per_channel = []
+        for i in range(CHANNELS):
+            channel = x[:,i,...].expand(5000,-1,-1,-1)
+            patch = torch.nn.functional.grid_sample(channel, self.grid, mode="bilinear", align_corners=False, padding_mode="border")
+            patch = patch.transpose(0,1).flatten(start_dim=2)
+            per_channel.append(patch)
+        x = torch.cat(per_channel, axis=2)
+        x = self.fc(x)
+        return x
+
+def main():
+    model = MyModel()
+
+Original API Under Test: torch.expandtorch.expand
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.signal.kaiser_window
+Similarity score: 0.9846295118331909
+
+Similar API information:
+# Extracted call chain for tf.signal.kaiser_window
+
+# --- tensorflow.python.ops.signal.window_ops.kaiser_window ---
+def kaiser_window(window_length, beta=12., dtype=dtypes.float32, name=None):
+  """Generate a [Kaiser window][kaiser].
+
+  Args:
+    window_length: A scalar `Tensor` indicating the window length to generate.
+    beta: Beta parameter for Kaiser window, see reference below.
+    dtype: The data type to produce. Must be a floating point type.
+    name: An optional name for the operation.
+
+  Returns:
+    A `Tensor` of shape `[window_length]` of type `dtype`.
+
+  [kaiser]:
+    https://docs.scipy.org/doc/numpy/reference/generated/numpy.kaiser.html
+  """
+  with ops.name_scope(name, 'kaiser_window'):
+    window_length = _check_params(window_length, dtype)
+    window_length_const = tensor_util.constant_value(window_length)
+    if window_length_const == 1:
+      return array_ops.ones([1], dtype=dtype)
+    # tf.range does not support float16 so we work with float32 initially.
+    halflen_float = (
+        math_ops.cast(window_length, dtype=dtypes.float32) - 1.0) / 2.0
+    arg = math_ops.range(-halflen_float, halflen_float + 0.1,
+                         dtype=dtypes.float32)
+    # C
+...
+
+Original Test Case:
+import torch
+
+BATCH_SIZE = 64
+CHANNELS, IMG_SIZE = 3, 224
+GRID_SIZE = 13
+
+class MyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.grid = torch.nn.Parameter(torch.randn((5000, GRID_SIZE, GRID_SIZE, 2), device='cuda'))
+        self.fc = torch.nn.Linear(GRID_SIZE*GRID_SIZE*CHANNELS, 16)
+
+    def forward(self, x):
+        per_channel = []
+        for i in range(CHANNELS):
+            channel = x[:,i,...].expand(5000,-1,-1,-1)
+            patch = torch.nn.functional.grid_sample(channel, self.grid, mode="bilinear", align_corners=False, padding_mode="border")
+            patch = patch.transpose(0,1).flatten(start_dim=2)
+            per_channel.append(patch)
+        x = torch.cat(per_channel, axis=2)
+        x = self.fc(x)
+        return x
+
+def main():
+    model = MyModel()
+    model = model.cuda()
+    model = torch.compile(model)
+
+    for _ in range(10):
+        x = torch.randn((BATCH_SIZE, CHANNELS, IMG_SIZE, IMG_SIZE), device='cuda')
+        x = model(x)
+        x = torch.sum(x)
+        x.backward()
+
+
+if __name__ == "__main__":
+    main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

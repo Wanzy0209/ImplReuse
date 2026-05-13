@@ -1,0 +1,150 @@
+Issue ID: 164701
+Title: torch.compile miscompilation when copying from and saving to a state tensor in the same fused kernel
+Bug Description:
+### 🐛 Describe the bug
+
+In the below notebook cell, there are three versions of a function that rotates new rows into a state tensor whose purpose is to contain the last 2048 rows. `slide_to_the_left1` is just included for reference; it should have the same behaviour as the other two functions. `slide_to_the_left3` is just a `torch.compiled` copy of `slide_to_the_left2`: however it does not behave the same as `slide_to_the_left2` and instead exhibits a miscompilation bug.
+
+These functions are a minimal-ish version of a much larger codebase that was both updating the state tensor and then using it to perform some computation (hence the seemingly useless `dev_null` tensor in the reproducer); it's not from a fuzzer.
+
+The script is set up to initialise a state tensor with zeros, slide two new events into the state tensor, and then check that only the last two rows of the state tensor are nonzero; for them to be nonzero would be a bug. It does not crash/print an error, this is a bug report of a miscompilation.
+
+```python
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+
+device = "cuda"
+
+def slide_to_the_left1(state, new_events, arange, dev_null):
+    _ = arange
+    _ = dev_null
+
+    concatenated = torch.cat([state, new_events], dim=1)
+    state[:, :, :] = concatenated[:, -2048:, :]
+
+def slide_to_the_left2(state, new_events, arange, dev_null):
+    batch_size, _, _ = new_events.shape
+
+    concatenated = torch.cat([state, new_events], dim=1)
+
+    # th
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.enable_eager_execution
+Similarity score: 0.9934076070785522
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.enable_eager_execution
+
+# --- tensorflow.python.framework.ops.enable_eager_execution ---
+def enable_eager_execution(config=None, device_policy=None,
+                           execution_mode=None) -> None:
+  """Enables eager execution for the lifetime of this program.
+
+  Eager execution provides an imperative interface to TensorFlow. With eager
+  execution enabled, TensorFlow functions execute operations immediately (as
+  opposed to adding to a graph to be executed later in a `tf.compat.v1.Session`)
+  and
+  return concrete values (as opposed to symbolic references to a node in a
+  computational graph).
+
+  For example:
+
+  ```python
+  tf.compat.v1.enable_eager_execution()
+
+  # After eager execution is enabled, operations are executed as they are
+  # defined and Tensor objects hold concrete values, which can be accessed as
+  # numpy.ndarray`s through the numpy() method.
+  assert tf.multiply(6, 7).numpy() == 42
+  ```
+
+  Eager execution cannot be enabled after TensorFlow APIs have been used to
+  create or execute graphs. It is typically recommended to invoke this function
+  at program startup and not in a library (as most libraries should be usabl
+...
+
+Original Test Case:
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+
+device = "cuda"
+
+def slide_to_the_left1(state, new_events, arange, dev_null):
+    _ = arange
+    _ = dev_null
+
+    concatenated = torch.cat([state, new_events], dim=1)
+    state[:, :, :] = concatenated[:, -2048:, :]
+
+def slide_to_the_left2(state, new_events, arange, dev_null):
+    batch_size, _, _ = new_events.shape
+
+    concatenated = torch.cat([state, new_events], dim=1)
+
+    # these three lines are a very complicated identity transformation:
+    batch_idx = torch.arange(batch_size, dtype=torch.int32, device=device)[:, None]
+    arange = arange[None, :]
+    concatenated = concatenated[batch_idx, arange]
+
+    state[:, :, :] = concatenated[:, -2048:, :]
+    dev_null[:, :, :] = concatenated[:, :, :]
+
+slide_to_the_left3 = torch.compile(slide_to_the_left2)
+
+state = torch.zeros([4, 2048, 1024], device=device)
+slide_to_the_left1(
+    state,
+    torch.arange(start=1, end=3, device=device)[None, :, None].expand(4, 2, 1024).contiguous(),
+    torch.arange(2050, dtype=torch.int32, device=device),
+    torch.zeros([4, 2050, 1024], device=device),
+)
+display("slide_to_the_left1", state)
+# because new_events has shape [4, 2, 1024], only 2 new events should have been added to the state, and the rest should still be zeros:
+assert (state[:, :-2, :] == 0).all(), torch.nonzero(state[:, :-2, :])
+
+state = torch.zeros([4, 2048, 1024], device=device)
+slide_to_the_left2(
+    state,
+    torch.arange(start=1, end=3, device=device)[None, :, None].expand(4, 2, 1024).contiguous(),
+    torch.arange(2050, dtype=torch.int32, device=device),
+    torch.zeros([4, 2050, 1024], device=device),
+)
+display("slide_to_the_left2", state)
+# ditto
+assert (state[:, :-2, :] == 0).all(), torch.nonzero(state[:, :-2, :])
+
+# this third one has a race condition that can take a few attempts to be exhibited on a T4
+# anecdotally it seems to happen more often on the bigger chips
+# single digit attempts to exhibit this have always sufficed on the NVIDIA chips I've tried
+for attempt in range(1, 1000):
+    state = torch.zeros([4, 2048, 1024], device=device)
+    slide_to_the_left3(
+        state,
+        torch.arange(start=1, end=3, device=device)[None, :, None].expand(4, 2, 1024).contiguous(),
+        torch.arange(2050, dtype=torch.int32, device=device),
+        torch.zeros([4, 2050, 1024], device=device),
+    )
+
+    if not (state[:, :-2, :] == 0).all():
+        display(f"slide_to_the_left3 attempt {attempt}", state, torch.nonzero(state[:, :-2, :]))
+        break
+
+The API tf.compat.v1.enable_eager_execution is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,89 @@
+Issue ID: 161014
+Title: Inconsistent constant_pad_nd behavior with negative padding
+Bug Description:
+### 🕵️‍♂️ Detected with [FACTO](https://github.com/meta-pytorch/FACTO)
+
+### 🐛 Describe the bug
+
+The aten op `constant_pad_nd` allows for negative padding, as long as the absolute value of the padding is smaller than the size, and as long as the resulting output doesn't have negative size
+
+For example:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2]).shape
+torch.Size([5, 0])
+```
+Notice that the -1, -2 padding applies to the last dimension
+
+We can also pad the first dimension, by adding two more pads:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 0, 0]).shape
+torch.Size([5, 0])
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, -1, -1]).shape
+torch.Size([3, 0])
+```
+
+However, in the following case, it throws an error:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 1, 1]).shape
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/Users/mcandales/miniconda3/envs/facto/lib/python3.11/site-packages/torch/_ops.py", line 840, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: The input size 3, plus negative padding -1 and -2 resulted in a negative output size, which is invalid. Check dimension 1 of your input.
+```
+
+Notice that, if we make sure the output won't have size 0, we always avoid the bug:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -1, 1, 1])
+...
+
+Original API Under Test: torch.nn.functional.pad
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.batch_scatter_update
+Similarity score: 0.9920693039894104
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.batch_scatter_update
+
+# --- tensorflow.python.ops.state_ops.batch_scatter_update ---
+def batch_scatter_update(ref, indices, updates, use_locking=True, name=None):
+  """Generalization of `tf.compat.v1.scatter_update` to axis different than 0.
+
+  Analogous to `batch_gather`. This assumes that `ref`, `indices` and `updates`
+  have a series of leading dimensions that are the same for all of them, and the
+  updates are performed on the last dimension of indices. In other words, the
+  dimensions should be the following:
+
+  `num_prefix_dims = indices.ndims - 1`
+  `batch_dim = num_prefix_dims + 1`
+  `updates.shape = indices.shape + var.shape[batch_dim:]`
+
+  where
+
+  `updates.shape[:num_prefix_dims]`
+  `== indices.shape[:num_prefix_dims]`
+  `== var.shape[:num_prefix_dims]`
+
+  And the operation performed can be expressed as:
+
+  `var[i_1, ..., i_n, indices[i_1, ..., i_n, j]] = updates[i_1, ..., i_n, j]`
+
+  When indices is a 1D tensor, this operation is equivalent to
+  `tf.compat.v1.scatter_update`.
+
+  To avoid this operation there would be 2 alternatives:
+  1) Reshaping the variable by merging the first `ndims` dimensions. However,
+
+Original Test Case:
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2]).shape
+torch.Size([5, 0])
+
+The API tf.compat.v1.batch_scatter_update is identified as cross-library similar to the original PyTorch API torch.nn.functional.pad.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,142 @@
+Issue ID: 165854
+Title: New flex flash path breaks w/ dynamic buffers
+Bug Description:
+```Py
+import torch
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask, noop_mask
+
+
+def run_with_head_count(compiled_fa, H, device, dtype):
+    """Run flex attention with a specific head count, creating a captured buffer sized by H."""
+    B, S, D = 2, 256, 64
+
+    # Create captured buffer that depends on dynamic H
+    head_scale = torch.randn(H, device=device, dtype=dtype, requires_grad=True)
+
+    def score_mod(score, batch, head, token_q, token_kv):
+        return score * head_scale[head]
+
+    print(f"  Running with H={H}, head_scale.shape={head_scale.shape}")
+
+    # Run multiple iterations with the same head_scale
+    for i in range(5):
+        q = torch.randn(B, H, S, D, device=device, dtype=dtype, requires_grad=True)
+        k = torch.randn_like(q, requires_grad=True)
+        v = torch.randn_like(q, requires_grad=True)
+
+        block_mask = create_block_mask(noop_mask, B, 1, S, S, device=device)
+
+        outputs = compiled_fa(q, k, v, score_mod=score_mod, block_mask=block_mask)
+        loss = outputs.sum()
+        loss.backward()
+
+    print(f"  ✓ Completed {i+1} iterations")
+
+
+def main():
+    device = "cuda"
+    dtype = torch.float16
+    torch.manual_seed(0)
+
+    # Test with different head counts - this makes H a dynamic dimension
+    # and the captured buffer (head_scale) changes size with H
+    head_counts = [4, 8, 4, 16, 4]
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.lobpcg
+Similarity score: 0.99420565366745
+
+Similar API information:
+# Extracted call chain for torch.lobpcg
+
+# --- torch._lobpcg.lobpcg ---
+def lobpcg(
+    A: Tensor,
+    k: Optional[int] = None,
+    B: Optional[Tensor] = None,
+    X: Optional[Tensor] = None,
+    n: Optional[int] = None,
+    iK: Optional[Tensor] = None,
+    niter: Optional[int] = None,
+    tol: Optional[float] = None,
+    largest: Optional[bool] = None,
+    method: Optional[str] = None,
+    tracker: None = None,
+    ortho_iparams: Optional[dict[str, int]] = None,
+    ortho_fparams: Optional[dict[str, float]] = None,
+    ortho_bparams: Optional[dict[str, bool]] = None,
+) -> tuple[Tensor, Tensor]:
+    """Find the k largest (or smallest) eigenvalues and the corresponding
+    eigenvectors of a symmetric positive definite generalized
+    eigenvalue problem using matrix-free LOBPCG methods.
+
+    This function is a front-end to the following LOBPCG algorithms
+    selectable via `method` argument:
+
+      `method="basic"` - the LOBPCG method introduced by Andrew
+      Knyazev, see [Knyazev2001]. A less robust method, may fail when
+      Cholesky is applied to singular input.
+
+Original Test Case:
+import torch
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask, noop_mask
+
+
+def run_with_head_count(compiled_fa, H, device, dtype):
+    """Run flex attention with a specific head count, creating a captured buffer sized by H."""
+    B, S, D = 2, 256, 64
+
+    # Create captured buffer that depends on dynamic H
+    head_scale = torch.randn(H, device=device, dtype=dtype, requires_grad=True)
+
+    def score_mod(score, batch, head, token_q, token_kv):
+        return score * head_scale[head]
+
+    print(f"  Running with H={H}, head_scale.shape={head_scale.shape}")
+
+    # Run multiple iterations with the same head_scale
+    for i in range(5):
+        q = torch.randn(B, H, S, D, device=device, dtype=dtype, requires_grad=True)
+        k = torch.randn_like(q, requires_grad=True)
+        v = torch.randn_like(q, requires_grad=True)
+
+        block_mask = create_block_mask(noop_mask, B, 1, S, S, device=device)
+
+        outputs = compiled_fa(q, k, v, score_mod=score_mod, block_mask=block_mask)
+        loss = outputs.sum()
+        loss.backward()
+
+    print(f"  ✓ Completed {i+1} iterations")
+
+
+def main():
+    device = "cuda"
+    dtype = torch.float16
+    torch.manual_seed(0)
+
+    # Test with different head counts - this makes H a dynamic dimension
+    # and the captured buffer (head_scale) changes size with H
+    head_counts = [4, 8, 4, 16, 4]
+
+    compiled_fa = torch.compile(flex_attention, fullgraph=True, dynamic=True)
+
+    print(f"Running flex-attention with dynamic head counts on {device}, dtype={dtype}")
+    print(f"Testing head counts: {head_counts}\n")
+
+    for iteration, H in enumerate(head_counts, start=1):
+        print(f"Iteration {iteration}:")
+        run_with_head_count(compiled_fa, H, device, dtype)
+
+
+if __name__ == "__main__":
+    main()
+
+The API torch.lobpcg is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -99,12 +99,11 @@ def is_sufficient_test_code(code: str) -> bool:
     return False
 
 
-def build_prompt(issue: Dict[str, Any], test_case: str, similar_api: Dict[str, Any], group: str) -> str:
+def build_prompt(issue: Dict[str, Any], test_case: str, similar_api: Dict[str, Any], group: str, main_api: str) -> str:
     issue_title = issue.get('title', '').strip()
     issue_desc = issue.get('bug_description') or issue.get('error_description') or issue.get('repro_output') or ''
     issue_desc = truncate_text(issue_desc, max_chars=1500, max_lines=40)
     issue_id = issue.get('issue_id', '')
-    main_api = issue.get('core_api') or issue.get('affected_api') or 'Unknown API'
 
     api_name = similar_api.get('api_name') or similar_api.get('name') or 'Unknown API'
     similarity_score = similar_api.get('similarity')
@@ -162,16 +161,15 @@ Similar API: {api_name}
     prompt += f"\n{similarity_note}\n{reuse_description}\n"
     prompt += (
         "IMPORTANT:\n"
-        "1. Output only valid Python test case code.\n"
-        "2. Do not include explanations, analysis, or markdown.\n"
-        "3. Keep the test case runnable and minimal.\n"
-        "4. Include any necessary imports and assertions.\n"
-        "5. If the API is cross-library, translate semantics appropriately.\n"
+        "1. Output valid Python test case code.\n"
+        "2. Keep the test case runnable and minimal.\n"
+        "3. Include any necessary imports and assertions.\n"
+        "4. If the API is cross-library, translate semantics appropriately.\n"
     )
 
     if group == 'issue_to_api':
         prompt += (
-            "6. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.\n"
+            "5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.\n"
         )
 
     return prompt
@@ -231,6 +229,13 @@ def main():
             continue
 
         issue_id = issue.get('issue_id') or issue_file.stem.replace('_issue_ori_data', '')
+        core_api = None
+        if isinstance(issue.get('core_api_identification'), dict):
+            core_api = issue['core_api_identification'].get('core_api')
+        if not core_api:
+            print(f"Skipping {issue_id}: no core_api available")
+            continue
+
         test_case_file = find_test_case_file(issue_id, args.test_case_dir)
         if not test_case_file:
             print(f"Skipping {issue_id}: no test case file found")
@@ -247,6 +252,11 @@ def main():
             print(f"Skipping {issue_id}: missing similarity file")
             continue
 
+        main_api = similarity_data.get('core_api') or core_api
+        if not main_api:
+            print(f"Skipping {issue_id}: similarity file missing core_api")
+            continue
+
         similar_groups = similarity_data.get('similar_apis', {})
         if not similar_groups:
             print(f"Skipping {issue_id}: no similar APIs in file")
@@ -256,7 +266,7 @@ def main():
             if not api_list:
                 continue
             for idx, similar_api in enumerate(api_list):
-                prompt_text = build_prompt(issue, test_case, similar_api, group)
+                prompt_text = build_prompt(issue, test_case, similar_api, group, main_api)
                 prompt_file = args.output_dir / f"{issue_id}_{group}_{idx}.txt"
                 save_text(prompt_file, prompt_text)
                 print(f"Saved prompt: {prompt_file}")

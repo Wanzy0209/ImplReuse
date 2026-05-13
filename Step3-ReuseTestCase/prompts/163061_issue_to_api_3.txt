@@ -1,0 +1,134 @@
+Issue ID: 163061
+Title: GIL is not released when calling torch.compile kernels
+Bug Description:
+### 🐛 Describe the bug
+
+In most cases, PyTorch releases GIL when calling CUDA APIs, but I found the GIL is held when calling torch.compile kernels, is this expected? Is it possible to release GIL when calling torch.compile kernels?
+
+To reproduce, script `torch_compile.py`:
+```python
+import torch
+import triton
+import triton.language as tl
+
+def torch_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@torch.compile
+def torch_compile_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@triton.jit
+def add_kernel(x_ptr,
+               y_ptr,
+               output_ptr,
+               n_elements,
+               BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+def triton_add(x: torch.Tensor, y: torch.Tensor):
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    return output
+
+Original API Under Test: torch.compile
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.compat.v1.train.ProximalGradientDescentOptimizer
+Similarity score: 0.9829152226448059
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.train.ProximalGradientDescentOptimizer
+
+# --- tensorflow.python.training.proximal_gradient_descent.ProximalGradientDescentOptimizer ---
+class ProximalGradientDescentOptimizer(optimizer.Optimizer):
+  # pylint: disable=line-too-long
+  """Optimizer that implements the proximal gradient descent algorithm.
+
+  References:
+    Efficient Learning using Forward-Backward Splitting:
+      [Duchi et al., 2009](http://papers.nips.cc/paper/3793-efficient-learning-using-forward-backward-splitting)
+      ([pdf](http://papers.nips.cc/paper/3793-efficient-learning-using-forward-backward-splitting.pdf))
+  """
+
+  def __init__(self, learning_rate, l1_regularization_strength=0.0,
+               l2_regularization_strength=0.0, use_locking=False,
+               name="ProximalGradientDescent"):
+    """Construct a new proximal gradient descent optimizer.
+
+    Args:
+      learning_rate: A Tensor or a floating point value.  The learning
+        rate to use.
+      l1_regularization_strength: A float value, must be greater than or
+        equal to zero.
+      l2_regularization_strength: A float value, must be greater than or
+        equal to zero.
+      use_locking: If Tr
+...
+
+Original Test Case:
+import torch
+import triton
+import triton.language as tl
+
+def torch_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@torch.compile
+def torch_compile_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@triton.jit
+def add_kernel(x_ptr,
+               y_ptr,
+               output_ptr,
+               n_elements,
+               BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+def triton_add(x: torch.Tensor, y: torch.Tensor):
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    return output
+
+
+def main():
+    x = torch.randn(4096, 4096, device='cuda')
+    y = torch.randn(4096, 4096, device='cuda')
+    for _ in range(10):
+        torch_add(x, y)
+        torch_compile_add(x, y)
+        triton_add(x, y)
+        
+
+if __name__ == "__main__":
+    main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

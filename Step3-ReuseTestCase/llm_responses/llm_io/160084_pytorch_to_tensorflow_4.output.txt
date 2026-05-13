@@ -1,0 +1,103 @@
+```python
+import tensorflow as tf
+import sys
+
+# Disable eager execution to use tf.compat.v1 queues and sessions
+tf.compat.v1.disable_eager_execution()
+
+class RegressionModelTF:
+    """
+    TensorFlow adaptation of the RegressionModel.
+    Uses tf.compat.v1.train.string_input_producer to handle inputs,
+    mimicking the data flow of the original PyTorch model.
+    """
+    def __init__(self, a=0, b=0):
+        # Define parameters as constants in the graph
+        self.a = tf.constant(float(a), name='param_a')
+        self.b = tf.constant(float(b), name='param_b')
+        self.first_batch = True
+
+    def forward(self, string_inputs):
+        """
+        Constructs the graph using string_input_producer.
+        """
+        # Use the specific API: string_input_producer
+        # This replaces the direct torch.randn input generation
+        queue = tf.compat.v1.train.string_input_producer(
+            string_inputs,
+            num_epochs=1,
+            shuffle=False,
+            capacity=32
+        )
+        
+        # Dequeue the next string (filename)
+        filename = queue.dequeue()
+        
+        # Mimic the print logic for the first batch
+        # In graph mode, we use tf.print. 
+        # Note: Exact stateful 'if' logic is complex in TF1 graphs, 
+        # so we print on every step to verify execution flow.
+        filename_print = tf.print("Processing input: ", filename)
+        
+        # To perform the math operation (x * a + b), we need to convert the string to a number.
+        # We simulate this by taking the length of the string as 'x'.
+        with tf.control_dependencies([filename_print]):
+            x = tf.strings.length(filename)
+            x = tf.cast(x, tf.float32)
+            
+            # The core computation: x * a + b
+            result = x * self.a + self.b
+            
+        return result
+
+def test_string_input_producer_regression():
+    """
+    Test case adapted from PyTorch issue 160084.
+    Verifies that the input pipeline and graph execution proceed without errors.
+    """
+    # Setup: Create dummy string inputs (mimicking torch.randn inputs)
+    # We use 10 strings to represent a batch of data
+    input_strings = [f"data_batch_{i}.txt" for i in range(10)]
+    
+    # Initialize Model
+    model = RegressionModelTF(a=2.0, b=1.0)
+    
+    # Build the graph
+    output = model.forward(input_strings)
+    
+    # Execution: Use a Session
+    with tf.compat.v1.Session() as sess:
+        # Initialize local variables (required for epochs counter in string_input_producer)
+        # and global variables
+        sess.run([
+            tf.compat.v1.local_variables_initializer(), 
+            tf.compat.v1.global_variables_initializer()
+        ])
+        
+        # Start the queue runners (essential for string_input_producer to work)
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord, sess=sess)
+        
+        try:
+            print("Starting inference loop...")
+            # Run a few steps to verify the pipeline works
+            for i in range(4):
+                result_val = sess.run(output)
+                print(f"Step {i}: Computed Result = {result_val}")
+            
+            print("Test Passed: API executed successfully without stream/runtime errors.")
+            
+        except RuntimeError as e:
+            print(f"Test Failed with RuntimeError: {e}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Test Failed with unexpected error: {e}")
+            sys.exit(1)
+        finally:
+            # Stop the queue runners
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_string_input_producer_regression()
+```

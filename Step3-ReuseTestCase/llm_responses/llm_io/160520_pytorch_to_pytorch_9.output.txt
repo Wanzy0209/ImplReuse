@@ -1,0 +1,49 @@
+```python
+import torch
+import torch.distributed as dist
+import os
+import torch.profiler
+
+def main():
+    # Initialize the process group
+    # This setup assumes the script is run with torchrun or similar launcher
+    # For a minimal single-process test, we default to rank 0 and world size 1
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    dist.init_process_group(backend=backend, rank=rank, world_size=world_size)
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(rank)
+
+    # Non-tensor arguments (similar to the implicit non-tensor args in the original bug)
+    object_list = [1, 2.5, "string_arg", [1, 2, 3], {"key": "value"}]
+
+    # Define device
+    device = torch.device(f"cuda:{rank}") if torch.cuda.is_available() else torch.device("cpu")
+
+    # Use Profiler to check for H2D/D2H activities, similar to the original bug report
+    with torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ],
+        on_trace_ready=torch.profiler.tensorboard_trace_handler("./log_dist"),
+    ) as prof:
+        # Call the similar API: torch.distributed.broadcast_object_list
+        # We pass non-tensor objects and specify a device, which triggers internal
+        # serialization and potential device transfers.
+        dist.broadcast_object_list(object_list, src=0, device=device)
+
+    # Verify correctness of the broadcast
+    expected_list = [1, 2.5, "string_arg", [1, 2, 3], {"key": "value"}]
+    assert object_list == expected_list, f"Mismatch after broadcast: {object_list} != {expected_list}"
+
+    print(f"Rank {rank}: Test passed. Objects broadcasted correctly.")
+    
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()
+```

@@ -1,0 +1,118 @@
+Issue ID: 160520
+Title: Inductor w/ cpp_wrapper introduces redundant H2D-D2H memcpy under DeviceContext
+Bug Description:
+### 🐛 Describe the bug
+
+If we compile a Module with inductor w/ cpp_wrapper, and run it under a DeviceContext, Non-tensor arguments would be redundantly passed to device by `torch.tensor(arg)` and then fetched back to device by `.item()`. This introduce extra overhead.
+
+Repro code:
+```python
+import torch
+import torch._inductor.config as config
+config.cpp_wrapper = True
+torch._logging.set_logs(output_code=True)
+
+class SimpleMLP(torch.nn.Module):
+  def __init__(self):
+    super().__init__()
+    self.fc1 = torch.nn.Linear(28 * 28, 128)
+    self.fc2 = torch.nn.Linear(128, 10)
+    self.forward = torch.compile(self.forward)
+
+  def forward(self, x):
+    x = x.view(x.size(0), 28*28)
+    x = torch.nn.functional.relu(self.fc1(x))
+    x = self.fc2(x)
+    return x
+
+mlp = SimpleMLP().cuda()
+
+with torch.profiler.profile(with_stack=True, activities=[
+         torch.profiler.ProfilerActivity.CPU,
+         torch.profiler.ProfilerActivity.CUDA,
+    ], on_trace_ready=torch.profiler.tensorboard_trace_handler("./log"),
+) as prof:
+  with torch.device("cuda"):
+    for i in range(10):
+      x = torch.randn(i, 28, 28).cuda()
+      y = mlp(x)
+      loss = y.sum()
+```
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.library.impl_abstract
+Similarity score: 0.9943459033966064
+
+Similar API information:
+# Extracted call chain for torch.library.impl_abstract
+
+# --- torch.library.impl_abstract ---
+def impl_abstract(qualname, func=None, *, lib=None, _stacklevel=1):
+    r"""This API was renamed to :func:`torch.library.register_fake` in PyTorch 2.4.
+    Please use that instead.
+    """
+    if func is not None:
+        _stacklevel = _stacklevel + 1
+    return register_fake(qualname, func, lib=lib, _stacklevel=_stacklevel)
+
+# --- torch.library.register_fake ---
+def register_fake(
+    op: _op_identifier,
+    func: Optional[Callable] = None,
+    /,
+    *,
+    lib: Optional[Library] = None,
+    _stacklevel: int = 1,
+):
+    r"""Register a FakeTensor implementation ("fake impl") for this operator.
+
+    Also sometimes known as a "meta kernel", "abstract impl".
+
+    An "FakeTensor implementation" specifies the behavior of this operator on
+    Tensors that carry no data ("FakeTensor"). Given some input Tensors with
+    certain properties (sizes/strides/storage_offset/device), it specifies
+    what the properties of the output Tensors are.
+
+    The FakeTensor implementation has the same signature as the operator.
+
+Original Test Case:
+import torch
+import torch._inductor.config as config
+config.cpp_wrapper = True
+torch._logging.set_logs(output_code=True)
+
+class SimpleMLP(torch.nn.Module):
+  def __init__(self):
+    super().__init__()
+    self.fc1 = torch.nn.Linear(28 * 28, 128)
+    self.fc2 = torch.nn.Linear(128, 10)
+    self.forward = torch.compile(self.forward)
+
+  def forward(self, x):
+    x = x.view(x.size(0), 28*28)
+    x = torch.nn.functional.relu(self.fc1(x))
+    x = self.fc2(x)
+    return x
+
+mlp = SimpleMLP().cuda()
+
+with torch.profiler.profile(with_stack=True, activities=[
+         torch.profiler.ProfilerActivity.CPU,
+         torch.profiler.ProfilerActivity.CUDA,
+    ], on_trace_ready=torch.profiler.tensorboard_trace_handler("./log"),
+) as prof:
+  with torch.device("cuda"):
+    for i in range(10):
+      x = torch.randn(i, 28, 28).cuda()
+      y = mlp(x)
+      loss = y.sum()
+
+The API torch.library.impl_abstract is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

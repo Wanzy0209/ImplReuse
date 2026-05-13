@@ -1,0 +1,101 @@
+Issue ID: 160273
+Title: [Documentation Clarity] torch.min/torch.max gradient behavior
+Bug Description:
+### 📚 The doc issue
+
+`torch.min` and `torch.max` do not mention the gradient behavior of theirs, yet the gradient behavior can be found in the documentation of `torch.amin`, `torch.amax`:
+> Both max/min and amax/amin evenly distribute gradients between equal values when there are multiple input elements with the same minimum or maximum value.
+
+Which seems, **unfortunately**, to be wrong, or at least, partially wrong, see the following example:
+
+```python
+>>> # torch.min -> reduce over all dimensions
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a)
+>>> min_val.backward()
+>>> a.grad
+tensor([0.2000, 0.2000, 0.2000, 0.2000, 0.2000], device='cuda:0')
+...
+>>> # torch.min(input, dim=...) -> reduce over specified dimension
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a, dim=0)
+>>> min_val.values.backward()
+>>> a.grad
+tensor([1., 0., 0., 0., 0.], device='cuda:0')
+```
+
+It is obvious that the former one performs a `amin`-like BP while the latter one is more like indexing. My torch version is `'2.7.1+cu126'`, and I think it is the same with CPU devices.
+
+Can you make it clearer? (see Suggest a potential alternative/fix) 
+
+### Suggest a potential alternative/fix
+
+We know that `torch.min` (and `max`) has three sets of behaviors:
+- reduce over all dimensions (single tensor input), its gradient behavior is the same as `amin`. (Evenly distribute).
+- reduce over one specified axis, its gradient behavior is like using an `argm
+...
+
+Original API Under Test: torch.min
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.functional.cosine_similarity
+Similarity score: 0.9946666359901428
+
+Similar API information:
+# Extracted call chain for torch.nn.functional.cosine_similarity
+
+# --- torch.onnx.symbolic_opset9.cosine_similarity ---
+def cosine_similarity(g: jit_utils.GraphContext, x1, x2, dim, eps):
+    cross = symbolic_helper._reducesum_helper(
+        g, mul(g, x1, x2), axes_i=[dim], keepdims_i=0
+    )
+    x1_l2 = symbolic_helper._reducesum_helper(
+        g, mul(g, x1, x1), axes_i=[dim], keepdims_i=0
+    )
+    x2_l2 = symbolic_helper._reducesum_helper(
+        g, mul(g, x2, x2), axes_i=[dim], keepdims_i=0
+    )
+    div_tens = max(
+        g, sqrt(g, mul(g, x1_l2, x2_l2)), g.op("Constant", value_t=torch.tensor([eps]))
+    )
+    return div(g, cross, div_tens)
+
+# --- torch.onnx.symbolic_opset9.div ---
+def div(g: jit_utils.GraphContext, self, other, *args):
+    if len(args) == 0:
+        return true_divide(g, self, other)
+    else:
+        return _div_rounding_mode(g, self, other, *args)
+
+# --- torch.onnx.symbolic_opset9._div_rounding_mode ---
+def _div_rounding_mode(g: jit_utils.GraphContext, self, other, rounding_mode):
+    if rounding_mode is None:
+        return true_divide(g, self, other)
+    elif rounding_mode == "floor":
+
+Original Test Case:
+>>> # torch.min -> reduce over all dimensions
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a)
+>>> min_val.backward()
+>>> a.grad
+tensor([0.2000, 0.2000, 0.2000, 0.2000, 0.2000], device='cuda:0')
+...
+>>> # torch.min(input, dim=...) -> reduce over specified dimension
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a, dim=0)
+>>> min_val.values.backward()
+>>> a.grad
+tensor([1., 0., 0., 0., 0.], device='cuda:0')
+
+The API torch.nn.functional.cosine_similarity is identified as same-library similar to the original PyTorch API torch.min.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

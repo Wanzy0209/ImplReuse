@@ -1,0 +1,59 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_tf_random_uniform_shape_change():
+    """
+    Adapted test case for tf.random.uniform based on the PyTorch bug report.
+    
+    The original bug involves torch.compile crashing when torch.complex receives
+    inputs with different shapes than during the initial compilation.
+    
+    This test adapts that logic to TensorFlow's tf.random.uniform, utilizing
+    the broadcast_dynamic_shape logic mentioned in the similar API information
+    to determine the output shape from the input tensors.
+    """
+    
+    # Define the function to be compiled/traced.
+    # Mimics the logic: output shape depends on broadcasting input shapes.
+    @tf.function
+    def f(low: tf.Tensor, high: tf.Tensor) -> tf.Tensor:
+        # Based on the Similar API info: 
+        # size = array_ops.broadcast_dynamic_shape(low.shape, high.shape)
+        shape = tf.broadcast_dynamic_shape(tf.shape(low), tf.shape(high))
+        
+        # Call the target API
+        return tf.random.uniform(shape=shape, minval=low, maxval=high, dtype=tf.float32)
+
+    # Setup dimensions matching the original bug report
+    B, F, T = 1, 641, 39
+
+    # Create source tensors
+    low_src = tf.random.normal((B, F, T))
+    high_src = tf.random.normal((B, F, T))
+
+    # Create mismatched tensors (permuted dimensions)
+    # This mimics r_mismatch and i_mismatch in the original bug
+    low_mismatch = tf.transpose(low_src, [0, 2, 1])
+    high_mismatch = tf.transpose(high_src, [0, 2, 1])
+
+    # First call with original shapes (traces the graph)
+    out1 = f(low_src, high_src)
+    assert out1.shape == (B, F, T), f"First call failed: expected {(B, F, T)}, got {out1.shape}"
+    print(f"First call successful. Shape: {out1.shape}")
+
+    # Second call with permuted shapes
+    # In the PyTorch bug, this causes an AssertionError.
+    # We verify if tf.random.uniform handles the shape change gracefully (e.g., by retracing).
+    try:
+        out2 = f(low_mismatch, high_mismatch)
+        assert out2.shape == (B, T, F), f"Second call failed: expected {(B, T, F)}, got {out2.shape}"
+        print(f"Second call successful. Shape: {out2.shape}")
+        print("Test passed: API handled shape change gracefully.")
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_tf_random_uniform_shape_change()
+```

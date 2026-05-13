@@ -1,0 +1,115 @@
+Issue ID: 168181
+Title: [inductor] User-defined Triton kernel output + .cpu() correctness issue
+Bug Description:
+Repro:
+Apply
+```
+diff --git a/test/inductor/test_triton_kernels.py b/test/inductor/test_triton_kernels.py
+index eee4dba7f27..2eef80e5976 100644
+--- a/test/inductor/test_triton_kernels.py
++++ b/test/inductor/test_triton_kernels.py
+@@ -1216,6 +1216,20 @@ def forward(self, x_1, output_1):
+         compiled_out = torch.compile(f)(x, y)
+         self.assertEqual(compiled_out, eager_out)
+ 
++    @requires_gpu
++    def test_triton_kernel_to_cpu(self):
++        def f(x, y):
++            out = torch.zeros_like(x)
++            add_kernel[(1,)](x, y, out, 16, 16)
++            out_cpu = out.cpu() + 1
++            return out_cpu
++
++        x = torch.randn(4, 4, device=GPU_TYPE)
++        y = torch.randn(4, 4, device=GPU_TYPE)
++        eager_out = f(x, y)
++        compiled_out = torch.compile(f)(x, y)
++        self.assertEqual(compiled_out, eager_out)
++
+     @requires_gpu
+     def test_triton_kernel_out_of_order(self):
+         @triton.jit
+```
+
+, then run 
+
+```
+python test/inductor/test_triton_kernels.py -k test_triton_kernel_to_cpu
+
+
+Fframes [('total', 1), ('ok', 1)]
+stats [('calls_captured', 4), ('unique_graphs', 1)]
+inductor [('fxgraph_cache_miss', 1), ('pattern_matcher_count', 1), ('pattern_matcher_nodes', 1)]
+aot_autograd [('total', 1), ('autograd_cache_miss', 1), ('autograd_cache_saved', 1), ('ok', 1)]
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.tpu.batch_parallel
+Similarity score: 0.9940187931060791
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.tpu.batch_parallel
+
+# --- tensorflow.python.tpu.tpu.batch_parallel ---
+def batch_parallel(
+    computation: Callable[..., Any],
+    inputs: Optional[List[List[Optional[core_types.Tensor]]]] = None,
+    num_shards: int = 1,
+    infeed_queue: Optional[tpu_feed.InfeedQueue] = None,
+    device_assignment: Optional[device_assignment_lib.DeviceAssignment] = None,
+    name: Optional[Text] = None,
+    xla_options: Optional[XLAOptions] = None):
+  """Shards `computation` along the batch dimension for parallel execution.
+
+  Convenience wrapper around shard().
+
+  `inputs` must be a list of Tensors or None (equivalent to an empty list).
+  Each input is split into `num_shards` pieces along the 0-th dimension, and
+  computation is applied to each shard in parallel.
+
+  Tensors are broadcast to all shards if they are lexically captured by
+  `computation`. e.g.,
+
+  x = tf.constant(7)
+  def computation():
+    return x + 3
+  ... = shard(computation, ...)
+
+  The outputs from all shards are concatenated back together along their 0-th
+  dimension.
+
+Original Test Case:
+diff --git a/test/inductor/test_triton_kernels.py b/test/inductor/test_triton_kernels.py
+index eee4dba7f27..2eef80e5976 100644
+--- a/test/inductor/test_triton_kernels.py
++++ b/test/inductor/test_triton_kernels.py
+@@ -1216,6 +1216,20 @@ def forward(self, x_1, output_1):
+         compiled_out = torch.compile(f)(x, y)
+         self.assertEqual(compiled_out, eager_out)
+ 
++    @requires_gpu
++    def test_triton_kernel_to_cpu(self):
++        def f(x, y):
++            out = torch.zeros_like(x)
++            add_kernel[(1,)](x, y, out, 16, 16)
++            out_cpu = out.cpu() + 1
++            return out_cpu
++
++        x = torch.randn(4, 4, device=GPU_TYPE)
++        y = torch.randn(4, 4, device=GPU_TYPE)
++        eager_out = f(x, y)
++        compiled_out = torch.compile(f)(x, y)
++        self.assertEqual(compiled_out, eager_out)
++
+     @requires_gpu
+     def test_triton_kernel_out_of_order(self):
+         @triton.jit
+
+The API tf.compat.v1.tpu.batch_parallel is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

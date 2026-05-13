@@ -1,0 +1,57 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup():
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+
+def cleanup():
+    dist.destroy_process_group()
+
+class DistributedReduceModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.randn(10, 10))
+
+    def forward(self, x):
+        # Adapt the model to use torch.distributed.reduce
+        # We reduce the input tensor x to rank 0
+        dist.reduce(x, dst=0)
+        return x
+
+def run(rank, world_size):
+    setup()
+    # Use NCCL for CUDA communication
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
+    model = DistributedReduceModel().cuda()
+    
+    # The regression is specific to torch.compile with backend="inductor"
+    # We keep the original compilation call site
+    model.forward = torch.compile(model.forward, backend="inductor")
+
+    inputs = torch.randn(4, 10).cuda()
+    
+    # Execute the compiled model
+    output = model(inputs)
+    
+    if rank == 0:
+        # Verify the result on rank 0
+        assert output is not None
+        print("Test passed on rank 0")
+    
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # This test requires at least 2 GPUs to run with NCCL
+    if torch.cuda.is_available() and torch.cuda.device_count() >= 2:
+        mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)
+    else:
+        print("Skipping test: Requires at least 2 CUDA GPUs")
+```

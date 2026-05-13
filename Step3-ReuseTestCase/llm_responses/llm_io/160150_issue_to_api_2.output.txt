@@ -1,0 +1,83 @@
+```python
+import torch
+import torch.onnx
+import tempfile
+import os
+
+def test_onnx_export_with_none_output():
+    """
+    Test case for Issue #160150: [ONNX] Exporter crashes when fx node output includes None.
+    
+    This test verifies that torch.onnx.export can handle models that return tuples 
+    containing None values, similar to the logic found in the HiDream-I1 repository 
+    where (output, image_tokens_masks) is returned and image_tokens_masks could be None.
+    """
+    
+    class ModelWithOptionalOutput(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(10, 5)
+
+        def forward(self, x, return_dict=True):
+            output = self.linear(x)
+            
+            # Reproduce the logic from the bug report:
+            # image_tokens_masks could be None
+            image_tokens_masks = None 
+            
+            if not return_dict:
+                # This return statement caused the crash in the original issue
+                return (output, image_tokens_masks)
+            
+            return {"output": output}
+
+    model = ModelWithOptionalOutput()
+    dummy_input = torch.randn(1, 10)
+    
+    # Use a temporary file for the ONNX export
+    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=True) as f:
+        onnx_path = f.name
+
+        try:
+            # Attempt to export the model when return_dict=False (triggering the None return)
+            # We need to provide args that match the forward signature, but export usually 
+            # takes the model and args. Since 'return_dict' is a non-tensor argument, 
+            # we handle it by exporting the specific call path or using a wrapper.
+            # For simplicity in this test, we wrap the call to force the specific return path.
+            
+            class ExportWrapper(torch.nn.Module):
+                def __init__(self, model):
+                    super().__init__()
+                    self.model = model
+                
+                def forward(self, x):
+                    # Force the path that returns (output, None)
+                    return self.model(x, return_dict=False)
+
+            wrapper_model = ExportWrapper(model)
+            
+            torch.onnx.export(
+                wrapper_model,
+                dummy_input,
+                onnx_path,
+                opset_version=17,
+                input_names=['input'],
+                output_names=['output', 'image_tokens_masks'],
+                dynamic_axes={
+                    'input': {0: 'batch_size'},
+                    'output': {0: 'batch_size'}
+                }
+            )
+            print("Test Passed: ONNX export handled None output successfully.")
+            
+            # Verify the file was created
+            assert os.path.exists(onnx_path)
+            assert os.path.getsize(onnx_path) > 0
+
+        except Exception as e:
+            print(f"Test Failed: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_onnx_export_with_none_output()
+```

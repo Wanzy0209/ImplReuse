@@ -1,0 +1,118 @@
+Issue ID: 164814
+Title: [Fuzzer][Eager/Compile Divergence] dimensionality of sizes (0) must match dimensionality of strides (1)
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1000560)
+
+def fuzzed_program(sentinel):
+    var_node_3 = torch.full((2, 3), 3, dtype=torch.int32) # size=(2, 3), stride=(3, 1), dtype=int32, device=cuda
+    _inp_unique_wide = torch.arange(1, device=var_node_3.device, dtype=torch.int64)
+    _uniq_wide = torch.unique(_inp_unique_wide)
+    var_node_2 = _uniq_wide.to(var_node_3.dtype) # size=(1,), stride=(1,), dtype=int32, device=cuda
+    var_node_1 = torch.reshape(var_node_2, [1]) # size=(1,), stride=(1,), dtype=int32, device=cuda
+    var_node_0 = torch.squeeze(var_node_1) # size=(), stride=(), dtype=int32, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+
+args = () + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+```
+
+```
+   ✅ eager success
+...
+
+Original API Under Test: as_strided
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.experimental.dtensor.jobs
+Similarity score: 0.9942077398300171
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.jobs
+
+# --- tensorflow.dtensor.python.config.jobs ---
+def jobs() -> List[str]:
+  """Returns a list of job names of all clients in this DTensor cluster."""
+  d_jobs = os.environ.get(_DT_JOBS)
+  if d_jobs is None:
+    return []
+  d_jobs_list = d_jobs.split(",")
+
+  # Validate ordering for BNS style job names.
+  # For definition of BNS, refer to https://research.google/pubs/pub43438/.
+  if any([name.startswith("/bns/") for name in d_jobs_list]):
+    if d_jobs_list != sorted(d_jobs_list, key=_bns_task_id):
+      raise ValueError(
+          f"Unexpected DTENSOR_JOBS content {d_jobs}. Sort entries "
+          "in DTENSOR_JOBS because cluster construction relies on "
+          "the order."
+      )
+
+  return d_jobs_list
+
+# --- tensorflow.python.keras.backend.any ---
+def any(x, axis=None, keepdims=False):
+  """Bitwise reduction (logical OR).
+
+  Args:
+      x: Tensor or variable.
+      axis: axis along which to perform the reduction.
+      keepdims: whether the drop or broadcast the reduction axes.
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1000560)
+
+def fuzzed_program(sentinel):
+    var_node_3 = torch.full((2, 3), 3, dtype=torch.int32) # size=(2, 3), stride=(3, 1), dtype=int32, device=cuda
+    _inp_unique_wide = torch.arange(1, device=var_node_3.device, dtype=torch.int64)
+    _uniq_wide = torch.unique(_inp_unique_wide)
+    var_node_2 = _uniq_wide.to(var_node_3.dtype) # size=(1,), stride=(1,), dtype=int32, device=cuda
+    var_node_1 = torch.reshape(var_node_2, [1]) # size=(1,), stride=(1,), dtype=int32, device=cuda
+    var_node_0 = torch.squeeze(var_node_1) # size=(), stride=(), dtype=int32, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+
+args = () + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

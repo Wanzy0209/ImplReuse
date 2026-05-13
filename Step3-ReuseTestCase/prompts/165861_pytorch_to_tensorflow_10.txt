@@ -1,0 +1,115 @@
+Issue ID: 165861
+Title: Reflect padding: CUDA errror when one of the batch dimensions is larger than uint16 max value (2**16)
+Bug Description:
+### 🐛 Describe the bug
+
+Reflect padding breaks when one of the batch dimensions is larger than uint16 max value (2**16).
+The total memory footprint is not important, as when the tensor holds more numbers, but all but last dimension is within the uint16 range everything is fine. 
+
+Other padding modes behave fine, the problem is only with the reflection one.
+
+## why is this important?
+`torch.stft` only accepts 2D tensors (B, L), requiring flattening of higher dimensions into the batch dimension. This commonly produces batch sizes > 65536 for large batches or multi-dimensional audio/signal data.
+
+## reproduce
+```python
+import torch
+import torch.nn.functional as F
+
+# these break cuda
+x = torch.rand(2**16, 2, device="cuda")
+# x = torch.rand(1, 2**16, 2, device="cuda")
+# x = torch.rand(2**16, 1, 2, device="cuda")
+
+# these are fine even if the total number of samples is more than 2**16, but not along a single dimension
+# x = torch.rand(2**16 - 1, 200, device="cuda")     # everything ok
+# x = torch.rand(8, 2**16 - 1, 200, device="cuda")  # everything ok
+# x = torch.rand(2**16 - 1, 8, 200, device="cuda")  # everything ok
+
+# x = torch.rand(2, 2**18, device="cuda") # everything ok
+
+F.pad(x, (1, 1), mode="constant")
+print("constant pad ok")
+F.pad(x, (1, 1), mode="circular")
+print("circular pad ok")
+F.pad(x, (1, 1), mode="replicate")
+print("replicate pad ok")
+
+F.pad(x, (1, 1), mode="reflect")
+print("this won't print")
+```
+
+output (error message):
+```
+
+Original API Under Test: torch.nn.functional.pad
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.dtensor.Mesh
+Similarity score: 0.9918403625488281
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.Mesh
+
+# --- tensorflow.dtensor.python.layout.Mesh ---
+class Mesh(_pywrap_dtensor_device.Mesh):
+  """Represents a Mesh configuration over a certain list of Mesh Dimensions.
+
+  A mesh consists of named dimensions with sizes, which describe how a set of
+  devices are arranged. Defining tensor layouts in terms of mesh dimensions
+  allows us to efficiently determine the communication required when computing
+  an operation with tensors of different layouts.
+
+  A mesh provides information not only about the placement of the tensors but
+  also the topology of the underlying devices. For example, we can group 8 TPUs
+  as a 1-D array for data parallelism or a `2x4` grid for (2-way) data
+  parallelism and (4-way) model parallelism.
+
+  Refer to [DTensor Concepts](https://www.tensorflow.org/guide/dtensor_overview)
+  for in depth discussion and examples.
+
+  Note: the utilities `dtensor.create_mesh` and
+  `dtensor.create_distributed_mesh` provide a simpler API to create meshes for
+  single- or multi-client use cases.
+  """
+
+  def __init__(
+      self,
+      dim_names: List[str],
+      global_device_ids: np.ndarray,
+      local_device_ids: List[in
+...
+
+Original Test Case:
+import torch
+import torch.nn.functional as F
+
+# these break cuda
+x = torch.rand(2**16, 2, device="cuda")
+# x = torch.rand(1, 2**16, 2, device="cuda")
+# x = torch.rand(2**16, 1, 2, device="cuda")
+
+# these are fine even if the total number of samples is more than 2**16, but not along a single dimension
+# x = torch.rand(2**16 - 1, 200, device="cuda")     # everything ok
+# x = torch.rand(8, 2**16 - 1, 200, device="cuda")  # everything ok
+# x = torch.rand(2**16 - 1, 8, 200, device="cuda")  # everything ok
+
+# x = torch.rand(2, 2**18, device="cuda") # everything ok
+
+F.pad(x, (1, 1), mode="constant")
+print("constant pad ok")
+F.pad(x, (1, 1), mode="circular")
+print("circular pad ok")
+F.pad(x, (1, 1), mode="replicate")
+print("replicate pad ok")
+
+F.pad(x, (1, 1), mode="reflect")
+print("this won't print")
+
+The API tf.experimental.dtensor.Mesh is identified as cross-library similar to the original PyTorch API torch.nn.functional.pad.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

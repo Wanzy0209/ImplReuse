@@ -1,0 +1,69 @@
+```python
+import torch
+from torch.nn.attention.flex_attention import flex_attention
+
+def test_flex_attention_gqa_backward_compilation():
+    """
+    Test case for Issue 160074: FlexAttention backward compilation failure with GQA on NVIDIA B200.
+    
+    This test reproduces the logic where torch.compile with backend="inductor" fails
+    during the backward pass of flex_attention when enable_gqa=True.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # Compile flex_attention with the inductor backend, as specified in the bug report.
+    # This mirrors the usage pattern of applying a compiled function to inputs.
+    compiled_flex_attention = torch.compile(
+        flex_attention, fullgraph=True, backend="inductor"
+    )
+
+    with torch.device("cuda"):
+        # GQA Configuration: 
+        # Query heads (32) > Key/Value heads (8)
+        batch_size = 2
+        n_q_heads = 32
+        n_kv_heads = 8
+        seq_len = 4096
+        head_dim = 128
+
+        q = torch.randn(
+            [batch_size, n_q_heads, seq_len, head_dim],
+            dtype=torch.bfloat16,
+            requires_grad=True
+        )
+        k = torch.randn(
+            [batch_size, n_kv_heads, seq_len, head_dim],
+            dtype=torch.bfloat16,
+            requires_grad=True
+        )
+        v = torch.randn(
+            [batch_size, n_kv_heads, seq_len, head_dim],
+            dtype=torch.bfloat16,
+            requires_grad=True
+        )
+
+    # Forward pass
+    y = compiled_flex_attention(q, k, v, enable_gqa=True)
+
+    # Backward pass
+    # The bug report indicates a Triton compilation failure occurs here.
+    # We attempt to run this to verify the fix or reproduce the crash.
+    try:
+        y.backward(torch.randn_like(y))
+        
+        # If backward succeeds, verify gradients are populated
+        assert q.grad is not None, "Query gradient is None"
+        assert k.grad is not None, "Key gradient is None"
+        assert v.grad is not None, "Value gradient is None"
+        
+        print("Test passed: Backward compilation and execution succeeded.")
+        
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_flex_attention_gqa_backward_compilation()
+```

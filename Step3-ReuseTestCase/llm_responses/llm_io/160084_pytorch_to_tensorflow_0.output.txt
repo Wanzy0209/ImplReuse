@@ -1,0 +1,61 @@
+```python
+import tensorflow as tf
+
+class RegressionModel(tf.Module):
+    def __init__(self, a=0, b=0):
+        super().__init__()
+        # Translate torch.nn.Parameter to tf.Variable
+        self.a = tf.Variable(float(a), dtype=tf.float32, name='a')
+        self.b = tf.Variable(float(b), dtype=tf.float32, name='b')
+        # Use a tf.Variable for the flag to ensure it is tracked in the graph
+        self.first_batch = tf.Variable(True, dtype=tf.bool, name='first_batch')
+
+    def forward(self, x=None):
+        # Translate Python print to tf.print for graph compatibility
+        # Translate Python if to tf.cond for graph compatibility
+        def print_fn():
+            tf.print("Model dtype: ", self.a.dtype, ", ", self.b.dtype, ". Input dtype: ", x.dtype)
+            return tf.constant(True)
+
+        # Execute the print conditionally
+        tf.cond(self.first_batch, print_fn, lambda: tf.constant(False))
+        
+        # The core computation logic
+        return x * self.a + self.b
+
+def test_tpu_rewrite():
+    # Standard boilerplate to initialize TPU
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        strategy = tf.distribute.TPUStrategy(resolver)
+    except ValueError:
+        print("TPU not found. This test case requires a TPU environment to execute tf.compat.v1.tpu.rewrite.")
+        return
+
+    with strategy.scope():
+        model = RegressionModel()
+        
+        # Create inputs similar to torch.randn(4, 10).to(torch_device)
+        inputs = tf.random.normal((4, 10), dtype=tf.float32)
+        
+        # Adaptation of torch.compile(model.forward, backend="inductor")
+        # tf.compat.v1.tpu.rewrite takes the computation and inputs, compiles, and executes.
+        # Note: Unlike torch.compile which returns a callable, rewrite executes immediately.
+        try:
+            # The API expects a list of inputs
+            result = tf.compat.v1.tpu.rewrite(model.forward, inputs=[inputs])
+            
+            # Verify output
+            # rewrite returns a list of tensors
+            assert len(result) > 0
+            assert result[0].shape == (4, 10)
+            print("Test passed: tf.compat.v1.tpu.rewrite executed successfully.")
+            
+        except Exception as e:
+            print(f"Test failed with error: {e}")
+
+if __name__ == "__main__":
+    test_tpu_rewrite()
+```

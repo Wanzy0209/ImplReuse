@@ -1,0 +1,97 @@
+Issue ID: 160737
+Title: MPS index_select cannot handle scalar index tensor
+Bug Description:
+### 🕵️‍♂️ Detected with [FACTO](https://github.com/meta-pytorch/FACTO)
+
+### 🐛 Describe the bug
+
+The CPU index_select operator can consume a scalar tensor (zero-dimensional) as the index. MPS throws error:
+
+```python
+import torch
+
+def test_index_select(device):
+    x = torch.ones([2, 3], device=device)
+    index = torch.tensor(1, device=device)  # zero-dimensional index tensor
+    try:
+        output = torch.index_select(x, dim=0, index=index)
+        print(f"index_select test succeeds for device: {device}. output shape: {output.shape}")
+    except Exception as e:
+        print(f"index_select test fails for device: {device}: {e}")
+
+test_index_select(device = "cpu")
+test_index_select(device = "mps")
+```
+
+terminal output:
+```
+index_select test succeeds for device: cpu. output shape: torch.Size([1, 3])
+index_select test fails for device: mps: Dimension specified as -1 but tensor has no dimensions
+```
+
+### Versions
+
+nightly
+
+cc @kulinseth @albanD @malfet @DenisVieriu97 @jhavukainen
+
+Original API Under Test: torch.index_select
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.index_select
+Similarity score: 0.9999998807907104
+
+Similar API information:
+# Extracted call chain for torch.index_select
+
+# --- torch._refs.index_select ---
+def index_select(x: TensorLike, dim: int, index: TensorLike):
+    dim = utils.canonicalize_dims(x.ndim, dim)
+    torch._check(
+        index.ndim <= 1,
+        lambda: f"Index should have dimension 1 or 0 (got {index.ndim})",
+    )
+    if index.ndim == 0:
+        index = index.unsqueeze(0)
+    if x.ndim == 0:
+        # Treat scalars as elements of \R^1
+        # We cannot use x[idx] here as it accesses item() (??), hence this awkward construction
+        return torch.empty_like(x).index_copy(0, index, x.expand_as(index))
+
+    idx = (slice(None),) * dim + (index,)
+    return x[idx]
+
+# --- index.unsqueeze ---
+def unsqueeze(x, dim):
+    dim = _validate_dim(x, dim, 1)
+    new_shape = list(x.get_size())
+    new_shape.insert(dim, sympy.S.One)
+    return view(x, new_shape)
+
+# --- torch._inductor.lowering._validate_dim ---
+def _validate_dim(x, dim, offset=0):
+    dim = V.graph.sizevars.shape_env.evaluate_expr(sympy.sympify(dim))
+    ndim = len(x.get_size())
+
+Original Test Case:
+import torch
+
+def test_index_select(device):
+    x = torch.ones([2, 3], device=device)
+    index = torch.tensor(1, device=device)  # zero-dimensional index tensor
+    try:
+        output = torch.index_select(x, dim=0, index=index)
+        print(f"index_select test succeeds for device: {device}. output shape: {output.shape}")
+    except Exception as e:
+        print(f"index_select test fails for device: {device}: {e}")
+
+test_index_select(device = "cpu")
+test_index_select(device = "mps")
+
+The API torch.index_select is identified as same-library similar to the original PyTorch API torch.index_select.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

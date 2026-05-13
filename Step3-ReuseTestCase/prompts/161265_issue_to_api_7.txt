@@ -1,0 +1,72 @@
+Issue ID: 161265
+Title: [MPS] On MacOS-26 torch.full fails for 4+Gb tensors
+Bug Description:
+### 🐛 Describe the bug
+
+If one runs following example on macOS Tahoe
+```python
+import torch
+a = torch.ones(2, (1 << 31) + 5, dtype=torch.int8, device='mps')
+print(a[1, -2])
+print(a[:, -2])
+```
+
+result will be
+```
+tensor(0, device='mps:0', dtype=torch.int8)
+tensor([1, 1], device='mps:0', dtype=torch.int8)
+```
+But should have been 1 in both cases 
+Reason for that are relying on unsupported use of `fillBuffer` that for some reason stopped working for length exceeding 4Gb
+https://github.com/pytorch/pytorch/blob/639b8cc51ddebf10361f3840a6b0a244eb6092a1/aten/src/ATen/mps/MPSStream.mm#L161
+
+
+I.e. following Swift script returns non-unfirom values on MacOS Tahoe
+```swift
+import Metal
+
+let bufferSize = 1<<32 + 4
+
+guard let device = MTLCreateSystemDefaultDevice() else { fatalError("No Metal device found") }
+guard let buffer = device.makeBuffer(length: bufferSize, options: .storageModeShared) else { fatalError("Failed to create buffer") }
+
+guard let cmdQueue = device.makeCommandQueue() else { fatalError("Failed to create command queue") }
+guard let cmdBuffer = cmdQueue.makeCommandBuffer() else { fatalError("Failed to create command buffer") }
+guard let blitEncoder = cmdBuffer.makeBlitCommandEncoder() else { fatalError("Failed to create blit encoder") }
+
+blitEncoder.fill(buffer: buffer, range: 0..<bufferSize, value: 0x42)
+blitEncoder.endEncoding()
+
+cmdBuffer.commit()
+cmdBuffer.waitUntilCompleted()
+
+let tailOffs = 8
+
+Original API Under Test: torch.full
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.backends.nnpack.is_available
+Similarity score: 0.9655212163925171
+
+Similar API information:
+# Extracted call chain for torch.backends.nnpack.is_available
+
+# --- torch.backends.nnpack.is_available ---
+def is_available():
+    r"""Return whether PyTorch is built with NNPACK support."""
+    return torch._nnpack_available()
+
+Original Test Case:
+import torch
+a = torch.ones(2, (1 << 31) + 5, dtype=torch.int8, device='mps')
+print(a[1, -2])
+print(a[:, -2])
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

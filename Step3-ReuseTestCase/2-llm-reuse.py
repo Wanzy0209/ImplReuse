@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 SCRIPT_DIR = Path(__file__).parent
 DEFAULT_PROMPT_DIR = SCRIPT_DIR / "prompts"
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "llm_responses"
+DEFAULT_IO_SUBDIR = "llm_io"
 
 
 def extract_zhipu_chunk_content(chunk: Any) -> Optional[str]:
@@ -119,11 +120,16 @@ def main():
         default=DEFAULT_OUTPUT_DIR,
         help="Output directory for LLM responses."
     )
-    parser.add_argument("--api-key", required=True, help="Zhipu API key.")
+    parser.add_argument("--api-key", default=os.getenv("ZHIPUAI_API_KEY", "044f2bc486d14e13aa68259fbd1970c4.hjLhKCmeXaDRt2xf"), help="Zhipu API key.")
     parser.add_argument("--model", default="glm-4.7", help="LLM model.")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=8192)
     parser.add_argument("--limit", type=int, default=0, help="Process only first N prompts.")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing response files.",
+    )
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -132,16 +138,22 @@ def main():
     if args.limit > 0:
         prompt_files = prompt_files[:args.limit]
 
+    io_dir = args.output_dir / DEFAULT_IO_SUBDIR
+    io_dir.mkdir(parents=True, exist_ok=True)
+
     print(f"Processing {len(prompt_files)} prompts...")
 
     for prompt_file in prompt_files:
         prompt_text = prompt_file.read_text(encoding='utf-8')
         base_name = prompt_file.stem
 
-        response_file = args.output_dir / f"{base_name}.txt"
-        events_file = args.output_dir / f"{base_name}.events.json"
+        input_file = io_dir / f"{base_name}.input.txt"
+        response_file = io_dir / f"{base_name}.output.txt"
+        events_file = io_dir / f"{base_name}.output.events.json"
 
-        if response_file.exists():
+        save_text(input_file, prompt_text)
+
+        if response_file.exists() and not args.overwrite:
             print(f"Skipping {base_name}: response exists")
             continue
 

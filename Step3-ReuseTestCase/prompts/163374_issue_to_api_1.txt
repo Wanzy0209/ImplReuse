@@ -1,0 +1,128 @@
+Issue ID: 163374
+Title: [DTensor] Inplace ops preduces wrong result
+Bug Description:
+```
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import torch
+from torch import distributed as dist
+from torch.utils.debug_mode import DebugMode
+
+
+if __name__ == '__main__':
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    partial_dt = in_dtensor.sum()
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        out = partial_dt.clamp_(max=2)
+        full = out.full_tensor()
+
+    if rank == 0:
+        print(debug_mode.debug_string())
+        # redistribute_input(0, [P] -> [R])
+        #   _c10d_functional::all_reduce(t: f32[], sum, 0)
+        #   _c10d_functional::wait_tensor(t: f32[])
+        # aten::clamp_(t: f32[], None, 2)
+        # _c10d_functional::all_reduce(t: f32[], sum, 0)
+        # _c10d_functional::wait_tensor(t: f32[])
+        # aten::view(t: f32[], [])
+
+        print(out.placements)
+        # (Partial(sum),)
+        # Expected (Replicate(),)
+
+        print(full)
+        # tensor(144., device='cuda:0')
+        # Expected tensor(2., device='cuda:0')
+``` 
+
+Placement is wrong, it should be replicated, instead of Partial(sum)
+
+Original API Under Test: torch.clamp_
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.nn.SyncBatchNorm
+Similarity score: 0.9951971769332886
+
+Similar API information:
+# Extracted call chain for torch.nn.SyncBatchNorm
+
+# --- torch.nn.modules._functions.SyncBatchNorm ---
+class SyncBatchNorm(Function):
+    @staticmethod
+    def forward(
+        self,
+        input,
+        weight,
+        bias,
+        running_mean,
+        running_var,
+        eps,
+        momentum,
+        process_group,
+        world_size,
+    ):
+        if not (
+            input.is_contiguous(memory_format=torch.channels_last)
+            or input.is_contiguous(memory_format=torch.channels_last_3d)
+        ):
+            input = input.contiguous()
+        if weight is not None:
+            weight = weight.contiguous()
+
+        size = int(input.numel() // input.size(1))
+        if size == 1 and world_size < 2:
+            raise ValueError(
+                f"Expected more than 1 value per channel when training, got input size {size}"
+            )
+
+Original Test Case:
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import torch
+from torch import distributed as dist
+from torch.utils.debug_mode import DebugMode
+
+
+if __name__ == '__main__':
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    partial_dt = in_dtensor.sum()
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        out = partial_dt.clamp_(max=2)
+        full = out.full_tensor()
+
+    if rank == 0:
+        print(debug_mode.debug_string())
+        # redistribute_input(0, [P] -> [R])
+        #   _c10d_functional::all_reduce(t: f32[], sum, 0)
+        #   _c10d_functional::wait_tensor(t: f32[])
+        # aten::clamp_(t: f32[], None, 2)
+        # _c10d_functional::all_reduce(t: f32[], sum, 0)
+        # _c10d_functional::wait_tensor(t: f32[])
+        # aten::view(t: f32[], [])
+
+        print(out.placements)
+        # (Partial(sum),)
+        # Expected (Replicate(),)
+
+        print(full)
+        # tensor(144., device='cuda:0')
+        # Expected tensor(2., device='cuda:0')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

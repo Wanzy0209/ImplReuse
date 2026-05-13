@@ -1,0 +1,57 @@
+```python
+import tensorflow as tf
+import numpy as np
+import tf.experimental.dtensor as dtensor
+
+# Setup for DTensor: Create a mesh and a replicated layout
+# This simulates the distributed environment context for the API under test.
+mesh = dtensor.create_mesh(['x'], ['cpu'])
+layout = dtensor.Layout.replicated(mesh, rank=3)
+
+def foo(x):
+    t = tf.tan(x)
+    # Equivalent to torch.tan(x).expand(31, 51, 1)
+    e = tf.broadcast_to(t, [31, 51, 1])
+    mean_val = tf.reduce_mean(e)
+    
+    # Using Python control flow inside tf.function.
+    # Autograph will convert this to tf.cond, similar to how torch.compile 
+    # handles control flow graph breaks.
+    if mean_val > 0.5:
+        out1 = tf.subtract(e, e * 0.5)
+    else:
+        out1 = tf.add(e, e * 0.5)
+        
+    # print("break")  # No error occurs if uncomment this line in original bug
+    
+    return tf.sin(out1)
+
+# Replicate the data generation from the original bug report
+np.random.seed(0)
+x_np = np.random.uniform(0, 10, size=(31, 51, 1)).astype(np.float16)
+x_tf = tf.constant(x_np)
+
+# 1. Eager Execution (Baseline)
+eager_res = foo(x_tf)
+
+# 2. DTensor Execution using the similar API: copy_to_mesh
+# We wrap the function in tf.function to simulate the compilation aspect
+# and ensure the graph logic is tested.
+compiled_foo = tf.function(foo)
+
+# Use copy_to_mesh to move the input tensor to the DTensor mesh
+x_dt = dtensor.copy_to_mesh(x_tf, layout)
+
+# Execute the logic on the DTensor
+dtensor_res = compiled_foo(x_dt)
+
+# Convert DTensor back to a local tensor for comparison
+dtensor_res_local = dtensor_res.to_tensor()
+
+# Verify that the results match
+# This checks if copy_to_mesh and the subsequent graph execution preserve
+# numerical accuracy compared to standard eager execution.
+np.testing.assert_allclose(eager_res.numpy(), dtensor_res_local.numpy(), rtol=1e-5, atol=1e-5)
+
+print("Test passed: Eager and DTensor results match.")
+```

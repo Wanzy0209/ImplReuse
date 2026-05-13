@@ -1,0 +1,96 @@
+Issue ID: 160751
+Title: torch.compile aot_eager mode removes torch.cuda.synchronize() causing missed exceptions
+Bug Description:
+### 🐛 Describe the bug
+
+While testing both eager and aot_eager modes, I observed that aot_eager does not capture exceptions as expected. I found that during graph optimization, the torch.cuda.synchronize() call is removed in aot_eager mode.
+
+I ran the following code with TORCH_LOGS="graph_code,aot_graphs". The __graph_code logs show the synchronize function present, but in the __aot_graphs logs, the synchronize call is eliminated. This behavior differs from eager mode, where the assertion is caught and the print statement is not executed.
+
+```python
+import torch
+
+def func():
+    a = torch.tensor([1.0, -2.0], device="cuda")
+    result = torch.all(a > 0)
+    assert result, "should throw"
+    torch.cuda.synchronize()
+    print("should not run")
+
+
+def test_fn():
+    torch._dynamo.reset()
+    f_c = torch.compile(func, backend="aot_eager")
+    f_c()
+
+test_fn()
+```
+
+```
+[karthickps@devvm1752.odn0 ~/work/experiments/aot_eager]$ TORCH_LOGS="graph_code,aot_graphs" python test_aot_eager.py 
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_graph.py:1711] [0/0_1] [__graph_code] TRACED GRAPH
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_graph.py:1711] [0/0_1] [__graph_code]  ===== __compiled_fn_2_c224c13a_e190_4f9e_b8eb_e4c7476b65dc =====
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_graph.py:1711] [0/0_1] [__graph_code]  /home/karthickps/git/karthickai/pytorch/torch/fx/_lazy_graph_module.py class GraphModule(torch.nn.Module):
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.train.range_input_producer
+Similarity score: 0.9930681586265564
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.train.range_input_producer
+
+# --- tensorflow.python.training.input.range_input_producer ---
+def range_input_producer(limit, num_epochs=None, shuffle=True, seed=None,
+                         capacity=32, shared_name=None, name=None):
+  """Produces the integers from 0 to limit-1 in a queue.
+
+  Note: if `num_epochs` is not `None`, this function creates local counter
+  `epochs`. Use `local_variables_initializer()` to initialize local variables.
+
+  Args:
+    limit: An int32 scalar tensor.
+    num_epochs: An integer (optional). If specified, `range_input_producer`
+      produces each integer `num_epochs` times before generating an
+      OutOfRange error. If not specified, `range_input_producer` can cycle
+      through the integers an unlimited number of times.
+    shuffle: Boolean. If true, the integers are randomly shuffled within each
+      epoch.
+    seed: An integer (optional). Seed used if shuffle == True.
+    capacity: An integer. Sets the queue capacity.
+    shared_name: (optional). If set, this queue will be shared under the given
+      name across multiple sessions.
+    name: A name for the operations (optional).
+
+  Returns:
+    A Queue w
+...
+
+Original Test Case:
+import torch
+
+def func():
+    a = torch.tensor([1.0, -2.0], device="cuda")
+    result = torch.all(a > 0)
+    assert result, "should throw"
+    torch.cuda.synchronize()
+    print("should not run")
+
+
+def test_fn():
+    torch._dynamo.reset()
+    f_c = torch.compile(func, backend="aot_eager")
+    f_c()
+
+test_fn()
+
+The API tf.compat.v1.train.range_input_producer is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

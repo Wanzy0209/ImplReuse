@@ -1,0 +1,129 @@
+Issue ID: 161906
+Title: torch.compilefails withaten.complex.defaultsize/stride assertion when using STFT output recombined into complex tensor
+Bug Description:
+### 🐛 Describe the bug
+
+## Issue Description
+A simple model using `torch.stft` followed by recombination of real/imag parts into a complex tensor works fine in eager mode.
+However, when compiled with `torch.compile` (Inductor backend), runtime fails with a stride assertion inside `aten.complex.default`.
+
++ Eager execution: ok! produces correct complex tensor
+
++ Compiled execution: error! AssertionError in assert_size_stride for torch.ops.aten.complex.default
+
+## Minimal Reproduction Script
+```python
+import torch
+import torch.nn as nn
+
+class M(nn.Module):
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft, self.hop, self.win = n_fft, hop, win
+        # Register window as buffer so it moves with .to(device)
+        self.register_buffer("window", torch.hann_window(win))
+        # Introduce parameter for broadcasting / stride ops
+        self.p = nn.Parameter(torch.tensor(2.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        S = torch.stft(
+            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,
+            return_complex=True, window=self.window, pad_mode="constant"
+        )
+        R = torch.abs(S.real)   # unary op on real
+        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)
+        Z = torch.complex(R, I) # recombine -> triggers aten.complex.default
+        return Z
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(0)
+...
+
+Original API Under Test: torch.complex
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.arange
+Similarity score: 0.9951874017715454
+
+Similar API information:
+# Extracted call chain for torch.arange
+
+# --- torch._numpy._funcs_impl.arange ---
+def arange(
+    start: Optional[ArrayLikeOrScalar] = None,
+    stop: Optional[ArrayLikeOrScalar] = None,
+    step: Optional[ArrayLikeOrScalar] = 1,
+    dtype: Optional[DTypeLike] = None,
+    *,
+    like: NotImplementedType = None,
+):
+    if step == 0:
+        raise ZeroDivisionError
+    if stop is None and start is None:
+        raise TypeError
+    if stop is None:
+        # XXX: this breaks if start is passed as a kwarg:
+        # arange(start=4) should raise (no stop) but doesn't
+        start, stop = 0, start
+    if start is None:
+        start = 0
+
+    # the dtype of the result
+    if dtype is None:
+        dtype = (
+            _dtypes_impl.default_dtypes().float_dtype
+            if any(_dtypes_impl.is_float_or_fp_tensor(x) for x in (start, stop, step))
+            else _dtypes_impl.default_dtypes().int_dtype
+        )
+    work_dtype = torch.float64 if dtype.is_complex else dtype
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+class M(nn.Module):
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft, self.hop, self.win = n_fft, hop, win
+        # Register window as buffer so it moves with .to(device)
+        self.register_buffer("window", torch.hann_window(win))
+        # Introduce parameter for broadcasting / stride ops
+        self.p = nn.Parameter(torch.tensor(2.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        S = torch.stft(
+            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,
+            return_complex=True, window=self.window, pad_mode="constant"
+        )
+        R = torch.abs(S.real)   # unary op on real
+        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)
+        Z = torch.complex(R, I) # recombine -> triggers aten.complex.default
+        return Z
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(0)
+
+    x = torch.randn(1, 16000, device=device)
+    m = M().to(device)
+
+    # Eager: works fine
+    z_eager = m(x)
+    assert z_eager.is_complex()
+    print("eager mode OK:", z_eager.shape, z_eager.is_complex())
+
+    # Compile: runtime stride assertion in aten.complex.default
+    m_c = torch.compile(m)
+    z_compiled = m_c(x)
+
+if __name__ == "__main__":
+    main()
+
+The API torch.arange is identified as same-library similar to the original PyTorch API torch.complex.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

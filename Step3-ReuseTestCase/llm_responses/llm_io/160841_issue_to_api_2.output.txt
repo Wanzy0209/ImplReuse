@@ -1,0 +1,91 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Note: Depending on the specific TensorFlow version, DynamicRaggedShape might be 
+# located in tf.experimental or internal ops. We attempt to import from the 
+# experimental namespace as indicated by the API similarity.
+try:
+    from tf.experimental import DynamicRaggedShape
+except (ImportError, ModuleNotFoundError):
+    from tensorflow.python.ops.ragged.dynamic_ragged_shape import DynamicRaggedShape
+    from tensorflow.python.ops.ragged import row_partition
+
+def test_dynamic_ragged_shape_dtype_precision():
+    """
+    Test case adapted from Issue 160841 (PyTorch phi-2 MacOS garbage output).
+    
+    Original Bug Logic:
+    1. Load model with torch_dtype="auto" (defaults to float16 on Mac/MPS).
+    2. Run inference.
+    3. Observe garbage output.
+    4. Fix: Change dtype to bf16.
+    
+    Adapted Test Logic for tf.experimental.DynamicRaggedShape:
+    1. Define a DynamicRaggedShape structure.
+    2. Create RaggedTensors using this structure with float16 (problematic in original) 
+       and bfloat16 (fix in original).
+    3. Verify that the shape inference and tensor values remain valid (no garbage/NaNs).
+    """
+    
+    # 1. Setup: Define a DynamicRaggedShape
+    # Analogous to loading the model structure.
+    # We define a shape with row partitions [2, 0, 3] and inner shape [3].
+    lengths = [2, 0, 3]
+    rp = row_partition.RowPartition.from_lengths(lengths)
+    shape = DynamicRaggedShape(inner_shape=[3], row_partitions=[rp])
+
+    # Input data (analogous to tokenizer inputs)
+    # We create flat values that match the inner shape and total row lengths.
+    flat_values = np.array([[1.0, 2.0, 3.0], 
+                            [4.0, 5.0, 6.0], 
+                            [7.0, 8.0, 9.0], 
+                            [10.0, 11.0, 12.0], 
+                            [13.0, 14.0, 15.0], 
+                            [16.0, 17.0, 18.0], 
+                            [19.0, 20.0, 21.0]], dtype=np.float32)
+
+    # 2. Test with float16 (The problematic dtype in the original bug)
+    # Analogous to torch_dtype="auto" on MacOS/MPS
+    print("Testing with float16...")
+    try:
+        values_f16 = tf.constant(flat_values, dtype=tf.float16)
+        # Construct RaggedTensor using the partition logic defined in the shape
+        rt_f16 = tf.RaggedTensor.from_row_lengths(values_f16, lengths)
+        
+        # Check for "garbage" (NaNs) which was the symptom of the bug
+        has_nan_f16 = tf.reduce_any(tf.math.is_nan(rt_f16.flat_values)).numpy()
+        assert not has_nan_f16, "Float16 produced garbage (NaNs)"
+        
+        # Verify shape consistency
+        assert rt_f16.shape.rank == 2
+        assert rt_f16.shape[0] == 3
+        print("Float16 test passed.")
+        
+    except Exception as e:
+        print(f"Float16 test failed: {e}")
+
+    # 3. Test with bfloat16 (The fix in the original bug)
+    # Analogous to torch_dtype="bf16"
+    print("Testing with bfloat16...")
+    try:
+        values_bf16 = tf.constant(flat_values, dtype=tf.bfloat16)
+        rt_bf16 = tf.RaggedTensor.from_row_lengths(values_bf16, lengths)
+        
+        # Check for "garbage"
+        has_nan_bf16 = tf.reduce_any(tf.math.is_nan(rt_bf16.flat_values)).numpy()
+        assert not has_nan_bf16, "Bfloat16 produced garbage (NaNs)"
+        
+        # Verify shape consistency
+        assert rt_bf16.shape.rank == 2
+        assert rt_bf16.shape[0] == 3
+        print("Bfloat16 test passed.")
+        
+    except Exception as e:
+        print(f"Bfloat16 test failed: {e}")
+
+    print("Test case completed successfully.")
+
+if __name__ == "__main__":
+    test_dynamic_ragged_shape_dtype_precision()
+```

@@ -1,0 +1,120 @@
+Issue ID: 164685
+Title: [Fuzzer][Eager/Compile Divergence] KeyError: u0
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(19989)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = -6 # dtype=int64
+    var_node_3 = arg_0 # dtype=int32
+    var_node_1 = var_node_2 * var_node_3 # dtype=int32
+    var_node_5 = torch.full((), 1, dtype=torch.int64) # size=(), stride=(), dtype=int64, device=cuda
+    var_node_4 = var_node_5.item() # dtype=int64
+    var_node_0 = var_node_1 / var_node_4 # dtype=int64
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.tensor(torch.randn(()), dtype=torch.int32).item()
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+```
+
+```
+   ✅ eager success                                                                                                                                                                                                                                                                                
+   /tmp/torchfuzz/fuzz_9080a984.py:23: UserWarning
+...
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.all
+Similarity score: 0.9942798018455505
+
+Similar API information:
+# Extracted call chain for torch.all
+
+# --- torch._dynamo.polyfills.builtins.all ---
+def all(iterable: Iterable[object], /) -> bool:
+    for elem in iterable:
+        if not elem:
+            return False
+    return True
+
+# --- torch._dynamo.decorators.substitute_in_graph ---
+def substitute_in_graph(
+    original_fn: Callable[_P, _R],
+    *,
+    can_constant_fold_through: bool = False,
+    skip_signature_check: bool = False,
+    # type that is embedded in the Python interpreter
+    is_embedded_type: bool = False,  # internal use only
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """
+    Register a polyfill handler for a function, usually a C function from the C extension, to be
+    used in place of the original function when inlining the original function in the graph.
+
+    .. note::
+
+        The polyfill handler is only used when inlining the original function. It is not used when
+        the original function is called directly. In the eager mode, the decorated function calls
+        the performant C function rather than the polyfill handler.
+
+    The polyfill handler is a function that will be called in place of the original function when
+    inlining the original fun
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(19989)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = -6 # dtype=int64
+    var_node_3 = arg_0 # dtype=int32
+    var_node_1 = var_node_2 * var_node_3 # dtype=int32
+    var_node_5 = torch.full((), 1, dtype=torch.int64) # size=(), stride=(), dtype=int64, device=cuda
+    var_node_4 = var_node_5.item() # dtype=int64
+    var_node_0 = var_node_1 / var_node_4 # dtype=int64
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.tensor(torch.randn(()), dtype=torch.int32).item()
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+The API torch.all is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

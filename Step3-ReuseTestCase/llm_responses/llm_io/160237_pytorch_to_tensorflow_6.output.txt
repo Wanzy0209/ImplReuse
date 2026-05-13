@@ -1,0 +1,67 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_yiq_to_rgb_device_compatibility():
+    """
+    Test case adapted from PyTorch issue 160237 (aten::grid_sampler_3d on MPS).
+    
+    The original bug reported a NotImplementedError when running grid_sample 
+    on the MPS (Metal) device. This test verifies that the similar TensorFlow 
+    API (tf.image.yiq_to_rgb) executes correctly on the available hardware 
+    (GPU or CPU), ensuring the operation is implemented and handles the 
+    data transformation as expected.
+    """
+    # 1. Setup Input Data
+    # YIQ color space requires specific ranges for valid conversion:
+    # Y: [0, 1], I: [-0.5957, 0.5957], Q: [-0.5226, 0.5226]
+    batch_size, height, width = 1, 64, 64
+    
+    # Create a tensor with valid YIQ values
+    # Using mid-gray (Y=0.5, I=0, Q=0) for a deterministic baseline
+    y = np.ones((batch_size, height, width, 1), dtype=np.float32) * 0.5
+    i = np.zeros((batch_size, height, width, 1), dtype=np.float32)
+    q = np.zeros((batch_size, height, width, 1), dtype=np.float32)
+    
+    yiq_input = np.concatenate([y, i, q], axis=-1)
+    input_tensor = tf.constant(yiq_input)
+
+    # 2. Device Execution
+    # The original bug occurred specifically on the 'mps' device.
+    # Here we test on the available TensorFlow device (GPU or CPU).
+    device_name = '/GPU:0' if tf.config.list_physical_devices('GPU') else '/CPU:0'
+    
+    with tf.device(device_name):
+        try:
+            # 3. Execute the Similar API
+            # This corresponds to the torch.nn.functional.grid_sample call in the stack trace
+            output_tensor = tf.image.yiq_to_rgb(input_tensor)
+            
+            # 4. Assertions
+            # Verify output shape matches input (standard for image ops)
+            assert output_tensor.shape == input_tensor.shape, \
+                f"Shape mismatch: expected {input_tensor.shape}, got {output_tensor.shape}"
+            
+            # Verify output dtype is preserved
+            assert output_tensor.dtype == input_tensor.dtype, \
+                f"Dtype mismatch: expected {input_tensor.dtype}, got {output_tensor.dtype}"
+            
+            # Verify output values are within valid RGB range [0, 1]
+            # (Allowing for small floating point errors)
+            min_val = tf.reduce_min(output_tensor)
+            max_val = tf.reduce_max(output_tensor)
+            
+            assert min_val >= -0.001, f"RGB value too low: {min_val}"
+            assert max_val <= 1.001, f"RGB value too high: {max_val}"
+            
+            print(f"Test Passed: tf.image.yiq_to_rgb executed successfully on {device_name}.")
+
+        except NotImplementedError as e:
+            # This block mirrors the behavior of the original PyTorch bug
+            # if the operation were not implemented on the current device.
+            print(f"NotImplementedError on {device_name}: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_yiq_to_rgb_device_compatibility()
+```

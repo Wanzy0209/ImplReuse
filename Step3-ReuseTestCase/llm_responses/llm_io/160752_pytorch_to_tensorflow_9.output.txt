@@ -1,0 +1,56 @@
+```python
+import tensorflow as tf
+
+# Constants from the original bug report
+MAX = 3
+BATCH = 37
+
+def func(x, idxs):
+    # TensorFlow equivalent of x.square() * torch.nn.functional.one_hot(idxs, MAX)
+    # tf.one_hot returns a Tensor with dtype determined by the input or on_value/off_value.
+    # We ensure it matches x.dtype for multiplication.
+    return tf.square(x) * tf.one_hot(idxs, MAX, dtype=x.dtype)
+
+def jacfunc(x, idxs):
+    # TensorFlow equivalent of torch.func.jacfwd(func, argnums=(0,))(x, idxs)
+    # tf.jacobian computes the full Jacobian of f(x) with respect to x.
+    return tf.jacobian(func, x)
+
+# Setup inputs
+idxs = tf.random.uniform((BATCH,), minval=0, maxval=MAX, dtype=tf.int64)
+x = tf.random.uniform((BATCH, MAX), dtype=tf.float64)
+
+# 1. Baseline run (equivalent to "works" in original)
+print("Running baseline...")
+out_baseline = jacfunc(x, idxs)
+print(f"Baseline output shape: {out_baseline.shape}")
+
+# 2. Adapted test using the similar API: tf.name_scope
+# The original bug involved torch.compile(..., dynamic=True).
+# Here we adapt the test to use tf.name_scope as the context manager wrapper.
+print("Running with tf.name_scope...")
+
+try:
+    # In TensorFlow, tf.name_scope is used to group operations for visualization,
+    # acting as a context manager similar to how torch.compile wraps the function call.
+    with tf.name_scope("dynamic_jacobian_scope"):
+        out = jacfunc(x, idxs)
+    
+    # Verify the output shape is correct
+    # Jacobian of f: R^(B, M) -> R^(B, M) is R^(B, M, B, M)
+    expected_shape = (BATCH, MAX, BATCH, MAX)
+    assert out.shape == expected_shape, f"Shape mismatch: expected {expected_shape}, got {out.shape}"
+    
+    # Verify values (sanity check)
+    # The derivative of x^2 is 2x. The one_hot masks the output.
+    # So J[i, j, i, j] should be 2*x[i, j] if idxs[i] == j, else 0.
+    # We check a specific element to ensure calculation happened.
+    i, j = 0, int(idxs[0].numpy())
+    assert out[i, j, i, j].numpy() == 2 * x[i, j].numpy(), "Value mismatch at diagonal"
+    
+    print("Test passed: tf.name_scope handled the operation successfully.")
+
+except Exception as e:
+    print(f"Test failed with error: {e}")
+    raise
+```

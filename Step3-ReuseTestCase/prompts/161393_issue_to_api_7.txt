@@ -1,0 +1,90 @@
+Issue ID: 161393
+Title: Hard error when slicing a tensor with unbacked sizes
+Bug Description:
+### 🐛 Describe the bug
+
+For below code:
+```python
+import torch
+
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def f(x):
+    nz = x.nonzero()
+    return nz[:-1]
+
+out = torch.compile(f, fullgraph=True)(torch.randn(3, 4))
+print(out)
+```
+I'm getting the following error:
+```python
+(pytorch) [yidi@devvm062.dkl0 ~/local/pytorch (f272b284)]$ TORCH_LOGS=+dynamic python test_slice.py 
+I0825 00:08:56.965000 3033571 torch/fx/experimental/symbolic_shapes.py:3781] [0/0] create_env
+I0825 00:08:56.978000 3033571 torch/fx/experimental/symbolic_shapes.py:4796] [0/0] create_unbacked_symint u0 [-int_oo, int_oo] nz = x.nonzero()  # test_slice.py:7 in f (_subclasses/fake_impls.py:695 in nonzero)
+V0825 00:08:56.978000 3033571 torch/fx/experimental/symbolic_shapes.py:6636] [0/0] _update_var_to_range u0 = VR[0, 12] (update)
+I0825 00:08:56.978000 3033571 torch/fx/experimental/symbolic_shapes.py:7864] [0/0] constrain_symbol_range u0 [0, 12]
+V0825 00:08:56.997000 3033571 torch/fx/experimental/symbolic_shapes.py:7721] [0/0] runtime_assert u0 >= 0 == True [statically known]
+I0825 00:08:57.001000 3033571 torch/fx/experimental/symbolic_shapes.py:7396] [0/0] could not evaluate Eq(u0, 0) due to data dependency, it was assumed to be False with no runtime assertions nz = x.nonzero()  # test_slice.py:7 in f (_ops.py:840 in __call__) 
+I0825 00:08:57.001000 3033571 torch/fx/experimental/symbolic_shapes.py:7396] [0/0] User Stack (most recent call la
+...
+
+Original API Under Test: torch.compile
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.isnan
+Similarity score: 0.9919601678848267
+
+Similar API information:
+# Extracted call chain for torch.isnan
+
+# --- torch._inductor.lowering.isnan ---
+def isnan(x):
+    if is_integer_type(x):
+        return full_like(x, False, dtype=torch.bool)
+    fn = ops_wrapper("isnan")
+    return make_pointwise(fn, override_return_dtype=torch.bool)(x)
+
+# --- torch._inductor.lowering.full_like ---
+def full_like(x, fill_value, **kwargs):
+    return create_tensor_like(tensor_constructor(fill_value))(x, **kwargs)
+
+# --- torch._inductor.lowering.create_tensor_like ---
+def create_tensor_like(creation_fn):
+    """
+    Shim to convert X_like(...) into X(...).  For example zeros_like() into zeros().
+    """
+
+    def _constant_like(
+        x, *, dtype=None, device=None, layout=None, pin_memory=False, memory_format=None
+    ):
+        assert_nyi(not pin_memory, "pin_memory")
+        assert_nyi(layout in (None, torch.strided), f"layout={layout}")
+        if dtype is None:
+            dtype = x.get_dtype()
+        else:
+            dtype = decode_dtype(dtype)
+        device = device or x.get_device()
+        size = list(x.get_size())
+
+Original Test Case:
+import torch
+
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def f(x):
+    nz = x.nonzero()
+    return nz[:-1]
+
+out = torch.compile(f, fullgraph=True)(torch.randn(3, 4))
+print(out)
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

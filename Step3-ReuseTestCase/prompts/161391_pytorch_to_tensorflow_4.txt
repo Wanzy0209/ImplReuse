@@ -1,0 +1,128 @@
+Issue ID: 161391
+Title: Memory leak when in-place op is applied to non-leaf tensor with requires_grad=True
+Bug Description:
+### 🐛 Describe the bug
+
+### **Description:**
+ When an in-place operation is applied to a non-leaf tensor with requires_grad=True, and the tensor subsequently loses its backward graph node because of Python arithmetic operators, the process’s resident memory keeps growing, indicating a memory leak caused by unreleased reference counts.
+### To Reproduce
+```
+import torch
+import unittest
+import gc, psutil
+
+def mem_mb_print():
+    gc.collect()
+    mem = psutil.virtual_memory()
+    process = psutil.Process().memory_info().rss
+
+    print(f"used: {mem.used // 1024**1} KB,"
+       f"process: {process // 1024**1} KB,"
+       f"percent: {mem.percent} %,"
+       f"PyTorch tensors: {sum(1 for o in gc.get_objects() if torch.is_tensor(o))}")
+
+class TestLeafGradMaxCUDA(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_cross_grad_max_cuda(self):
+        device = torch.device("cuda")
+
+        # leaf GPU tensor
+        leaf = torch.randn(8, 1, 24, device=device, requires_grad=True)
+        no_leaf= leaf * 1.0
+
+        for _ in range(100):
+            window_left = no_leaf[:, :, :-1]          # [8, 1, 23]
+            # inplace operators
+            no_leaf[:, :, 1:] = torch.max( 
+                no_leaf[:, :, 1:],  
+                window_left   
+            )
+            # Python arithmetic operators
+            mask = (no_leaf >= 0)
+            mem_mb_print()
+
+Original API Under Test: torch.max
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.numpy.vdot
+Similarity score: 0.9936672449111938
+
+Similar API information:
+# Extracted call chain for tf.experimental.numpy.vdot
+
+# --- tensorflow.python.ops.numpy_ops.np_math_ops.vdot ---
+def vdot(a, b):  # pylint: disable=missing-docstring
+  a, b = np_array_ops._promote_dtype(a, b)  # pylint: disable=protected-access
+  a = np_array_ops.reshape(a, [-1])
+  b = np_array_ops.reshape(b, [-1])
+  if a.dtype == np_dtypes.complex128 or a.dtype == np_dtypes.complex64:
+    a = conj(a)
+  return dot(a, b)
+
+# --- tensorflow.python.ops.numpy_ops.np_math_ops.conj ---
+def conj(x):
+  return _scalar(math_ops.conj, x)
+
+# --- tensorflow.python.ops.numpy_ops.np_math_ops._scalar ---
+def _scalar(tf_fn, x, promote_to_float=False):
+  """Computes the tf_fn(x) for each element in `x`.
+
+  Args:
+    tf_fn: function that takes a single Tensor argument.
+    x: array_like. Could be an ndarray, a Tensor or any object that can be
+      converted to a Tensor using `ops.convert_to_tensor`.
+    promote_to_float: whether to cast the argument to a float dtype if it is not
+      already.
+
+  Returns:
+    An ndarray with the same shape as `x`. The default output dtype is
+    determined by `np_utils.result_type(float)`, unless x is an ndarray with a
+    floating point type, in which case the outp
+
+Original Test Case:
+import torch
+import unittest
+import gc, psutil
+
+def mem_mb_print():
+    gc.collect()
+    mem = psutil.virtual_memory()
+    process = psutil.Process().memory_info().rss
+
+    print(f"used: {mem.used // 1024**1} KB,"
+       f"process: {process // 1024**1} KB,"
+       f"percent: {mem.percent} %,"
+       f"PyTorch tensors: {sum(1 for o in gc.get_objects() if torch.is_tensor(o))}")
+
+class TestLeafGradMaxCUDA(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_cross_grad_max_cuda(self):
+        device = torch.device("cuda")
+
+        # leaf GPU tensor
+        leaf = torch.randn(8, 1, 24, device=device, requires_grad=True)
+        no_leaf= leaf * 1.0
+
+        for _ in range(100):
+            window_left = no_leaf[:, :, :-1]          # [8, 1, 23]
+            # inplace operators
+            no_leaf[:, :, 1:] = torch.max( 
+                no_leaf[:, :, 1:],  
+                window_left   
+            )
+            # Python arithmetic operators
+            mask = (no_leaf >= 0)
+            mem_mb_print()
+
+        loss = mask.sum()
+
+if __name__ == "__main__":
+      unittest.main()
+
+The API tf.experimental.numpy.vdot is identified as cross-library similar to the original PyTorch API torch.max.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

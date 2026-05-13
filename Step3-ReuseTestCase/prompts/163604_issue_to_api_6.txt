@@ -1,0 +1,106 @@
+Issue ID: 163604
+Title: [Fuzzer][Eager/Compile Divergence] assert_size_stride(buf1, (s46, 64, s22), (64*s22, s22, 1), 'torch.ops.aten.convolution_backward.default')
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1):
+    t0 = arg0 # size=(4, 503, 64, 504), stride=(16224768, 32256, 504, 1), dtype=float32, device=cuda
+    t1 = t0.mean(dim=0) # size=(503, 64, 504), stride=(32192, 64, 1), dtype=float32, device=cuda
+    t2 = torch.nn.functional.relu(t1) # size=(503, 64, 504), stride=(32192, 64, 1), dtype=float32, device=cuda
+    t3 = arg1 # size=(5, 16, 1, 64), stride=(1024, 64, 64, 1), dtype=float32, device=cuda
+    t4 = t3.sum(dim=0) # size=(16, 1, 64), stride=(1024, 1, 64), dtype=float32, device=cuda
+    t5 = t4.transpose(2, 1) # size=(16, 64, 1), stride=(1024, 64, 1), dtype=float32, device=cuda
+    t6 = torch.nn.functional.conv1d(t2, t5, stride=1, padding=0) # size=(503, 16, 504), stride=(8064, 504, 1), dtype=float32, device=cuda
+    output = t6  # output tensor
+    return output
+
+arg0 = torch.rand([4, 503, 64, 504], dtype=torch.float32, device='cuda', requires_grad=True) # size=(4, 503, 64, 504), stride=(16224768, 32256, 504, 1), dtype=float32, device=cuda
+arg1 = torch.rand([5, 16, 1, 64], dtype=torch.float32, device='cuda', requires_grad=True) # size=(5, 16, 1, 64), stride=(1024, 64, 64, 1), dtype=float32, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo
+...
+
+Original API Under Test: torch.ops.aten.convolution_backward.default
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.distributed.get_group_rank
+Similarity score: 0.9842448234558105
+
+Similar API information:
+# Extracted call chain for torch.distributed.get_group_rank
+
+# --- torch.distributed.distributed_c10d.get_group_rank ---
+def get_group_rank(group: ProcessGroup, global_rank: int) -> int:
+    """
+    Translate a global rank into a group rank.
+
+    ``global_rank`` must be part of ``group`` otherwise this raises RuntimeError.
+
+    Args:
+        group (ProcessGroup): ProcessGroup to find the relative rank.
+        global_rank (int): Global rank to query.
+
+    Returns:
+        Group rank of ``global_rank`` relative to ``group``
+
+    N.B. calling this function on the default process group returns identity
+    """
+    if group is GroupMember.WORLD:
+        return global_rank
+    if group not in _world.pg_group_ranks:
+        raise ValueError(
+            f"Group {group} is not registered, please create group with torch.distributed.new_group API"
+        )
+    group_ranks = _world.pg_group_ranks[group]
+    if global_rank not in group_ranks:
+        raise ValueError(f"Global rank {global_rank} is not part of group {group}")
+
+    return group_ranks[global_rank]
+
+Original Test Case:
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1):
+    t0 = arg0 # size=(4, 503, 64, 504), stride=(16224768, 32256, 504, 1), dtype=float32, device=cuda
+    t1 = t0.mean(dim=0) # size=(503, 64, 504), stride=(32192, 64, 1), dtype=float32, device=cuda
+    t2 = torch.nn.functional.relu(t1) # size=(503, 64, 504), stride=(32192, 64, 1), dtype=float32, device=cuda
+    t3 = arg1 # size=(5, 16, 1, 64), stride=(1024, 64, 64, 1), dtype=float32, device=cuda
+    t4 = t3.sum(dim=0) # size=(16, 1, 64), stride=(1024, 1, 64), dtype=float32, device=cuda
+    t5 = t4.transpose(2, 1) # size=(16, 64, 1), stride=(1024, 64, 1), dtype=float32, device=cuda
+    t6 = torch.nn.functional.conv1d(t2, t5, stride=1, padding=0) # size=(503, 16, 504), stride=(8064, 504, 1), dtype=float32, device=cuda
+    output = t6  # output tensor
+    return output
+
+arg0 = torch.rand([4, 503, 64, 504], dtype=torch.float32, device='cuda', requires_grad=True) # size=(4, 503, 64, 504), stride=(16224768, 32256, 504, 1), dtype=float32, device=cuda
+arg1 = torch.rand([5, 16, 1, 64], dtype=torch.float32, device='cuda', requires_grad=True) # size=(5, 16, 1, 64), stride=(1024, 64, 64, 1), dtype=float32, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

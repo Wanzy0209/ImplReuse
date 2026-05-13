@@ -1,0 +1,70 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution as tf.compat.v1.train.add_queue_runner is a graph-mode API
+tf.compat.v1.disable_eager_execution()
+
+def test_queue_runner_regression():
+    """
+    Adapted test case for tf.compat.v1.train.add_queue_runner based on the 
+    PyTorch torch.compile regression issue.
+    
+    Original Logic:
+    1. Define a model/structure (RegressionModel).
+    2. Apply the specific API (torch.compile).
+    3. Execute with inputs (model(inputs)).
+    4. Verify behavior (check dtypes/state).
+    
+    Adapted Logic:
+    1. Define a queue structure (FIFOQueue).
+    2. Apply the specific API (add_queue_runner).
+    3. Execute the graph (Session.run).
+    4. Verify behavior (check collection and dequeue).
+    """
+    with tf.compat.v1.Graph().as_default():
+        # 1. Setup: Define a queue and enqueue operations
+        # Analogous to defining the RegressionModel and inputs in PyTorch
+        # Using shape (4, 10) to match torch.randn(4, 10) from the original issue
+        queue = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.float32], shapes=[(4, 10)])
+        enqueue_data = tf.random.normal((4, 10))
+        enqueue_op = queue.enqueue(enqueue_data)
+
+        # 2. Create the QueueRunner
+        # Analogous to the model structure
+        qr = tf.compat.v1.train.QueueRunner(queue, [enqueue_op] * 2)
+
+        # 3. API Call: Add the queue runner
+        # Analogous to torch.compile(model.forward, backend="inductor")
+        # This is the specific API being tested for regressions.
+        tf.compat.v1.train.add_queue_runner(qr)
+
+        # 4. Verification: Check collection
+        # Analogous to the print statement checking dtypes/state in the PyTorch forward pass
+        runners = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+        assert qr in runners, "QueueRunner not found in collection. Regression detected."
+
+        # 5. Execution: Run the session
+        # Analogous to _ = model(inputs)
+        with tf.compat.v1.Session() as sess:
+            # Initialize variables
+            sess.run(tf.compat.v1.global_variables_initializer())
+            sess.run(tf.compat.v1.local_variables_initializer())
+
+            # Start queue runners
+            coord = tf.compat.v1.train.Coordinator()
+            threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+            try:
+                # Dequeue data to ensure the pipeline works
+                # This mimics the forward pass execution
+                for _ in range(2):
+                    data = sess.run(queue.dequeue())
+                    assert data.shape == (4, 10), f"Expected shape (4, 10), got {data.shape}"
+            finally:
+                coord.request_stop()
+                coord.join(threads)
+
+if __name__ == "__main__":
+    test_queue_runner_regression()
+```

@@ -1,0 +1,79 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use tf.compat.v1 queues properly
+tf.compat.v1.disable_eager_execution()
+
+# Setup inputs
+# Using dimensions similar to the original bug report (31, 51)
+np.random.seed(0)
+num_files = 31 * 51
+string_tensor = [f"file_{i}.dat" for i in range(num_files)]
+
+# Define the graph logic
+def input_pipeline():
+    # Original API: torch.compile -> foo(x)
+    # Target API: tf.compat.v1.train.string_input_producer
+    q = tf.compat.v1.train.string_input_producer(
+        string_tensor,
+        num_epochs=1,
+        shuffle=True,
+        seed=0,
+        capacity=32
+    )
+
+    # Get a batch to mimic tensor operations
+    # Original: t = torch.tan(x); e = t.expand(...)
+    # Adaptation: Dequeue a batch of strings
+    batch_size = 10
+    filenames = q.dequeue_many(batch_size)
+
+    # Original: if mean_val > 0.5 ...
+    # Adaptation: Use a conditional on a random scalar to mimic control flow
+    rand_val = tf.random.uniform([], minval=0, maxval=1, dtype=tf.float32)
+
+    def true_branch():
+        # Mimic: torch.sub(e, e * 0.5)
+        return tf.strings.regex_replace(filenames, ".dat", "_sub.dat")
+
+    def false_branch():
+        # Mimic: torch.add(e, e * 0.5)
+        return tf.strings.regex_replace(filenames, ".dat", "_add.dat")
+
+    # Original: return torch.sin(out1)
+    # Adaptation: Return the processed strings
+    result = tf.cond(rand_val > 0.5, true_branch, false_branch)
+    return result
+
+# Run the test
+with tf.compat.v1.Session() as sess:
+    # Initialize variables (required for num_epochs)
+    sess.run([tf.compat.v1.local_variables_initializer(),
+              tf.compat.v1.global_variables_initializer()])
+
+    # Start queue runners
+    coord = tf.train.Coordinator()
+    threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+    try:
+        # Execute
+        output = sess.run(input_pipeline())
+
+        # Assertions
+        # Check that we got the expected batch size
+        assert len(output) == 10
+        # Check that output is bytes (TF string type)
+        assert isinstance(output[0], bytes)
+        # Check content modification
+        assert b"_sub.dat" in output[0] or b"_add.dat" in output[0]
+
+        print("Test passed successfully.")
+
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        raise
+    finally:
+        coord.request_stop()
+        coord.join(threads)
+```

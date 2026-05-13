@@ -1,0 +1,155 @@
+Issue ID: 168251
+Title: [Compile Error] TorchDynamo returns a tuple output that breaks shape access
+Bug Description:
+### 🐛 Describe the bug
+
+Description:
+When running a VAE model whose forward() returns a tuple (reconstruction, mu, log_var), eager mode executes correctly. However, under torch.compile, the returned object is still a tuple, but accessing output.shape triggers:AttributeError: 'tuple' object has no attribute 'shape'
+code：
+```
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class VAE(nn.Module):
+
+    def __init__(self, input_dim, hidden_dim, latent_dim):
+        super(VAE, self).__init__()
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_var = nn.Linear(hidden_dim, latent_dim)
+        self.decoder = nn.Sequential(nn.Linear(latent_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, input_dim), nn.Sigmoid())
+
+    def encode(self, x):
+        h = self.encoder(x)
+        mu = self.fc_mu(h)
+        log_var = self.fc_var(h)
+        return (mu, log_var)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def decode(self, z):
+        return self.decoder(z)
+
+    def forward(self, x):
+        x = x.view(-1, self.input_dim)
+        (mu, log_var) = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.train.string_input_producer
+Similarity score: 0.9932727217674255
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.train.string_input_producer
+
+# --- tensorflow.python.training.input.string_input_producer ---
+def string_input_producer(string_tensor,
+                          num_epochs=None,
+                          shuffle=True,
+                          seed=None,
+                          capacity=32,
+                          shared_name=None,
+                          name=None,
+                          cancel_op=None):
+  """Output strings (e.g. filenames) to a queue for an input pipeline.
+
+  Note: if `num_epochs` is not `None`, this function creates local counter
+  `epochs`. Use `local_variables_initializer()` to initialize local variables.
+
+  Args:
+    string_tensor: A 1-D string tensor with the strings to produce.
+    num_epochs: An integer (optional). If specified, `string_input_producer`
+      produces each string from `string_tensor` `num_epochs` times before
+      generating an `OutOfRange` error. If not specified,
+      `string_input_producer` can cycle through the strings in `string_tensor`
+      an unlimited number of times.
+    shuffle: Boolean. If true, the strings are randomly shuffled within each
+      epoch.
+    seed: An integer (opt
+...
+
+Original Test Case:
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class VAE(nn.Module):
+
+    def __init__(self, input_dim, hidden_dim, latent_dim):
+        super(VAE, self).__init__()
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_var = nn.Linear(hidden_dim, latent_dim)
+        self.decoder = nn.Sequential(nn.Linear(latent_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, input_dim), nn.Sigmoid())
+
+    def encode(self, x):
+        h = self.encoder(x)
+        mu = self.fc_mu(h)
+        log_var = self.fc_var(h)
+        return (mu, log_var)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def decode(self, z):
+        return self.decoder(z)
+
+    def forward(self, x):
+        x = x.view(-1, self.input_dim)
+        (mu, log_var) = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        reconstruction = self.decode(z)
+        return (reconstruction, mu, log_var)
+
+def get_default_model():
+    input_dim = 784
+    hidden_dim = 400
+    latent_dim = 20
+    model = VAE(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim)
+    return model
+
+def get_sample_inputs():
+    batch_size = 32
+    input_dim = 784
+    x = torch.randn(batch_size, input_dim)
+    return (x,)
+
+def main():
+    model = get_default_model()
+    model.eval()
+    inputs = get_sample_inputs()
+    with torch.no_grad():
+        (reconstruction, mu, log_var) = model(*inputs)
+    print('Model executed successfully!')
+    print(f'Input shape: {inputs[0].shape}')
+    print(f'Reconstruction shape: {reconstruction.shape[1]}')
+    print(f'Mu shape: {mu.shape}')
+    print(f'Log_var shape: {log_var.shape}')
+    print(f'Model parameters: {sum((p.numel() for p in model.parameters()))}')
+    compiled_model = torch.compile(model)
+    with torch.no_grad():
+        output_compile = compiled_model(*inputs)
+    print(f'Compile  shape: {output_compile.shape}')
+if __name__ == '__main__':
+    main()
+
+The API tf.compat.v1.train.string_input_producer is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

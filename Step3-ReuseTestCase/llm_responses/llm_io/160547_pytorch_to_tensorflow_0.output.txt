@@ -1,0 +1,59 @@
+```python
+import tensorflow as tf
+from collections import namedtuple
+from tensorflow.experimental import dtensor
+
+def test_relayout_namedtuple():
+    """
+    Adapts the PyTorch NamedTuple input test to tf.experimental.dtensor.relayout.
+    Verifies that relayout handles tensors derived from a NamedTuple input structure.
+    """
+    # Define a NamedTuple similar to the PyTorch example
+    TensorPair = namedtuple('TensorPair', 'x y')
+
+    # Setup Mesh and Layouts
+    # We use a simple CPU mesh for compatibility
+    devices = [tf.DeviceSpec(device_type="CPU")]
+    mesh = dtensor.create_mesh([("batch", 1)], devices=devices)
+    
+    # Define layouts: Replicated (source) and Sharded (target)
+    layout_replicated = dtensor.Layout([dtensor.UNSHARDED], mesh)
+    layout_sharded = dtensor.Layout([dtensor.SHARDED("batch")], mesh)
+
+    # Create inputs
+    x = tf.constant([1.0, 2.0, 3.0, 4.0])
+    y = tf.constant([5.0, 6.0, 7.0, 8.0])
+    
+    # Pack inputs into a NamedTuple
+    inp = TensorPair(x, y)
+
+    # Convert to DTensors (required for relayout)
+    # This step corresponds to the input preparation phase in the original test
+    d_x = dtensor.DTensor(inp.x, layout=layout_replicated)
+    d_y = dtensor.DTensor(inp.y, layout=layout_replicated)
+
+    # Call the API: tf.experimental.dtensor.relayout
+    # In the PyTorch bug, strict=False failed. Here we verify the operation succeeds.
+    # Since relayout doesn't have a 'strict' mode, we test the standard behavior.
+    try:
+        result_x = dtensor.relayout(d_x, layout_sharded)
+        result_y = dtensor.relayout(d_y, layout_sharded)
+        
+        # Verify the layout has changed correctly
+        assert result_x.layout == layout_sharded, "Layout of x did not change as expected"
+        assert result_y.layout == layout_sharded, "Layout of y did not change as expected"
+        
+        # Verify data integrity (values should remain the same)
+        # Note: to_tensor() gathers the data to local for comparison
+        assert tf.reduce_all(result_x.to_tensor() == inp.x).numpy()
+        assert tf.reduce_all(result_y.to_tensor() == inp.y).numpy()
+        
+        print("Test Passed: relayout succeeded with NamedTuple inputs.")
+        
+    except Exception as e:
+        print(f"Test Failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_relayout_namedtuple()
+```

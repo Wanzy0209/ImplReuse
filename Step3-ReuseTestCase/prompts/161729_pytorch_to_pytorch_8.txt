@@ -1,0 +1,102 @@
+Issue ID: 161729
+Title: Einsum produces transposed output for some cases
+Bug Description:
+```
+import torch
+import torch.nn.functional as F
+import numpy as np
+
+torch.set_default_device("cuda")
+
+
+torch.set_default_device("cuda")
+batch, in_dim, out_dim = 128, 1024, 4096
+x = torch.randn(batch, in_dim, dtype=torch.float)
+w = torch.randn(out_dim, in_dim, dtype=torch.float)
+
+def linear(x, w):
+    return F.linear(x, w)
+
+out = linear(x, w)
+print(out.shape, out.stride())
+out = torch.einsum("fd,bd->bf", w, x)
+print(out.shape, out.stride())
+out_np = np.einsum("fd,bd->bf", w.cpu().numpy(), x.cpu().numpy())
+print(out_np.shape, out_np.strides)
+```
+outputs 
+```
+torch.Size([128, 4096]) (4096, 1)
+torch.Size([128, 4096]) (1, 128)
+(128, 4096) (16384, 4)
+```
+`linear` and `numpy` produce contiguous output, `einsum` produces transposed output, there are probably other cases when this happens
+
+cc @jianyuh @nikitaved @mruberry @walterddr @xwang233 @Lezcano
+
+Original API Under Test: torch.einsum
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.functional.softshrink
+Similarity score: 0.9944103956222534
+
+Similar API information:
+# Extracted call chain for torch.nn.functional.softshrink
+
+# --- torch._refs.nn.functional.softshrink ---
+def softshrink(a: TensorLikeType, lambd: float = 0.5):
+    # Formula for reference,
+    # softshrink(x) = x - lambd if x > lambd
+    #               = x + lambd if x < -lambd
+    #               = 0 otherwise
+    torch._check(
+        lambd >= 0,
+        lambda: f"lambda must be greater or equal to 0, but found to be {lambd}",
+    )
+    # We implement this in one torch.where to generate better code in the backward
+    # see https://github.com/pytorch/pytorch/pull/107052#discussion_r1293748211
+    # We multiply by 0 for dealing with nans
+    return torch.where(torch.abs(a) > lambd, a - torch.sign(a) * lambd, a * 0)
+
+# --- torch._prims_common.wrappers.out_wrapper ---
+def out_wrapper(
+    *out_names: str,
+    exact_dtype: bool = False,
+    pass_is_out: bool = False,
+    preserve_memory_format: bool = False,
+) -> Callable[[Callable[_P, _T]], Callable[_P, _T]]:
+    # The wrapped function needs to convert the output parameters to ensure
+    # compatibility between the Python API (which always uses "out" as the
+    # parameter name and may be a tuple) and the Aten API (which may have
+...
+
+Original Test Case:
+import torch
+import torch.nn.functional as F
+import numpy as np
+
+torch.set_default_device("cuda")
+
+
+torch.set_default_device("cuda")
+batch, in_dim, out_dim = 128, 1024, 4096
+x = torch.randn(batch, in_dim, dtype=torch.float)
+w = torch.randn(out_dim, in_dim, dtype=torch.float)
+
+def linear(x, w):
+    return F.linear(x, w)
+
+out = linear(x, w)
+print(out.shape, out.stride())
+out = torch.einsum("fd,bd->bf", w, x)
+print(out.shape, out.stride())
+out_np = np.einsum("fd,bd->bf", w.cpu().numpy(), x.cpu().numpy())
+print(out_np.shape, out_np.strides)
+
+The API torch.nn.functional.softshrink is identified as same-library similar to the original PyTorch API torch.einsum.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

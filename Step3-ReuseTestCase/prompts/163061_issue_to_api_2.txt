@@ -1,0 +1,137 @@
+Issue ID: 163061
+Title: GIL is not released when calling torch.compile kernels
+Bug Description:
+### 🐛 Describe the bug
+
+In most cases, PyTorch releases GIL when calling CUDA APIs, but I found the GIL is held when calling torch.compile kernels, is this expected? Is it possible to release GIL when calling torch.compile kernels?
+
+To reproduce, script `torch_compile.py`:
+```python
+import torch
+import triton
+import triton.language as tl
+
+def torch_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@torch.compile
+def torch_compile_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@triton.jit
+def add_kernel(x_ptr,
+               y_ptr,
+               output_ptr,
+               n_elements,
+               BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+def triton_add(x: torch.Tensor, y: torch.Tensor):
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    return output
+
+Original API Under Test: torch.compile
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.sysconfig.get_compile_flags
+Similarity score: 0.9834480285644531
+
+Similar API information:
+# Extracted call chain for tf.sysconfig.get_compile_flags
+
+# --- tensorflow.python.platform.sysconfig.get_compile_flags ---
+def get_compile_flags():
+  """Returns the compilation flags for compiling with TensorFlow.
+
+  The returned list of arguments can be passed to the compiler for compiling
+  against TensorFlow headers. The result is platform dependent.
+
+  For example, on a typical Linux system with Python 3.7 the following command
+  prints `['-I/usr/local/lib/python3.7/dist-packages/tensorflow/include',
+  '-D_GLIBCXX_USE_CXX11_ABI=1', '-DEIGEN_MAX_ALIGN_BYTES=64']`
+
+  >>> print(tf.sysconfig.get_compile_flags())
+
+  Returns:
+    A list of strings for the compiler flags.
+  """
+  flags = []
+  flags.append('-I%s' % get_include())
+  flags.append('-D_GLIBCXX_USE_CXX11_ABI=%d' % _CXX11_ABI_FLAG)
+  cxx_version_flag = None
+  if _CXX_VERSION == 201103:
+    cxx_version_flag = '--std=c++11'
+  elif _CXX_VERSION == 201402:
+    cxx_version_flag = '--std=c++14'
+  elif _CXX_VERSION == 201703:
+    cxx_version_flag = '--std=c++17'
+  elif _CXX_VERSION == 202002:
+    cxx_version_flag = '--std=c++20'
+
+Original Test Case:
+import torch
+import triton
+import triton.language as tl
+
+def torch_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@torch.compile
+def torch_compile_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@triton.jit
+def add_kernel(x_ptr,
+               y_ptr,
+               output_ptr,
+               n_elements,
+               BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+def triton_add(x: torch.Tensor, y: torch.Tensor):
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    return output
+
+
+def main():
+    x = torch.randn(4096, 4096, device='cuda')
+    y = torch.randn(4096, 4096, device='cuda')
+    for _ in range(10):
+        torch_add(x, y)
+        torch_compile_add(x, y)
+        triton_add(x, y)
+        
+
+if __name__ == "__main__":
+    main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

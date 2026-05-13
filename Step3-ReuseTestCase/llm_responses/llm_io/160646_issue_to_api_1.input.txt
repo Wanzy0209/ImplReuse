@@ -1,0 +1,148 @@
+Issue ID: 160646
+Title: AOT compilation of Triton op fails in PyTorch 2.8
+Bug Description:
+### 🐛 Describe the bug
+
+I have a model that works fine with `aoti_compile_and_package` in PyTorch 2.7, but after updating to PyTorch 2.8 compilation fails. I managed to distil the issue into a small repro:
+
+```python
+import tempfile
+
+import torch
+import triton
+import triton.language as tl
+from torch.library import triton_op, wrap_triton
+
+
+@triton.jit
+def my_kernel(
+    out1,
+    out2,
+):
+    # the actual kernel does something more meaningful of course
+    tl.store(out1, 1.0)
+    tl.store(out2, 1.0)
+
+
+@triton_op("repro::my_triton_op", mutates_args={})
+def my_triton_op(
+    q: torch.Tensor,
+    block_size: int = 128,
+) -> torch.Tensor:
+    out1 = torch.empty((1,), device=q.device)
+    out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)
+
+    wrap_triton(my_kernel)[(1, 1)](
+        out1,
+        out2,
+    )
+
+    return out1
+
+
+class MyModule(torch.nn.Module):
+
+Original API Under Test: torch._inductor.aoti_compile_and_package
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.backends.mha.get_fastpath_enabled
+Similarity score: 0.9878718256950378
+
+Similar API information:
+# Extracted call chain for torch.backends.mha.get_fastpath_enabled
+
+# --- torch.backends.mha.get_fastpath_enabled ---
+def get_fastpath_enabled() -> bool:
+    """Returns whether fast path for TransformerEncoder and MultiHeadAttention
+    is enabled, or ``True`` if jit is scripting.
+
+    .. note::
+        The fastpath might not be run even if ``get_fastpath_enabled`` returns
+        ``True`` unless all conditions on inputs are met.
+    """
+    if not torch.jit.is_scripting():
+        return _is_fastpath_enabled
+    return True
+
+# --- torch.jit.is_scripting ---
+def is_scripting() -> bool:
+    r"""
+    Function that returns True when in compilation and False otherwise. This
+    is useful especially with the @unused decorator to leave code in your
+    model that is not yet TorchScript compatible.
+    .. testcode::
+
+        import torch
+
+        @torch.jit.unused
+        def unsupported_linear_op(x):
+            return x
+
+        def linear(x):
+
+Original Test Case:
+import tempfile
+
+import torch
+import triton
+import triton.language as tl
+from torch.library import triton_op, wrap_triton
+
+
+@triton.jit
+def my_kernel(
+    out1,
+    out2,
+):
+    # the actual kernel does something more meaningful of course
+    tl.store(out1, 1.0)
+    tl.store(out2, 1.0)
+
+
+@triton_op("repro::my_triton_op", mutates_args={})
+def my_triton_op(
+    q: torch.Tensor,
+    block_size: int = 128,
+) -> torch.Tensor:
+    out1 = torch.empty((1,), device=q.device)
+    out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)
+
+    wrap_triton(my_kernel)[(1, 1)](
+        out1,
+        out2,
+    )
+
+    return out1
+
+
+class MyModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, q):
+        return my_triton_op(q)
+
+
+def main():
+    model = MyModule().to("cuda")
+    with torch.inference_mode():
+        q = torch.randn(1024, device="cuda")
+        exported_model = torch.export.export(model, (q,), dynamic_shapes=({0: torch.export.Dim("dim")},))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        torch._inductor.aoti_compile_and_package(
+            exported_model,
+            package_path=tmpdir + "/package.pt2",
+        )
+
+
+if __name__ == "__main__":
+    main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

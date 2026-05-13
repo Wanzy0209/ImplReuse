@@ -1,0 +1,85 @@
+Issue ID: 160630
+Title: torch.zeros_like not implemented for QuantizedCPU tensors
+Bug Description:
+### 🐛 Describe the bug
+
+torch.zeros_like() fails when used with a QuantizedCPU tensor. The operator aten::zero_ is not implemented for the QuantizedCPU backend, causing any operation that tries to create a zeroed tensor for quantized inputs to fail.
+import torch
+
+def test_quantized_zeros_like():
+    # Create a quantized tensor
+    quant_input = torch.quantize_per_tensor(torch.tensor([1.0, 2.0, 3.0]), scale=1.0, zero_point=0, dtype=torch.quint8)
+    
+    # Attempt to create a zeroed tensor with the same shape
+    out_tensor = torch.zeros_like(quant_input)  # <-- This triggers the error
+    
+    print("Quantized input:", quant_input)
+    print("Output tensor:", out_tensor)
+
+if __name__ == "__main__":
+    test_quantized_zeros_like()
+
+
+### Versions
+
+Traceback (most recent call last):
+  File "example.py", line 7, in <module>
+    out_tensor = torch.zeros_like(quant_input)
+NotImplementedError: Could not run 'aten::zero_' with arguments from the 'QuantizedCPU' backend. ...
+'aten::zero_' is only available for these backends: [CPU, CUDA, Meta, MkldnnCPU, SparseCPU, ...]
+
+
+cc @jerryzh168 @jianyuh @raghuramank100 @jamesr66a @vkuzo @jgong5 @Xia-Weiwen @leslie-fang-intel @msaroufim
+
+Original API Under Test: torch.zeros_like
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.cholesky_solve
+Similarity score: 0.9959570169448853
+
+Similar API information:
+# Extracted call chain for torch.cholesky_solve
+
+# --- torch._meta_registrations.cholesky_solve ---
+def cholesky_solve(self: Tensor, A: Tensor, upper: bool = False) -> Tensor:
+    torch._check(
+        self.ndim >= 2,
+        lambda: f"b should have at least 2 dimensions, but has {self.ndim} dimensions instead",
+    )
+    torch._check(
+        A.ndim >= 2,
+        lambda: f"u should have at least 2 dimensions, but has {A.ndim} dimensions instead",
+    )
+    self_broadcasted, A_broadcasted = _linalg_broadcast_batch_dims_name(
+        self, A, "cholesky_solve"
+    )
+    return _cholesky_solve_helper(self_broadcasted, A_broadcasted, upper)
+
+# --- torch._meta_registrations._cholesky_solve_helper ---
+def _cholesky_solve_helper(self: Tensor, A: Tensor, upper: bool) -> Tensor:
+    return cloneBatchedColumnMajor(self)
+
+# --- torch._meta_registrations.cloneBatchedColumnMajor ---
+def cloneBatchedColumnMajor(src: Tensor) -> Tensor:
+    return src.mT.clone(memory_format=torch.contiguous_format).transpose(-2, -1)
+
+# --- src.mT.clone ---
+def clone(x, *, memory_format=None):
+    # TODO(jansel): memory format
+    return Pointwise.create(
+        device=x.get_device(),
+
+Original Test Case:
+# Attempt to create a zeroed tensor with the same shape
+out_tensor = torch.zeros_like(quant_input)  # <-- This triggers the error
+
+print("Quantized input:", quant_input)
+print("Output tensor:", out_tensor)
+
+The API torch.cholesky_solve is identified as same-library similar to the original PyTorch API torch.zeros_like.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

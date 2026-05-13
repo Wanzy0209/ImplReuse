@@ -1,0 +1,109 @@
+Issue ID: 162725
+Title: conv_transpose3d output and Inconsistent inference results after compilation
+Bug Description:
+### 🐛 Describe the bug
+
+```python
+import torch
+from torch.testing._internal.common_methods_invocations import op_db
+
+def fn(x,w):
+    result = torch.nn.functional.conv_transpose3d(input=x, weight=w)
+    return result
+
+
+op_dict = op_db[192]  # nn.functional.conv_transpose3d
+inputs = list(op_dict.sample_inputs("cuda", torch.float32, requires_grad=False))
+
+for sample in inputs:
+    eager_args = sample.input, *sample.args
+    (x,w,b) = eager_args
+    compiled = torch.compile(fn, backend="inductor", mode="max-autotune")
+    res1 = fn(x,w)
+    res2 = compiled(x,w)
+    torch.testing.assert_close(res1, res2)
+```
+
+```
+Traceback (most recent call last):
+  File "/share_container/learning/bug2.py", line 19, in <module>
+    torch.testing.assert_close(res1, res2)
+  File "/root/miniconda3/envs/triton/lib/python3.10/site-packages/torch/testing/_comparison.py", line 1530, in assert_close
+    raise error_metas[0].to_error(msg)
+AssertionError: Tensor-likes are not close!
+
+Mismatched elements: 1 / 2016 (0.0%)
+Greatest absolute difference: 2.288818359375e-05 at index (1, 0, 3, 1, 4) (up to 1e-05 allowed)
+Greatest relative difference: 1.4248430488805752e-05 at index (1, 0, 3, 1, 4) (up to 1.3e-06 allowed)
+
+```
+
+### Versions
+
+PyTorch version: 2.6.0+cu124
+
+Original API Under Test: torch.nn.functional.conv_transpose3d
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.sparse.segment_mean
+Similarity score: 0.9940171241760254
+
+Similar API information:
+# Extracted call chain for tf.sparse.segment_mean
+
+# --- tensorflow.python.ops.ragged.ragged_math_ops.segment_mean ---
+def segment_mean(data: ragged_tensor.RaggedOrDense,
+                 segment_ids: ragged_tensor.RaggedOrDense,
+                 num_segments,
+                 name=None):
+  """For docs, see: _RAGGED_SEGMENT_DOCSTRING."""
+  with ops.name_scope(name, 'RaggedSegmentMean',
+                      [data, segment_ids, num_segments]):
+    total = segment_sum(data, segment_ids, num_segments)
+    ones = ragged_tensor.RaggedTensor.from_nested_row_splits(
+        array_ops.ones_like(data.flat_values),
+        data.nested_row_splits,
+        validate=False)
+    count = segment_sum(ones, segment_ids, num_segments)
+    if ragged_tensor.is_ragged(total):
+      return total.with_flat_values(total.flat_values / count.flat_values)
+    else:
+      return total / count
+
+# --- tensorflow.python.ops.array_ops.ones_like ---
+def ones_like(tensor, dtype=None, name=None, optimize=True):
+  """Creates a tensor with all elements set to 1.
+
+  See also `tf.ones`.
+
+  Given a single tensor (`tensor`), this operation returns a tensor of the same
+  type and shape as `tensor` with all elements set to 1
+...
+
+Original Test Case:
+import torch
+from torch.testing._internal.common_methods_invocations import op_db
+
+def fn(x,w):
+    result = torch.nn.functional.conv_transpose3d(input=x, weight=w)
+    return result
+
+
+op_dict = op_db[192]  # nn.functional.conv_transpose3d
+inputs = list(op_dict.sample_inputs("cuda", torch.float32, requires_grad=False))
+
+for sample in inputs:
+    eager_args = sample.input, *sample.args
+    (x,w,b) = eager_args
+    compiled = torch.compile(fn, backend="inductor", mode="max-autotune")
+    res1 = fn(x,w)
+    res2 = compiled(x,w)
+    torch.testing.assert_close(res1, res2)
+
+The API tf.sparse.segment_mean is identified as cross-library similar to the original PyTorch API torch.nn.functional.conv_transpose3d.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

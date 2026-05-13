@@ -1,0 +1,104 @@
+Issue ID: 163420
+Title: [Fuzzer][Eager/Compile Divergence] Inductor fails ont2.fill_diagonal_(t1.item())call
+Bug Description:
+### 🐛 Describe the bug
+
+Repro
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(arg0, arg1):
+    t0 = arg0 # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    t1 = arg1 # size=(), stride=(), dtype=float32, device=cuda
+    t2 = t0.clone(); t2.fill_diagonal_(t1.item()) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    return t2
+
+arg0 = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+arg1 = torch.empty([], dtype=torch.float32, device='cuda', requires_grad=True) # size=(), stride=(), dtype=float32, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+```
+
+Error
+```
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] Triton compilation failed: triton_poi_fused_fill_1
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] def triton_poi_fused_fill_1(out_ptr0, xnumel, XBLOCK : tl.constexpr):
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     xnumel = 1
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     xoffset = tl.program_id(0) * XBLOCK
+E0920 13:45:08.604000 69361 to
+...
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.library.impl_abstract
+Similarity score: 0.9943459033966064
+
+Similar API information:
+# Extracted call chain for torch.library.impl_abstract
+
+# --- torch.library.impl_abstract ---
+def impl_abstract(qualname, func=None, *, lib=None, _stacklevel=1):
+    r"""This API was renamed to :func:`torch.library.register_fake` in PyTorch 2.4.
+    Please use that instead.
+    """
+    if func is not None:
+        _stacklevel = _stacklevel + 1
+    return register_fake(qualname, func, lib=lib, _stacklevel=_stacklevel)
+
+# --- torch.library.register_fake ---
+def register_fake(
+    op: _op_identifier,
+    func: Optional[Callable] = None,
+    /,
+    *,
+    lib: Optional[Library] = None,
+    _stacklevel: int = 1,
+):
+    r"""Register a FakeTensor implementation ("fake impl") for this operator.
+
+    Also sometimes known as a "meta kernel", "abstract impl".
+
+    An "FakeTensor implementation" specifies the behavior of this operator on
+    Tensors that carry no data ("FakeTensor"). Given some input Tensors with
+    certain properties (sizes/strides/storage_offset/device), it specifies
+    what the properties of the output Tensors are.
+
+    The FakeTensor implementation has the same signature as the operator.
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(arg0, arg1):
+    t0 = arg0 # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    t1 = arg1 # size=(), stride=(), dtype=float32, device=cuda
+    t2 = t0.clone(); t2.fill_diagonal_(t1.item()) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    return t2
+
+arg0 = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+arg1 = torch.empty([], dtype=torch.float32, device='cuda', requires_grad=True) # size=(), stride=(), dtype=float32, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+
+The API torch.library.impl_abstract is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

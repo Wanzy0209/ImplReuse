@@ -1,0 +1,90 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+# Model definition from the bug report
+class RegressionModel(torch.nn.Module):
+    def __init__(self, a=0, b=0):
+        super().__init__()
+        self.a = torch.nn.Parameter(torch.tensor(a).float())
+        self.b = torch.nn.Parameter(torch.tensor(b).float())
+        self.first_batch = True
+
+    def forward(self, x=None):
+        if self.first_batch:
+            # print(f"Model dtype: {self.a.dtype}, {self.b.dtype}. Input dtype: {x.dtype}")
+            self.first_batch = False
+        return x * self.a + self.b
+
+def setup_process_group(rank, world_size):
+    # Initialize the process group
+    dist.init_process_group(
+        backend="gloo", # Using gloo for compatibility in this test context
+        init_method=f"tcp://127.0.0.1:12355",
+        rank=rank,
+        world_size=world_size
+    )
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup_process_group(rank, world_size)
+
+    # Setup from the bug report
+    model = RegressionModel()
+    # The bug report specifically uses CUDA. 
+    # We check for availability, but fallback to CPU to ensure the test is runnable on all machines.
+    torch_device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    if torch_device == "cuda":
+        torch.cuda.set_device(rank)
+
+    model.to(torch_device)
+    inputs = torch.randn(4, 10).to(torch_device)
+
+    # Adaptation: Instead of compiling and running forward, 
+    # we test sending the model parameters and inputs via the similar API.
+    
+    if rank == 0:
+        # Sender
+        # We wrap parameters and inputs in a list to send them
+        object_list = [model.a, model.b, inputs]
+        dst = 1
+        if world_size > 1:
+            # Using the device argument to ensure tensors are moved correctly if needed
+            dist.send_object_list(object_list, dst=dst, device=torch.device(torch_device))
+            print(f"Rank {rank} sent objects to {dst}.")
+    elif rank == 1:
+        # Receiver
+        object_list = [None, None, None]
+        src = 0
+        if world_size > 1:
+            dist.recv_object_list(object_list, src=src)
+            print(f"Rank {rank} received objects from {src}.")
+            
+            # Verify the received data matches the original data structure
+            assert isinstance(object_list[0], torch.Tensor), "Received object 0 is not a Tensor"
+            assert object_list[0].shape == model.a.shape, f"Shape mismatch for a: {object_list[0].shape} vs {model.a.shape}"
+            assert object_list[0].dtype == model.a.dtype, f"Dtype mismatch for a: {object_list[0].dtype} vs {model.a.dtype}"
+            
+            assert isinstance(object_list[1], torch.Tensor), "Received object 1 is not a Tensor"
+            assert object_list[1].shape == model.b.shape, f"Shape mismatch for b"
+            
+            assert isinstance(object_list[2], torch.Tensor), "Received object 2 is not a Tensor"
+            assert object_list[2].shape == inputs.shape, f"Shape mismatch for inputs"
+            
+            print("Assertions passed for received objects.")
+
+    cleanup()
+
+def main():
+    world_size = 2
+    # Use spawn to run the distributed test
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()
+```

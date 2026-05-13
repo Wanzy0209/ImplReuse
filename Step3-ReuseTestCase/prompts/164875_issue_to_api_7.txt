@@ -1,0 +1,117 @@
+Issue ID: 164875
+Title: [Fuzzer][Eager/Compile Divergence] The size of tensor a (s67) must match the size of tensor b (u0) at non-singleton dimension 0)
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1014698)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0 # size=(20, 0), stride=(1, 20), dtype=int64, device=cuda
+    var_node_3 = torch.full((), True, dtype=torch.bool) # size=(), stride=(), dtype=bool, device=cuda
+    _x_nz = torch.zeros((), dtype=torch.bool, device=var_node_3.device)
+    _x_nz_flat = _x_nz.reshape(-1)
+    _x_nz_flat[:20] = True
+    var_node_2 = torch.nonzero(_x_nz) # size=(20, 0), stride=(1, 20), dtype=int64, device=cuda
+    var_node_0 = torch.add(var_node_1, var_node_2) # size=(20, 0), stride=(1, 20), dtype=int64, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(5, 30, (20,)).to(torch.int64), (20, 0), (1, 20))
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+```
+
+```
+   ✅ eager success
+...
+
+Original API Under Test: torch.add
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.compat.v1.assert_none_equal
+Similarity score: 0.9918867349624634
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.assert_none_equal
+
+# --- tensorflow.python.ops.check_ops.assert_none_equal ---
+def assert_none_equal(
+    x, y, data=None, summarize=None, message=None, name=None):
+  return _binary_assert('!=', 'assert_none_equal', math_ops.not_equal,
+                        np.not_equal, x, y, data, summarize, message, name)
+
+# --- tensorflow.python.ops.check_ops._binary_assert ---
+def _binary_assert(sym, opname, op_func, static_func, x, y, data, summarize,
+                   message, name):
+  """Generic binary elementwise assertion.
+
+  Implements the behavior described in _binary_assert_doc() above.
+  Args:
+    sym: Mathematical symbol for the test to apply to pairs of tensor elements,
+      i.e. "=="
+    opname: Name of the assert op in the public API, i.e. "assert_equal"
+    op_func: Function that, if passed the two Tensor inputs to the assertion (x
+      and y), will return the test to be passed to reduce_all() i.e.
+    static_func: Function that, if passed numpy ndarray versions of the two
+      inputs to the assertion, will return a Boolean ndarray with containing
+      True in all positions where the assertion PASSES.
+      i.e. np.equal for assert_e
+...
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1014698)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0 # size=(20, 0), stride=(1, 20), dtype=int64, device=cuda
+    var_node_3 = torch.full((), True, dtype=torch.bool) # size=(), stride=(), dtype=bool, device=cuda
+    _x_nz = torch.zeros((), dtype=torch.bool, device=var_node_3.device)
+    _x_nz_flat = _x_nz.reshape(-1)
+    _x_nz_flat[:20] = True
+    var_node_2 = torch.nonzero(_x_nz) # size=(20, 0), stride=(1, 20), dtype=int64, device=cuda
+    var_node_0 = torch.add(var_node_1, var_node_2) # size=(20, 0), stride=(1, 20), dtype=int64, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(5, 30, (20,)).to(torch.int64), (20, 0), (1, 20))
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

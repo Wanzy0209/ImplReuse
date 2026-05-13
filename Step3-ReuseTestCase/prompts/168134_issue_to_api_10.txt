@@ -1,0 +1,94 @@
+Issue ID: 168134
+Title: [DTensor] gaps in uneven strided shard
+Bug Description:
+### 🐛 Describe the bug
+
+for full tensor [0, 1, 2, 3, 4] over _StridedShard(0, split=2),  mesh (2,), we should have following local tensor 
+* rank0: [0, 1, 3, 4]
+* rank1: [2, pad]
+
+right now the result is wrong (see following repro)
+* rank0: [0, 1, 3]
+* rank2: [2, 4]
+
+the wrong result is because of these lines https://github.com/pytorch/pytorch/blob/c8d790b56d7bbb4ee266976944ab920f2d513b40/torch/distributed/tensor/placement_types.py#L596-L601
+
+the recommend approach is (5, ) -> unflatten -> (2, 3, ) -> S(1) -> flatten
+```
+0, 1  | 2
+3, 4  | pad
+```
+
+I follow up to improve https://github.com/pytorch/pytorch/pull/163843
+```
+@with_comms
+def test_strided_shard_bug(self):
+    assert self.world_size == 2
+    device_mesh = init_device_mesh(self.device_type, (2, ))
+    global_tensor = torch.Tensor([0, 1, 2, 3, 4])
+    dtensor = distribute_tensor(global_tensor, device_mesh, (Replicate(), )).redistribute(device_mesh, (_StridedShard(0, split_factor=2),))
+    import time
+    time.sleep(torch.distributed.get_rank())
+    print(f"{torch.distributed.get_rank()=} {dtensor._local_tensor=}")
+```
+
+```
+torch.distributed.get_rank()=0 dtensor._local_tensor=tensor([0., 1., 3.], device='cuda:0')
+torch.distributed.get_rank()=1 dtensor._local_tensor=tensor([2., 4.], device='cuda:1')
+```
+
+
+
+
+### Versions
+
+Original API Under Test: torch.Tensor
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.test.Benchmark
+Similarity score: 0.9931695461273193
+
+Similar API information:
+# Extracted call chain for tf.test.Benchmark
+
+# --- tensorflow.compiler.tests.xla_test.Benchmark ---
+def Benchmark(
+    tf_bench, builder_fn, use_xla_jit, device, separate_compiled_gradients=False
+):
+  """Build a graph and run benchmarks against it, with or without XLA.
+
+  Args:
+    tf_bench: An instance of tf.test.Benchmark, used to run the benchmark.
+    builder_fn: A function that builds a graph when invoked, and returns (name,
+      fetches), where name is the name of the test, and fetches is a list of
+      tensors to fetch as output.
+    use_xla_jit: If true compile with the XLA JIT, otherwise use regular TF.
+    device: The tensorflow device to run on, e.g. "cpu", "gpu".
+    separate_compiled_gradients: If true put each gradient subgraph into a
+      separate compilation scope. This gives fine-grained control over which
+      portions of the graph will be compiled as a single unit. Compiling
+      gradients separately may yield better performance for some graphs. The
+      scope is named based on the scope of the forward computation as well as
+      the name of the gradients. As a result, the gradients will be compiled in
+      a scope that is separate from both the forward
+...
+
+Original Test Case:
+@with_comms
+def test_strided_shard_bug(self):
+    assert self.world_size == 2
+    device_mesh = init_device_mesh(self.device_type, (2, ))
+    global_tensor = torch.Tensor([0, 1, 2, 3, 4])
+    dtensor = distribute_tensor(global_tensor, device_mesh, (Replicate(), )).redistribute(device_mesh, (_StridedShard(0, split_factor=2),))
+    import time
+    time.sleep(torch.distributed.get_rank())
+    print(f"{torch.distributed.get_rank()=} {dtensor._local_tensor=}")
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

@@ -1,0 +1,87 @@
+Issue ID: 167974
+Title: EmbeddingBag sum has incorrect offsets when input is 2D and include_last_offset is set to True.
+Bug Description:
+### 🐛 Describe the bug
+
+According to the documentation, when the parameter include_last_offset is True, it is expected that “offsets has one additional element, where the last element is equivalent to the size of indices.” However, when the input indices are 2D, the offsets are generated automatically by the framework and it does not take into account the include_last_offset flag. As a result, the generated offsets are, in my opinion, incorrect.
+Place where offsets are generated in that case: https://github.com/pytorch/pytorch/blob/99117c1238c9adcd3fb2621e36c91f9d20ed2ff7/torch/nn/functional.py#L2724-L2726
+
+Repro script:
+```python
+import torch
+embedding_sum = torch.nn.EmbeddingBag(10, 3, mode='sum', include_last_offset=True)
+input = torch.tensor([[1, 2, 4, 5], [4, 3, 2, 9]], dtype=torch.long)
+embedding_sum(input)
+```
+
+By modifying functional.py, I managed to collect the offsets that are generated; in this case they are: [0, 4]
+instead of the expected: [0, 4, 8].
+
+If my reasoning is correct and this is in fact an issue, it can be easily fixed by appending to the offsets the size of indices when include_last_offset is True.
+Another idea could be to ignore the include_last_offset flag when the input is 2D, but this would require updates to the documentation and the code.
+
+
+### Versions
+
+```
+Collecting environment information...
+PyTorch version: 2.8.0+cu126
+Is debug build: False
+CUDA used to build PyTorch: 12.6
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.4 LTS (x86_64)
+GCC
+...
+
+Original API Under Test: torch.nn.EmbeddingBag
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.nn.dropout
+Similarity score: 0.9930901527404785
+
+Similar API information:
+# Extracted call chain for tf.nn.dropout
+
+# --- tensorflow.dtensor.python.d_random.dropout ---
+def dropout(x, rate, noise_shape=None, seed=None, name=None):
+  """DTensor replacement for dropout."""
+  if not isinstance(rate, float):
+    raise ValueError("rate should be float for dropout.")
+  if seed is None:
+    raise ValueError("seed must be specified for DTensor dropout. Got: None")
+
+  with ops.name_scope(name, "dropout", [x]):
+    x_dtype = x.dtype
+    keep_prob = 1 - rate
+    scale = 1 / keep_prob
+    scale = ops.convert_to_tensor(scale, dtype=x_dtype)
+    ret = gen_math_ops.mul(x, scale)
+
+    noise_shape = _get_noise_shape(x, noise_shape)
+    # stateless_random_uniform requires a shape [2] seed.
+    seed = [seed, 0]
+
+    if context.executing_eagerly():
+      layout = api.fetch_layout(x)
+    else:
+      layout = None
+    random_tensor = _old_tf_random_stateless_uniform(
+        noise_shape, seed=seed, minval=0, maxval=1, dtype=x_dtype, layout=layout
+    )
+    keep_mask = random_tensor >= rate
+    ret = gen_math_ops.mul(ret, gen_math_ops.cast(keep_mask, x_dtype))
+
+Original Test Case:
+import torch
+embedding_sum = torch.nn.EmbeddingBag(10, 3, mode='sum', include_last_offset=True)
+input = torch.tensor([[1, 2, 4, 5], [4, 3, 2, 9]], dtype=torch.long)
+embedding_sum(input)
+
+The API tf.nn.dropout is identified as cross-library similar to the original PyTorch API torch.nn.EmbeddingBag.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

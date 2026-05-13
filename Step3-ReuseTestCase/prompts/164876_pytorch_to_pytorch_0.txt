@@ -1,0 +1,97 @@
+Issue ID: 164876
+Title: [Fuzzer][Eager/Compile Divergence] The size of tensor a (u0) must match the size of tensor b (18) at non-singleton dimension
+Bug Description:
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1012969)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0 # size=(2, 10), stride=(10, 1), dtype=float64, device=cuda
+    var_node_4 = arg_1 # size=(10, 3), stride=(3, 1), dtype=float64, device=cuda
+    var_node_2 = torch.matmul(var_node_3.to(torch.float64), var_node_4.to(torch.float64)) # size=(2, 3), stride=(3, 1), dtype=float64, device=cuda
+    _inp_unique_wide = torch.arange(1, device=var_node_2.device, dtype=torch.int64)
+    _uniq_wide = torch.unique(_inp_unique_wide)
+    var_node_1 = _uniq_wide.to(var_node_2.dtype) # size=(1,), stride=(1,), dtype=float64, device=cuda
+    var_node_5 = torch.full((1, 18), 0.40330381448978797, dtype=torch.float64) # size=(1, 18), stride=(18, 1), dtype=float64, device=cuda
+    var_node_0 = torch.matmul(var_node_1.to(torch.float64), var_node_5.to(torch.float64)) # size=(18,), stride=(1,), dtype=float64, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randn(20).to(torch.float64), (2, 10), (10, 1))
+arg_1 = torch.as_strided(torch.randn(30).to(torch.float64), (10, 3), (3, 1))
+
+args = (arg_0, arg_1)
+...
+
+Original API Under Test: torch.unique
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.unique
+Similarity score: 0.9999998807907104
+
+Similar API information:
+# Extracted call chain for torch.unique
+
+# --- torch._dynamo.guards.unique ---
+def unique(seq):
+    seen = set()
+    for x in seq:
+        if x not in seen:
+            yield x
+            seen.add(x)
+
+# --- seen.add ---
+def add(a, b):
+    return 3 * a + b
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1012969)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0 # size=(2, 10), stride=(10, 1), dtype=float64, device=cuda
+    var_node_4 = arg_1 # size=(10, 3), stride=(3, 1), dtype=float64, device=cuda
+    var_node_2 = torch.matmul(var_node_3.to(torch.float64), var_node_4.to(torch.float64)) # size=(2, 3), stride=(3, 1), dtype=float64, device=cuda
+    _inp_unique_wide = torch.arange(1, device=var_node_2.device, dtype=torch.int64)
+    _uniq_wide = torch.unique(_inp_unique_wide)
+    var_node_1 = _uniq_wide.to(var_node_2.dtype) # size=(1,), stride=(1,), dtype=float64, device=cuda
+    var_node_5 = torch.full((1, 18), 0.40330381448978797, dtype=torch.float64) # size=(1, 18), stride=(18, 1), dtype=float64, device=cuda
+    var_node_0 = torch.matmul(var_node_1.to(torch.float64), var_node_5.to(torch.float64)) # size=(18,), stride=(1,), dtype=float64, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randn(20).to(torch.float64), (2, 10), (10, 1))
+arg_1 = torch.as_strided(torch.randn(30).to(torch.float64), (10, 3), (3, 1))
+
+args = (arg_0, arg_1) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+The API torch.unique is identified as same-library similar to the original PyTorch API torch.unique.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

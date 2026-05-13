@@ -1,0 +1,109 @@
+Issue ID: 160084
+Title: Regression on compile with backend inductor with torch 2.8
+Bug Description:
+### 🐛 Describe the bug
+
+```python
+class RegressionModel(torch.nn.Module):
+    def __init__(self, a=0, b=0):
+        super().__init__()
+        self.a = torch.nn.Parameter(torch.tensor(a).float())
+        self.b = torch.nn.Parameter(torch.tensor(b).float())
+        self.first_batch = True
+
+    def forward(self, x=None):
+        if self.first_batch:
+            print(f"Model dtype: {self.a.dtype}, {self.b.dtype}. Input dtype: {x.dtype}")
+            self.first_batch = False
+        return x * self.a + self.b
+   
+model = RegressionModel()
+torch_device="cuda"
+model.forward = torch.compile(model.forward, backend="inductor")
+inputs = torch.randn(4, 10).to(torch_device)
+_ = model(inputs)
+```
+
+The code above don't work anymore with torch 2.8. With torch 2.7.1, there is no issues. You can also test it on accelerate repository as this is were I got notified: `pytest tests/test_utils.py::UtilsTester::test_dynamo -s -vvvv`
+
+I get the following traceback: 
+
+```
+FAILED tests/test_utils.py::UtilsTester::test_dynamo - torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+RuntimeError: opt_ready_stream && opt_parent_stream INTERNAL ASSERT FAILED at "/pytorch/torch/csrc/autograd/engine.cpp":1084, please report a bug to PyTorch.
+
+Set TORCHDYNAMO_VERBOSE=1 for the internal stack trace (please do this especially if you're reporting a bug to PyTorch). For even more developer context, set TORCH_LOGS="+dynamo"
+```
+
+### Versions
+
+PyTorch version: 2.8.0+cu128
+Is debug build: False
+CUDA u
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.dtensor.copy_to_mesh
+Similarity score: 0.9937996864318848
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.copy_to_mesh
+
+# --- tensorflow.dtensor.python.api.copy_to_mesh ---
+def copy_to_mesh(
+    tensor: Any,
+    layout: layout_lib.Layout,
+    source_layout: Optional[layout_lib.Layout] = None) -> tensor_lib.Tensor:
+  """Copies a tf.Tensor onto the DTensor device with the given layout.
+
+  Copies a regular tf.Tensor onto the DTensor device. Use the mesh attached to
+  `layout` as target mesh. This method currently only supports replicated
+  layouts, or one-to-one copies for sharded layouts.
+
+  Args:
+    tensor: A regular tf.Tensor to be copied as a DTensor.
+    layout: Target layout (and mesh) for the result DTensor.
+    source_layout: Source layout of the tensor before copy. This argument
+      is deprecated.
+
+  Returns:
+    A DTensor on the DTensor device with the given layout.
+  """
+  del source_layout
+  return relayout(tensor, layout)
+
+# --- tensorflow.dtensor.python.api.relayout ---
+def relayout(
+    tensor: tensor_lib.Tensor,
+    layout: layout_lib.Layout,
+    name: Optional[str] = None,
+
+Original Test Case:
+class RegressionModel(torch.nn.Module):
+    def __init__(self, a=0, b=0):
+        super().__init__()
+        self.a = torch.nn.Parameter(torch.tensor(a).float())
+        self.b = torch.nn.Parameter(torch.tensor(b).float())
+        self.first_batch = True
+
+    def forward(self, x=None):
+        if self.first_batch:
+            print(f"Model dtype: {self.a.dtype}, {self.b.dtype}. Input dtype: {x.dtype}")
+            self.first_batch = False
+        return x * self.a + self.b
+   
+model = RegressionModel()
+torch_device="cuda"
+model.forward = torch.compile(model.forward, backend="inductor")
+inputs = torch.randn(4, 10).to(torch_device)
+_ = model(inputs)
+
+The API tf.experimental.dtensor.copy_to_mesh is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

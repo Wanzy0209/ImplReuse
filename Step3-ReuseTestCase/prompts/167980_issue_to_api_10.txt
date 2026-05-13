@@ -1,0 +1,167 @@
+Issue ID: 167980
+Title: Jupyter kernel restart during eval after first epoch (MNIST, CPU and CUDA, PyTorch 2.10.0.dev20251114+cu128 on Windows 11 + RTX 5080)
+Bug Description:
+### 🐛 Describe the bug
+
+### 🐛 Bug
+
+PyTorch crashes during evaluation after the first training epoch when running a standard MNIST feed-forward network.
+
+There is **no Python traceback**.  
+The Jupyter kernel **restarts silently**, indicating a crash in native code (C++ / ATen / MKL / CUDA).
+
+The crash occurs:
+
+- with CUDA **enabled**
+- AND with `CUDA_VISIBLE_DEVICES=""` + `device="cpu"`
+
+So the error is not GPU-exclusive.
+
+---
+
+### 🔁 Minimal Reproduction Script
+
+```python
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""  # hide GPU for this test
+
+import torch
+from torch import nn
+from torchvision import datasets
+from torchvision.transforms import ToTensor
+from torch.utils.data import DataLoader
+
+device = "cpu"
+print("Device:", device)
+
+train_data = datasets.MNIST("data", train=True, download=True, transform=ToTensor())
+test_data  = datasets.MNIST("data", train=False, download=True, transform=ToTensor())
+
+train_loader = DataLoader(train_data, batch_size=80, shuffle=True)
+test_loader  = DataLoader(test_data,  batch_size=80, shuffle=True)
+
+class Net(nn.Module):
+
+Original API Under Test: nn.Module
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.fake_quantize_per_channel_affine
+Similarity score: 0.9859238266944885
+
+Similar API information:
+# Extracted call chain for torch.fake_quantize_per_channel_affine
+
+# --- torch.onnx.symbolic_opset13.fake_quantize_per_channel_affine ---
+def fake_quantize_per_channel_affine(
+    g: jit_utils.GraphContext,
+    inputs,
+    scale,
+    zero_point,
+    axis,
+    quant_min=-128,
+    quant_max=127,
+):
+    # NOTE: (0, 127) is allowed as special case. PyTorch restricts activations to be in the range (0, 127).
+    #   https://github.com/pytorch/pytorch/blob/b34b192d6b97325c9f78e5995c48c8498ede34bd/torch/ao/quantization/observer.py#L1422
+    if (quant_min, quant_max) not in [(0, 255), (-128, 127), (0, 127)]:
+        raise errors.SymbolicValueError(
+            "For (quant_min, quant_max), ONNX allows only (0, 127), (0, 255) and (-128, 127). "
+            f"Got ({quant_min}, {quant_max})",
+            inputs,
+        )
+    # ONNX defines zero_point to be int8 or uint8
+    if quant_min == 0:
+        zero_point = g.op("Cast", zero_point, to_i=_C_onnx.TensorProtoDataType.UINT8)
+    else:
+        zero_point = g.op("Cast", zero_point, to_i=_C_onnx.TensorProtoDataType.INT8)
+    quantized = g.op("QuantizeLinear", inputs, scale, zero_point, axis_i=axis)
+    if (quant_min, quant_max) == (0, 127):
+...
+
+Original Test Case:
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""  # hide GPU for this test
+
+import torch
+from torch import nn
+from torchvision import datasets
+from torchvision.transforms import ToTensor
+from torch.utils.data import DataLoader
+
+device = "cpu"
+print("Device:", device)
+
+train_data = datasets.MNIST("data", train=True, download=True, transform=ToTensor())
+test_data  = datasets.MNIST("data", train=False, download=True, transform=ToTensor())
+
+train_loader = DataLoader(train_data, batch_size=80, shuffle=True)
+test_loader  = DataLoader(test_data,  batch_size=80, shuffle=True)
+
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(784,256),
+            nn.ReLU(),
+            nn.Linear(256,256),
+            nn.ReLU(),
+            nn.Linear(256,10)
+        )
+    def forward(self,x):
+        return self.layers(x)
+
+model = Net().to(device)
+loss_fn = nn.CrossEntropyLoss()
+opt = torch.optim.SGD(model.parameters(), lr=0.01)
+
+print("=== TRAIN ===")
+for X,y in train_loader:
+    X,y = X.to(device), y.to(device)
+    pred = model(X)
+    loss = loss_fn(pred,y)
+    loss.backward()
+    opt.step()
+    opt.zero_grad()
+    break
+
+print("=== EVAL (CRASH HERE) ===")
+with torch.no_grad():
+    for batch, (X,y) in enumerate(test_loader):
+        print("batch", batch)
+        X,y = X.to(device), y.to(device)
+        pred = model(X)       # → Kernel restart happens here
+        break
+
+
+### Versions
+
+PyTorch version: 2.10.0.dev20251114+cu128
+Is debug build: False
+CUDA used to build PyTorch: 12.8
+OS: Windows 11 Pro (10.0.26200)
+Python: 3.12.12 (conda-forge)
+GPU: NVIDIA GeForce RTX 5080 (sm_120)
+NVIDIA driver: 581.42
+torchvision: 0.25.0.dev20251116+cu128
+numpy: 2.3.4
+MKL: 2025.3.0 (conda-forge)
+
+🔎 Notes
+
+The crash occurs on CPU and CUDA
+
+The crash also occurs in a clean conda environment
+
+Shapes and model are correct, so this is likely a native backend failure
+
+RTX 5080 + CUDA 12.8 + Nightly torch wheels may trigger new ATen failures
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

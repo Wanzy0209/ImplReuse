@@ -1,0 +1,54 @@
+```python
+import torch
+import unittest
+from torch import nn
+
+class TestMPSAutocastConvTranspose3D(unittest.TestCase):
+    """
+    Test case to verify that ConvTranspose3D works correctly with 
+    torch.amp.autocast on MPS devices.
+    
+    This test addresses the issue where autocast attempted to use FP16/BF16 
+    for ConvTranspose3D on MPS, which is not supported, causing a RuntimeError.
+    The expected behavior is that the operation falls back to or uses FP32 
+    successfully within the autocast context.
+    """
+
+    @unittest.skipIf(not torch.backends.mps.is_available(), "MPS device not available")
+    def test_convtranspose3d_autocast_mps(self):
+        device = torch.device('mps')
+        
+        # Enable autocast for the MPS device
+        # By default, this tries to use float16, but ConvTranspose3D on MPS
+        # requires FP32. The fix ensures this runs without error.
+        with torch.amp.autocast(device_type=device.type):
+            m = nn.ConvTranspose3d(16, 33, 3, stride=2)
+            m.to(device)
+            
+            # Create input tensor
+            x = torch.randn(20, 16, 10, 50, 100).to(device)
+            
+            # This line previously raised:
+            # RuntimeError: ConvTranspose 3D with BF16 or FP16 types is not supported on MPS
+            u = m(x)
+
+        # Assertions to verify the operation completed successfully
+        self.assertIsNotNone(u)
+        
+        # Check output shape
+        # Input: (20, 16, 10, 50, 100)
+        # Output calculation for ConvTranspose3d:
+        # H_out = (H_in - 1) * stride - 2*padding + dilation*(kernel_size-1) + output_padding + 1
+        # Default padding=0, dilation=1, output_padding=0
+        # 10 -> (10-1)*2 + 3 = 21
+        # 50 -> (50-1)*2 + 3 = 101
+        # 100 -> (100-1)*2 + 3 = 201
+        expected_shape = torch.Size([20, 33, 21, 101, 201])
+        self.assertEqual(u.shape, expected_shape)
+        
+        # Ensure output contains valid numbers (no NaNs)
+        self.assertFalse(torch.isnan(u).any())
+
+if __name__ == '__main__':
+    unittest.main()
+```

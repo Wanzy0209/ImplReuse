@@ -1,0 +1,44 @@
+```python
+import torch
+import numpy as np
+import torch.testing
+
+def test_torch_compile_tan_sin_float16():
+    """
+    Regression test for Issue 160730.
+    Verifies that torch.compile produces correct results for a function
+    involving torch.tan, torch.sin, control flow based on scalar outputs,
+    and float16 inputs.
+    """
+    # Configuration required to trigger the original bug
+    torch._dynamo.config.capture_scalar_outputs = True
+
+    def foo(x):
+        t = torch.tan(x)
+        e = t.expand(31, 51, 1)
+        mean_val = torch.mean(e)
+        # Control flow dependent on the scalar output
+        if mean_val.item() > 0.5:
+            out1 = torch.sub(e, e * 0.5)
+        else:
+            out1 = torch.add(e, e * 0.5)
+        return torch.sin(out1)
+
+    # Generate specific input data to reproduce the issue
+    np.random.seed(0)
+    x = np.random.uniform(0, 10, size=(31, 51, 1)).astype(np.float16)
+    input_tensor = torch.from_numpy(x)
+
+    # Execute in eager mode
+    eager_res = foo(input_tensor)
+
+    # Execute using torch.compile
+    compiled_foo = torch.compile(foo)
+    compiled_res = compiled_foo(input_tensor)
+
+    # Verify that the compiled result matches the eager result
+    torch.testing.assert_close(eager_res, compiled_res)
+
+if __name__ == "__main__":
+    test_torch_compile_tan_sin_float16()
+```

@@ -1,0 +1,129 @@
+Issue ID: 163741
+Title: Unexpected cuda context after dist.destroy_process_group
+Bug Description:
+### 🐛 Describe the bug
+
+During experimentation, I observed unexpected 320MB GPU0(maybe default cuda device) memory allocations in each subprocess that persist after process group destruction. I've constructed a minimal reproducible example demonstrating this issue.
+```python
+import torch
+import os
+import glob
+import time
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+def worker(rank, world_size):
+    torch.cuda.set_device(rank)
+    dist.init_process_group(
+        backend="nccl", 
+        init_method="tcp://127.0.0.1:29500",
+        world_size=world_size,
+        rank=rank
+    )
+    dist.barrier()
+
+    device = f"cuda:{rank}"
+    # do something
+    print("to sleep")
+    time.sleep(5)
+    
+    dist.destroy_process_group()
+
+    # sleep for observing nvidia-smi
+    time.sleep(100)
+
+def test_nccl():
+    world_size = torch.cuda.device_count()
+    mp.spawn(
+        worker,
+        args=(world_size,),
+        nprocs=world_size,
+        join=True,
+    )
+
+Original API Under Test: torch.distributed.destroy_process_grouptorch.distributed.destroy_process_group
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.raw_ops.MatchingFilesDataset
+Similarity score: 0.9886239767074585
+
+Similar API information:
+# Extracted call chain for tf.raw_ops.MatchingFilesDataset
+
+# --- tensorflow.python.data.experimental.ops.matching_files.MatchingFilesDataset ---
+class MatchingFilesDataset(dataset_ops.DatasetSource):
+  """A `Dataset` that list the files according to the input patterns."""
+
+  def __init__(self, patterns):
+    self._patterns = ops.convert_to_tensor(
+        patterns, dtype=dtypes.string, name="patterns")
+    variant_tensor = ged_ops.matching_files_dataset(self._patterns)
+    super(MatchingFilesDataset, self).__init__(variant_tensor)
+
+  @property
+  def element_spec(self):
+    return tensor_spec.TensorSpec([], dtypes.string)
+
+# --- tensorflow.python.framework.ops.convert_to_tensor ---
+def convert_to_tensor(
+    value,
+    dtype=None,
+    name=None,
+    as_ref=False,
+    preferred_dtype=None,
+    dtype_hint=None,
+    # TODO(b/268347915): Remove argument.
+    ctx=None,  # pylint: disable=unused-argument
+    accepted_result_types=(tensor_lib.Tensor,),
+) -> Union[EagerTensor, SymbolicTensor]:
+  """Implementation of the public convert_to_tensor."""
+  # TODO(b/142518781): Fix all call-sites and remove redundant arg
+
+Original Test Case:
+import torch
+import os
+import glob
+import time
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+def worker(rank, world_size):
+    torch.cuda.set_device(rank)
+    dist.init_process_group(
+        backend="nccl", 
+        init_method="tcp://127.0.0.1:29500",
+        world_size=world_size,
+        rank=rank
+    )
+    dist.barrier()
+
+    device = f"cuda:{rank}"
+    # do something
+    print("to sleep")
+    time.sleep(5)
+    
+    dist.destroy_process_group()
+
+    # sleep for observing nvidia-smi
+    time.sleep(100)
+
+def test_nccl():
+    world_size = torch.cuda.device_count()
+    mp.spawn(
+        worker,
+        args=(world_size,),
+        nprocs=world_size,
+        join=True,
+    )
+
+if __name__ == '__main__':
+    test_nccl()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

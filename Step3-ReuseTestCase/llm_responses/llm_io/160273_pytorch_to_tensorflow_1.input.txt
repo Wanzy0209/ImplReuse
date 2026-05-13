@@ -1,0 +1,101 @@
+Issue ID: 160273
+Title: [Documentation Clarity] torch.min/torch.max gradient behavior
+Bug Description:
+### 📚 The doc issue
+
+`torch.min` and `torch.max` do not mention the gradient behavior of theirs, yet the gradient behavior can be found in the documentation of `torch.amin`, `torch.amax`:
+> Both max/min and amax/amin evenly distribute gradients between equal values when there are multiple input elements with the same minimum or maximum value.
+
+Which seems, **unfortunately**, to be wrong, or at least, partially wrong, see the following example:
+
+```python
+>>> # torch.min -> reduce over all dimensions
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a)
+>>> min_val.backward()
+>>> a.grad
+tensor([0.2000, 0.2000, 0.2000, 0.2000, 0.2000], device='cuda:0')
+...
+>>> # torch.min(input, dim=...) -> reduce over specified dimension
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a, dim=0)
+>>> min_val.values.backward()
+>>> a.grad
+tensor([1., 0., 0., 0., 0.], device='cuda:0')
+```
+
+It is obvious that the former one performs a `amin`-like BP while the latter one is more like indexing. My torch version is `'2.7.1+cu126'`, and I think it is the same with CPU devices.
+
+Can you make it clearer? (see Suggest a potential alternative/fix) 
+
+### Suggest a potential alternative/fix
+
+We know that `torch.min` (and `max`) has three sets of behaviors:
+- reduce over all dimensions (single tensor input), its gradient behavior is the same as `amin`. (Evenly distribute).
+- reduce over one specified axis, its gradient behavior is like using an `argm
+...
+
+Original API Under Test: torch.min
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.keras.ops.triu
+Similarity score: 0.9944570064544678
+
+Similar API information:
+# Extracted call chain for tf.keras.ops.triu
+
+# --- tensorflow.python.ops.numpy_ops.np_array_ops.triu ---
+def triu(m, k=0):  # pylint: disable=missing-docstring
+  m = asarray(m)
+  if m.shape.ndims is None:
+    raise ValueError('Argument to triu should have known rank')
+  m_shape = m.shape.as_list()
+
+  if len(m_shape) < 2:
+    raise ValueError('Argument to triu must have rank at least 2')
+
+  if m_shape[-1] is None or m_shape[-2] is None:
+    raise ValueError(
+        'Currently, the last two dimensions of the input array '
+        'need to be known.'
+    )
+
+  z = constant_op.constant(0, m.dtype)
+
+  mask = tri(*m_shape[-2:], k=k - 1, dtype=bool)
+  return array_ops.where_v2(
+      array_ops.broadcast_to(mask, array_ops.shape(m)), z, m
+  )
+
+# --- tensorflow.python.ops.array_ops.broadcast_to ---
+def broadcast_to(array, shape):  # pylint: disable=redefined-outer-name
+  return full(shape, array)
+
+# --- tensorflow.python.ops.numpy_ops.np_array_ops.full ---
+
+Original Test Case:
+>>> # torch.min -> reduce over all dimensions
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a)
+>>> min_val.backward()
+>>> a.grad
+tensor([0.2000, 0.2000, 0.2000, 0.2000, 0.2000], device='cuda:0')
+...
+>>> # torch.min(input, dim=...) -> reduce over specified dimension
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a, dim=0)
+>>> min_val.values.backward()
+>>> a.grad
+tensor([1., 0., 0., 0., 0.], device='cuda:0')
+
+The API tf.keras.ops.triu is identified as cross-library similar to the original PyTorch API torch.min.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

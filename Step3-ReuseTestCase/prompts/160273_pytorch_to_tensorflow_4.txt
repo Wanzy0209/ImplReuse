@@ -1,0 +1,101 @@
+Issue ID: 160273
+Title: [Documentation Clarity] torch.min/torch.max gradient behavior
+Bug Description:
+### 📚 The doc issue
+
+`torch.min` and `torch.max` do not mention the gradient behavior of theirs, yet the gradient behavior can be found in the documentation of `torch.amin`, `torch.amax`:
+> Both max/min and amax/amin evenly distribute gradients between equal values when there are multiple input elements with the same minimum or maximum value.
+
+Which seems, **unfortunately**, to be wrong, or at least, partially wrong, see the following example:
+
+```python
+>>> # torch.min -> reduce over all dimensions
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a)
+>>> min_val.backward()
+>>> a.grad
+tensor([0.2000, 0.2000, 0.2000, 0.2000, 0.2000], device='cuda:0')
+...
+>>> # torch.min(input, dim=...) -> reduce over specified dimension
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a, dim=0)
+>>> min_val.values.backward()
+>>> a.grad
+tensor([1., 0., 0., 0., 0.], device='cuda:0')
+```
+
+It is obvious that the former one performs a `amin`-like BP while the latter one is more like indexing. My torch version is `'2.7.1+cu126'`, and I think it is the same with CPU devices.
+
+Can you make it clearer? (see Suggest a potential alternative/fix) 
+
+### Suggest a potential alternative/fix
+
+We know that `torch.min` (and `max`) has three sets of behaviors:
+- reduce over all dimensions (single tensor input), its gradient behavior is the same as `amin`. (Evenly distribute).
+- reduce over one specified axis, its gradient behavior is like using an `argm
+...
+
+Original API Under Test: torch.min
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.numpy.geomspace
+Similarity score: 0.9936931729316711
+
+Similar API information:
+# Extracted call chain for tf.experimental.numpy.geomspace
+
+# --- tensorflow.python.ops.numpy_ops.np_math_ops.geomspace ---
+def geomspace(start, stop, num=50, endpoint=True, dtype=None, axis=0):  # pylint: disable=missing-docstring
+  dtype = (
+      dtypes.as_dtype(dtype)  # pylint: disable=g-long-ternary
+      if dtype
+      else np_utils.result_type(
+          start, stop, float(num), np_array_ops.zeros((), dtype)
+      )
+  )
+  computation_dtype = np.promote_types(dtype.as_numpy_dtype, np.float32)
+  start = np_array_ops.asarray(start, dtype=computation_dtype)
+  stop = np_array_ops.asarray(stop, dtype=computation_dtype)
+  # follow the numpy geomspace convention for negative and complex endpoints
+  start_sign = 1 - np_array_ops.sign(np_array_ops.real(start))
+  stop_sign = 1 - np_array_ops.sign(np_array_ops.real(stop))
+  signflip = 1 - start_sign * stop_sign // 2
+  res = signflip * logspace(
+      log10(signflip * start),
+      log10(signflip * stop),
+      num,
+      endpoint=endpoint,
+      base=10.0,
+      dtype=computation_dtype,
+      axis=0,
+  )
+  if axis != 0:
+    res = np_array_ops.moveaxis(res, 0, axis)
+  return math_ops.cast(res, dtype)
+
+Original Test Case:
+>>> # torch.min -> reduce over all dimensions
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a)
+>>> min_val.backward()
+>>> a.grad
+tensor([0.2000, 0.2000, 0.2000, 0.2000, 0.2000], device='cuda:0')
+...
+>>> # torch.min(input, dim=...) -> reduce over specified dimension
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a, dim=0)
+>>> min_val.values.backward()
+>>> a.grad
+tensor([1., 0., 0., 0., 0.], device='cuda:0')
+
+The API tf.experimental.numpy.geomspace is identified as cross-library similar to the original PyTorch API torch.min.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

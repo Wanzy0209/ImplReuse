@@ -1,0 +1,40 @@
+```python
+import torch
+import torch.nn as nn
+import unittest
+
+class TestConvTranspose3DAutocastMPS(unittest.TestCase):
+    def test_convtranspose3d_autocast_mps_fp32_fallback(self):
+        """
+        Tests that ConvTranspose3D falls back to FP32 inside autocast on MPS,
+        preventing the RuntimeError described in the issue.
+        Leverages the pattern of checking context state (similar to tf.executing_eagerly).
+        """
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS backend is not available")
+
+        device = torch.device('mps')
+        m = nn.ConvTranspose3d(16, 33, 3, stride=2).to(device)
+        x = torch.randn(20, 16, 10, 50, 100).to(device)
+
+        # Check behavior inside the autocast context
+        # Similar to checking tf.executing_eagerly() inside tf.function
+        with torch.amp.autocast(device_type=device.type):
+            self.assertTrue(torch.is_autocast_enabled())
+            
+            # Original bug reproduction logic:
+            # This previously raised RuntimeError because autocast tried FP16/BF16.
+            # It should now run successfully using FP32.
+            output = m(x)
+            
+            # Verify the operation fell back to FP32 as FP16 is not supported on MPS
+            self.assertEqual(output.dtype, torch.float32)
+
+        # Check behavior outside the autocast context
+        self.assertFalse(torch.is_autocast_enabled())
+        output_default = m(x)
+        self.assertEqual(output_default.dtype, torch.float32)
+
+if __name__ == '__main__':
+    unittest.main()
+```

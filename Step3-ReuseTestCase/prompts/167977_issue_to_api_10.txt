@@ -1,0 +1,113 @@
+Issue ID: 167977
+Title: [DTensor]Sharding propagation failed for custom operation with Tensor in kwargs
+Bug Description:
+### 🐛 Describe the bug
+
+I try to register strategy for my custom operation by ```@register_sharding```, which has Tensor params in kwargs. And my custom strategy function provides strategies for all DTensor in args and kwargs.
+During sharding propagation, an AssertionError `assert len(input_specs) == len(input_args_strategy)` occurs in function `expand_to_full_mesh_op_strategy`.
+The cause is that `input_args_strategy` only considers DTensor in args, while `input_specs` contains sharding strategies of all DTensor in args and kwargs.
+
+Is it a limitation of DTensor? Or how can I adapt my operation with Tensor kwargs to Dtensor?
+
+Here is a simple demo using `aten.min.dim_min` to reproduce the problem:
+
+```python
+import torch
+from torch.distributed.tensor import distribute_tensor, Replicate
+from torch.distributed.tensor.experimental import register_sharding
+
+from torch.testing._internal.common_utils import run_tests
+from torch.testing._internal.distributed._tensor.common_dtensor import DTensorTestBase, with_comms
+
+aten = torch.ops.aten
+
+class TestRegisterSharding(DTensorTestBase):
+    @with_comms
+    def test_register_sharding_for_tensor_kwargs(self):
+        mesh = self.build_device_mesh()
+
+        x = torch.randn(4, 4, device="cuda")
+        y = torch.randn(4, 4, device="cuda")
+
+        x = distribute_tensor(x, mesh, [Replicate()])
+        y = distribute_tensor(y, mesh, [Replicate()])
+
+        # aten::min.dim_min(Tensor self, int dim, bool keepdim=False, *, Tensor(a!) min, Tenso
+...
+
+Original API Under Test: torch.distributed.tensor.experimental.register_sharding
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.mean
+Similarity score: 0.9686873555183411
+
+Similar API information:
+# Extracted call chain for torch.mean
+
+# --- test.test_overrides.mean ---
+def mean(mat):
+    return float(mat._i) / mat._N
+
+# --- test.test_overrides.implements_diagonal ---
+def implements_diagonal(torch_function):
+    """Register a torch function override for DiagonalTensor.
+
+    This decorator takes a function in the torch API as a
+    parameter. Applying this decorator to a function adds that function
+    as the registered override for the torch function passed as a
+    parameter to the decorator. See DiagonalTensor.__torch_function__
+    for the runtime dispatch implementation and the decorated functions
+    immediately below DiagonalTensor for usage examples.
+    """
+    @functools.wraps(torch_function)
+    def decorator(func):
+        HANDLED_FUNCTIONS_DIAGONAL[torch_function] = func
+        return func
+    return decorator
+
+Original Test Case:
+import torch
+from torch.distributed.tensor import distribute_tensor, Replicate
+from torch.distributed.tensor.experimental import register_sharding
+
+from torch.testing._internal.common_utils import run_tests
+from torch.testing._internal.distributed._tensor.common_dtensor import DTensorTestBase, with_comms
+
+aten = torch.ops.aten
+
+class TestRegisterSharding(DTensorTestBase):
+    @with_comms
+    def test_register_sharding_for_tensor_kwargs(self):
+        mesh = self.build_device_mesh()
+
+        x = torch.randn(4, 4, device="cuda")
+        y = torch.randn(4, 4, device="cuda")
+
+        x = distribute_tensor(x, mesh, [Replicate()])
+        y = distribute_tensor(y, mesh, [Replicate()])
+
+        # aten::min.dim_min(Tensor self, int dim, bool keepdim=False, *, Tensor(a!) min, Tensor(b!) min_indices) -> (Tensor(a!) values, Tensor(b!) indices)
+        @register_sharding(aten.min.dim_min)
+        def custom_strategy(x, dim, keepdim, min, min_indices):
+            acceptable_shardings = []
+            all_replicate = ([Replicate(), Replicate()], [Replicate(), None, None, Replicate(), Replicate()])
+            acceptable_shardings.append(all_replicate)
+            return acceptable_shardings
+
+        value = torch.randn(4, 1, device="cuda")
+        indices = torch.randn(4, 1, device="cuda").long()
+        value = distribute_tensor(value, mesh, [Replicate()])
+        indices = distribute_tensor(indices, mesh, [Replicate()])
+        torch.min(x, dim=1, keepdim=True, out=(value, indices))
+
+if __name__ == "__main__":
+    run_tests()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

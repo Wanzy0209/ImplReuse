@@ -1,0 +1,103 @@
+Issue ID: 163563
+Title: [Fuzzer][Eager/Compile Divergence] OOM on PT2 that doesn't happen on eager
+Bug Description:
+### 🐛 Describe the bug
+
+Ran twice and same thing (eager passes, PT2 OOMs)
+
+```
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0 # size=(5699097, 6, 1), stride=(6, 1, 1), dtype=bfloat16, device=cuda
+    t1 = torch.sigmoid(t0) # size=(5699097, 6, 1), stride=(6, 1, 1), dtype=bfloat16, device=cuda
+    t2 = arg1 # size=(5699097, 6, 256), stride=(1536, 256, 1), dtype=bfloat16, device=cuda
+    t3 = torch.sigmoid(t2) # size=(5699097, 6, 256), stride=(1536, 256, 1), dtype=bfloat16, device=cuda
+    t4 = arg2 # size=(5699097, 256, 1), stride=(256, 1, 1), dtype=bfloat16, device=cuda
+    t5 = torch.exp(t4) # size=(5699097, 256, 1), stride=(256, 1, 1), dtype=bfloat16, device=cuda
+    t6 = torch.baddbmm(t1, t3, t5) # size=(5699097, 6, 1), stride=(6, 1, 1), dtype=bfloat16, device=cuda
+    t7 = t6.reshape((193, 386, 459)) # size=(193, 386, 459), stride=(177174, 459, 1), dtype=bfloat16, device=cuda
+    output = t7  # output tensor
+    return output
+
+arg0 = torch.rand([5699097, 6, 1], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5699097, 6, 1), stride=(6, 1, 1), dtype=bfloat16, device=cuda
+arg1 = torch.rand([5699097, 6, 256], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5699097, 6, 256), stride=(1536, 256, 1), dtype=bfloat16, device=cuda
+arg2 = torch.rand([5699097, 256, 1], d
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.keras.name_scope
+Similarity score: 0.9931139349937439
+
+Similar API information:
+# Extracted call chain for tf.keras.name_scope
+
+# --- tensorflow.python.framework.ops.name_scope ---
+def name_scope(
+    name, default_name=None, values=None, skip_on_eager=True,
+) -> ContextManager[Optional[str]]:
+  """Internal-only entry point for `name_scope*`.
+
+  Internal ops do not use the public API and instead rely on
+  `ops.name_scope` regardless of the execution mode. This function
+  dispatches to the correct `name_scope*` implementation based on
+  the arguments provided and the current mode. Specifically,
+
+  * if `values` contains a graph tensor `Graph.name_scope` is used;
+  * `name_scope_v1` is used in graph mode;
+  * `name_scope_v2` -- in eager mode.
+
+  Args:
+    name: The name argument that is passed to the op function.
+    default_name: The default name to use if the `name` argument is `None`.
+    values: The list of `Tensor` arguments that are passed to the op function.
+    skip_on_eager: Indicates to return NullContextmanager if executing eagerly.
+      By default this is True since naming tensors and operations in eager mode
+      have little use and cause unnecessary performance overhead. However, it is
+      important to preserve variable names since they are oft
+...
+
+Original Test Case:
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0 # size=(5699097, 6, 1), stride=(6, 1, 1), dtype=bfloat16, device=cuda
+    t1 = torch.sigmoid(t0) # size=(5699097, 6, 1), stride=(6, 1, 1), dtype=bfloat16, device=cuda
+    t2 = arg1 # size=(5699097, 6, 256), stride=(1536, 256, 1), dtype=bfloat16, device=cuda
+    t3 = torch.sigmoid(t2) # size=(5699097, 6, 256), stride=(1536, 256, 1), dtype=bfloat16, device=cuda
+    t4 = arg2 # size=(5699097, 256, 1), stride=(256, 1, 1), dtype=bfloat16, device=cuda
+    t5 = torch.exp(t4) # size=(5699097, 256, 1), stride=(256, 1, 1), dtype=bfloat16, device=cuda
+    t6 = torch.baddbmm(t1, t3, t5) # size=(5699097, 6, 1), stride=(6, 1, 1), dtype=bfloat16, device=cuda
+    t7 = t6.reshape((193, 386, 459)) # size=(193, 386, 459), stride=(177174, 459, 1), dtype=bfloat16, device=cuda
+    output = t7  # output tensor
+    return output
+
+arg0 = torch.rand([5699097, 6, 1], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5699097, 6, 1), stride=(6, 1, 1), dtype=bfloat16, device=cuda
+arg1 = torch.rand([5699097, 6, 256], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5699097, 6, 256), stride=(1536, 256, 1), dtype=bfloat16, device=cuda
+arg2 = torch.rand([5699097, 256, 1], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5699097, 256, 1), stride=(256, 1, 1), dtype=bfloat16, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+
+The API tf.keras.name_scope is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

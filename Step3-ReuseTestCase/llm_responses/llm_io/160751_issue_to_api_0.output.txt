@@ -1,0 +1,50 @@
+```python
+import torch
+from torch.library import custom_op, impl
+
+# Define a custom operation that encapsulates the logic from the bug report.
+# This leverages torch.library.custom_op to wrap the synchronization and assertion.
+@custom_op("test_ns::sync_check", mutates_args=())
+def sync_check(x: torch.Tensor) -> None:
+    """
+    Custom op that checks if all elements are positive and synchronizes.
+    """
+    result = torch.all(x > 0)
+    assert result, "should throw"
+    torch.cuda.synchronize()
+
+# Register the implementation for CUDA devices
+@impl("test_ns::sync_check", "CUDA")
+def sync_check_cuda(x: torch.Tensor) -> None:
+    result = torch.all(x > 0)
+    assert result, "should throw"
+    torch.cuda.synchronize()
+
+def func():
+    a = torch.tensor([1.0, -2.0], device="cuda")
+    # Call the custom op instead of raw logic
+    sync_check(a)
+    print("should not run")
+
+def test_custom_op_with_compile():
+    torch._dynamo.reset()
+    # Compile with aot_eager backend as specified in the original bug report
+    f_c = torch.compile(func, backend="aot_eager")
+    
+    exception_caught = False
+    try:
+        f_c()
+    except AssertionError as e:
+        if "should throw" in str(e):
+            exception_caught = True
+            print("Test Passed: Exception caught as expected.")
+        else:
+            raise
+
+    # Assert that the exception was caught, implying the synchronization 
+    # inside the custom op was not removed by the compiler.
+    assert exception_caught, "Bug reproduced: Exception was missed, likely due to synchronization removal."
+
+if __name__ == "__main__":
+    test_custom_op_with_compile()
+```

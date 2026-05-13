@@ -1,0 +1,89 @@
+Issue ID: 164684
+Title: [Fuzzer][Eager/Compile Divergence] call_function <built-in function mul>(*(Eq(u0, 1), FakeTensor(..., size=(), requires_grad=True)), **{}): got TypeError("unsupported operand type(s) for *: 'SymBool' and 'FakeTensor'")
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(19990)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = arg_0 # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_1 = torch.squeeze(var_node_2) # size=(), stride=(), dtype=bool, device=cuda
+    var_node_0 = var_node_1.item() # dtype=bool
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.randint(0, 2, (1,), dtype=torch.bool) > 0
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+```
+
+```
+   ✅ eager success                                                                                                                                                                                                                                                                                
+   E1004 20:19:41.525000 2817273 /home/bobren/local/a/pytorch/torch/_subclasses/fake_tensor.py:2780] [0/0] failed while attempting to run meta for aten.mul.Tensor
+...
+
+Original API Under Test: torch.mul
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.log
+Similarity score: 0.9784182906150818
+
+Similar API information:
+# Extracted call chain for torch.log
+
+# --- benchmarks.fuser.run_benchmarks.log ---
+def log(a):
+    return (3 * a).log()
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(19990)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = arg_0 # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_1 = torch.squeeze(var_node_2) # size=(), stride=(), dtype=bool, device=cuda
+    var_node_0 = var_node_1.item() # dtype=bool
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.randint(0, 2, (1,), dtype=torch.bool) > 0
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+The API torch.log is identified as same-library similar to the original PyTorch API torch.mul.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

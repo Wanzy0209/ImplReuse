@@ -1,0 +1,109 @@
+Issue ID: 167313
+Title: [Bug][Inductor]addmm -> add(mm)ignores parametersalpha/beta
+Bug Description:
+### 🐛 Describe the bug
+
+Have a look at the following reproduction:
+
+```python
+In [1]: import torch
+
+In [2]: x = torch.rand(2, device="cuda")
+         
+In [3]: a = torch.rand(2, 3, device="cuda")
+
+In [4]: b = torch.rand(3, 2, device="cuda")
+
+In [5]: f = lambda x, a, b: torch.nn.functional.relu(torch.addmm(x, a, b, alpha=0.5, beta=0.5))
+
+In [6]: fc = torch.compile(f)
+
+In [7]: f(x, a, b)
+Out[7]: 
+tensor([[0.7411, 0.6704],
+        [0.5025, 0.4090]], device='cuda:0')
+
+In [8]: fc(x, a, b)
+Out[8]: 
+tensor([[1.4822, 1.3408],
+        [1.0049, 0.8180]], device='cuda:0')
+```
+
+The fx pass replaces `addmm` with `add(mm)` because there is a point-wise user (`relu`). The problem is that the pattern matching ignores parameters `alpha/beta` and `alpha/beta` are being silently replaced with value `1`.
+
+### Versions
+
+Current master
+
+cc @voznesenskym @penguinwu @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @ipiszy @chenyang78 @kadeng @muchulee8 @amjames @chauhang @aakhundov @coconutruben
+
+cc @eellison
+
+Original API Under Test: torch.addmm
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.fmax
+Similarity score: 0.9959357976913452
+
+Similar API information:
+# Extracted call chain for torch.fmax
+
+# --- torch._inductor.decomposition.fmax ---
+def fmax(self: torch.Tensor, other: torch.Tensor) -> torch.Tensor:
+    return torch.where(torch.isnan(other) | (other < self), self, other)
+
+# --- torch._inductor.decomposition.register_decomposition ---
+def register_decomposition(
+    ops: list[Union[torch._ops.OperatorBase, torch._ops.OpOverloadPacket]],
+) -> Callable[[Callable[_P, _T]], Callable[_P, _T]]:
+    for op in [ops] if callable(ops) else ops:  # type: ignore[attr-defined]
+        if op in decompositions:
+            log.warning("duplicate decomp: %s", ops)
+    return decomp.register_decomposition(ops, decompositions)
+
+# --- torch._decomp.register_decomposition ---
+def register_decomposition(
+    aten_op, registry=None, *, type="post_autograd", unsafe=False
+) -> Callable[[Callable[_P, _T]], Callable[_P, _T]]:
+    """
+    A decorator to register a function as a decomposition to the Python
+    decomposition table.  Use it like this::
+
+        @register_decomposition(torch.ops.aten.clamp_min)
+        def clamp_min(x):
+            return torch.clamp(self, min=min)
+
+    If you are writing a new decomposition, consider contributing it
+    direc
+...
+
+Original Test Case:
+In [1]: import torch
+
+In [2]: x = torch.rand(2, device="cuda")
+         
+In [3]: a = torch.rand(2, 3, device="cuda")
+
+In [4]: b = torch.rand(3, 2, device="cuda")
+
+In [5]: f = lambda x, a, b: torch.nn.functional.relu(torch.addmm(x, a, b, alpha=0.5, beta=0.5))
+
+In [6]: fc = torch.compile(f)
+
+In [7]: f(x, a, b)
+Out[7]: 
+tensor([[0.7411, 0.6704],
+        [0.5025, 0.4090]], device='cuda:0')
+
+In [8]: fc(x, a, b)
+Out[8]: 
+tensor([[1.4822, 1.3408],
+        [1.0049, 0.8180]], device='cuda:0')
+
+The API torch.fmax is identified as same-library similar to the original PyTorch API torch.addmm.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

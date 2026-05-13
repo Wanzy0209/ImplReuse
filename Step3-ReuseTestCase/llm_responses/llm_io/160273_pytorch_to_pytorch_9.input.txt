@@ -1,0 +1,101 @@
+Issue ID: 160273
+Title: [Documentation Clarity] torch.min/torch.max gradient behavior
+Bug Description:
+### 📚 The doc issue
+
+`torch.min` and `torch.max` do not mention the gradient behavior of theirs, yet the gradient behavior can be found in the documentation of `torch.amin`, `torch.amax`:
+> Both max/min and amax/amin evenly distribute gradients between equal values when there are multiple input elements with the same minimum or maximum value.
+
+Which seems, **unfortunately**, to be wrong, or at least, partially wrong, see the following example:
+
+```python
+>>> # torch.min -> reduce over all dimensions
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a)
+>>> min_val.backward()
+>>> a.grad
+tensor([0.2000, 0.2000, 0.2000, 0.2000, 0.2000], device='cuda:0')
+...
+>>> # torch.min(input, dim=...) -> reduce over specified dimension
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a, dim=0)
+>>> min_val.values.backward()
+>>> a.grad
+tensor([1., 0., 0., 0., 0.], device='cuda:0')
+```
+
+It is obvious that the former one performs a `amin`-like BP while the latter one is more like indexing. My torch version is `'2.7.1+cu126'`, and I think it is the same with CPU devices.
+
+Can you make it clearer? (see Suggest a potential alternative/fix) 
+
+### Suggest a potential alternative/fix
+
+We know that `torch.min` (and `max`) has three sets of behaviors:
+- reduce over all dimensions (single tensor input), its gradient behavior is the same as `amin`. (Evenly distribute).
+- reduce over one specified axis, its gradient behavior is like using an `argm
+...
+
+Original API Under Test: torch.min
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.cholesky_solve
+Similarity score: 0.994510293006897
+
+Similar API information:
+# Extracted call chain for torch.cholesky_solve
+
+# --- torch._meta_registrations.cholesky_solve ---
+def cholesky_solve(self: Tensor, A: Tensor, upper: bool = False) -> Tensor:
+    torch._check(
+        self.ndim >= 2,
+        lambda: f"b should have at least 2 dimensions, but has {self.ndim} dimensions instead",
+    )
+    torch._check(
+        A.ndim >= 2,
+        lambda: f"u should have at least 2 dimensions, but has {A.ndim} dimensions instead",
+    )
+    self_broadcasted, A_broadcasted = _linalg_broadcast_batch_dims_name(
+        self, A, "cholesky_solve"
+    )
+    return _cholesky_solve_helper(self_broadcasted, A_broadcasted, upper)
+
+# --- torch._meta_registrations._cholesky_solve_helper ---
+def _cholesky_solve_helper(self: Tensor, A: Tensor, upper: bool) -> Tensor:
+    return cloneBatchedColumnMajor(self)
+
+# --- torch._meta_registrations.cloneBatchedColumnMajor ---
+def cloneBatchedColumnMajor(src: Tensor) -> Tensor:
+    return src.mT.clone(memory_format=torch.contiguous_format).transpose(-2, -1)
+
+# --- src.mT.clone ---
+def clone(x, *, memory_format=None):
+    # TODO(jansel): memory format
+    return Pointwise.create(
+        device=x.get_device(),
+
+Original Test Case:
+>>> # torch.min -> reduce over all dimensions
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a)
+>>> min_val.backward()
+>>> a.grad
+tensor([0.2000, 0.2000, 0.2000, 0.2000, 0.2000], device='cuda:0')
+...
+>>> # torch.min(input, dim=...) -> reduce over specified dimension
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a, dim=0)
+>>> min_val.values.backward()
+>>> a.grad
+tensor([1., 0., 0., 0., 0.], device='cuda:0')
+
+The API torch.cholesky_solve is identified as same-library similar to the original PyTorch API torch.min.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

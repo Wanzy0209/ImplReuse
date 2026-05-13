@@ -1,0 +1,87 @@
+Issue ID: 167974
+Title: EmbeddingBag sum has incorrect offsets when input is 2D and include_last_offset is set to True.
+Bug Description:
+### 🐛 Describe the bug
+
+According to the documentation, when the parameter include_last_offset is True, it is expected that “offsets has one additional element, where the last element is equivalent to the size of indices.” However, when the input indices are 2D, the offsets are generated automatically by the framework and it does not take into account the include_last_offset flag. As a result, the generated offsets are, in my opinion, incorrect.
+Place where offsets are generated in that case: https://github.com/pytorch/pytorch/blob/99117c1238c9adcd3fb2621e36c91f9d20ed2ff7/torch/nn/functional.py#L2724-L2726
+
+Repro script:
+```python
+import torch
+embedding_sum = torch.nn.EmbeddingBag(10, 3, mode='sum', include_last_offset=True)
+input = torch.tensor([[1, 2, 4, 5], [4, 3, 2, 9]], dtype=torch.long)
+embedding_sum(input)
+```
+
+By modifying functional.py, I managed to collect the offsets that are generated; in this case they are: [0, 4]
+instead of the expected: [0, 4, 8].
+
+If my reasoning is correct and this is in fact an issue, it can be easily fixed by appending to the offsets the size of indices when include_last_offset is True.
+Another idea could be to ignore the include_last_offset flag when the input is 2D, but this would require updates to the documentation and the code.
+
+
+### Versions
+
+```
+Collecting environment information...
+PyTorch version: 2.8.0+cu126
+Is debug build: False
+CUDA used to build PyTorch: 12.6
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.4 LTS (x86_64)
+GCC
+...
+
+Original API Under Test: torch.nn.EmbeddingBag
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.RNNCell
+Similarity score: 0.9947525858879089
+
+Similar API information:
+# Extracted call chain for torch.nn.RNNCell
+
+# --- torch.ao.nn.quantized.dynamic.modules.rnn.RNNCell ---
+class RNNCell(RNNCellBase):
+    r"""An Elman RNN cell with tanh or ReLU non-linearity.
+    A dynamic quantized RNNCell module with floating point tensor as inputs and outputs.
+    Weights are quantized to 8 bits. We adopt the same interface as `torch.nn.RNNCell`,
+    please see https://pytorch.org/docs/stable/nn.html#torch.nn.RNNCell for documentation.
+
+    Examples::
+
+        >>> # xdoctest: +SKIP
+        >>> rnn = nn.RNNCell(10, 20)
+        >>> input = torch.randn(6, 3, 10)
+        >>> hx = torch.randn(3, 20)
+        >>> output = []
+        >>> for i in range(6):
+        ...     hx = rnn(input[i], hx)
+        ...     output.append(hx)
+    """
+    __constants__ = ["input_size", "hidden_size", "bias", "nonlinearity"]
+
+    def __init__(
+        self, input_size, hidden_size, bias=True, nonlinearity="tanh", dtype=torch.qint8
+    ):
+        super().__init__(input_size, hidden_size, bias, num_chunks=1, dtype=dtype)
+        self.nonlinearity = nonlinearity
+
+    def _get_name(self):
+        return "DynamicQuantizedRNNCell"
+
+Original Test Case:
+import torch
+embedding_sum = torch.nn.EmbeddingBag(10, 3, mode='sum', include_last_offset=True)
+input = torch.tensor([[1, 2, 4, 5], [4, 3, 2, 9]], dtype=torch.long)
+embedding_sum(input)
+
+The API torch.nn.RNNCell is identified as same-library similar to the original PyTorch API torch.nn.EmbeddingBag.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

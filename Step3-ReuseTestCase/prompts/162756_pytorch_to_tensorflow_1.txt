@@ -1,0 +1,104 @@
+Issue ID: 162756
+Title: torch.compile fails with NameError when helper functions are required and combo_kernels enabled
+Bug Description:
+### 🐛 Describe the bug
+
+When `torch._inductor.config.combo_kernels = True` is enabled, compilation fails with `NameError` for Triton helper functions (e.g., `_triton_helper_fn_add0`) when operations that require helper functions (like `cumsum`) are combined into combo kernels.
+
+repro:
+```python
+import torch
+torch._inductor.config.combo_kernels = True
+
+@torch.compile
+def fn(x, y, z):
+    return x.sum(1), y.mean(1), z.cumsum(1)
+
+inps = (
+    torch.rand(16, 128, device="cuda"),
+    torch.rand(32, 128, device="cuda"),
+    torch.rand(32, 256, device="cuda"),
+)
+
+fn(*inps)
+```
+
+error:
+```bash
+torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+CompilationError: at 73:50:
+        xmask = xindex < xnumel
+        r0_index = tl.arange(0, R0_BLOCK_2)[None, :]
+        r0_offset = 0
+        r0_mask = r0_index < r0_numel
+        roffset = r0_offset
+        rindex = r0_index
+        r0_5 = r0_index
+        x4 = xindex
+        tmp12 = tl.load(in_ptr2 + (r0_5 + 256*x4), r0_mask & xmask, other=0.0)
+        tmp13 = tmp12.to(tl.float32)
+        tmp14 = tl.broadcast_to(tmp13, [XBLOCK, R0_BLOCK_2])
+        tmp15, = tl.associative_scan((tmp14,), 1, _triton_helper_fn_add0)
+                                                  ^
+NameError('_triton_helper_fn_add0 is not defined')
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.tpu.batch_parallel
+Similarity score: 0.9940187931060791
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.tpu.batch_parallel
+
+# --- tensorflow.python.tpu.tpu.batch_parallel ---
+def batch_parallel(
+    computation: Callable[..., Any],
+    inputs: Optional[List[List[Optional[core_types.Tensor]]]] = None,
+    num_shards: int = 1,
+    infeed_queue: Optional[tpu_feed.InfeedQueue] = None,
+    device_assignment: Optional[device_assignment_lib.DeviceAssignment] = None,
+    name: Optional[Text] = None,
+    xla_options: Optional[XLAOptions] = None):
+  """Shards `computation` along the batch dimension for parallel execution.
+
+  Convenience wrapper around shard().
+
+  `inputs` must be a list of Tensors or None (equivalent to an empty list).
+  Each input is split into `num_shards` pieces along the 0-th dimension, and
+  computation is applied to each shard in parallel.
+
+  Tensors are broadcast to all shards if they are lexically captured by
+  `computation`. e.g.,
+
+  x = tf.constant(7)
+  def computation():
+    return x + 3
+  ... = shard(computation, ...)
+
+  The outputs from all shards are concatenated back together along their 0-th
+  dimension.
+
+Original Test Case:
+import torch
+torch._inductor.config.combo_kernels = True
+
+@torch.compile
+def fn(x, y, z):
+    return x.sum(1), y.mean(1), z.cumsum(1)
+
+inps = (
+    torch.rand(16, 128, device="cuda"),
+    torch.rand(32, 128, device="cuda"),
+    torch.rand(32, 256, device="cuda"),
+)
+
+fn(*inps)
+
+The API tf.compat.v1.tpu.batch_parallel is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

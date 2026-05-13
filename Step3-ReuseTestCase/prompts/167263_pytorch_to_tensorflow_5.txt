@@ -1,0 +1,120 @@
+Issue ID: 167263
+Title: einsum calculates wrong stride for gradient of input
+Bug Description:
+### 🐛 Describe the bug
+
+https://docs.pytorch.org/docs/stable/autograd.html#default-gradient-layouts
+This page suggests that parameters and gradients have the same stride, although it specifically mentions "parameters" and not "activations". I couldn't find any source on activations.
+
+The below code produces activations and gradients with different strides. In my model, this causes the next layer in the backward to fail.
+
+```
+import torch
+import torch.nn as nn
+
+B, H, W, C = 20, 2, 2, 128
+
+x = torch.randn(B, H, W, C, requires_grad=True)
+linear = nn.Linear(C, C, bias=False)
+
+values = linear(x)
+values.retain_grad()
+
+values_view = values.view(B, H * W, C)
+values_view.retain_grad()
+
+
+def log_grad(name):
+    def hook(grad):
+        print(f"{name} hook - shape: {grad.shape}, stride: {grad.stride()}")
+        return grad
+
+    return hook
+
+
+print("forward strides", values_view.shape, values_view.stride())
+values_view.register_hook(log_grad("values_view"))
+
+weights = torch.randn(B, H * W, C)
+result = torch.einsum("bhc,bhc->bc", weights, values_view)
+
+result.backward(torch.ones_like(result))
+```
+
+Original API Under Test: torch.einsum
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.numpy.hstack
+Similarity score: 0.9949532747268677
+
+Similar API information:
+# Extracted call chain for tf.experimental.numpy.hstack
+
+# --- tensorflow.python.ops.numpy_ops.np_array_ops.hstack ---
+def hstack(tup):
+  arrays = [atleast_1d(a) for a in tup]
+  arrays = _promote_dtype(*arrays)  # pylint: disable=protected-access
+  unwrapped_arrays = [
+      a if isinstance(a, np_arrays.ndarray) else a for a in arrays
+  ]
+  rank = array_ops.rank(unwrapped_arrays[0])
+  return np_utils.cond(
+      math_ops.equal(rank, 1),
+      lambda: array_ops.concat(unwrapped_arrays, axis=0),
+      lambda: array_ops.concat(unwrapped_arrays, axis=1),
+  )
+
+# --- tensorflow.python.ops.numpy_ops.np_array_ops._promote_dtype ---
+def _promote_dtype(*arrays):
+  dtype = np_utils.result_type(*arrays)
+
+  def _fast_asarray(a):
+    if isinstance(a, np_arrays.ndarray) and dtype == a.dtype.as_numpy_dtype:
+      return a
+    return _array_internal(a, dtype=dtype, copy=False)
+
+  return [_fast_asarray(a) for a in arrays]
+
+# --- tensorflow.python.ops.numpy_ops.np_array_ops._array_internal ---
+def _array_internal(val, dtype=None, copy=True, ndmin=0):  # pylint: disable=redefined-outer-name
+  """Main implementation of np.array()."""
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+B, H, W, C = 20, 2, 2, 128
+
+x = torch.randn(B, H, W, C, requires_grad=True)
+linear = nn.Linear(C, C, bias=False)
+
+values = linear(x)
+values.retain_grad()
+
+values_view = values.view(B, H * W, C)
+values_view.retain_grad()
+
+
+def log_grad(name):
+    def hook(grad):
+        print(f"{name} hook - shape: {grad.shape}, stride: {grad.stride()}")
+        return grad
+
+    return hook
+
+
+print("forward strides", values_view.shape, values_view.stride())
+values_view.register_hook(log_grad("values_view"))
+
+weights = torch.randn(B, H * W, C)
+result = torch.einsum("bhc,bhc->bc", weights, values_view)
+
+result.backward(torch.ones_like(result))
+
+The API tf.experimental.numpy.hstack is identified as cross-library similar to the original PyTorch API torch.einsum.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,98 @@
+Issue ID: 166888
+Title: [Inductor] nameError when using .item() on float tensor arg in torch.compile
+Bug Description:
+### 🐛 Describe the bug
+
+When compiling a fn with `torch.compile` that calls `.item()` on a float tensor arg (e.g., for use in `torch.clamp`), the generated triton kernel fails with `NameError: 'zuf0' is not defined`.
+
+```python
+import torch
+def f(x, max_val):
+    y = torch.clamp(x, 0, max_val.item())
+    return y
+
+compiled_func = torch.compile(f, backend='inductor', fullgraph=True)
+x = torch.randn(10, 20, 30, device='cuda')
+max_val = torch.tensor(5.0, device='cuda')
+compiled_func(x, max_val)
+```
+
+error:
+```python
+torch._inductor.exc.InductorError: CompilationError: at 10:11:
+def triton_poi_fused_clamp_0(in_ptr0, out_ptr0, xnumel, XBLOCK : tl.constexpr):
+    xnumel = 6000
+    xoffset = tl.program_id(0) * XBLOCK
+    xindex = xoffset + tl.arange(0, XBLOCK)[:]
+    xmask = xindex < xnumel
+    x0 = xindex
+    tmp0 = tl.load(in_ptr0 + (x0), xmask)
+    tmp1 = 0.0
+    tmp2 = triton_helpers.maximum(tmp0, tmp1)
+    tmp3 = zuf0
+           ^
+NameError('zuf0 is not defined')
+
+```
+
+generated triton code
+
+```python
+# AOT ID: ['0_inference']
+from ctypes import c_void_p, c_long, c_int
+import torch
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.compile
+Similarity score: 1.0
+
+Similar API information:
+# Extracted call chain for torch.compile
+
+# --- torch.compile ---
+def compile(
+    model: _Optional[_Callable] = None,
+    *,
+    fullgraph: builtins.bool = False,
+    dynamic: _Optional[builtins.bool] = None,
+    backend: _Union[str, _Callable] = "inductor",
+    mode: _Union[str, None] = None,
+    options: _Optional[dict[str, _Union[str, builtins.int, builtins.bool]]] = None,
+    disable: builtins.bool = False,
+) -> _Union[
+    _Callable[[_Callable[_InputT, _RetT]], _Callable[_InputT, _RetT]],
+    _Callable[_InputT, _RetT],
+]:
+    """
+    Optimizes given model/function using TorchDynamo and specified backend.
+    If you are compiling an :class:`torch.nn.Module`, you can also use :meth:`torch.nn.Module.compile`
+    to compile the module inplace without changing its structure.
+
+    Concretely, for every frame executed within the compiled region, we will attempt
+    to compile it and cache the compiled result on the code object for future
+    use.  A single frame may be compiled multiple times if previous compiled
+    results are not applicable for subsequent calls (this is called a "guard
+    failure), you can use TORCH_LOGS=guards to debug these situations.
+    Multiple compiled re
+...
+
+Original Test Case:
+import torch
+def f(x, max_val):
+    y = torch.clamp(x, 0, max_val.item())
+    return y
+
+compiled_func = torch.compile(f, backend='inductor', fullgraph=True)
+x = torch.randn(10, 20, 30, device='cuda')
+max_val = torch.tensor(5.0, device='cuda')
+compiled_func(x, max_val)
+
+The API torch.compile is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,52 @@
+```python
+import torch
+import unittest
+
+class TestIndexAddComplexMPS(unittest.TestCase):
+    def test_index_add_complex_mps(self):
+        """
+        Test case to verify index_add_ consistency on complex tensors between MPS and CPU.
+        This test reproduces the issue where the imaginary part is lost on MPS.
+        """
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS backend is not available")
+
+        torch.manual_seed(0)
+        device = "mps"
+
+        shape = (400, )
+        idx = torch.arange(400, dtype=torch.long)
+        dim = 0
+
+        # Initialize tensors on MPS and CPU
+        t_mps = torch.zeros(shape, dtype=torch.complex64, device=device)
+        t_cpu = torch.zeros(shape, dtype=torch.complex64, device="cpu")
+        
+        # Prepare source tensor with only imaginary part
+        trailing = shape[dim+1:]
+        src_shape = (len(idx),) + trailing
+        src_imag = torch.randn(src_shape, dtype=torch.float32, device=device)
+        src_real = torch.zeros_like(src_imag)
+        src = torch.complex(src_real, src_imag)
+
+        # Perform index_add_ operation
+        t_mps.index_add_(dim, idx.to(device), src)
+        t_cpu.index_add_(dim, idx.cpu(), src.cpu())
+
+        # Calculate metrics
+        mps_imag_sum = t_mps.imag.abs().sum().item()
+        cpu_imag_sum = t_cpu.imag.abs().sum().item()
+        max_diff = (t_mps.cpu() - t_cpu).abs().max().item()
+
+        print(f"MPS imag sum: {mps_imag_sum}")
+        print(f"CPU imag sum: {cpu_imag_sum}")
+        print(f"max abs diff: {max_diff}")
+
+        # Assert that MPS and CPU results are close
+        # The bug manifests as MPS imag sum being 0.0 while CPU is ~321.17
+        self.assertTrue(torch.allclose(t_mps.cpu(), t_cpu, atol=1e-5),
+                        f"MPS and CPU results differ significantly. Max diff: {max_diff}")
+
+if __name__ == '__main__':
+    unittest.main()
+```

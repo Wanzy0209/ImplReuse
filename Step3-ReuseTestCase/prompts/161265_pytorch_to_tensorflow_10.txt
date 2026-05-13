@@ -1,0 +1,95 @@
+Issue ID: 161265
+Title: [MPS] On MacOS-26 torch.full fails for 4+Gb tensors
+Bug Description:
+### 🐛 Describe the bug
+
+If one runs following example on macOS Tahoe
+```python
+import torch
+a = torch.ones(2, (1 << 31) + 5, dtype=torch.int8, device='mps')
+print(a[1, -2])
+print(a[:, -2])
+```
+
+result will be
+```
+tensor(0, device='mps:0', dtype=torch.int8)
+tensor([1, 1], device='mps:0', dtype=torch.int8)
+```
+But should have been 1 in both cases 
+Reason for that are relying on unsupported use of `fillBuffer` that for some reason stopped working for length exceeding 4Gb
+https://github.com/pytorch/pytorch/blob/639b8cc51ddebf10361f3840a6b0a244eb6092a1/aten/src/ATen/mps/MPSStream.mm#L161
+
+
+I.e. following Swift script returns non-unfirom values on MacOS Tahoe
+```swift
+import Metal
+
+let bufferSize = 1<<32 + 4
+
+guard let device = MTLCreateSystemDefaultDevice() else { fatalError("No Metal device found") }
+guard let buffer = device.makeBuffer(length: bufferSize, options: .storageModeShared) else { fatalError("Failed to create buffer") }
+
+guard let cmdQueue = device.makeCommandQueue() else { fatalError("Failed to create command queue") }
+guard let cmdBuffer = cmdQueue.makeCommandBuffer() else { fatalError("Failed to create command buffer") }
+guard let blitEncoder = cmdBuffer.makeBlitCommandEncoder() else { fatalError("Failed to create blit encoder") }
+
+blitEncoder.fill(buffer: buffer, range: 0..<bufferSize, value: 0x42)
+blitEncoder.endEncoding()
+
+cmdBuffer.commit()
+cmdBuffer.waitUntilCompleted()
+
+let tailOffs = 8
+
+Original API Under Test: torch.full
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.io.match_filenames_once
+Similarity score: 0.9936569929122925
+
+Similar API information:
+# Extracted call chain for tf.io.match_filenames_once
+
+# --- tensorflow.python.training.input.match_filenames_once ---
+def match_filenames_once(pattern, name=None):
+  """Save the list of files matching pattern, so it is only computed once.
+
+  NOTE: The order of the files returned is deterministic.
+
+  Args:
+    pattern: A file pattern (glob), or 1D tensor of file patterns.
+    name: A name for the operations (optional).
+
+  Returns:
+    A variable that is initialized to the list of files matching the pattern(s).
+  """
+  with ops.name_scope(name, "matching_filenames", [pattern]) as name:
+    return variable_v1.VariableV1(
+        name=name, initial_value=io_ops.matching_files(pattern),
+        trainable=False, validate_shape=False,
+        collections=[ops.GraphKeys.LOCAL_VARIABLES])
+
+# --- tensorflow.python.util.deprecation.deprecated_endpoints ---
+def deprecated_endpoints(*args):
+  """Decorator for marking endpoints deprecated.
+
+  This decorator does not print deprecation messages.
+  TODO(annarev): eventually start printing deprecation warnings when
+  @deprecation_endpoints decorator is added.
+
+  Args:
+
+Original Test Case:
+import torch
+a = torch.ones(2, (1 << 31) + 5, dtype=torch.int8, device='mps')
+print(a[1, -2])
+print(a[:, -2])
+
+The API tf.io.match_filenames_once is identified as cross-library similar to the original PyTorch API torch.full.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

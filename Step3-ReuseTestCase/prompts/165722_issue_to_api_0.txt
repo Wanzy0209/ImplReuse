@@ -1,0 +1,132 @@
+Issue ID: 165722
+Title: [dynamo] RelationalGuard classes store raw PyObject* without proper reference counting
+Bug Description:
+### 🐛 Describe the bug
+
+ ## 🐛 Bug
+
+Similar to #156527, there are dangling pointer issues in `torch/csrc/dynamo/guards.cpp` where `PyObject*` pointers are stored without incrementing reference counts.
+
+ ### Affected Classes
+
+1. **OBJECT_ALIASING** (line 2259-2282)
+     - Stores `PyObject* _first_tensor` without `Py_INCREF`
+     - Can become dangling after `torch._dynamo.reset()`
+```cpp
+ bool check_nopybind(PyObject* value) override { // borrowed ref
+    if (_is_first_call) {
+      _first_tensor = value;
+      _is_first_call = false;
+      return true;
+    }
+    return _first_tensor == value;
+  }
+
+  void reset_state() final {
+    _is_first_call = true;
+  }
+
+ private:
+  bool _is_first_call{true};
+  PyObject* _first_tensor{nullptr};
+};
+```
+<img width="500" alt="Image" src="https://github.com/user-attachments/assets/c21fea0c-a29f-4f81-b852-6726f4d986c3" />
+
+## Proposed Solution
+
+  Following the pattern from #156527:
+  - Replace PyObject* with py::object for automatic reference counting
+  - Update OBJECT_ALIASING::_first_tensor to use py::object
+
+##  Environment
+
+Original API Under Test: torch._dynamo.reset
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.compat.v1.Summary.Value
+Similarity score: 0.9765920639038086
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.Summary.Value
+
+# --- tensorflow.python.types.core.Value ---
+class Value(Tensor):
+  """Tensor that can be associated with a value (aka "eager tensor").
+
+  These objects represent the (usually future) output of executing an op
+  immediately.
+  """
+
+  def numpy(self):
+    pass
+
+Original Test Case:
+Collecting environment information...
+PyTorch version: 2.10.0.dev20251015+cu126
+Is debug build: False
+CUDA used to build PyTorch: 12.6
+ROCM used to build PyTorch: N/A
+ OS: Ubuntu 24.04.3 LTS (x86_64)
+ GCC version: (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0
+ Clang version: Could not collect
+ CMake version: Could not collect
+ Libc version: glibc-2.39
+
+ Python version: 3.12.3 (main, Aug 14 2025, 17:47:21) [GCC 13.3.0] (64-bit runtime)
+ Python platform: Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39
+ Is CUDA available: True
+ CUDA runtime version: Could not collect
+ CUDA_MODULE_LOADING set to:
+ GPU models and configuration: GPU 0: NVIDIA GeForce MX230
+ Nvidia driver version: Could not collect
+ cuDNN version: Could not collect
+ Is XPU available: False
+ HIP runtime version: N/A
+ MIOpen runtime version: N/A
+ Is XNNPACK available: True
+
+ CPU:
+ Architecture:                         x86_64
+ CPU op-mode(s):                       32-bit, 64-bit
+ Address sizes:                        39 bits physical, 48 bits virtual
+ Byte Order:                           Little Endian
+ CPU(s):                               2
+ On-line CPU(s) list:                  0,1
+ Vendor ID:                            GenuineIntel
+ Model name:                           Intel(R) Core(TM) i5-1035G1 CPU @ 1.00GHz
+ CPU family:                           6
+ Model:                                126
+ Thread(s) per core:                   2
+ Core(s) per socket:                   1
+ Socket(s):                            1
+ Stepping:                             5
+ BogoMIPS:                             2380.80
+ Flags:                                fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht
+ syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl xtopology tsc_reliable nonstop_tsc cpuid tsc_known_freq pni pclmulqdq vmx
+ ssse3 fma cx16 pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch ssbd
+ ibrs ibpb stibp ibrs_enhanced tpr_shadow ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap
+ avx512ifma clflushopt avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves vnmi avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq
+ avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm md_clear flush_l1d arch_capabilities
+ Virtualization:                       VT-x
+ Hypervisor vendor:                    Microsoft
+ Virtualization type:                  full
+ L1d cache:                            48 KiB (1 instance)
+ L1i cache:                            32 KiB (1 instance)
+ L2 cache:                             512 KiB (1 instance)
+ L3 cache:                             6 MiB (1 instance)
+ NUMA node(s):                         1
+ NUMA node0 CPU(s):                    0,1
+ Vulnerability Gather data sampling:   Not affected
+ Vulnerability Itlb multihit:          KVM: Mitigation: VMX disabled
+ Vulnerability L
+...
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

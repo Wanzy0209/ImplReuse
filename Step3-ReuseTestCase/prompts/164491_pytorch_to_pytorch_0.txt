@@ -1,0 +1,134 @@
+Issue ID: 164491
+Title: _scaled_mmerrors and_int_mmis slow with row-major rhs matrix
+Bug Description:
+### 🐛 Describe the bug
+
+I'm not sure if this is considered an issue by the torch team, since `_int_mm` and `_scaled_mm` are not part of a stable and documented API. If not, feel free to close it.
+
+_scaled_mm raises an error if the rhs matrix is row-major. _int_mm does not, but it is very slow in benchmarks. Presumably, it does a transparent rhs.T.contiguous().T before applying the mm.
+
+both column-major and row-major rhs matrices are common use cases, because your weights matrix in a Linear layer is transposed for your forward pass and not transposed for your backward. So either one of those will be row-major, no matter how you store it.
+
+Attached you can find a Triton kernel that we are using instead for this case. It's not as optimized as torch kernels, but due to its strided access to the matrix it is much faster than convert the matrix to column-major first.
+
+[triton_mm_8bit(3).py](https://github.com/user-attachments/files/22665283/triton_mm_8bit.3.py)
+
+### Versions
+
+```
+PyTorch version: 2.8.0+cu128
+Is debug build: False
+CUDA used to build PyTorch: 12.8
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 24.04.3 LTS (x86_64)
+GCC version: (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0
+Clang version: Could not collect
+CMake version: version 3.28.3
+Libc version: glibc-2.39
+
+Python version: 3.12.3 (main, Aug 14 2025, 17:47:21) [GCC 13.3.0] (64-bit runtime)
+Python platform: Linux-6.8.0-36-generic-x86_64-with-glibc2.39
+Is CUDA available: True
+CUDA runtime version: Could not collect
+CUDA_MODULE_
+...
+
+Original API Under Test: torch.matmul
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.matmul
+Similarity score: 0.9999998807907104
+
+Similar API information:
+# Extracted call chain for torch.matmul
+
+# --- torch._decomp.decompositions.matmul ---
+def matmul(tensor1, tensor2, *, is_out=False):
+    dim_tensor1 = tensor1.dim()
+    dim_tensor2 = tensor2.dim()
+    assert dim_tensor1 != 0 and dim_tensor2 != 0
+    if dim_tensor1 == 1 and dim_tensor2 == 1:
+        return torch.dot(tensor1, tensor2)
+    elif dim_tensor1 == 2 and dim_tensor2 == 1:
+        return torch.mv(tensor1, tensor2)
+    elif dim_tensor1 == 1 and dim_tensor2 == 2:
+        return torch.squeeze(torch.mm(torch.unsqueeze(tensor1, 0), tensor2), 0)
+    elif dim_tensor1 == 2 and dim_tensor2 == 2:
+        return torch.mm(tensor1, tensor2)
+    elif should_fold(tensor1, tensor2, is_out):
+        # dim_tensor1 >=3 && (dim_tensor2 == 1 || dim_tensor2 == 2) ||
+        # dim_tensor2 >=3 && (dim_tensor1 == 1 || dim_tensor1 == 2)
+        # and some condition on the strides is fulfilled
+
+        # optimization: use mm instead of bmm by folding the batch of the larger tensor
+        # into its leading matrix dimension
+        transpose = dim_tensor2 > dim_tensor1
+        t1 = tensor2.mT if transpose else tensor1
+        t2 = (
+            tensor2 if not transpose else (tensor1.t() if dim_tensor
+...
+
+Original Test Case:
+PyTorch version: 2.8.0+cu128
+Is debug build: False
+CUDA used to build PyTorch: 12.8
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 24.04.3 LTS (x86_64)
+GCC version: (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0
+Clang version: Could not collect
+CMake version: version 3.28.3
+Libc version: glibc-2.39
+
+Python version: 3.12.3 (main, Aug 14 2025, 17:47:21) [GCC 13.3.0] (64-bit runtime)
+Python platform: Linux-6.8.0-36-generic-x86_64-with-glibc2.39
+Is CUDA available: True
+CUDA runtime version: Could not collect
+CUDA_MODULE_LOADING set to: LAZY
+GPU models and configuration: GPU 0: NVIDIA GeForce RTX 4070 Ti SUPER
+Nvidia driver version: 580.82.07
+cuDNN version: Could not collect
+Is XPU available: False
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: True
+
+CPU:
+Architecture:                         x86_64
+CPU op-mode(s):                       32-bit, 64-bit
+Address sizes:                        39 bits physical, 48 bits virtual
+Byte Order:                           Little Endian
+CPU(s):                               12
+On-line CPU(s) list:                  0-11
+Vendor ID:                            GenuineIntel
+Model name:                           12th Gen Intel(R) Core(TM) i5-12400F
+CPU family:                           6
+Model:                                151
+Thread(s) per core:                   2
+Core(s) per socket:                   6
+Socket(s):                            1
+Stepping:                             5
+CPU(s) scaling MHz:                   54%
+CPU max MHz:                          4400.0000
+CPU min MHz:                          800.0000
+BogoMIPS:                             4992.00
+Flags:                                fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx est tm2 ssse3 sdbg fma cx16 xtpr pdcm sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb intel_pt sha_ni xsaveopt xsavec xgetbv1 xsaves split_lock_detect user_shstk avx_vnni dtherm ida arat pln pts hwp hwp_notify hwp_act_window hwp_epp hwp_pkg_req hfi vnmi umip pku ospke waitpkg gfni vaes vpclmulqdq rdpid movdiri movdir64b fsrm md_clear serialize arch_lbr ibt flush_l1d arch_capabilities
+Virtualization:                       VT-x
+L1d cache:                            288 KiB (6 instances)
+L1i cache:                            192 KiB (6 instances)
+L2 cache:                             7.5 MiB (6 instances)
+L3 cache:                             18 MiB (1 instance)
+NUMA node(s):                         1
+NUMA node0 CPU(s):                    0-11
+Vulnerability Gather data sampling:   Not affected
+V
+...
+
+The API torch.matmul is identified as same-library similar to the original PyTorch API torch.matmul.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

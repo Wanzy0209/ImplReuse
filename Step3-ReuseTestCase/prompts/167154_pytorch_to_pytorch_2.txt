@@ -1,0 +1,105 @@
+Issue ID: 167154
+Title: MPS Buffer Allocation Regression Bug
+Bug Description:
+### 🐛 Describe the bug
+
+Starting in version 2.8.0, the MPS backend doesn't allocate buffers of the right size with non-contiguous tensors. Here is a small example for reproducing:
+
+```python
+import torch
+from torch.nn import functional as F
+
+weight = torch.rand((768, 768), device="mps", dtype=torch.float32)
+bias = torch.rand((768), device="mps", dtype=torch.float32)
+
+shape = (5, 499, 768)
+stride = (0, 768, 1)
+storage_offset = 0
+numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+base = torch.arange(numel, dtype=torch.float32, device="mps")
+input = torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+
+F.linear(input, weight, bias)
+```
+
+Running it on an M-series Macbook Pro (Sequoia 15.6) yields the following error message:
+```console
+/AppleInternal/Library/BuildRoots/4~B5E4ugD7ttWrICQL0cKin8ziE5extnGgu--yePo/Library/Caches/com.apple.xbs/Sources/MetalPerformanceShaders/MPSCore/Types/MPSNDArray.mm:891: failed assertion `[MPSNDArray, initWithBufferImpl:offset:descriptor:isForNDArrayAlias:isUserBuffer:] Error: buffer is not large enough. Must be 7664640 bytes
+```
+
+It works just fine if the input is converted to contiguous with `.contiguous()`.
+
+### Versions
+
+```text
+Collecting environment information...
+PyTorch version: 2.8.0
+Is debug build: False
+CUDA used to build PyTorch: None
+ROCM used to build PyTorch: N/A
+
+OS: macOS 15.6 (arm64)
+GCC version: Could not collect
+Clang version: 16.0.0 (clang-1600.0.26.6)
+
+Original API Under Test: torch.nn.functional.linear
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.functional.instance_norm
+Similarity score: 0.9925103187561035
+
+Similar API information:
+# Extracted call chain for torch.nn.functional.instance_norm
+
+# --- torch.nn.functional.instance_norm ---
+def instance_norm(
+    input: Tensor,
+    running_mean: Optional[Tensor] = None,
+    running_var: Optional[Tensor] = None,
+    weight: Optional[Tensor] = None,
+    bias: Optional[Tensor] = None,
+    use_input_stats: bool = True,
+    momentum: float = 0.1,
+    eps: float = 1e-5,
+) -> Tensor:
+    r"""Apply Instance Normalization independently for each channel in every data sample within a batch.
+
+    See :class:`~torch.nn.InstanceNorm1d`, :class:`~torch.nn.InstanceNorm2d`,
+    :class:`~torch.nn.InstanceNorm3d` for details.
+    """
+    if has_torch_function_variadic(input, running_mean, running_var, weight, bias):
+        return handle_torch_function(
+            instance_norm,
+            (input, running_mean, running_var, weight, bias),
+            input,
+            running_mean=running_mean,
+            running_var=running_var,
+            weight=weight,
+            bias=bias,
+            use_input_stats=use_input_stats,
+            momentum=momentum,
+            eps=eps,
+
+Original Test Case:
+import torch
+from torch.nn import functional as F
+
+weight = torch.rand((768, 768), device="mps", dtype=torch.float32)
+bias = torch.rand((768), device="mps", dtype=torch.float32)
+
+shape = (5, 499, 768)
+stride = (0, 768, 1)
+storage_offset = 0
+numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+base = torch.arange(numel, dtype=torch.float32, device="mps")
+input = torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+
+F.linear(input, weight, bias)
+
+The API torch.nn.functional.instance_norm is identified as same-library similar to the original PyTorch API torch.nn.functional.linear.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

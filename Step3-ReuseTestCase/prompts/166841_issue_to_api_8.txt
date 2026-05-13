@@ -1,0 +1,133 @@
+Issue ID: 166841
+Title: aoti_compile_and_package incorrectly generates CUDA kernel call for CPU scatter_add_ in multi-device models
+Bug Description:
+### 🐛 Describe the bug
+
+When using `torch._inductor.aoti_compile_and_package` on a model that contains both CPU and CUDA operations, the compiler incorrectly generates a call to the CUDA-specific kernel (`aoti_torch_cuda_scatter_reduce_two_out`) for a `scatter_add_` operation that is running entirely on CPU tensors.
+This bug is only triggered when the exported graph contains both CPU and CUDA device types. If the model is CPU-only, the correct CPU kernel is generated.
+This leads to a runtime exception when the compiled model is loaded and run, as the CUDA-specific kernel is (correctly) called with CPU tensors, causing a `CUDAGuardImpl initialized with non-CUDA DeviceType: cpu` error.
+
+## Minimal Reproduction Script
+This script defines a model with a `scatter_add_` on CPU tensors and a matmul on CUDA tensors. It exports, compiles, and then attempts to run the model, which triggers the runtime exception.
+
+```python
+import torch
+import torch.export
+import torch._inductor
+import os
+import shutil
+
+# --- 1. Minimal Model Definition ---
+class MyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Buffers are on CPU
+        self.register_buffer(
+            "index",
+            torch.tensor([1, 4, 1, 7], device='cpu', dtype=torch.int64)
+        )
+        self.register_buffer(
+            "src",
+            torch.ones(4, device='cpu', dtype=torch.int64)
+        )
+
+    def forward(self, matrix, vector):
+        # Inputs are on CUDA
+
+        # 1. Operatio
+...
+
+Original API Under Test: torch._inductor.aoti_compile_and_package
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.keras.backend.relu
+Similarity score: 0.9786248803138733
+
+Similar API information:
+# Extracted call chain for tf.keras.backend.relu
+
+# --- tensorflow.python.framework.experimental.nn_ops.relu ---
+def relu(a, name=None):
+  ctx = context.get_default()
+  return _nn_ops.relu(ctx, a, name)
+
+# --- tensorflow.python.framework.experimental._nn_ops.relu ---
+def relu(a, name=None):
+  ctx = context.get_default()
+  return _nn_ops.relu(ctx, a, name)
+
+# --- tensorflow.python.framework.experimental.context_stack.get_default ---
+def get_default():
+  """Returns the default execution context."""
+  return _default_ctx_stack.peek()
+
+Original Test Case:
+import torch
+import torch.export
+import torch._inductor
+import os
+import shutil
+
+# --- 1. Minimal Model Definition ---
+class MyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Buffers are on CPU
+        self.register_buffer(
+            "index",
+            torch.tensor([1, 4, 1, 7], device='cpu', dtype=torch.int64)
+        )
+        self.register_buffer(
+            "src",
+            torch.ones(4, device='cpu', dtype=torch.int64)
+        )
+
+    def forward(self, matrix, vector):
+        # Inputs are on CUDA
+
+        # 1. Operation on CPU tensors
+        z = torch.zeros((vector.shape[0],), device='cpu', dtype=torch.int64)
+        scatter_result = z.scatter_add(0, self.index, self.src)
+
+        # 2. Move result to CUDA and continue on CUDA
+        v = vector + scatter_result.to(vector.dtype).to('cuda')
+        return torch.matmul(matrix, v)
+
+# --- 2. Setup and Compile ---
+model = MyModel().eval().to('cpu')
+matrix = torch.randn(10, 10, device='cuda')
+vector = torch.randn(10, device='cuda')
+example_args = (matrix, vector)
+
+print("Exporting model...")
+ep = torch.export.export(model, example_args)
+
+output_dir = "/tmp/my_aoti_model"
+if os.path.exists(output_dir):
+    shutil.rmtree(output_dir)
+os.makedirs(output_dir, exist_ok=True)
+package = os.path.join(output_dir, "model_package.pt2")
+
+print("Starting AOTInductor compilation...")
+torch._inductor.aoti_compile_and_package(
+    ep,
+    package_path=package,
+)
+print(f"Compiled package at: {package}")
+
+# --- 3. Load and Run (This is where it fails) ---
+print("\nAttempting to load and run compiled model...")
+loaded = torch._inductor.aoti_load_package(package)
+print("\nModel package loaded successfully.")
+
+loaded(*example_args)
+print("Model ran successfully with the loaded package.")
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

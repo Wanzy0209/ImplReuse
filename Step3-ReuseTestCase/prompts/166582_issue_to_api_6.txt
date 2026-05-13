@@ -1,0 +1,118 @@
+Issue ID: 166582
+Title: Backend Compiler Graph Break
+Bug Description:
+### 🐛 Describe the bug
+
+I discovered the bug when building a custom Torch compiler backend for a custom AI ASIC, and ran it on a simulated hardware platform.
+
+The structure is meant to be simple, as the backend replaces `nn.Linear` calls with matmuls through my own chip.
+However, the complex part is that the chip is super small and can only do `int8` matmuls, with `int16` output, so there is some quantization lowering that appears to be breaking, as I am training the model for the chip using Quantization Aware Training (QAT).
+
+Previously, I used legacy torch `QuantStub` and `DeQuantStub` but have now used TorchAO to manage the QAT workflow with an XNNPack quantizer backend. Both approaches have encountered this issue.
+
+To reproduce, register a backend like:
+```python
+import torch
+import torch._dynamo
+from test_tpu import matmul
+from torch._inductor.compile_fx import compile_fx
+from torch._dynamo import register_backend, disable
+import numpy as np
+import asyncio
+
+@disable
+async def dut_matmul_async(dut, a: torch.Tensor, b: torch.Tensor, bias=None):
+    # Now safe to quantize
+    a_q = a.clamp(-128, 127).to(torch.int8)
+    b_q = b.clamp(-128, 127).to(torch.int8)
+
+    c = await matmul(dut, a_q, b_q, transpose=True, is_torch=True)
+    if bias is not None:
+        c = c + bias.round().to(torch.int32)
+    return c.to(torch.int32)
+
+def dut_matmul_sync(dut, a, b, bias=None):
+    """Synchronous wrapper – torch.compile expects a normal function."""
+    return asyncio.run(dut_matmul_asy
+...
+
+Original API Under Test: torch._dynamo.register_backend
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.profiler.itt.range_pop
+Similarity score: 0.974407434463501
+
+Similar API information:
+# Extracted call chain for torch.profiler.itt.range_pop
+
+# --- torch.profiler.itt.range_pop ---
+def range_pop():
+    """
+    Pops a range off of a stack of nested range spans. Returns the
+    zero-based depth of the range that is ended.
+    """
+    return _itt.rangePop()
+
+Original Test Case:
+import torch
+import torch._dynamo
+from test_tpu import matmul
+from torch._inductor.compile_fx import compile_fx
+from torch._dynamo import register_backend, disable
+import numpy as np
+import asyncio
+
+@disable
+async def dut_matmul_async(dut, a: torch.Tensor, b: torch.Tensor, bias=None):
+    # Now safe to quantize
+    a_q = a.clamp(-128, 127).to(torch.int8)
+    b_q = b.clamp(-128, 127).to(torch.int8)
+
+    c = await matmul(dut, a_q, b_q, transpose=True, is_torch=True)
+    if bias is not None:
+        c = c + bias.round().to(torch.int32)
+    return c.to(torch.int32)
+
+def dut_matmul_sync(dut, a, b, bias=None):
+    """Synchronous wrapper – torch.compile expects a normal function."""
+    return asyncio.run(dut_matmul_async(dut, a, b, bias))
+
+def make_backend(dut):
+    """
+    Returns a *registered* backend that has the DUT baked in.
+    The FX graph is the first argument.
+    """
+    @register_backend(name=f"tpu_net")
+    def _backend(gm: torch.fx.GraphModule, example_inputs):
+        print("\n=== FX graph received ===")
+        gm.graph.print_tabular()
+
+        # ---- replace every linear ----
+        for node in list(gm.graph.nodes):
+            if node.target == torch.ops.aten.linear.default:
+                x, weight, bias = node.args
+                with gm.graph.inserting_before(node):
+                    new_node = gm.graph.call_function(
+                        dut_matmul_sync,
+                        args=(dut, x, weight, bias),
+                    )
+                    node.replace_all_uses_with(new_node)
+                    gm.graph.erase_node(node)
+
+        gm.recompile()
+        print("\n=== Modified graph ===")
+        gm.graph.print_tabular()
+
+        # Let Inductor compile the rest
+        return compile_fx(gm, example_inputs)
+
+    return _backend
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

@@ -1,0 +1,76 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to ensure compatibility with tf.compat.v1 queue runners
+tf.compat.v1.disable_eager_execution()
+
+def test_string_input_producer():
+    """
+    Adapted test case for tf.compat.v1.train.string_input_producer.
+    
+    Original Bug Context: FlexAttention backward compilation failure with GQA.
+    Adaptation Logic: 
+    - The original test sets up inputs (q, k, v), runs a compiled operation, 
+      and checks for execution failures (specifically during backward pass).
+    - Since string_input_producer is a data input pipeline API (not a differentiable 
+      attention kernel), we adapt the test to verify the setup, execution flow, 
+      and data retrieval of the string producer, ensuring it handles the queue 
+      operations without crashing.
+    """
+
+    # Mimic the device context setup from the original PyTorch test
+    with tf.device("/cpu:0"):
+        # Setup inputs: Create a list of filenames (mimicking the random tensors)
+        # Original: q = torch.randn(...), k = torch.randn(...)
+        string_data = [f"file_{i}.bin" for i in range(10)]
+        string_tensor = tf.convert_to_tensor(string_data, dtype=tf.string)
+
+        # The API under test: tf.compat.v1.train.string_input_producer
+        # We map the boolean flag 'enable_gqa=True' to 'shuffle=True' to test 
+        # a specific behavioral mode of the API.
+        queue = tf.compat.v1.train.string_input_producer(
+            string_tensor,
+            num_epochs=1,
+            shuffle=True, 
+            capacity=32
+        )
+
+        # Prepare to dequeue results (mimicking the output 'y')
+        # We dequeue a batch to verify the pipeline works
+        output = queue.dequeue_many(10)
+
+    # Execution context
+    with tf.compat.v1.Session() as sess:
+        # Initialize local variables (required for num_epochs)
+        sess.run(tf.compat.v1.local_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        # Start the queue runners (mimicking the execution of the compiled kernel)
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+
+        try:
+            # Run the operation (mimicking y = inductor(...) and y.backward(...))
+            # We expect this to complete without raising an error, similar to how 
+            # the original test expects the backward pass to succeed (or fail predictably).
+            result = sess.run(output)
+            
+            # Assertions to verify correct behavior
+            assert len(result) == 10, "Expected 10 items to be dequeued"
+            assert all(isinstance(x, bytes) for x in result), "Expected bytes output"
+            
+            print("Test passed: string_input_producer executed successfully.")
+
+        except Exception as e:
+            # Catching the error mimics the "Failures have been detected" in the original bug
+            print(f"Error during execution: {e}")
+            raise
+        finally:
+            # Clean up
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_string_input_producer()
+```

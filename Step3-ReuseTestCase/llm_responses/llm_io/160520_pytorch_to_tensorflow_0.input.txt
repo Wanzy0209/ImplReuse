@@ -1,0 +1,115 @@
+Issue ID: 160520
+Title: Inductor w/ cpp_wrapper introduces redundant H2D-D2H memcpy under DeviceContext
+Bug Description:
+### 🐛 Describe the bug
+
+If we compile a Module with inductor w/ cpp_wrapper, and run it under a DeviceContext, Non-tensor arguments would be redundantly passed to device by `torch.tensor(arg)` and then fetched back to device by `.item()`. This introduce extra overhead.
+
+Repro code:
+```python
+import torch
+import torch._inductor.config as config
+config.cpp_wrapper = True
+torch._logging.set_logs(output_code=True)
+
+class SimpleMLP(torch.nn.Module):
+  def __init__(self):
+    super().__init__()
+    self.fc1 = torch.nn.Linear(28 * 28, 128)
+    self.fc2 = torch.nn.Linear(128, 10)
+    self.forward = torch.compile(self.forward)
+
+  def forward(self, x):
+    x = x.view(x.size(0), 28*28)
+    x = torch.nn.functional.relu(self.fc1(x))
+    x = self.fc2(x)
+    return x
+
+mlp = SimpleMLP().cuda()
+
+with torch.profiler.profile(with_stack=True, activities=[
+         torch.profiler.ProfilerActivity.CPU,
+         torch.profiler.ProfilerActivity.CUDA,
+    ], on_trace_ready=torch.profiler.tensorboard_trace_handler("./log"),
+) as prof:
+  with torch.device("cuda"):
+    for i in range(10):
+      x = torch.randn(i, 28, 28).cuda()
+      y = mlp(x)
+      loss = y.sum()
+```
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.tpu.rewrite
+Similarity score: 0.9947934746742249
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.tpu.rewrite
+
+# --- tensorflow.python.tpu.tpu.rewrite ---
+def rewrite(
+    computation: Callable[..., Any],
+    inputs: Optional[List[List[Optional[core_types.Tensor]]]] = None,
+    infeed_queue: Optional[tpu_feed.InfeedQueue] = None,
+    device_assignment: Optional[device_assignment_lib.DeviceAssignment] = None,
+    name: Optional[Text] = None,
+    xla_options: Optional[XLAOptions] = None) -> Any:
+  """Rewrites `computation` for execution on a TPU system.
+
+  Args:
+    computation: A Python function that builds a computation to apply to the
+      input. If the function takes n inputs, 'inputs' should be a list of n
+      tensors.
+
+      `computation` may return a list of operations and tensors. Tensors must
+      come before operations in the returned list.  The return value of
+      `rewrite` is a list of tensors corresponding to the tensors from the
+      output of `computation`.
+
+      All `Operation`s constructed during `computation` will be executed when
+      evaluating any of the returned output tensors, not just the ones returned.
+    inputs: A list of input tensors or `None` (equivalent to an empty list).
+      Each input can be a nes
+...
+
+Original Test Case:
+import torch
+import torch._inductor.config as config
+config.cpp_wrapper = True
+torch._logging.set_logs(output_code=True)
+
+class SimpleMLP(torch.nn.Module):
+  def __init__(self):
+    super().__init__()
+    self.fc1 = torch.nn.Linear(28 * 28, 128)
+    self.fc2 = torch.nn.Linear(128, 10)
+    self.forward = torch.compile(self.forward)
+
+  def forward(self, x):
+    x = x.view(x.size(0), 28*28)
+    x = torch.nn.functional.relu(self.fc1(x))
+    x = self.fc2(x)
+    return x
+
+mlp = SimpleMLP().cuda()
+
+with torch.profiler.profile(with_stack=True, activities=[
+         torch.profiler.ProfilerActivity.CPU,
+         torch.profiler.ProfilerActivity.CUDA,
+    ], on_trace_ready=torch.profiler.tensorboard_trace_handler("./log"),
+) as prof:
+  with torch.device("cuda"):
+    for i in range(10):
+      x = torch.randn(i, 28, 28).cuda()
+      y = mlp(x)
+      loss = y.sum()
+
+The API tf.compat.v1.tpu.rewrite is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

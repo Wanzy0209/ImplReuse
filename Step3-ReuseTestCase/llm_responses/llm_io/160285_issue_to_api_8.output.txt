@@ -1,0 +1,56 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_scatter_mul_distributed_correctness():
+    """
+    Test case to verify that tf.compat.v1.scatter_mul applies updates correctly
+    in a distributed context, ensuring no "doubling" of updates occurs.
+    
+    This mirrors the logic of the PyTorch bug where gradients (updates) were 
+    doubled when using Expert Parallel (EP) sharding. Here we check if 
+    scatter_mul incorrectly applies the multiplication multiple times.
+    """
+    
+    # Use MirroredStrategy to simulate a distributed environment
+    strategy = tf.distribute.MirroredStrategy()
+    
+    print(f"Number of devices: {strategy.num_replicas_in_sync}")
+
+    with strategy.scope():
+        # Initialize a variable with a known value.
+        # Shape: [2, 2], initialized to 2.0
+        initial_value = np.ones((2, 2), dtype=np.float32) * 2.0
+        var = tf.Variable(initial_value)
+
+        # Define indices and updates.
+        # We want to multiply the element at index [0, 0] by 3.0.
+        # Expected result: 2.0 * 3.0 = 6.0.
+        # Bug scenario (doubling): If the update is applied twice (e.g., once per replica 
+        # without proper synchronization), the result would be 2.0 * 3.0 * 3.0 = 18.0.
+        indices = tf.constant([[0, 0]])
+        updates = tf.constant([3.0])
+
+        # Apply the scatter_mul operation using the compat.v1 API
+        # Note: In TF2, this op works eagerly on ResourceVariables.
+        tf.compat.v1.scatter_mul(var, indices, updates)
+
+        # Verify the result
+        result = var.read_value().numpy()
+        
+        # Expected: [[6.0, 2.0], [2.0, 2.0]]
+        expected = np.array([[6.0, 2.0], [2.0, 2.0]], dtype=np.float32)
+
+        # Assert that the value is exactly 6.0, not 18.0 (doubled/squared)
+        try:
+            np.testing.assert_allclose(result, expected, rtol=1e-5)
+            print("Test Passed: Updates applied correctly without doubling.")
+        except AssertionError as e:
+            print(f"Test Failed: {e}")
+            print(f"Expected:\n{expected}")
+            print(f"Got:\n{result}")
+            raise
+
+if __name__ == "__main__":
+    test_scatter_mul_distributed_correctness()
+```

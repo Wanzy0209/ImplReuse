@@ -1,0 +1,125 @@
+Issue ID: 163374
+Title: [DTensor] Inplace ops preduces wrong result
+Bug Description:
+```
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import torch
+from torch import distributed as dist
+from torch.utils.debug_mode import DebugMode
+
+
+if __name__ == '__main__':
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    partial_dt = in_dtensor.sum()
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        out = partial_dt.clamp_(max=2)
+        full = out.full_tensor()
+
+    if rank == 0:
+        print(debug_mode.debug_string())
+        # redistribute_input(0, [P] -> [R])
+        #   _c10d_functional::all_reduce(t: f32[], sum, 0)
+        #   _c10d_functional::wait_tensor(t: f32[])
+        # aten::clamp_(t: f32[], None, 2)
+        # _c10d_functional::all_reduce(t: f32[], sum, 0)
+        # _c10d_functional::wait_tensor(t: f32[])
+        # aten::view(t: f32[], [])
+
+        print(out.placements)
+        # (Partial(sum),)
+        # Expected (Replicate(),)
+
+        print(full)
+        # tensor(144., device='cuda:0')
+        # Expected tensor(2., device='cuda:0')
+``` 
+
+Placement is wrong, it should be replicated, instead of Partial(sum)
+
+Original API Under Test: torch.clamp_
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.random.fold_in
+Similarity score: 0.9943848848342896
+
+Similar API information:
+# Extracted call chain for tf.random.fold_in
+
+# --- tensorflow.python.ops.stateless_random_ops.fold_in ---
+def fold_in(seed, data, alg="auto_select"):
+  """Folds in data to an RNG seed to form a new RNG seed.
+
+  For example, in a distributed-training setting, suppose we have a master seed
+  and a replica ID. We want to fold the replica ID into the master seed to
+  form a "replica seed" to be used by that replica later on, so that different
+  replicas will generate different random numbers but the reproducibility of the
+  whole system can still be controlled by the master seed:
+
+  >>> master_seed = [1, 2]
+  >>> replica_id = 3
+  >>> replica_seed = tf.random.experimental.stateless_fold_in(
+  ...   master_seed, replica_id)
+  >>> print(replica_seed)
+  tf.Tensor([1105988140          3], shape=(2,), dtype=int32)
+  >>> tf.random.stateless_normal(shape=[3], seed=replica_seed)
+  <tf.Tensor: shape=(3,), dtype=float32, numpy=array([0.03197195, 0.8979765 ,
+  0.13253039], dtype=float32)>
+
+  Args:
+    seed: an RNG seed (a tensor with shape [2] and dtype `int32` or `int64`).
+      (When using XLA, only `int32` is allowed.)
+    data: an `int32` or `int64` scalar representing data to be folded in to
+...
+
+Original Test Case:
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import torch
+from torch import distributed as dist
+from torch.utils.debug_mode import DebugMode
+
+
+if __name__ == '__main__':
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    partial_dt = in_dtensor.sum()
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        out = partial_dt.clamp_(max=2)
+        full = out.full_tensor()
+
+    if rank == 0:
+        print(debug_mode.debug_string())
+        # redistribute_input(0, [P] -> [R])
+        #   _c10d_functional::all_reduce(t: f32[], sum, 0)
+        #   _c10d_functional::wait_tensor(t: f32[])
+        # aten::clamp_(t: f32[], None, 2)
+        # _c10d_functional::all_reduce(t: f32[], sum, 0)
+        # _c10d_functional::wait_tensor(t: f32[])
+        # aten::view(t: f32[], [])
+
+        print(out.placements)
+        # (Partial(sum),)
+        # Expected (Replicate(),)
+
+        print(full)
+        # tensor(144., device='cuda:0')
+        # Expected tensor(2., device='cuda:0')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

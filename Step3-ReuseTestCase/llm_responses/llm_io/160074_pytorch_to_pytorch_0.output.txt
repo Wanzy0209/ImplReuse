@@ -1,0 +1,59 @@
+```python
+import torch
+from torch.nn.attention.flex_attention import flex_attention
+
+def test_flex_attention_gqa_backward_inductor():
+    """
+    Test case for Issue 160074: FlexAttention backward compilation failure with GQA.
+    
+    This test verifies that torch.compile with the 'inductor' backend can handle
+    the backward pass of flex_attention when GQA (Grouped Query Attention) is enabled.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        return
+
+    # Compile flex_attention with fullgraph=True and backend="inductor"
+    # This configuration triggered a Triton compilation failure on B200 hardware
+    # during the backward pass.
+    compiled_fn = torch.compile(flex_attention, fullgraph=True, backend="inductor")
+
+    with torch.device("cuda"):
+        # Initialize tensors with shapes representing GQA (Grouped Query Attention)
+        # Batch size: 2
+        # Query heads: 32
+        # Key/Value heads: 8 (GQA ratio of 4)
+        # Sequence length: 4096
+        # Head dimension: 128
+        batch_size = 2
+        n_q_heads = 32
+        n_kv_heads = 8
+        seq_len = 4096
+        head_dim = 128
+
+        q = torch.randn([batch_size, n_q_heads, seq_len, head_dim], dtype=torch.bfloat16, requires_grad=True)
+        k = torch.randn([batch_size, n_kv_heads, seq_len, head_dim], dtype=torch.bfloat16, requires_grad=True)
+        v = torch.randn([batch_size, n_kv_heads, seq_len, head_dim], dtype=torch.bfloat16, requires_grad=True)
+
+        # Forward pass
+        y = compiled_fn(q, k, v, enable_gqa=True)
+
+        # Backward pass
+        # The bug report indicates the failure happens here during compilation/execution
+        y.backward(torch.randn_like(y))
+
+        # Assertions to verify execution completed and gradients were computed
+        assert q.grad is not None, "Query gradient is None"
+        assert k.grad is not None, "Key gradient is None"
+        assert v.grad is not None, "Value gradient is None"
+        
+        # Check gradient shapes match input shapes
+        assert q.grad.shape == q.shape, "Query gradient shape mismatch"
+        assert k.grad.shape == k.shape, "Key gradient shape mismatch"
+        assert v.grad.shape == v.shape, "Value gradient shape mismatch"
+
+        print("Test passed: FlexAttention backward with GQA on inductor backend succeeded.")
+
+if __name__ == "__main__":
+    test_flex_attention_gqa_backward_inductor()
+```

@@ -1,0 +1,115 @@
+Issue ID: 163640
+Title: [torch.compile] TransformerEncoder with boolean src_key_padding_mask fails under Dynamo fullgraph mode
+Bug Description:
+### 🐛 Describe the bug
+
+### Describe the bug
+
+Compiling a simple `nn.TransformerEncoder` model with `torch.compile(fullgraph=True)` fails when a boolean `src_key_padding_mask` is passed.
+
+Eager mode works correctly, but `torch.compile` raises `torch._dynamo.exc.Unsupported` because of an internal call to `torch._nested_tensor_from_mask_left_aligned`, which returns a `bool` instead of a `Tensor`.
+
+### Minimal Reproducible Example
+```python
+import torch
+import torch.nn as nn
+
+class TinyEnc(nn.Module):
+    def __init__(self, d_model=512, nhead=8, num_layers=1):
+        super().__init__()
+        layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, batch_first=True, dropout=0.1
+        )
+        self.enc = nn.TransformerEncoder(layer, num_layers=num_layers)
+        self.proj = nn.Linear(d_model, 10)
+
+    def forward(self, x, pad_mask):
+        # Passing src_key_padding_mask triggers torch._nested_tensor_from_mask_left_aligned
+        y = self.enc(x, mask=None, src_key_padding_mask=pad_mask)
+        return self.proj(y)
+
+def main():
+    torch.manual_seed(0)
+    m = TinyEnc().eval()
+
+    B, T, C = 1, 41, 512
+    x = torch.randn(B, T, C, dtype=torch.float32)
+    pad_mask = (torch.rand(B, T) > 0.5)
+    pad_mask[..., 0] = True
+
+    # Eager is fine
+    with torch.inference_mode():
+        y = m(x, pad_mask)
+    print("eager ok:", tuple(y.shape))
+
+Original API Under Test: torch._nested_tensor_from_mask_left_aligned
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.nn.functional.tanh
+Similarity score: 0.972476601600647
+
+Similar API information:
+# Extracted call chain for torch.nn.functional.tanh
+
+# --- torch.nn.functional.tanh ---
+def tanh(input):  # noqa: D400,D402
+    r"""tanh(input) -> Tensor
+
+    Applies element-wise,
+    :math:`\text{Tanh}(x) = \tanh(x) = \frac{\exp(x) - \exp(-x)}{\exp(x) + \exp(-x)}`
+
+    See :class:`~torch.nn.Tanh` for more details.
+    """
+    return input.tanh()
+
+# --- input.tanh ---
+def tanh(a):
+    return (3 * a).tanh()
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+class TinyEnc(nn.Module):
+    def __init__(self, d_model=512, nhead=8, num_layers=1):
+        super().__init__()
+        layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, batch_first=True, dropout=0.1
+        )
+        self.enc = nn.TransformerEncoder(layer, num_layers=num_layers)
+        self.proj = nn.Linear(d_model, 10)
+
+    def forward(self, x, pad_mask):
+        # Passing src_key_padding_mask triggers torch._nested_tensor_from_mask_left_aligned
+        y = self.enc(x, mask=None, src_key_padding_mask=pad_mask)
+        return self.proj(y)
+
+def main():
+    torch.manual_seed(0)
+    m = TinyEnc().eval()
+
+    B, T, C = 1, 41, 512
+    x = torch.randn(B, T, C, dtype=torch.float32)
+    pad_mask = (torch.rand(B, T) > 0.5)
+    pad_mask[..., 0] = True
+
+    # Eager is fine
+    with torch.inference_mode():
+        y = m(x, pad_mask)
+    print("eager ok:", tuple(y.shape))
+
+    # Compile (fullgraph=True required to reproduce)
+    cm = torch.compile(m, backend="inductor", fullgraph=True)
+    _ = cm(x, pad_mask)
+
+if __name__ == "__main__":
+    main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

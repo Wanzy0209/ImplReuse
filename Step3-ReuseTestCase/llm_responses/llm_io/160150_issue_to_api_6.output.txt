@@ -1,0 +1,60 @@
+```python
+import torch
+import torch.nn as nn
+import tempfile
+import os
+
+# Leveraging the pattern from the similar API (tf.compat.v1.user_ops.my_fact)
+# which acts as a wrapper for an internal operation.
+def _internal_gen_op(x):
+    """Simulates an internal operation."""
+    return x
+
+def my_fact_like_op(x):
+    """Wrapper function mimicking the structure of the similar API."""
+    return _internal_gen_op(x)
+
+class ModelWithNoneOutput(nn.Module):
+    """
+    Model designed to reproduce the bug where the ONNX exporter crashes
+    when an FX node output includes None.
+    """
+    def forward(self, x):
+        # Use the wrapper function derived from the similar API pattern
+        output = my_fact_like_op(x)
+        
+        # Reproduce the specific bug logic:
+        # Returning a tuple where one element is None (image_tokens_masks)
+        image_tokens_masks = None
+        return (output, image_tokens_masks)
+
+def test_onnx_export_with_none_output():
+    model = ModelWithNoneOutput()
+    dummy_input = torch.randn(1, 10)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        onnx_path = os.path.join(tmpdir, "model.onnx")
+        
+        # The bug occurs during the translation from the exported program 
+        # to the ONNX graph when the output includes None.
+        # We expect this to raise an error in the buggy version.
+        try:
+            torch.onnx.export(
+                model, 
+                dummy_input, 
+                onnx_path,
+                opset_version=17,
+                input_names=['input'],
+                output_names=['output', 'mask']
+            )
+            print("Test Passed: Export handled None output successfully.")
+            # Assert file was created if it passes
+            assert os.path.exists(onnx_path)
+        except Exception as e:
+            print(f"Test Failed (Bug Reproduced): {e}")
+            # Re-raise to indicate failure in a test runner context
+            raise
+
+if __name__ == "__main__":
+    test_onnx_export_with_none_output()
+```

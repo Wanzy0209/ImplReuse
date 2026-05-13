@@ -1,0 +1,105 @@
+Issue ID: 164286
+Title: GradTrackingTensor does not copy layout (issue with torch.sparse)
+Bug Description:
+### 🐛 Describe the bug
+
+`GradTrackingTensor` wrapped around a sparse tensor breaks with `torch.sparse.mm` due to a failing layout check. Specifically, here is a minimal example:
+
+```
+import torch
+
+
+def f(a, x):
+    print(a.layout, x.layout)
+
+    return torch.sparse.mm(a, x)
+
+
+a = torch.sparse_coo_tensor(torch.tensor([[0, 1, 2], [1, 2, 0]]), [1.0, 1.0, 1.0])
+x = torch.tensor([1.0, 3.0, 2.0])[:, None]
+print(f(a, x))  # works fine
+
+vjp = torch.func.vjp(f, a, x)[1]  # fails
+```
+
+This produces the following output (note that the `print(a.layout, x.layout)` call produces different outputs depending on whether it is called inside or outside of the vjp):
+```
+torch.sparse_coo torch.strided
+tensor([[3.],
+        [2.],
+        [1.]])
+torch.strided torch.strided
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File ".../main.py", line 13, in <module>
+    vjp = torch.func.vjp(f, a, x)[1]
+          ^^^^^^^^^^^^^^^^^^^^^^^
+  File ".../lib/python3.12/site-packages/torch/_functorch/eager_transforms.py", line 300, in vjp
+    return _vjp_with_argnums(func, *primals, has_aux=has_aux)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ".../lib/python3.12/site-packages/torch/_functorch/vmap.py", line 48, in fn
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+
+Original API Under Test: torch.mm
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.optim.swa_utils.get_ema_multi_avg_fn
+Similarity score: 0.9918804168701172
+
+Similar API information:
+# Extracted call chain for torch.optim.swa_utils.get_ema_multi_avg_fn
+
+# --- torch.optim.swa_utils.get_ema_multi_avg_fn ---
+def get_ema_multi_avg_fn(decay=0.999):
+    """Get the function applying exponential moving average (EMA) across multiple params."""
+
+    if decay < 0.0 or decay > 1.0:
+        raise ValueError(
+            f"Invalid decay value {decay} provided. Please provide a value in [0,1] range."
+        )
+
+    @torch.no_grad()
+    def ema_update(ema_param_list: PARAM_LIST, current_param_list: PARAM_LIST, _):
+        # foreach lerp only handles float and complex
+        if torch.is_floating_point(ema_param_list[0]) or torch.is_complex(
+            ema_param_list[0]
+        ):
+            torch._foreach_lerp_(ema_param_list, current_param_list, 1 - decay)
+        else:
+            for p_ema, p_model in zip(ema_param_list, current_param_list):
+                p_ema.copy_(p_ema * decay + p_model * (1 - decay))
+
+    return ema_update
+
+# --- p_ema.copy_ ---
+def copy_(in1, in2):
+    return in1.copy_(in2)
+
+# --- in1.copy_ ---
+def copy_(in1, in2):
+
+Original Test Case:
+import torch
+
+
+def f(a, x):
+    print(a.layout, x.layout)
+
+    return torch.sparse.mm(a, x)
+
+
+a = torch.sparse_coo_tensor(torch.tensor([[0, 1, 2], [1, 2, 0]]), [1.0, 1.0, 1.0])
+x = torch.tensor([1.0, 3.0, 2.0])[:, None]
+print(f(a, x))  # works fine
+
+vjp = torch.func.vjp(f, a, x)[1]  # fails
+
+The API torch.optim.swa_utils.get_ema_multi_avg_fn is identified as same-library similar to the original PyTorch API torch.mm.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

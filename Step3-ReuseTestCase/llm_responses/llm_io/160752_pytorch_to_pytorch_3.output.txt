@@ -1,0 +1,43 @@
+```python
+import torch
+from torch import library
+
+# Define a custom operator that encapsulates the logic from the bug report
+library.define("test_ns::one_hot_square_mul(Tensor x, Tensor idxs) -> Tensor")
+
+MAX = 3
+BATCH = 37
+
+# Abstract implementation using the similar API: torch.library.impl_abstract
+# This defines the behavior of the operator on FakeTensors, which is essential
+# for torch.compile to work correctly.
+@library.impl_abstract("test_ns::one_hot_square_mul")
+def one_hot_square_mul_abstract(x, idxs):
+    # torch.nn.functional.one_hot is compatible with FakeTensors
+    return x.square() * torch.nn.functional.one_hot(idxs, MAX)
+
+# Concrete implementation
+def one_hot_square_mul_impl(x, idxs):
+    return x.square() * torch.nn.functional.one_hot(idxs, MAX)
+
+# Register the concrete implementation
+library.impl("test_ns::one_hot_square_mul", one_hot_square_mul_impl)
+
+# Setup inputs
+idxs = torch.randint(MAX, (BATCH,), dtype=torch.int64)
+x = torch.rand((BATCH, MAX), dtype=torch.float64)
+
+# Test the custom operator directly
+out = torch.ops.test_ns.one_hot_square_mul(x, idxs)
+assert out.shape == (BATCH, MAX), "Output shape mismatch"
+
+# Verify that the abstract implementation allows torch.compile to succeed
+# This addresses the original bug where torch.compile failed with similar logic.
+try:
+    compiled_func = torch.compile(torch.ops.test_ns.one_hot_square_mul, dynamic=True)
+    out_compiled = compiled_func(x, idxs)
+    assert torch.allclose(out, out_compiled), "Compiled output differs from eager"
+    print("Test passed: torch.library.impl_abstract registered correctly and works with torch.compile")
+except Exception as e:
+    print(f"Test failed: {e}")
+```

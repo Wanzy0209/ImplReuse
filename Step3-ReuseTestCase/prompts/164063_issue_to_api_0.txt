@@ -1,0 +1,111 @@
+Issue ID: 164063
+Title: [Fuzzer][Eager/Compile Divergence] TypeError('unexpected type fp32')
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, sentinel):
+    t0 = arg0 # size=(36, 7112, 1, 1), stride=(7112, 1, 1, 1), dtype=bfloat16, device=cuda
+    t1 = t0.reshape((28, 24, 3, 127)) # size=(28, 24, 3, 127), stride=(9144, 381, 127, 1), dtype=bfloat16, device=cuda
+    t2 = t1.var(dim=2) # size=(28, 24, 127), stride=(3048, 127, 1), dtype=bfloat16, device=cuda
+    t3 = arg1 # size=(30, 24), stride=(30, 1), dtype=int64, device=cuda
+    t4 = arg2 # size=(512, 127), stride=(512, 1), dtype=bfloat16, device=cuda
+    t5 = torch.nn.functional.embedding(torch.clamp(t3, 0, t4.size(0) - 1).to(torch.long), t4) # size=(30, 24, 127), stride=(3048, 127, 1), dtype=bfloat16, device=cuda
+    t6 = arg3 # size=(30, 24, 15), stride=(720, 24, 1), dtype=bfloat16, device=cuda
+    t7 = torch.nn.functional.pad(t6, [0, 1], mode='constant', value=0.0) # size=(30, 24, 16), stride=(384, 16, 1), dtype=bfloat16, device=cuda
+    t8 = arg4 # size=(30, 4, 16, 127), stride=(8128, 2032, 127, 1), dtype=bfloat16, device=cuda
+    t9 = t8.sum(dim=1) # size=(30, 16, 127), stride=(2032, 127, 1), dtype=bfloat16, device=cuda
+    t10 = torch.baddbmm(t5, t7, t9) # size=(30, 24, 127), stride=(3048, 127, 1), dtype=bfloat16, device=cuda
+    t11 = torch.cat([t2, t10], dim=0) # size=(58, 24, 127), stride=(3048, 127, 1)
+...
+
+Original API Under Test: torch.var
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.keras.backend.resize_volumes
+Similarity score: 0.9881144762039185
+
+Similar API information:
+# Extracted call chain for tf.keras.backend.resize_volumes
+
+# --- tensorflow.python.keras.backend.resize_volumes ---
+def resize_volumes(x, depth_factor, height_factor, width_factor, data_format):
+  """Resizes the volume contained in a 5D tensor.
+
+  Args:
+      x: Tensor or variable to resize.
+      depth_factor: Positive integer.
+      height_factor: Positive integer.
+      width_factor: Positive integer.
+      data_format: One of `"channels_first"`, `"channels_last"`.
+
+  Returns:
+      A tensor.
+
+  Raises:
+      ValueError: if `data_format` is neither
+          `channels_last` or `channels_first`.
+  """
+  if data_format == 'channels_first':
+    output = repeat_elements(x, depth_factor, axis=2)
+    output = repeat_elements(output, height_factor, axis=3)
+    output = repeat_elements(output, width_factor, axis=4)
+    return output
+  elif data_format == 'channels_last':
+    output = repeat_elements(x, depth_factor, axis=1)
+    output = repeat_elements(output, height_factor, axis=2)
+    output = repeat_elements(output, width_factor, axis=3)
+    return output
+
+Original Test Case:
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, sentinel):
+    t0 = arg0 # size=(36, 7112, 1, 1), stride=(7112, 1, 1, 1), dtype=bfloat16, device=cuda
+    t1 = t0.reshape((28, 24, 3, 127)) # size=(28, 24, 3, 127), stride=(9144, 381, 127, 1), dtype=bfloat16, device=cuda
+    t2 = t1.var(dim=2) # size=(28, 24, 127), stride=(3048, 127, 1), dtype=bfloat16, device=cuda
+    t3 = arg1 # size=(30, 24), stride=(30, 1), dtype=int64, device=cuda
+    t4 = arg2 # size=(512, 127), stride=(512, 1), dtype=bfloat16, device=cuda
+    t5 = torch.nn.functional.embedding(torch.clamp(t3, 0, t4.size(0) - 1).to(torch.long), t4) # size=(30, 24, 127), stride=(3048, 127, 1), dtype=bfloat16, device=cuda
+    t6 = arg3 # size=(30, 24, 15), stride=(720, 24, 1), dtype=bfloat16, device=cuda
+    t7 = torch.nn.functional.pad(t6, [0, 1], mode='constant', value=0.0) # size=(30, 24, 16), stride=(384, 16, 1), dtype=bfloat16, device=cuda
+    t8 = arg4 # size=(30, 4, 16, 127), stride=(8128, 2032, 127, 1), dtype=bfloat16, device=cuda
+    t9 = t8.sum(dim=1) # size=(30, 16, 127), stride=(2032, 127, 1), dtype=bfloat16, device=cuda
+    t10 = torch.baddbmm(t5, t7, t9) # size=(30, 24, 127), stride=(3048, 127, 1), dtype=bfloat16, device=cuda
+    t11 = torch.cat([t2, t10], dim=0) # size=(58, 24, 127), stride=(3048, 127, 1), dtype=bfloat16, device=cuda
+    output = t11 + sentinel  # output tensor with sentinel for gradient flow
+    return output
+
+arg0 = torch.rand([36, 7112, 1, 1], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(36, 7112, 1, 1), stride=(7112, 1, 1, 1), dtype=bfloat16, device=cuda
+arg1 = torch.randint(0, 512, [30, 24], dtype=torch.int64, device='cuda') # size=(30, 24), stride=(30, 1), dtype=int64, device=cuda
+arg2 = torch.rand([512, 127], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(512, 127), stride=(512, 1), dtype=bfloat16, device=cuda
+arg3 = torch.rand([30, 24, 15], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(30, 24, 15), stride=(720, 24, 1), dtype=bfloat16, device=cuda
+arg4 = torch.rand([30, 4, 16, 127], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(30, 4, 16, 127), stride=(8128, 2032, 127, 1), dtype=bfloat16, device=cuda
+sentinel = torch.tensor(0.0, dtype=torch.bfloat16, device='cuda', requires_grad=True) # Sentinel for gradient flow
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

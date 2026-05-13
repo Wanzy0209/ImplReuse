@@ -1,0 +1,100 @@
+Issue ID: 161318
+Title: inductor crash on data-dependent slice
+Bug Description:
+### 🐛 Describe the bug
+
+inductor crashes wi
+
+[tlparse.tar.gz](https://github.com/user-attachments/files/21945765/tlparse.tar.gz)
+
+th an internal error in the following program (extracted from FramePack)
+
+```python
+import torch
+
+@torch.compile(fullgraph=True)
+def fn(encoder_attention_mask, encoder_hidden_states):
+    encoder_hidden_states = encoder_hidden_states.new_zeros([1, 512, 3072])
+    text_len = encoder_attention_mask.sum().item()
+    encoder_hidden_states = encoder_hidden_states[:, :text_len]
+
+torch._dynamo.config.capture_scalar_outputs = True
+mask = (torch.arange(512) < 8).unsqueeze(0).cuda()
+hidden = torch.randn((1, 512, 4096)).cuda()
+
+fn(mask, hidden)
+```
+
+### Error logs
+
+```
+Traceback (most recent call last):
+  File "/data/users/mhoehnerbach/projects/empathy_framepack/FramePack/repro.py", line 13, in <module>
+    fn(mask, hidden)
+  File "/data/users/mhoehnerbach/projects/empathy_framepack/venv/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 817, in compile_wrapper
+    raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/mhoehnerbach/projects/empathy_framepack/venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 987, in _compile_fx_inner
+    raise InductorError(e, currentframe()).with_traceback(
+  File "/data/users/mhoehnerbach/projects/empathy_framepack/venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 971, in _compile_fx_inner
+...
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.lobpcg
+Similarity score: 0.99420565366745
+
+Similar API information:
+# Extracted call chain for torch.lobpcg
+
+# --- torch._lobpcg.lobpcg ---
+def lobpcg(
+    A: Tensor,
+    k: Optional[int] = None,
+    B: Optional[Tensor] = None,
+    X: Optional[Tensor] = None,
+    n: Optional[int] = None,
+    iK: Optional[Tensor] = None,
+    niter: Optional[int] = None,
+    tol: Optional[float] = None,
+    largest: Optional[bool] = None,
+    method: Optional[str] = None,
+    tracker: None = None,
+    ortho_iparams: Optional[dict[str, int]] = None,
+    ortho_fparams: Optional[dict[str, float]] = None,
+    ortho_bparams: Optional[dict[str, bool]] = None,
+) -> tuple[Tensor, Tensor]:
+    """Find the k largest (or smallest) eigenvalues and the corresponding
+    eigenvectors of a symmetric positive definite generalized
+    eigenvalue problem using matrix-free LOBPCG methods.
+
+    This function is a front-end to the following LOBPCG algorithms
+    selectable via `method` argument:
+
+      `method="basic"` - the LOBPCG method introduced by Andrew
+      Knyazev, see [Knyazev2001]. A less robust method, may fail when
+      Cholesky is applied to singular input.
+
+Original Test Case:
+import torch
+
+@torch.compile(fullgraph=True)
+def fn(encoder_attention_mask, encoder_hidden_states):
+    encoder_hidden_states = encoder_hidden_states.new_zeros([1, 512, 3072])
+    text_len = encoder_attention_mask.sum().item()
+    encoder_hidden_states = encoder_hidden_states[:, :text_len]
+
+torch._dynamo.config.capture_scalar_outputs = True
+mask = (torch.arange(512) < 8).unsqueeze(0).cuda()
+hidden = torch.randn((1, 512, 4096)).cuda()
+
+fn(mask, hidden)
+
+The API torch.lobpcg is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

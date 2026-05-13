@@ -1,0 +1,51 @@
+```python
+import torch
+from torch.nn.attention.flex_attention import flex_attention
+
+def test_flex_attention_gqa_backward_compilation():
+    """
+    Test case to reproduce the FlexAttention backward compilation failure
+    with GQA (Grouped Query Attention) on NVIDIA B200 using the 'inductor' backend.
+    
+    This test verifies that the backward pass compiles and runs correctly when
+    enable_gqa is set to True.
+    """
+    # Compile flex_attention with the specific backend that was reported to fail
+    compiled_flex = torch.compile(flex_attention, fullgraph=True, backend="inductor")
+
+    with torch.device("cuda"):
+        # Define tensor dimensions
+        batch_size = 2
+        num_q_heads = 32
+        num_kv_heads = 8  # GQA configuration: num_q_heads > num_kv_heads
+        seq_len = 4096
+        head_dim = 128
+
+        # Initialize tensors with bfloat16 and gradients enabled
+        q = torch.randn([batch_size, num_q_heads, seq_len, head_dim], 
+                        dtype=torch.bfloat16, requires_grad=True)
+        k = torch.randn([batch_size, num_kv_heads, seq_len, head_dim], 
+                        dtype=torch.bfloat16, requires_grad=True)
+        v = torch.randn([batch_size, num_kv_heads, seq_len, head_dim], 
+                        dtype=torch.bfloat16, requires_grad=True)
+
+        # Forward pass
+        y = compiled_flex(q, k, v, enable_gqa=True)
+
+        # Backward pass - This triggers the Triton compilation failure on B200
+        grad_output = torch.randn_like(y)
+        y.backward(grad_output)
+
+        # Assertions to verify execution and gradient computation
+        assert q.grad is not None, "Query gradient is None"
+        assert k.grad is not None, "Key gradient is None"
+        assert v.grad is not None, "Value gradient is None"
+        
+        # Check that gradients have the correct shape
+        assert q.grad.shape == q.shape, "Query gradient shape mismatch"
+        assert k.grad.shape == k.shape, "Key gradient shape mismatch"
+        assert v.grad.shape == v.shape, "Value gradient shape mismatch"
+
+if __name__ == "__main__":
+    test_flex_attention_gqa_backward_compilation()
+```

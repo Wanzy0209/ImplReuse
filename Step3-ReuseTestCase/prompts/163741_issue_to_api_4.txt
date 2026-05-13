@@ -1,0 +1,129 @@
+Issue ID: 163741
+Title: Unexpected cuda context after dist.destroy_process_group
+Bug Description:
+### 🐛 Describe the bug
+
+During experimentation, I observed unexpected 320MB GPU0(maybe default cuda device) memory allocations in each subprocess that persist after process group destruction. I've constructed a minimal reproducible example demonstrating this issue.
+```python
+import torch
+import os
+import glob
+import time
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+def worker(rank, world_size):
+    torch.cuda.set_device(rank)
+    dist.init_process_group(
+        backend="nccl", 
+        init_method="tcp://127.0.0.1:29500",
+        world_size=world_size,
+        rank=rank
+    )
+    dist.barrier()
+
+    device = f"cuda:{rank}"
+    # do something
+    print("to sleep")
+    time.sleep(5)
+    
+    dist.destroy_process_group()
+
+    # sleep for observing nvidia-smi
+    time.sleep(100)
+
+def test_nccl():
+    world_size = torch.cuda.device_count()
+    mp.spawn(
+        worker,
+        args=(world_size,),
+        nprocs=world_size,
+        join=True,
+    )
+
+Original API Under Test: torch.distributed.destroy_process_grouptorch.distributed.destroy_process_group
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.rand_like
+Similarity score: 0.9887456893920898
+
+Similar API information:
+# Extracted call chain for torch.rand_like
+
+# --- torch._decomp.decompositions_for_rng.rand_like ---
+def rand_like(
+    x: torch.Tensor,
+    dtype=None,
+    layout=None,
+    device=None,
+    pin_memory=False,
+    memory_format=torch.preserve_format,
+):
+    device = device or x.device
+    if device.type != "cuda":
+        throw_on_non_cuda(device)
+    dtype = dtype or x.dtype
+    seed, offset = PhiloxStateTracker.get_state_as_tuple()
+    out, offset_jump = torch.ops.rngprims.philox_rand(
+        x.shape, seed, offset, None, device, dtype
+    )
+    PhiloxStateTracker.advance_offset(offset_jump)
+    return out
+
+# --- torch._decomp.decompositions_for_rng.register_rng_decomposition ---
+def register_rng_decomposition(aten_op):
+    return decomp.register_decomposition(aten_op, rng_decompositions)
+
+# --- torch._decomp.register_decomposition ---
+def register_decomposition(
+    aten_op, registry=None, *, type="post_autograd", unsafe=False
+) -> Callable[[Callable[_P, _T]], Callable[_P, _T]]:
+
+Original Test Case:
+import torch
+import os
+import glob
+import time
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+def worker(rank, world_size):
+    torch.cuda.set_device(rank)
+    dist.init_process_group(
+        backend="nccl", 
+        init_method="tcp://127.0.0.1:29500",
+        world_size=world_size,
+        rank=rank
+    )
+    dist.barrier()
+
+    device = f"cuda:{rank}"
+    # do something
+    print("to sleep")
+    time.sleep(5)
+    
+    dist.destroy_process_group()
+
+    # sleep for observing nvidia-smi
+    time.sleep(100)
+
+def test_nccl():
+    world_size = torch.cuda.device_count()
+    mp.spawn(
+        worker,
+        args=(world_size,),
+        nprocs=world_size,
+        join=True,
+    )
+
+if __name__ == '__main__':
+    test_nccl()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

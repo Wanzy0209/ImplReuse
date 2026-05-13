@@ -1,0 +1,52 @@
+```python
+import tensorflow as tf
+
+# Constants from the original bug report
+MAX = 3
+BATCH = 37
+
+def func(x, idxs):
+    # Adapting PyTorch operations to TensorFlow
+    # torch.nn.functional.one_hot(idxs, MAX) -> tf.one_hot(idxs, MAX)
+    # x.square() -> tf.square(x)
+    # Note: Explicitly casting one_hot to match x.dtype to ensure multiplication works as in PyTorch
+    return tf.square(x) * tf.cast(tf.one_hot(idxs, MAX), x.dtype)
+
+def jacfunc(x, idxs):
+    # Adapting torch.func.jacfwd(func, argnums=(0,))
+    # We use a lambda to fix 'idxs' and differentiate w.r.t 'x' (argnums 0)
+    return tf.jacobian(lambda t: func(t, idxs), x)
+
+# Setup input data
+# torch.randint(MAX, (BATCH,), dtype=torch.int64) -> tf.random.uniform
+idxs = tf.random.uniform((BATCH,), minval=0, maxval=MAX, dtype=tf.int64)
+# torch.rand((BATCH, MAX), dtype=torch.float64) -> tf.random.uniform
+x = tf.random.uniform((BATCH, MAX), dtype=tf.float64)
+
+# Test 1: Eager execution inside the target API (tf.compat.v1.name_scope)
+# This verifies that the operations can be named and run eagerly without issues.
+print("Testing eager execution inside name_scope...")
+with tf.compat.v1.name_scope("eager_jacobian_test"):
+    out_eager = jacfunc(x, idxs)
+    assert out_eager is not None, "Eager execution failed"
+    print("Eager execution successful.")
+
+# Test 2: Compiled execution (tf.function) inside the target API
+# This mimics the torch.compile(..., dynamic=True) part of the original bug.
+# We wrap the function in tf.function and execute it within a new name scope.
+print("Testing compiled execution inside name_scope...")
+jacfunc_compiled = tf.function(jacfunc)
+
+with tf.compat.v1.name_scope("compiled_jacobian_test"):
+    try:
+        out_compiled = jacfunc_compiled(x, idxs)
+        assert out_compiled is not None, "Compiled execution returned None"
+        print("Compiled execution successful.")
+    except Exception as e:
+        print(f"Compiled execution failed with error: {e}")
+        raise
+
+# Verify shapes match as a sanity check
+assert out_eager.shape == out_compiled.shape, "Output shapes differ between eager and compiled modes"
+print("Test case completed successfully.")
+```

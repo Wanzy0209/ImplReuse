@@ -1,0 +1,120 @@
+Issue ID: 164300
+Title: [dynamo][sac] functools partial'ed context_fn is not supported
+Bug Description:
+### 🐛 Describe the bug
+
+Thanks to @soulitzer for the repro
+
+```
+import torch
+import functools
+from torch.utils.checkpoint import CheckpointPolicy
+
+class CustomPolicy:
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, ctx, out, func, *args, **kwargs):
+        return CheckpointPolicy.MUST_SAVE
+
+from torch.utils.checkpoint import (
+    CheckpointPolicy,
+    create_selective_checkpoint_contexts,
+)
+
+def f(x, y):
+    return torch.sigmoid(torch.matmul(torch.matmul(x, y), y)) * y
+
+context_fn1 = functools.partial(create_selective_checkpoint_contexts, CustomPolicy())
+
+def context_fn2():
+    return create_selective_checkpoint_contexts(CustomPolicy())
+
+@torch.compile(backend="aot_eager_decomp_partition", fullgraph=True)
+def g(x, y):
+    return torch.utils.checkpoint.checkpoint(
+        f, x, y,
+        use_reentrant=False,
+        context_fn=context_fn1,
+    )
+
+a = torch.randn(4, 4, requires_grad=True, device="cpu")
+b = torch.randn(4, 4, requires_grad=True, device="cpu")
+g(a, b).sum().backward()
+
+Original API Under Test: torch.utils.checkpoint.checkpoint
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.utils.checkpoint.checkpoint_sequential
+Similarity score: 0.9968668818473816
+
+Similar API information:
+# Extracted call chain for torch.utils.checkpoint.checkpoint_sequential
+
+# --- torch.utils.checkpoint.checkpoint_sequential ---
+def checkpoint_sequential(functions, segments, input, use_reentrant=None, **kwargs):
+    r"""Checkpoint a sequential model to save memory.
+
+    Sequential models execute a list of modules/functions in order
+    (sequentially). Therefore, we can divide such a model in various segments
+    and checkpoint each segment. All segments except the last will not store
+    the intermediate activations. The inputs of each checkpointed segment will
+    be saved for re-running the segment in the backward pass.
+
+    .. warning::
+        The ``use_reentrant`` parameter should be passed explicitly. In version
+        2.4 we will raise an exception if ``use_reentrant`` is not passed.
+        If you are using the ``use_reentrant=True` variant, please see
+        :func:`~torch.utils.checkpoint.checkpoint` for
+        the important considerations and limitations of this variant. It is
+        recommended that you use ``use_reentrant=False``.
+
+    .. warning:
+        Since PyTorch 1.4, it allows only one Tensor as the input and
+        intermediate outputs, just like :class:`t
+...
+
+Original Test Case:
+import torch
+import functools
+from torch.utils.checkpoint import CheckpointPolicy
+
+class CustomPolicy:
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, ctx, out, func, *args, **kwargs):
+        return CheckpointPolicy.MUST_SAVE
+
+from torch.utils.checkpoint import (
+    CheckpointPolicy,
+    create_selective_checkpoint_contexts,
+)
+
+def f(x, y):
+    return torch.sigmoid(torch.matmul(torch.matmul(x, y), y)) * y
+
+context_fn1 = functools.partial(create_selective_checkpoint_contexts, CustomPolicy())
+
+def context_fn2():
+    return create_selective_checkpoint_contexts(CustomPolicy())
+
+@torch.compile(backend="aot_eager_decomp_partition", fullgraph=True)
+def g(x, y):
+    return torch.utils.checkpoint.checkpoint(
+        f, x, y,
+        use_reentrant=False,
+        context_fn=context_fn1,
+    )
+
+a = torch.randn(4, 4, requires_grad=True, device="cpu")
+b = torch.randn(4, 4, requires_grad=True, device="cpu")
+g(a, b).sum().backward()
+
+The API torch.utils.checkpoint.checkpoint_sequential is identified as same-library similar to the original PyTorch API torch.utils.checkpoint.checkpoint.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

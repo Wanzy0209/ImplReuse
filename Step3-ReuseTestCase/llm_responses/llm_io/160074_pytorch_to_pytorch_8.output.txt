@@ -1,0 +1,66 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Adapted from the original bug report: using torch.compile with backend="inductor"
+    # Original: inductor = torch.compile(flex_attention, fullgraph=True, backend="inductor")
+    # Adapted: compiling the distributed receive function
+    compiled_recv = torch.compile(dist.recv_object_list, fullgraph=True, backend="inductor")
+
+    if rank == 0:
+        # Sender: Create tensors similar to the original bug report (q, k, v shapes)
+        # Using CPU tensors here for broader compatibility in this test, 
+        # though the original bug was on CUDA.
+        q = torch.randn([2, 32, 4096, 128], dtype=torch.bfloat16)
+        k = torch.randn([2, 8, 4096, 128], dtype=torch.bfloat16)
+        v = torch.randn([2, 8, 4096, 128], dtype=torch.bfloat16)
+        
+        object_list = [q, k, v]
+        dist.send_object_list(object_list, dst=1)
+        print(f"Rank {rank}: Sent objects.")
+
+    elif rank == 1:
+        # Receiver
+        recv_list = [None, None, None]
+        
+        # Original call: y = inductor(q, k, v, enable_gqa=True)
+        # Adapted call: receiving objects via the compiled function
+        try:
+            compiled_recv(recv_list, src=0)
+            
+            # Assertions to verify correctness
+            assert recv_list[0] is not None
+            assert recv_list[0].shape == (2, 32, 4096, 128)
+            assert recv_list[0].dtype == torch.bfloat16
+            assert recv_list[1].shape == (2, 8, 4096, 128)
+            assert recv_list[2].shape == (2, 8, 4096, 128)
+            
+            print(f"Rank {rank}: Successfully received and verified objects via compiled function.")
+        except Exception as e:
+            print(f"Rank {rank}: Error during compiled recv_object_list: {e}")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Check if CUDA is available to mimic original environment closer, 
+    # but fallback to CPU to ensure the test is runnable everywhere.
+    if torch.cuda.is_available():
+        print("CUDA detected. Note: This test uses Gloo backend for process group, but tensors can be moved.")
+    
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+```

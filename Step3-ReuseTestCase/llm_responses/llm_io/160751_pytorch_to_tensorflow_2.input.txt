@@ -1,0 +1,99 @@
+Issue ID: 160751
+Title: torch.compile aot_eager mode removes torch.cuda.synchronize() causing missed exceptions
+Bug Description:
+### 🐛 Describe the bug
+
+While testing both eager and aot_eager modes, I observed that aot_eager does not capture exceptions as expected. I found that during graph optimization, the torch.cuda.synchronize() call is removed in aot_eager mode.
+
+I ran the following code with TORCH_LOGS="graph_code,aot_graphs". The __graph_code logs show the synchronize function present, but in the __aot_graphs logs, the synchronize call is eliminated. This behavior differs from eager mode, where the assertion is caught and the print statement is not executed.
+
+```python
+import torch
+
+def func():
+    a = torch.tensor([1.0, -2.0], device="cuda")
+    result = torch.all(a > 0)
+    assert result, "should throw"
+    torch.cuda.synchronize()
+    print("should not run")
+
+
+def test_fn():
+    torch._dynamo.reset()
+    f_c = torch.compile(func, backend="aot_eager")
+    f_c()
+
+test_fn()
+```
+
+```
+[karthickps@devvm1752.odn0 ~/work/experiments/aot_eager]$ TORCH_LOGS="graph_code,aot_graphs" python test_aot_eager.py 
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_graph.py:1711] [0/0_1] [__graph_code] TRACED GRAPH
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_graph.py:1711] [0/0_1] [__graph_code]  ===== __compiled_fn_2_c224c13a_e190_4f9e_b8eb_e4c7476b65dc =====
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_graph.py:1711] [0/0_1] [__graph_code]  /home/karthickps/git/karthickai/pytorch/torch/fx/_lazy_graph_module.py class GraphModule(torch.nn.Module):
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.dtensor.copy_to_mesh
+Similarity score: 0.9937996864318848
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.copy_to_mesh
+
+# --- tensorflow.dtensor.python.api.copy_to_mesh ---
+def copy_to_mesh(
+    tensor: Any,
+    layout: layout_lib.Layout,
+    source_layout: Optional[layout_lib.Layout] = None) -> tensor_lib.Tensor:
+  """Copies a tf.Tensor onto the DTensor device with the given layout.
+
+  Copies a regular tf.Tensor onto the DTensor device. Use the mesh attached to
+  `layout` as target mesh. This method currently only supports replicated
+  layouts, or one-to-one copies for sharded layouts.
+
+  Args:
+    tensor: A regular tf.Tensor to be copied as a DTensor.
+    layout: Target layout (and mesh) for the result DTensor.
+    source_layout: Source layout of the tensor before copy. This argument
+      is deprecated.
+
+  Returns:
+    A DTensor on the DTensor device with the given layout.
+  """
+  del source_layout
+  return relayout(tensor, layout)
+
+# --- tensorflow.dtensor.python.api.relayout ---
+def relayout(
+    tensor: tensor_lib.Tensor,
+    layout: layout_lib.Layout,
+    name: Optional[str] = None,
+
+Original Test Case:
+import torch
+
+def func():
+    a = torch.tensor([1.0, -2.0], device="cuda")
+    result = torch.all(a > 0)
+    assert result, "should throw"
+    torch.cuda.synchronize()
+    print("should not run")
+
+
+def test_fn():
+    torch._dynamo.reset()
+    f_c = torch.compile(func, backend="aot_eager")
+    f_c()
+
+test_fn()
+
+The API tf.experimental.dtensor.copy_to_mesh is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

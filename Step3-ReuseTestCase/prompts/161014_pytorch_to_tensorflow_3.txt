@@ -1,0 +1,85 @@
+Issue ID: 161014
+Title: Inconsistent constant_pad_nd behavior with negative padding
+Bug Description:
+### 🕵️‍♂️ Detected with [FACTO](https://github.com/meta-pytorch/FACTO)
+
+### 🐛 Describe the bug
+
+The aten op `constant_pad_nd` allows for negative padding, as long as the absolute value of the padding is smaller than the size, and as long as the resulting output doesn't have negative size
+
+For example:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2]).shape
+torch.Size([5, 0])
+```
+Notice that the -1, -2 padding applies to the last dimension
+
+We can also pad the first dimension, by adding two more pads:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 0, 0]).shape
+torch.Size([5, 0])
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, -1, -1]).shape
+torch.Size([3, 0])
+```
+
+However, in the following case, it throws an error:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 1, 1]).shape
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/Users/mcandales/miniconda3/envs/facto/lib/python3.11/site-packages/torch/_ops.py", line 840, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: The input size 3, plus negative padding -1 and -2 resulted in a negative output size, which is invalid. Check dimension 1 of your input.
+```
+
+Notice that, if we make sure the output won't have size 0, we always avoid the bug:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -1, 1, 1])
+...
+
+Original API Under Test: torch.nn.functional.pad
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.nn.atrous_conv2d_transpose
+Similarity score: 0.9920713901519775
+
+Similar API information:
+# Extracted call chain for tf.nn.atrous_conv2d_transpose
+
+# --- tensorflow.python.ops.nn_ops.atrous_conv2d_transpose ---
+def atrous_conv2d_transpose(value,
+                            filters,
+                            output_shape,
+                            rate,
+                            padding,
+                            name=None):
+  """The transpose of `atrous_conv2d`.
+
+  This operation is sometimes called "deconvolution" after
+  (Zeiler et al., 2010), but is really the transpose (gradient) of
+  `atrous_conv2d` rather than an actual deconvolution.
+
+  Args:
+    value: A 4-D `Tensor` of type `float`. It needs to be in the default `NHWC`
+      format. Its shape is `[batch, in_height, in_width, in_channels]`.
+    filters: A 4-D `Tensor` with the same type as `value` and shape
+      `[filter_height, filter_width, out_channels, in_channels]`. `filters`'
+      `in_channels` dimension must match that of `value`. Atrous convolution is
+      equivalent to standard convolution with upsampled filters with effective
+      height `filter_height + (filter_height - 1) * (rate - 1)` and effective
+      width `filter_width + (filter_width - 1) * (rate - 1)`, produced by
+      inserting
+...
+
+Original Test Case:
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2]).shape
+torch.Size([5, 0])
+
+The API tf.nn.atrous_conv2d_transpose is identified as cross-library similar to the original PyTorch API torch.nn.functional.pad.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

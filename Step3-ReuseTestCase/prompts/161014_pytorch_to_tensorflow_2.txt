@@ -1,0 +1,87 @@
+Issue ID: 161014
+Title: Inconsistent constant_pad_nd behavior with negative padding
+Bug Description:
+### 🕵️‍♂️ Detected with [FACTO](https://github.com/meta-pytorch/FACTO)
+
+### 🐛 Describe the bug
+
+The aten op `constant_pad_nd` allows for negative padding, as long as the absolute value of the padding is smaller than the size, and as long as the resulting output doesn't have negative size
+
+For example:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2]).shape
+torch.Size([5, 0])
+```
+Notice that the -1, -2 padding applies to the last dimension
+
+We can also pad the first dimension, by adding two more pads:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 0, 0]).shape
+torch.Size([5, 0])
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, -1, -1]).shape
+torch.Size([3, 0])
+```
+
+However, in the following case, it throws an error:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 1, 1]).shape
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/Users/mcandales/miniconda3/envs/facto/lib/python3.11/site-packages/torch/_ops.py", line 840, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: The input size 3, plus negative padding -1 and -2 resulted in a negative output size, which is invalid. Check dimension 1 of your input.
+```
+
+Notice that, if we make sure the output won't have size 0, we always avoid the bug:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -1, 1, 1])
+...
+
+Original API Under Test: torch.nn.functional.pad
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.ragged.stack_dynamic_partitions
+Similarity score: 0.9923785328865051
+
+Similar API information:
+# Extracted call chain for tf.ragged.stack_dynamic_partitions
+
+# --- tensorflow.python.ops.ragged.ragged_array_ops.stack_dynamic_partitions ---
+def stack_dynamic_partitions(data, partitions, num_partitions, name=None):
+  """Stacks dynamic partitions of a Tensor or RaggedTensor.
+
+  Returns a RaggedTensor `output` with `num_partitions` rows, where the row
+  `output[i]` is formed by stacking all slices `data[j1...jN]` such that
+  `partitions[j1...jN] = i`.  Slices of `data` are stacked in row-major
+  order.
+
+  If `num_partitions` is an `int` (not a `Tensor`), then this is equivalent to
+  `tf.ragged.stack(tf.dynamic_partition(data, partitions, num_partitions))`.
+
+  #### Example:
+
+  >>> data           = ['a', 'b', 'c', 'd', 'e']
+  >>> partitions     = [  3,   0,   2,   2,   3]
+  >>> num_partitions = 5
+  >>> tf.ragged.stack_dynamic_partitions(data, partitions, num_partitions)
+  <tf.RaggedTensor [[b'b'], [], [b'c', b'd'], [b'a', b'e'], []]>
+
+  Args:
+    data: A `Tensor` or `RaggedTensor` containing the values to stack.
+    partitions: An `int32` or `int64` `Tensor` or `RaggedTensor` specifying the
+      partition that each slice of `data` should be added to. `partitions.shape`
+      must
+...
+
+Original Test Case:
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2]).shape
+torch.Size([5, 0])
+
+The API tf.ragged.stack_dynamic_partitions is identified as cross-library similar to the original PyTorch API torch.nn.functional.pad.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

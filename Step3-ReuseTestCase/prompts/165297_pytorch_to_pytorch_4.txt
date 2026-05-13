@@ -1,0 +1,122 @@
+Issue ID: 165297
+Title: [BUG] MaxPool2d with channels_last + bfloat16 on CUDA produces NaNs for large tensors
+Bug Description:
+### 🐛 Describe the bug
+
+# Description
+When using torch.nn.MaxPool2d on large tensors with memory_format=torch.channels_last on GPU, the output can contain NaN values or even cause an illegal memory access error, depending on dtype and the memory content. This happens even when the input has no NaN/Inf. Changing to contiguous (NCHW) memory format before MaxPool fixes the issue.
+
+# Steps to Reproduce
+```python
+import torch
+import torch.nn as nn
+
+device = torch.device("cuda")
+
+def test_maxpool_nan():
+    # Large input tensor
+    N, C, H, W = 84, 64, 512, 960
+    # Case 1: bfloat16 + channels_last  => NaN
+    x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+
+    # Case 2: float32 + channels_last => illegal memory access
+    # x = torch.randn(N, C, H, W, device=device)  # default float32
+
+
+    # Convert to NHWC channels_last layout
+    x = x.to(memory_format=torch.channels_last)
+
+    # Uncommenting the line below avoids NaNs
+    # x = x.contiguous()
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+    print(f"Input stride: {x.stride()}")
+
+    pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1).to(device)
+    y = pool(x)
+
+    print(f"Output contains NaN? {torch.isnan(y).any().item()}")
+    print(f"Output contains Inf? {torch.isinf(y).any().item()}")
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    if torch.isnan(y).any():
+        print("Detected NaNs in MaxPool out
+...
+
+Original API Under Test: torch.nn.MaxPool2d
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.MaxPool1d
+Similarity score: 0.9984073042869568
+
+Similar API information:
+# Extracted call chain for torch.nn.MaxPool1d
+
+# --- torch.nn.modules.pooling.MaxPool1d ---
+class MaxPool1d(_MaxPoolNd):
+    r"""Applies a 1D max pooling over an input signal composed of several input planes.
+
+    In the simplest case, the output value of the layer with input size :math:`(N, C, L)`
+    and output :math:`(N, C, L_{out})` can be precisely described as:
+
+    .. math::
+        out(N_i, C_j, k) = \max_{m=0, \ldots, \text{kernel\_size} - 1}
+                input(N_i, C_j, stride \times k + m)
+
+    If :attr:`padding` is non-zero, then the input is implicitly padded with negative infinity on both sides
+    for :attr:`padding` number of points. :attr:`dilation` is the stride between the elements within the
+    sliding window. This `link`_ has a nice visualization of the pooling parameters.
+
+    Note:
+        When ceil_mode=True, sliding windows are allowed to go off-bounds if they start within the left padding
+        or the input. Sliding windows that would start in the right padded region are ignored.
+
+    Args:
+        kernel_size: The size of the sliding window, must be > 0.
+        stride: The stride of the sliding window, must be > 0. Default value is :attr:`kernel_si
+...
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+device = torch.device("cuda")
+
+def test_maxpool_nan():
+    # Large input tensor
+    N, C, H, W = 84, 64, 512, 960
+    # Case 1: bfloat16 + channels_last  => NaN
+    x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+
+    # Case 2: float32 + channels_last => illegal memory access
+    # x = torch.randn(N, C, H, W, device=device)  # default float32
+
+
+    # Convert to NHWC channels_last layout
+    x = x.to(memory_format=torch.channels_last)
+
+    # Uncommenting the line below avoids NaNs
+    # x = x.contiguous()
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+    print(f"Input stride: {x.stride()}")
+
+    pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1).to(device)
+    y = pool(x)
+
+    print(f"Output contains NaN? {torch.isnan(y).any().item()}")
+    print(f"Output contains Inf? {torch.isinf(y).any().item()}")
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    if torch.isnan(y).any():
+        print("Detected NaNs in MaxPool output!")
+
+test_maxpool_nan()
+
+The API torch.nn.MaxPool1d is identified as same-library similar to the original PyTorch API torch.nn.MaxPool2d.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

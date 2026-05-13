@@ -1,0 +1,100 @@
+Issue ID: 160751
+Title: torch.compile aot_eager mode removes torch.cuda.synchronize() causing missed exceptions
+Bug Description:
+### 🐛 Describe the bug
+
+While testing both eager and aot_eager modes, I observed that aot_eager does not capture exceptions as expected. I found that during graph optimization, the torch.cuda.synchronize() call is removed in aot_eager mode.
+
+I ran the following code with TORCH_LOGS="graph_code,aot_graphs". The __graph_code logs show the synchronize function present, but in the __aot_graphs logs, the synchronize call is eliminated. This behavior differs from eager mode, where the assertion is caught and the print statement is not executed.
+
+```python
+import torch
+
+def func():
+    a = torch.tensor([1.0, -2.0], device="cuda")
+    result = torch.all(a > 0)
+    assert result, "should throw"
+    torch.cuda.synchronize()
+    print("should not run")
+
+
+def test_fn():
+    torch._dynamo.reset()
+    f_c = torch.compile(func, backend="aot_eager")
+    f_c()
+
+test_fn()
+```
+
+```
+[karthickps@devvm1752.odn0 ~/work/experiments/aot_eager]$ TORCH_LOGS="graph_code,aot_graphs" python test_aot_eager.py 
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_graph.py:1711] [0/0_1] [__graph_code] TRACED GRAPH
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_graph.py:1711] [0/0_1] [__graph_code]  ===== __compiled_fn_2_c224c13a_e190_4f9e_b8eb_e4c7476b65dc =====
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_graph.py:1711] [0/0_1] [__graph_code]  /home/karthickps/git/karthickai/pytorch/torch/fx/_lazy_graph_module.py class GraphModule(torch.nn.Module):
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_
+...
+
+Original API Under Test: torch.compile
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.var
+Similarity score: 0.9929944276809692
+
+Similar API information:
+# Extracted call chain for torch.var
+
+# --- torch._numpy._reductions_impl.var ---
+def var(
+    a: ArrayLike,
+    axis: AxisLike = None,
+    dtype: Optional[DTypeLike] = None,
+    out: Optional[OutArray] = None,
+    ddof=0,
+    keepdims: KeepDims = False,
+    *,
+    where: NotImplementedType = None,
+):
+    in_dtype = dtype
+    dtype = _atleast_float(dtype, a.dtype)
+    tensor = _util.cast_if_needed(a, dtype)
+    result = tensor.var(dim=axis, correction=ddof)
+    return _util.cast_if_needed(result, in_dtype)
+
+# --- torch._numpy._reductions_impl._atleast_float ---
+def _atleast_float(dtype, other_dtype):
+    """Return a dtype that is real or complex floating-point.
+
+    For inputs that are boolean or integer dtypes, this returns the default
+    float dtype; inputs that are complex get converted to the default complex
+    dtype; real floating-point dtypes (`float*`) get passed through unchanged
+    """
+    if dtype is None:
+        dtype = other_dtype
+    if not (dtype.is_floating_point or dtype.is_complex):
+
+Original Test Case:
+import torch
+
+def func():
+    a = torch.tensor([1.0, -2.0], device="cuda")
+    result = torch.all(a > 0)
+    assert result, "should throw"
+    torch.cuda.synchronize()
+    print("should not run")
+
+
+def test_fn():
+    torch._dynamo.reset()
+    f_c = torch.compile(func, backend="aot_eager")
+    f_c()
+
+test_fn()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

@@ -1,0 +1,120 @@
+Issue ID: 167263
+Title: einsum calculates wrong stride for gradient of input
+Bug Description:
+### 🐛 Describe the bug
+
+https://docs.pytorch.org/docs/stable/autograd.html#default-gradient-layouts
+This page suggests that parameters and gradients have the same stride, although it specifically mentions "parameters" and not "activations". I couldn't find any source on activations.
+
+The below code produces activations and gradients with different strides. In my model, this causes the next layer in the backward to fail.
+
+```
+import torch
+import torch.nn as nn
+
+B, H, W, C = 20, 2, 2, 128
+
+x = torch.randn(B, H, W, C, requires_grad=True)
+linear = nn.Linear(C, C, bias=False)
+
+values = linear(x)
+values.retain_grad()
+
+values_view = values.view(B, H * W, C)
+values_view.retain_grad()
+
+
+def log_grad(name):
+    def hook(grad):
+        print(f"{name} hook - shape: {grad.shape}, stride: {grad.stride()}")
+        return grad
+
+    return hook
+
+
+print("forward strides", values_view.shape, values_view.stride())
+values_view.register_hook(log_grad("values_view"))
+
+weights = torch.randn(B, H * W, C)
+result = torch.einsum("bhc,bhc->bc", weights, values_view)
+
+result.backward(torch.ones_like(result))
+```
+
+Original API Under Test: torch.einsum
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.isnan
+Similarity score: 0.9943737387657166
+
+Similar API information:
+# Extracted call chain for torch.isnan
+
+# --- torch._inductor.lowering.isnan ---
+def isnan(x):
+    if is_integer_type(x):
+        return full_like(x, False, dtype=torch.bool)
+    fn = ops_wrapper("isnan")
+    return make_pointwise(fn, override_return_dtype=torch.bool)(x)
+
+# --- torch._inductor.lowering.full_like ---
+def full_like(x, fill_value, **kwargs):
+    return create_tensor_like(tensor_constructor(fill_value))(x, **kwargs)
+
+# --- torch._inductor.lowering.create_tensor_like ---
+def create_tensor_like(creation_fn):
+    """
+    Shim to convert X_like(...) into X(...).  For example zeros_like() into zeros().
+    """
+
+    def _constant_like(
+        x, *, dtype=None, device=None, layout=None, pin_memory=False, memory_format=None
+    ):
+        assert_nyi(not pin_memory, "pin_memory")
+        assert_nyi(layout in (None, torch.strided), f"layout={layout}")
+        if dtype is None:
+            dtype = x.get_dtype()
+        else:
+            dtype = decode_dtype(dtype)
+        device = device or x.get_device()
+        size = list(x.get_size())
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+B, H, W, C = 20, 2, 2, 128
+
+x = torch.randn(B, H, W, C, requires_grad=True)
+linear = nn.Linear(C, C, bias=False)
+
+values = linear(x)
+values.retain_grad()
+
+values_view = values.view(B, H * W, C)
+values_view.retain_grad()
+
+
+def log_grad(name):
+    def hook(grad):
+        print(f"{name} hook - shape: {grad.shape}, stride: {grad.stride()}")
+        return grad
+
+    return hook
+
+
+print("forward strides", values_view.shape, values_view.stride())
+values_view.register_hook(log_grad("values_view"))
+
+weights = torch.randn(B, H * W, C)
+result = torch.einsum("bhc,bhc->bc", weights, values_view)
+
+result.backward(torch.ones_like(result))
+
+The API torch.isnan is identified as same-library similar to the original PyTorch API torch.einsum.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

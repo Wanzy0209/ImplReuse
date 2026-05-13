@@ -1,0 +1,58 @@
+```python
+import torch
+import torch._dynamo
+
+# Mock backend function to simulate the user's setup
+def my_backend(gm, example_inputs):
+    """
+    A simple custom backend that returns the forward pass of the graph module.
+    In a real scenario, this would contain custom compilation logic.
+    """
+    return gm.forward
+
+def test_compile_prod_with_privateuse1():
+    """
+    Test case to verify torch.compile behavior with torch.prod on PrivateUse1 device.
+    This adapts the original bug report scenario to specifically test the torch.prod API.
+    """
+    # Check if privateuse1 is available to ensure the test is runnable in environments that support it
+    try:
+        device = torch.device("privateuse1")
+        # Verify device functionality
+        _ = torch.empty(1, device=device)
+    except (RuntimeError, AssertionError) as e:
+        print(f"Skipping test: PrivateUse1 device not available or functional. Error: {e}")
+        return
+
+    # Define a function using torch.prod (the similar API)
+    # The bug report indicates issues with internal ops (like flatten) during tracing.
+    def prod_fn(x):
+        return torch.prod(x)
+
+    # Create data on PrivateUse1
+    # Shape matches the dimensions in the original bug report
+    data = torch.randn(1, 8, 3, 128, device=device)
+
+    # Compile the function
+    # The bug occurs when torch.compile traces the function and generates meta tensors,
+    # which are then incorrectly passed to PrivateUse1 ops.
+    try:
+        compiled_fn = torch.compile(prod_fn, backend=my_backend)
+        result = compiled_fn(data)
+        print("Test Passed: torch.compile with torch.prod on PrivateUse1 succeeded.")
+        
+        # Basic assertion to ensure execution
+        assert result.device.type == "privateuse1"
+        
+    except RuntimeError as e:
+        error_msg = str(e)
+        # Check for the specific error mentioned in the bug report
+        if "meta" in error_msg and "PrivateUse1" in error_msg:
+            print(f"Bug Reproduced: {error_msg}")
+        else:
+            # Re-raise if it's a different error unrelated to the bug description
+            raise
+
+if __name__ == "__main__":
+    test_compile_prod_with_privateuse1()
+```

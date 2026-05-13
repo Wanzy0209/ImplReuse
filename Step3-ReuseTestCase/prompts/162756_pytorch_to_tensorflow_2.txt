@@ -1,0 +1,105 @@
+Issue ID: 162756
+Title: torch.compile fails with NameError when helper functions are required and combo_kernels enabled
+Bug Description:
+### 🐛 Describe the bug
+
+When `torch._inductor.config.combo_kernels = True` is enabled, compilation fails with `NameError` for Triton helper functions (e.g., `_triton_helper_fn_add0`) when operations that require helper functions (like `cumsum`) are combined into combo kernels.
+
+repro:
+```python
+import torch
+torch._inductor.config.combo_kernels = True
+
+@torch.compile
+def fn(x, y, z):
+    return x.sum(1), y.mean(1), z.cumsum(1)
+
+inps = (
+    torch.rand(16, 128, device="cuda"),
+    torch.rand(32, 128, device="cuda"),
+    torch.rand(32, 256, device="cuda"),
+)
+
+fn(*inps)
+```
+
+error:
+```bash
+torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+CompilationError: at 73:50:
+        xmask = xindex < xnumel
+        r0_index = tl.arange(0, R0_BLOCK_2)[None, :]
+        r0_offset = 0
+        r0_mask = r0_index < r0_numel
+        roffset = r0_offset
+        rindex = r0_index
+        r0_5 = r0_index
+        x4 = xindex
+        tmp12 = tl.load(in_ptr2 + (r0_5 + 256*x4), r0_mask & xmask, other=0.0)
+        tmp13 = tmp12.to(tl.float32)
+        tmp14 = tl.broadcast_to(tmp13, [XBLOCK, R0_BLOCK_2])
+        tmp15, = tl.associative_scan((tmp14,), 1, _triton_helper_fn_add0)
+                                                  ^
+NameError('_triton_helper_fn_add0 is not defined')
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.dtensor.copy_to_mesh
+Similarity score: 0.9937996864318848
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.copy_to_mesh
+
+# --- tensorflow.dtensor.python.api.copy_to_mesh ---
+def copy_to_mesh(
+    tensor: Any,
+    layout: layout_lib.Layout,
+    source_layout: Optional[layout_lib.Layout] = None) -> tensor_lib.Tensor:
+  """Copies a tf.Tensor onto the DTensor device with the given layout.
+
+  Copies a regular tf.Tensor onto the DTensor device. Use the mesh attached to
+  `layout` as target mesh. This method currently only supports replicated
+  layouts, or one-to-one copies for sharded layouts.
+
+  Args:
+    tensor: A regular tf.Tensor to be copied as a DTensor.
+    layout: Target layout (and mesh) for the result DTensor.
+    source_layout: Source layout of the tensor before copy. This argument
+      is deprecated.
+
+  Returns:
+    A DTensor on the DTensor device with the given layout.
+  """
+  del source_layout
+  return relayout(tensor, layout)
+
+# --- tensorflow.dtensor.python.api.relayout ---
+def relayout(
+    tensor: tensor_lib.Tensor,
+    layout: layout_lib.Layout,
+    name: Optional[str] = None,
+
+Original Test Case:
+import torch
+torch._inductor.config.combo_kernels = True
+
+@torch.compile
+def fn(x, y, z):
+    return x.sum(1), y.mean(1), z.cumsum(1)
+
+inps = (
+    torch.rand(16, 128, device="cuda"),
+    torch.rand(32, 128, device="cuda"),
+    torch.rand(32, 256, device="cuda"),
+)
+
+fn(*inps)
+
+The API tf.experimental.dtensor.copy_to_mesh is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

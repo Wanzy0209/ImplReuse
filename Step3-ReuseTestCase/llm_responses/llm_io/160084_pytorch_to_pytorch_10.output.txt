@@ -1,0 +1,68 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Use NCCL backend as the original bug report is CUDA specific
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
+def cleanup():
+    dist.destroy_process_group()
+
+class GatherModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.first_batch = True
+
+    def forward(self, x=None):
+        # Adapted logic: Using torch.distributed.gather_object instead of arithmetic
+        if self.first_batch:
+            print(f"Rank {dist.get_rank()}: Model dtype: {x.dtype}. Input dtype: {x.dtype}")
+            self.first_batch = False
+        
+        # Prepare the list for gathering (only on destination rank)
+        object_gather_list = [None] * dist.get_world_size() if dist.get_rank() == 0 else None
+        
+        # Perform the gather_object operation
+        # We gather a simple object derived from the input tensor to test the API
+        dist.gather_object(obj=x[0, 0].item(), object_gather_list=object_gather_list, dst=0)
+        
+        if dist.get_rank() == 0:
+            # Verify gathering occurred (optional assertion for test validity)
+            assert len(object_gather_list) == dist.get_world_size()
+            
+        return x
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+    
+    model = GatherModel()
+    torch_device = "cuda"
+    
+    # Apply torch.compile with the inductor backend, mirroring the original bug report
+    model.forward = torch.compile(model.forward, backend="inductor")
+    
+    inputs = torch.randn(4, 10).to(torch_device)
+    
+    # Execute the compiled forward pass
+    # This tests if the inductor backend regression affects gather_object
+    _ = model(inputs)
+    
+    cleanup()
+
+if __name__ == "__main__":
+    # Check for CUDA availability before running
+    if not torch.cuda.is_available():
+        print("CUDA is not available. This test requires CUDA to run as per the original bug report.")
+    else:
+        world_size = 2
+        # Spawn processes to simulate distributed environment
+        mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+```

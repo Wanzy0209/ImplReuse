@@ -1,0 +1,139 @@
+Issue ID: 160868
+Title: torch.compile(Inductor) segfaults ontorch.slice_copywith huge step; eager andaot_eagerOK
+Bug Description:
+### 🐛 Describe the bug
+
+Compiling a tiny model that calls `torch.slice_copy` with a very large `step` (e.g. `2**63 - 1`) causes a segmentation fault when using the default Inductor backend.
+
++ Eager execution returns an empty tensor (expected).
+
++ `backend="aot_eager"` also runs correctly.
+
++ Only Inductor crashes with `Segmentation fault (core dumped)`.
+
+This suggests an Inductor codegen/runtime bug handling extreme (but valid) slice strides that result in zero-length outputs.
+
+## Minimal Reproduction Script
+```python
+# repro_slice_huge_step_model.py
+import os
+import torch
+from torch import nn
+
+# Force CPU to minimize unrelated noise
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
+class SliceHugeStepModel(nn.Module):
+    def __init__(self, start=449, step=(2**63 - 1)):
+        super().__init__()
+        self.start = start
+        self.step = step
+
+    def forward(self, x: torch.Tensor):
+        # Huge step makes the slice empty; eager returns shape (0,)
+        sliced = torch.slice_copy(x, dim=0, start=self.start, end=None, step=self.step)
+        return torch.reciprocal(sliced)
+
+def get_input(n=875):
+    return torch.randn(n, dtype=torch.float32)
+
+def run_eager():
+    m = SliceHugeStepModel()
+    x = get_input()
+    y = m(x)
+
+Original API Under Test: torch.slice_copy
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.nn.SyncBatchNorm
+Similarity score: 0.9860464334487915
+
+Similar API information:
+# Extracted call chain for torch.nn.SyncBatchNorm
+
+# --- torch.nn.modules._functions.SyncBatchNorm ---
+class SyncBatchNorm(Function):
+    @staticmethod
+    def forward(
+        self,
+        input,
+        weight,
+        bias,
+        running_mean,
+        running_var,
+        eps,
+        momentum,
+        process_group,
+        world_size,
+    ):
+        if not (
+            input.is_contiguous(memory_format=torch.channels_last)
+            or input.is_contiguous(memory_format=torch.channels_last_3d)
+        ):
+            input = input.contiguous()
+        if weight is not None:
+            weight = weight.contiguous()
+
+        size = int(input.numel() // input.size(1))
+        if size == 1 and world_size < 2:
+            raise ValueError(
+                f"Expected more than 1 value per channel when training, got input size {size}"
+            )
+
+Original Test Case:
+# repro_slice_huge_step_model.py
+import os
+import torch
+from torch import nn
+
+# Force CPU to minimize unrelated noise
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
+class SliceHugeStepModel(nn.Module):
+    def __init__(self, start=449, step=(2**63 - 1)):
+        super().__init__()
+        self.start = start
+        self.step = step
+
+    def forward(self, x: torch.Tensor):
+        # Huge step makes the slice empty; eager returns shape (0,)
+        sliced = torch.slice_copy(x, dim=0, start=self.start, end=None, step=self.step)
+        return torch.reciprocal(sliced)
+
+def get_input(n=875):
+    return torch.randn(n, dtype=torch.float32)
+
+def run_eager():
+    m = SliceHugeStepModel()
+    x = get_input()
+    y = m(x)
+    print("[eager] OK, output shape:", tuple(y.shape))
+
+def run_compiled_aot_eager():
+    m = SliceHugeStepModel()
+    m_compiled = torch.compile(m, backend="aot_eager")
+    x = get_input()
+    y = m_compiled(x)
+    print("[compile:aot_eager] OK, output shape:", tuple(y.shape))
+
+def run_compiled_inductor_should_crash():
+    print("[compile:inductor(default)] running ...")
+    m = SliceHugeStepModel()
+    m_compiled = torch.compile(m)  # default backend = inductor
+    x = get_input()
+    y = m_compiled(x)              # <-- segfault here
+    print("[compile:inductor] (unexpected) survived, output shape:", tuple(y.shape))
+
+if __name__ == "__main__":
+    run_eager()
+    run_compiled_aot_eager()
+    run_compiled_inductor_should_crash()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

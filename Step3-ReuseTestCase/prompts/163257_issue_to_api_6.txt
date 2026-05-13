@@ -1,0 +1,90 @@
+Issue ID: 163257
+Title: Support checkPoolLiveAllocations with pluggable device
+Bug Description:
+### 🚀 The feature, motivation and pitch
+
+# Summary 
+
+Pytorch currently supports using separate device allocators via `torch.cuda.memory.change_memory_allocator`.  However, this breaks torch compile functionality:
+
+```
+RuntimeError: pluggable does not yet support checkPoolLiveAllocations. If you need it, please file an issue describing your use case.
+```
+
+I'd like to request pytorch support `checkPoolLiveAllocations` when using non-standard memory pool allocators.
+
+## Use Case
+
+I am doing performance optimizations for a neural operator network with a complicated preprocessing pipeline.  For optimal performance, and memory management, it's critical to share the memory pool between pytorch and rapids, via the rapids memory manager:
+
+```python
+    import rmm
+    from rmm.allocators.torch import rmm_torch_allocator
+    import torch
+
+    rmm.reinitialize(pool_allocator=True)
+    torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+```
+
+The preprocessing pipeline needs to compute a kNN operation, and the `cuml` kNN is the most performant for this workload.
+
+On the other hand, on H100 the model itself has relatively small kernels and gpu utilization is poor: the GPU is finishing nearly every kernel before the next one can launch.  This would straightforward to improve with cuda graphs and triton fusions via `torch.compile`, however, the changed memory allocator and end-to-end model compilation are incompatible.  The full traceback is here:
+
+```
+[rank0]:W0918 06:55:44.37600
+...
+
+Original API Under Test: torch.cuda.memory.change_current_allocator
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.renorm
+Similarity score: 0.9947726726531982
+
+Similar API information:
+# Extracted call chain for torch.renorm
+
+# --- torch._refs.renorm ---
+def renorm(
+    input: TensorLikeType, p: RealNumberType, dim: int, maxnorm: RealNumberType
+) -> TensorLikeType:
+    torch._check(not isinstance(p, complex), lambda: "renorm: p must be real-valued")
+    torch._check(p > 0, lambda: "renorm: non-positive norm not supported")
+    torch._check(
+        not isinstance(maxnorm, complex), lambda: "renorm: maxnorm must be real-valued"
+    )
+    torch._check(
+        maxnorm >= 0, lambda: f"renorm: expected maxnorm to be >= 0 but got {maxnorm}"
+    )
+    ndim = input.ndim
+    torch._check(
+        ndim > 1,
+        lambda: f"renorm: input needs at least 2 dimensions, got {ndim} dimensions",
+    )
+
+    dim = utils.canonicalize_dim(ndim, dim)
+    reduce_dims = list(range(ndim))
+    del reduce_dims[dim]
+
+    # For half and bfloat16, calculate norm in float precision then cast
+    # normalization factor to half
+    acc_type = utils.get_computation_dtype(input.dtype)
+    if acc_type != input.dtype:
+        norm = torch.linalg.vector_norm(
+            input, p, reduce_dims, keepdim=True, dtype=acc_type
+
+Original Test Case:
+import rmm
+    from rmm.allocators.torch import rmm_torch_allocator
+    import torch
+
+    rmm.reinitialize(pool_allocator=True)
+    torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

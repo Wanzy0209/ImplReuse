@@ -1,0 +1,76 @@
+```python
+import os
+import tempfile
+from pathlib import Path
+
+import torch
+import torch.onnx
+from torch.utils.cpp_extension import load
+
+# Define a minimal C++ extension to simulate a custom operator
+# This leverages the torch.utils.cpp_extension.CppExtension pattern
+cpp_source = """
+#include <torch/extension.h>
+
+torch::Tensor custom_mul(torch::Tensor x, torch::Tensor y) {
+    return x * y;
+}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("custom_mul", &custom_mul, "Custom multiplication operator");
+}
+"""
+
+# Create a temporary file for the C++ source
+with tempfile.NamedTemporaryFile(mode='w', suffix='.cpp', delete=False) as f:
+    f.write(cpp_source)
+    source_path = f.name
+
+try:
+    # Load the custom C++ extension
+    # This mimics the usage of torch.utils.cpp_extension.CppExtension
+    custom_ops = load(
+        name="custom_ops",
+        sources=[source_path],
+        extra_cflags=["-O3"],
+        verbose=False
+    )
+
+    # Define a function that uses vmap with the custom C++ operator
+    # This preserves the original bug reproduction logic involving vmap
+    def vmap_model(x, y):
+        return torch.vmap(custom_ops.custom_mul)(x, y)
+
+    # Prepare inputs
+    inputs_x = torch.randn(2, 3)
+    inputs_y = torch.randn(2, 3)
+    example_inputs = (inputs_x, inputs_y)
+
+    # Attempt ONNX Export
+    # This is the operation that failed in the original issue
+    onnx_path = "custom_vmap_model.onnx"
+    torch.onnx.export(
+        vmap_model,
+        example_inputs,
+        onnx_path,
+        input_names=["x", "y"],
+        output_names=["output"],
+        opset_version=17,
+        dynamo=True  # Using dynamo as in the original issue
+    )
+
+    # Assertion to verify the export succeeded
+    assert Path(onnx_path).exists(), "ONNX export failed for vmap with custom C++ extension"
+    print("Test passed: ONNX export successful with vmap and CppExtension.")
+
+except Exception as e:
+    print(f"Test failed: {e}")
+    raise
+
+finally:
+    # Cleanup temporary files
+    if os.path.exists(source_path):
+        os.remove(source_path)
+    if os.path.exists(onnx_path):
+        os.remove(onnx_path)
+```

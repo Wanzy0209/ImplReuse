@@ -1,0 +1,111 @@
+Issue ID: 165861
+Title: Reflect padding: CUDA errror when one of the batch dimensions is larger than uint16 max value (2**16)
+Bug Description:
+### 🐛 Describe the bug
+
+Reflect padding breaks when one of the batch dimensions is larger than uint16 max value (2**16).
+The total memory footprint is not important, as when the tensor holds more numbers, but all but last dimension is within the uint16 range everything is fine. 
+
+Other padding modes behave fine, the problem is only with the reflection one.
+
+## why is this important?
+`torch.stft` only accepts 2D tensors (B, L), requiring flattening of higher dimensions into the batch dimension. This commonly produces batch sizes > 65536 for large batches or multi-dimensional audio/signal data.
+
+## reproduce
+```python
+import torch
+import torch.nn.functional as F
+
+# these break cuda
+x = torch.rand(2**16, 2, device="cuda")
+# x = torch.rand(1, 2**16, 2, device="cuda")
+# x = torch.rand(2**16, 1, 2, device="cuda")
+
+# these are fine even if the total number of samples is more than 2**16, but not along a single dimension
+# x = torch.rand(2**16 - 1, 200, device="cuda")     # everything ok
+# x = torch.rand(8, 2**16 - 1, 200, device="cuda")  # everything ok
+# x = torch.rand(2**16 - 1, 8, 200, device="cuda")  # everything ok
+
+# x = torch.rand(2, 2**18, device="cuda") # everything ok
+
+F.pad(x, (1, 1), mode="constant")
+print("constant pad ok")
+F.pad(x, (1, 1), mode="circular")
+print("circular pad ok")
+F.pad(x, (1, 1), mode="replicate")
+print("replicate pad ok")
+
+F.pad(x, (1, 1), mode="reflect")
+print("this won't print")
+```
+
+output (error message):
+```
+
+Original API Under Test: torch.nn.functional.pad
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.nn.atrous_conv2d_transpose
+Similarity score: 0.9920713901519775
+
+Similar API information:
+# Extracted call chain for tf.nn.atrous_conv2d_transpose
+
+# --- tensorflow.python.ops.nn_ops.atrous_conv2d_transpose ---
+def atrous_conv2d_transpose(value,
+                            filters,
+                            output_shape,
+                            rate,
+                            padding,
+                            name=None):
+  """The transpose of `atrous_conv2d`.
+
+  This operation is sometimes called "deconvolution" after
+  (Zeiler et al., 2010), but is really the transpose (gradient) of
+  `atrous_conv2d` rather than an actual deconvolution.
+
+  Args:
+    value: A 4-D `Tensor` of type `float`. It needs to be in the default `NHWC`
+      format. Its shape is `[batch, in_height, in_width, in_channels]`.
+    filters: A 4-D `Tensor` with the same type as `value` and shape
+      `[filter_height, filter_width, out_channels, in_channels]`. `filters`'
+      `in_channels` dimension must match that of `value`. Atrous convolution is
+      equivalent to standard convolution with upsampled filters with effective
+      height `filter_height + (filter_height - 1) * (rate - 1)` and effective
+      width `filter_width + (filter_width - 1) * (rate - 1)`, produced by
+      inserting
+...
+
+Original Test Case:
+import torch
+import torch.nn.functional as F
+
+# these break cuda
+x = torch.rand(2**16, 2, device="cuda")
+# x = torch.rand(1, 2**16, 2, device="cuda")
+# x = torch.rand(2**16, 1, 2, device="cuda")
+
+# these are fine even if the total number of samples is more than 2**16, but not along a single dimension
+# x = torch.rand(2**16 - 1, 200, device="cuda")     # everything ok
+# x = torch.rand(8, 2**16 - 1, 200, device="cuda")  # everything ok
+# x = torch.rand(2**16 - 1, 8, 200, device="cuda")  # everything ok
+
+# x = torch.rand(2, 2**18, device="cuda") # everything ok
+
+F.pad(x, (1, 1), mode="constant")
+print("constant pad ok")
+F.pad(x, (1, 1), mode="circular")
+print("circular pad ok")
+F.pad(x, (1, 1), mode="replicate")
+print("replicate pad ok")
+
+F.pad(x, (1, 1), mode="reflect")
+print("this won't print")
+
+The API tf.nn.atrous_conv2d_transpose is identified as cross-library similar to the original PyTorch API torch.nn.functional.pad.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

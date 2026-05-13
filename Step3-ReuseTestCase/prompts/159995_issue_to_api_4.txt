@@ -1,0 +1,108 @@
+Issue ID: 159995
+Title: torch._inductor.aoti_compile_and_packagefails with CUDA kernels inside of atorch.cond
+Bug Description:
+### 🐛 Describe the bug
+
+### Issue
+
+A model that uses torch.cond to choose between two CUDA kernels runs fine eager, but `torch._inductor.aoti_load_package` fails to execute the exported model correctly.
+
+### Repro:
+```python
+# main.py
+import torch
+import os
+from torch.utils.cpp_extension import load
+
+op = load(name="add_extension", sources=[os.path.join(os.path.dirname(__file__), "op.cu")], verbose=True)
+
+torch.library.define("myops::add_one", "(Tensor x) -> Tensor")
+torch.library.define("myops::add_two", "(Tensor x) -> Tensor")
+torch.library.impl("myops::add_one", "CUDA", op.add_one)
+torch.library.impl("myops::add_two", "CUDA", op.add_two)
+
+@torch.library.register_fake("myops::add_one")
+def _(x): return torch.empty_like(x)
+
+@torch.library.register_fake("myops::add_two")
+def _(x): return torch.empty_like(x)
+
+class M(torch.nn.Module):
+    def forward(self, x):
+        # return torch.ops.myops.add_one(x) works totally fine
+        return torch.cond(x.shape[0] < 5, torch.ops.myops.add_one, torch.ops.myops.add_two, (x,))
+
+model = M()
+
+exported = torch.export.export(model, (torch.zeros(3, device="cuda"),), dynamic_shapes={"x": {0: torch.export.Dim("batch", min=1, max=128)}})
+torch._inductor.aoti_compile_and_package(exported, package_path="model.pt2")
+aoti_model = torch._inductor.aoti_load_package("model.pt2")
+result = aoti_model(torch.zeros(6, device="cuda"))
+print(f"{result = }")
+```
+```cuda
+
+Original API Under Test: torch._inductor.aoti_compile_and_package
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.keras.layers.serialize
+Similarity score: 0.9849840402603149
+
+Similar API information:
+# Extracted call chain for tf.keras.layers.serialize
+
+# --- tensorflow.compiler.tests.xla_call_module_test.serialize ---
+def serialize(module_str: str) -> tuple[str, int]:
+  target = stablehlo.get_minimum_version()
+  byte_str = stablehlo.serialize_portable_artifact_str(module_str, target)
+  return byte_str, xla.call_module_maximum_supported_version()
+
+# --- tensorflow.compiler.tf2xla.python.xla.call_module_maximum_supported_version ---
+def call_module_maximum_supported_version():
+  """Maximum version of XlaCallModule op supported.
+
+  See versioning details documentation for the XlaCallModule op at:
+  https://github.com/search?q=repo%3Atensorflow%2Ftensorflow+path%3Axla_call_module+%22int+kVersionMaximumSupported%22&type=code
+  """
+  return 10
+
+Original Test Case:
+# main.py
+import torch
+import os
+from torch.utils.cpp_extension import load
+
+op = load(name="add_extension", sources=[os.path.join(os.path.dirname(__file__), "op.cu")], verbose=True)
+
+torch.library.define("myops::add_one", "(Tensor x) -> Tensor")
+torch.library.define("myops::add_two", "(Tensor x) -> Tensor")
+torch.library.impl("myops::add_one", "CUDA", op.add_one)
+torch.library.impl("myops::add_two", "CUDA", op.add_two)
+
+@torch.library.register_fake("myops::add_one")
+def _(x): return torch.empty_like(x)
+
+@torch.library.register_fake("myops::add_two")
+def _(x): return torch.empty_like(x)
+
+class M(torch.nn.Module):
+    def forward(self, x):
+        # return torch.ops.myops.add_one(x) works totally fine
+        return torch.cond(x.shape[0] < 5, torch.ops.myops.add_one, torch.ops.myops.add_two, (x,))
+
+model = M()
+
+exported = torch.export.export(model, (torch.zeros(3, device="cuda"),), dynamic_shapes={"x": {0: torch.export.Dim("batch", min=1, max=128)}})
+torch._inductor.aoti_compile_and_package(exported, package_path="model.pt2")
+aoti_model = torch._inductor.aoti_load_package("model.pt2")
+result = aoti_model(torch.zeros(6, device="cuda"))
+print(f"{result = }")
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

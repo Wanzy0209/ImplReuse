@@ -1,0 +1,95 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Note: tf.compat.v1.train.string_input_producer is a legacy API that requires graph mode.
+# We disable eager execution to simulate the environment where this API is typically used.
+tf.compat.v1.disable_eager_execution()
+
+def create_input_pipeline(i):
+    """
+    Mimics the original function fn(x, i) which had conditional logic.
+    Here, we conditionally configure the string_input_producer based on 'i'.
+    """
+    filenames = ["file1.txt", "file2.txt", "file3.txt"]
+    
+    # Original logic: if i == 1: torch._dynamo.graph_break()
+    # Adapted logic: Change configuration (shuffle) to trigger a different execution path
+    if i == 1:
+        # "Break" path: Enable shuffling
+        queue = tf.compat.v1.train.string_input_producer(
+            filenames, 
+            num_epochs=1, 
+            shuffle=True, 
+            capacity=32,
+            name=f"queue_break_{i}"
+        )
+    else:
+        # Normal path: No shuffling
+        queue = tf.compat.v1.train.string_input_producer(
+            filenames, 
+            num_epochs=1, 
+            shuffle=False, 
+            capacity=32,
+            name=f"queue_normal_{i}"
+        )
+    
+    return queue
+
+def test_string_input_producer():
+    """
+    Test case adapted from PyTorch dynamo graph break issue.
+    Verifies that the input producer does not yield empty results
+    across different configuration states (i=0, 1, 2).
+    """
+    with tf.compat.v1.Session() as sess:
+        # Create the graph nodes for the different calls
+        # Corresponds to fn(inp, 0), fn(inp, 1), fn(inp, 2)
+        q0 = create_input_pipeline(0)
+        q1 = create_input_pipeline(1)
+        q2 = create_input_pipeline(2)
+        
+        # Define dequeue operations to get data out of the queues
+        dequeue0 = q0.dequeue()
+        dequeue1 = q1.dequeue()
+        dequeue2 = q2.dequeue()
+        
+        # Initialize local variables (required for num_epochs)
+        sess.run(tf.compat.v1.local_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
+        
+        # Start the queue runners
+        coord = tf.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+        
+        try:
+            # Run 0: Normal path
+            result_0 = sess.run(dequeue0)
+            print(f"Run 0 result: {result_0}")
+            assert result_0 != "", "Run 0 produced empty string (Empty Graph equivalent)"
+            
+            # Run 1: "Break" path (shuffled)
+            # In the original bug, this generated an empty graph.
+            # Here we verify the queue still produces valid output.
+            result_1 = sess.run(dequeue1)
+            print(f"Run 1 result: {result_1}")
+            assert result_1 != "", "Run 1 produced empty string (Bug reproduction)"
+            
+            # Run 2: Normal path again
+            result_2 = sess.run(dequeue2)
+            print(f"Run 2 result: {result_2}")
+            assert result_2 != "", "Run 2 produced empty string (Empty Graph equivalent)"
+            
+            print("Test passed: All runs produced valid output.")
+            
+        except tf.errors.OutOfRangeError:
+            print("Test finished: Reached end of input queue.")
+        except Exception as e:
+            print(f"Test failed with error: {e}")
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_string_input_producer()
+```

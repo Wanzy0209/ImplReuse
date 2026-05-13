@@ -1,0 +1,90 @@
+Issue ID: 163257
+Title: Support checkPoolLiveAllocations with pluggable device
+Bug Description:
+### 🚀 The feature, motivation and pitch
+
+# Summary 
+
+Pytorch currently supports using separate device allocators via `torch.cuda.memory.change_memory_allocator`.  However, this breaks torch compile functionality:
+
+```
+RuntimeError: pluggable does not yet support checkPoolLiveAllocations. If you need it, please file an issue describing your use case.
+```
+
+I'd like to request pytorch support `checkPoolLiveAllocations` when using non-standard memory pool allocators.
+
+## Use Case
+
+I am doing performance optimizations for a neural operator network with a complicated preprocessing pipeline.  For optimal performance, and memory management, it's critical to share the memory pool between pytorch and rapids, via the rapids memory manager:
+
+```python
+    import rmm
+    from rmm.allocators.torch import rmm_torch_allocator
+    import torch
+
+    rmm.reinitialize(pool_allocator=True)
+    torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+```
+
+The preprocessing pipeline needs to compute a kNN operation, and the `cuml` kNN is the most performant for this workload.
+
+On the other hand, on H100 the model itself has relatively small kernels and gpu utilization is poor: the GPU is finishing nearly every kernel before the next one can launch.  This would straightforward to improve with cuda graphs and triton fusions via `torch.compile`, however, the changed memory allocator and end-to-end model compilation are incompatible.  The full traceback is here:
+
+```
+[rank0]:W0918 06:55:44.37600
+...
+
+Original API Under Test: torch.cuda.memory.change_current_allocator
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.repeat_interleave
+Similarity score: 0.9948631525039673
+
+Similar API information:
+# Extracted call chain for torch.repeat_interleave
+
+# --- torch.onnx.symbolic_opset13.repeat_interleave ---
+def repeat_interleave(
+    g: jit_utils.GraphContext, self, repeats, dim=None, output_size=None
+):
+    repeats_dim = symbolic_helper._get_tensor_rank(repeats)
+    repeats_sizes = symbolic_helper._get_tensor_sizes(repeats)
+    input_sizes = symbolic_helper._get_tensor_sizes(self)
+    if repeats_dim is None:
+        raise errors.SymbolicValueError(
+            "Unsupported: ONNX export of repeat_interleave for unknown repeats rank.",
+            self,
+        )
+    if repeats_sizes is None:
+        raise errors.SymbolicValueError(
+            "Unsupported: ONNX export of repeat_interleave for unknown repeats size.",
+            self,
+        )
+    if input_sizes is None:
+        raise errors.SymbolicValueError(
+            "Unsupported: ONNX export of repeat_interleave for unknown input size.",
+            self,
+        )
+
+    final_dim = dim
+    # if dim is None flatten
+    # By default, use the flattened input array, and return a flat output array
+    if symbolic_helper._is_none(dim):
+        self = symbolic_helper._reshape_helper(
+
+Original Test Case:
+import rmm
+    from rmm.allocators.torch import rmm_torch_allocator
+    import torch
+
+    rmm.reinitialize(pool_allocator=True)
+    torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

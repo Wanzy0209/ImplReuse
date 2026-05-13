@@ -1,0 +1,136 @@
+Issue ID: 160868
+Title: torch.compile(Inductor) segfaults ontorch.slice_copywith huge step; eager andaot_eagerOK
+Bug Description:
+### 🐛 Describe the bug
+
+Compiling a tiny model that calls `torch.slice_copy` with a very large `step` (e.g. `2**63 - 1`) causes a segmentation fault when using the default Inductor backend.
+
++ Eager execution returns an empty tensor (expected).
+
++ `backend="aot_eager"` also runs correctly.
+
++ Only Inductor crashes with `Segmentation fault (core dumped)`.
+
+This suggests an Inductor codegen/runtime bug handling extreme (but valid) slice strides that result in zero-length outputs.
+
+## Minimal Reproduction Script
+```python
+# repro_slice_huge_step_model.py
+import os
+import torch
+from torch import nn
+
+# Force CPU to minimize unrelated noise
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
+class SliceHugeStepModel(nn.Module):
+    def __init__(self, start=449, step=(2**63 - 1)):
+        super().__init__()
+        self.start = start
+        self.step = step
+
+    def forward(self, x: torch.Tensor):
+        # Huge step makes the slice empty; eager returns shape (0,)
+        sliced = torch.slice_copy(x, dim=0, start=self.start, end=None, step=self.step)
+        return torch.reciprocal(sliced)
+
+def get_input(n=875):
+    return torch.randn(n, dtype=torch.float32)
+
+def run_eager():
+    m = SliceHugeStepModel()
+    x = get_input()
+    y = m(x)
+
+Original API Under Test: torch.slice_copy
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.random.fold_in
+Similarity score: 0.9855460524559021
+
+Similar API information:
+# Extracted call chain for tf.random.fold_in
+
+# --- tensorflow.python.ops.stateless_random_ops.fold_in ---
+def fold_in(seed, data, alg="auto_select"):
+  """Folds in data to an RNG seed to form a new RNG seed.
+
+  For example, in a distributed-training setting, suppose we have a master seed
+  and a replica ID. We want to fold the replica ID into the master seed to
+  form a "replica seed" to be used by that replica later on, so that different
+  replicas will generate different random numbers but the reproducibility of the
+  whole system can still be controlled by the master seed:
+
+  >>> master_seed = [1, 2]
+  >>> replica_id = 3
+  >>> replica_seed = tf.random.experimental.stateless_fold_in(
+  ...   master_seed, replica_id)
+  >>> print(replica_seed)
+  tf.Tensor([1105988140          3], shape=(2,), dtype=int32)
+  >>> tf.random.stateless_normal(shape=[3], seed=replica_seed)
+  <tf.Tensor: shape=(3,), dtype=float32, numpy=array([0.03197195, 0.8979765 ,
+  0.13253039], dtype=float32)>
+
+  Args:
+    seed: an RNG seed (a tensor with shape [2] and dtype `int32` or `int64`).
+      (When using XLA, only `int32` is allowed.)
+    data: an `int32` or `int64` scalar representing data to be folded in to
+...
+
+Original Test Case:
+# repro_slice_huge_step_model.py
+import os
+import torch
+from torch import nn
+
+# Force CPU to minimize unrelated noise
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
+class SliceHugeStepModel(nn.Module):
+    def __init__(self, start=449, step=(2**63 - 1)):
+        super().__init__()
+        self.start = start
+        self.step = step
+
+    def forward(self, x: torch.Tensor):
+        # Huge step makes the slice empty; eager returns shape (0,)
+        sliced = torch.slice_copy(x, dim=0, start=self.start, end=None, step=self.step)
+        return torch.reciprocal(sliced)
+
+def get_input(n=875):
+    return torch.randn(n, dtype=torch.float32)
+
+def run_eager():
+    m = SliceHugeStepModel()
+    x = get_input()
+    y = m(x)
+    print("[eager] OK, output shape:", tuple(y.shape))
+
+def run_compiled_aot_eager():
+    m = SliceHugeStepModel()
+    m_compiled = torch.compile(m, backend="aot_eager")
+    x = get_input()
+    y = m_compiled(x)
+    print("[compile:aot_eager] OK, output shape:", tuple(y.shape))
+
+def run_compiled_inductor_should_crash():
+    print("[compile:inductor(default)] running ...")
+    m = SliceHugeStepModel()
+    m_compiled = torch.compile(m)  # default backend = inductor
+    x = get_input()
+    y = m_compiled(x)              # <-- segfault here
+    print("[compile:inductor] (unexpected) survived, output shape:", tuple(y.shape))
+
+if __name__ == "__main__":
+    run_eager()
+    run_compiled_aot_eager()
+    run_compiled_inductor_should_crash()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

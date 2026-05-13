@@ -1,0 +1,139 @@
+Issue ID: 160868
+Title: torch.compile(Inductor) segfaults ontorch.slice_copywith huge step; eager andaot_eagerOK
+Bug Description:
+### 🐛 Describe the bug
+
+Compiling a tiny model that calls `torch.slice_copy` with a very large `step` (e.g. `2**63 - 1`) causes a segmentation fault when using the default Inductor backend.
+
++ Eager execution returns an empty tensor (expected).
+
++ `backend="aot_eager"` also runs correctly.
+
++ Only Inductor crashes with `Segmentation fault (core dumped)`.
+
+This suggests an Inductor codegen/runtime bug handling extreme (but valid) slice strides that result in zero-length outputs.
+
+## Minimal Reproduction Script
+```python
+# repro_slice_huge_step_model.py
+import os
+import torch
+from torch import nn
+
+# Force CPU to minimize unrelated noise
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
+class SliceHugeStepModel(nn.Module):
+    def __init__(self, start=449, step=(2**63 - 1)):
+        super().__init__()
+        self.start = start
+        self.step = step
+
+    def forward(self, x: torch.Tensor):
+        # Huge step makes the slice empty; eager returns shape (0,)
+        sliced = torch.slice_copy(x, dim=0, start=self.start, end=None, step=self.step)
+        return torch.reciprocal(sliced)
+
+def get_input(n=875):
+    return torch.randn(n, dtype=torch.float32)
+
+def run_eager():
+    m = SliceHugeStepModel()
+    x = get_input()
+    y = m(x)
+
+Original API Under Test: torch.slice_copy
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.grad_pass_through
+Similarity score: 0.985328733921051
+
+Similar API information:
+# Extracted call chain for tf.grad_pass_through
+
+# --- tensorflow.python.ops.custom_gradient.grad_pass_through ---
+def grad_pass_through(f):
+  """Creates a grad-pass-through op with the forward behavior provided in f.
+
+  Use this function to wrap any op, maintaining its behavior in the forward
+  pass, but replacing the original op in the backward graph with an identity.
+  For example:
+
+  ```python
+  x = tf.Variable(1.0, name="x")
+  z = tf.Variable(3.0, name="z")
+
+  with tf.GradientTape() as tape:
+    # y will evaluate to 9.0
+    y = tf.grad_pass_through(x.assign)(z**2)
+  # grads will evaluate to 6.0
+  grads = tape.gradient(y, z)
+  ```
+
+  Another example is a 'differentiable' moving average approximation, where
+  gradients are allowed to flow into the last value fed to the moving average,
+  but the moving average is still used for the forward pass:
+
+  ```python
+  x = ... # Some scalar value
+  # A moving average object, we don't need to know how this is implemented
+  moving_average = MovingAverage()
+  with backprop.GradientTape() as tape:
+
+Original Test Case:
+# repro_slice_huge_step_model.py
+import os
+import torch
+from torch import nn
+
+# Force CPU to minimize unrelated noise
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
+class SliceHugeStepModel(nn.Module):
+    def __init__(self, start=449, step=(2**63 - 1)):
+        super().__init__()
+        self.start = start
+        self.step = step
+
+    def forward(self, x: torch.Tensor):
+        # Huge step makes the slice empty; eager returns shape (0,)
+        sliced = torch.slice_copy(x, dim=0, start=self.start, end=None, step=self.step)
+        return torch.reciprocal(sliced)
+
+def get_input(n=875):
+    return torch.randn(n, dtype=torch.float32)
+
+def run_eager():
+    m = SliceHugeStepModel()
+    x = get_input()
+    y = m(x)
+    print("[eager] OK, output shape:", tuple(y.shape))
+
+def run_compiled_aot_eager():
+    m = SliceHugeStepModel()
+    m_compiled = torch.compile(m, backend="aot_eager")
+    x = get_input()
+    y = m_compiled(x)
+    print("[compile:aot_eager] OK, output shape:", tuple(y.shape))
+
+def run_compiled_inductor_should_crash():
+    print("[compile:inductor(default)] running ...")
+    m = SliceHugeStepModel()
+    m_compiled = torch.compile(m)  # default backend = inductor
+    x = get_input()
+    y = m_compiled(x)              # <-- segfault here
+    print("[compile:inductor] (unexpected) survived, output shape:", tuple(y.shape))
+
+if __name__ == "__main__":
+    run_eager()
+    run_compiled_aot_eager()
+    run_compiled_inductor_should_crash()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

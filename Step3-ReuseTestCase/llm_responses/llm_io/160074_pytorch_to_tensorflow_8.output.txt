@@ -1,0 +1,88 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_tf_attention_compilation():
+    """
+    Adapted test case for TensorFlow based on PyTorch FlexAttention issue.
+    Tests compilation and backward pass of attention mechanisms with specific tensor shapes.
+    """
+    
+    # Enable GPU execution similar to torch.device("cuda")
+    # Note: TensorFlow handles device placement automatically or via tf.device
+    device = "/GPU:0" if tf.config.list_physical_devices('GPU') else "/CPU:0"
+    
+    with tf.device(device):
+        # Define inputs matching the PyTorch reproducer shapes
+        # PyTorch: [2, 32, 4096, 128] (Batch, Heads, Seq, Dim)
+        batch_size = 2
+        seq_len = 4096
+        head_dim = 128
+        num_q_heads = 32
+        num_kv_heads = 8 # GQA configuration
+
+        # Initialize tensors with bfloat16
+        q = tf.random.normal([batch_size, num_q_heads, seq_len, head_dim], dtype=tf.bfloat16)
+        k = tf.random.normal([batch_size, num_kv_heads, seq_len, head_dim], dtype=tf.bfloat16)
+        v = tf.random.normal([batch_size, num_kv_heads, seq_len, head_dim], dtype=tf.bfloat16)
+
+        # Define a model that mimics the attention call
+        # We use tf.keras.layers.MultiHeadAttention. 
+        # Note: Standard TF MHA does not natively support GQA (num_kv_heads != num_q_heads) 
+        # in the same way PyTorch's flex_attention does without custom implementation, 
+        # but we test the compilation path with these shapes.
+        class AttentionModel(tf.keras.Model):
+            def __init__(self):
+                super().__init__()
+                # We use the query head count for the layer definition
+                self.attention = tf.keras.layers.MultiHeadAttention(
+                    num_heads=num_q_heads, 
+                    key_dim=head_dim,
+                    dtype=tf.bfloat16
+                )
+
+            # Using tf.function as the equivalent to torch.compile
+            @tf.function(jit_compile=True)
+            def call(self, q, k, v):
+                # Using the requested API: tf.keras.name_scope
+                # This organizes the graph operations, similar to how compilation 
+                # pipelines organize the execution graph.
+                with tf.keras.name_scope("flex_attention_sim"):
+                    # Reshape inputs from (B, H, S, D) to (B, S, H*D) for TF layer
+                    batch, heads_q, seq, dim = q.shape
+                    _, heads_k, _, _ = k.shape
+
+                    q_reshaped = tf.reshape(q, [batch, seq, heads_q * dim])
+                    k_reshaped = tf.reshape(k, [batch, seq, heads_k * dim])
+                    v_reshaped = tf.reshape(v, [batch, seq, heads_k * dim])
+
+                    # Execute attention
+                    # In standard TF MHA, key/value projections are handled internally.
+                    # We pass the reshaped tensors to test the compilation flow.
+                    output = self.attention(query=q_reshaped, value=v_reshaped, key=k_reshaped)
+                    return output
+
+        model = AttentionModel()
+
+        # Forward pass
+        print("Running forward pass...")
+        y = model(q, k, v)
+        
+        # Backward pass (Gradient calculation)
+        print("Running backward pass...")
+        with tf.GradientTape() as tape:
+            y = model(q, k, v)
+            loss = tf.reduce_sum(y)
+        
+        grads = tape.gradient(loss, model.trainable_variables)
+        
+        # Assertions to verify execution
+        assert y is not None, "Forward pass produced None"
+        assert grads is not None, "Backward pass produced None gradients"
+        assert len(grads) > 0, "No gradients computed"
+        
+        print("Test completed successfully.")
+
+if __name__ == "__main__":
+    test_tf_attention_compilation()
+```

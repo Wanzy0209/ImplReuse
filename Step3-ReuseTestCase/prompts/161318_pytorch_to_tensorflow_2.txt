@@ -1,0 +1,101 @@
+Issue ID: 161318
+Title: inductor crash on data-dependent slice
+Bug Description:
+### 🐛 Describe the bug
+
+inductor crashes wi
+
+[tlparse.tar.gz](https://github.com/user-attachments/files/21945765/tlparse.tar.gz)
+
+th an internal error in the following program (extracted from FramePack)
+
+```python
+import torch
+
+@torch.compile(fullgraph=True)
+def fn(encoder_attention_mask, encoder_hidden_states):
+    encoder_hidden_states = encoder_hidden_states.new_zeros([1, 512, 3072])
+    text_len = encoder_attention_mask.sum().item()
+    encoder_hidden_states = encoder_hidden_states[:, :text_len]
+
+torch._dynamo.config.capture_scalar_outputs = True
+mask = (torch.arange(512) < 8).unsqueeze(0).cuda()
+hidden = torch.randn((1, 512, 4096)).cuda()
+
+fn(mask, hidden)
+```
+
+### Error logs
+
+```
+Traceback (most recent call last):
+  File "/data/users/mhoehnerbach/projects/empathy_framepack/FramePack/repro.py", line 13, in <module>
+    fn(mask, hidden)
+  File "/data/users/mhoehnerbach/projects/empathy_framepack/venv/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 817, in compile_wrapper
+    raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/users/mhoehnerbach/projects/empathy_framepack/venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 987, in _compile_fx_inner
+    raise InductorError(e, currentframe()).with_traceback(
+  File "/data/users/mhoehnerbach/projects/empathy_framepack/venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 971, in _compile_fx_inner
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.dtensor.copy_to_mesh
+Similarity score: 0.9937996864318848
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.copy_to_mesh
+
+# --- tensorflow.dtensor.python.api.copy_to_mesh ---
+def copy_to_mesh(
+    tensor: Any,
+    layout: layout_lib.Layout,
+    source_layout: Optional[layout_lib.Layout] = None) -> tensor_lib.Tensor:
+  """Copies a tf.Tensor onto the DTensor device with the given layout.
+
+  Copies a regular tf.Tensor onto the DTensor device. Use the mesh attached to
+  `layout` as target mesh. This method currently only supports replicated
+  layouts, or one-to-one copies for sharded layouts.
+
+  Args:
+    tensor: A regular tf.Tensor to be copied as a DTensor.
+    layout: Target layout (and mesh) for the result DTensor.
+    source_layout: Source layout of the tensor before copy. This argument
+      is deprecated.
+
+  Returns:
+    A DTensor on the DTensor device with the given layout.
+  """
+  del source_layout
+  return relayout(tensor, layout)
+
+# --- tensorflow.dtensor.python.api.relayout ---
+def relayout(
+    tensor: tensor_lib.Tensor,
+    layout: layout_lib.Layout,
+    name: Optional[str] = None,
+
+Original Test Case:
+import torch
+
+@torch.compile(fullgraph=True)
+def fn(encoder_attention_mask, encoder_hidden_states):
+    encoder_hidden_states = encoder_hidden_states.new_zeros([1, 512, 3072])
+    text_len = encoder_attention_mask.sum().item()
+    encoder_hidden_states = encoder_hidden_states[:, :text_len]
+
+torch._dynamo.config.capture_scalar_outputs = True
+mask = (torch.arange(512) < 8).unsqueeze(0).cuda()
+hidden = torch.randn((1, 512, 4096)).cuda()
+
+fn(mask, hidden)
+
+The API tf.experimental.dtensor.copy_to_mesh is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

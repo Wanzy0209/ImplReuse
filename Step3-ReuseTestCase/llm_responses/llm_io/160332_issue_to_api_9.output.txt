@@ -1,0 +1,54 @@
+```python
+import torch
+import torch.nn as nn
+import unittest
+
+class TestMPSConvTranspose3DAutocast(unittest.TestCase):
+    """
+    Test case for Issue #160332: Use FP32 for ConvTranspose3D when using autocast on MPS.
+    
+    The bug describes that torch.amp.autocast attempts to use FP16/BF16 for 
+    ConvTranspose3d on MPS, which is unsupported, leading to a RuntimeError.
+    The expected behavior is that autocast handles this gracefully (likely by 
+    using FP32).
+    """
+
+    @unittest.skipIf(not torch.backends.mps.is_available(), "MPS backend not available")
+    def test_convtranspose3d_autocast_mps_fp32_fallback(self):
+        device = torch.device('mps')
+
+        # Initialize the ConvTranspose3d module and move to MPS
+        m = nn.ConvTranspose3d(16, 33, 3, stride=2)
+        m.to(device)
+
+        # Create input tensor and move to MPS
+        x = torch.randn(20, 16, 10, 50, 100).to(device)
+
+        # The bug occurs inside the autocast context
+        with torch.amp.autocast(device_type=device.type):
+            # This previously raised:
+            # RuntimeError: ConvTranspose 3D with BF16 or FP16 types is not supported on MPS
+            output = m(x)
+
+        # Verify the operation completed successfully
+        self.assertIsNotNone(output)
+
+        # Verify output shape
+        # Input: (20, 16, 10, 50, 100)
+        # Output calculation for ConvTranspose3d:
+        # H_out = (H_in - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1
+        # Default padding=0, dilation=1, output_padding=0, kernel_size=3, stride=2
+        # D_out = (10 - 1) * 2 + 3 = 21
+        # H_out = (50 - 1) * 2 + 3 = 101
+        # W_out = (100 - 1) * 2 + 3 = 201
+        # Shape: (20, 33, 21, 101, 201)
+        expected_shape = (20, 33, 21, 101, 201)
+        self.assertEqual(output.shape, expected_shape)
+
+        # Verify the dtype. Since FP16/BF16 is not supported for this op on MPS,
+        # autocast should have executed the operation in FP32.
+        self.assertEqual(output.dtype, torch.float32)
+
+if __name__ == '__main__':
+    unittest.main()
+```

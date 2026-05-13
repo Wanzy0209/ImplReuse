@@ -1,0 +1,87 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_tf_name_scope_attention():
+    """
+    Adapted test case for tf.name_scope based on the PyTorch FlexAttention bug report.
+    
+    Original Bug: FlexAttention backward compilation failure with GQA on NVIDIA B200.
+    Adaptation: Uses tf.name_scope to wrap the execution of a compiled attention 
+    operation (using tf.function) and gradient calculation to verify behavior 
+    in a TensorFlow context.
+    """
+    
+    # Define a simplified Scaled Dot-Product Attention to mimic flex_attention
+    def scaled_dot_product_attention(q, k, v, mask=None):
+        matmul_qk = tf.matmul(q, k, transpose_b=True)
+        dk = tf.cast(tf.shape(k)[-1], tf.float32)
+        scaled_attention_logits = matmul_qk / tf.math.sqrt(dk)
+
+        if mask is not None:
+            scaled_attention_logits += (mask * -1e9)
+
+        attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1)
+        output = tf.matmul(attention_weights, v)
+        return output
+
+    # Use tf.name_scope as the primary API under test, wrapping the graph logic
+    with tf.name_scope("flex_attention_gqa_repro"):
+        # Setup inputs matching the original bug report dimensions
+        # Batch=2, Seq=4096, Head_Dim=128
+        # Q: 32 heads, K/V: 8 heads (GQA scenario)
+        batch_size = 2
+        seq_len = 4096
+        num_heads_q = 32
+        num_heads_kv = 8
+        head_dim = 128
+
+        # Initialize tensors with bfloat16 and gradients enabled
+        # Note: tf.Variable requires trainable=True for gradients
+        q = tf.Variable(tf.random.normal([batch_size, num_heads_q, seq_len, head_dim], dtype=tf.bfloat16), trainable=True)
+        k = tf.Variable(tf.random.normal([batch_size, num_heads_kv, seq_len, head_dim], dtype=tf.bfloat16), trainable=True)
+        v = tf.Variable(tf.random.normal([batch_size, num_heads_kv, seq_len, head_dim], dtype=tf.bfloat16), trainable=True)
+
+        # To simulate GQA (Grouped Query Attention) where K/V heads are fewer than Q heads,
+        # we repeat K and V to match Q heads for the matmul operation in this simplified implementation.
+        # This mimics the enable_gqa=True logic.
+        k_repeated = tf.repeat(k, repeats=num_heads_q // num_heads_kv, axis=1)
+        v_repeated = tf.repeat(v, repeats=num_heads_q // num_heads_kv, axis=1)
+
+        # Use tf.function to mimic torch.compile (backend="inductor")
+        # jit_compile=True enables XLA compilation, similar to the inductor backend
+        @tf.function(jit_compile=True)
+        def compiled_attention(q_in, k_in, v_in):
+            return scaled_dot_product_attention(q_in, k_in, v_in)
+
+        # Forward pass
+        y = compiled_attention(q, k_repeated, v_repeated)
+
+        # Backward pass
+        with tf.GradientTape() as tape:
+            # Watch the input tensors to ensure gradients are calculated
+            # (Variables are watched by default, but explicit watching ensures robustness)
+            tape.watch([q, k, v])
+            
+            # Re-run forward pass inside tape context
+            y_out = compiled_attention(q, k_repeated, v_repeated)
+            
+            # Calculate loss (mimicking y.backward(torch.randn_like(y)))
+            # We use a simple L2 loss against a random target
+            target = tf.random.normal(tf.shape(y_out), dtype=tf.bfloat16)
+            loss = tf.reduce_mean(tf.square(y_out - target))
+
+        # Calculate gradients
+        grads = tape.gradient(loss, [q, k, v])
+
+        # Assertions to verify execution
+        assert y_out is not None, "Forward pass output is None"
+        assert grads[0] is not None, "Gradient for Q is None"
+        assert grads[1] is not None, "Gradient for K is None"
+        assert grads[2] is not None, "Gradient for V is None"
+        
+        print("Test passed: Forward and Backward execution completed within tf.name_scope.")
+
+if __name__ == "__main__":
+    test_tf_name_scope_attention()
+```

@@ -1,0 +1,121 @@
+Issue ID: 163093
+Title: [lr_scheduler]ReduceLROnPlateau._reduce_lrtriggers recompilation with tensor lr
+Bug Description:
+### 🐛 Describe the bug
+
+`ReduceLROnPlateau._reduce_lr` sets `param_group["lr"]` to a float, [triggering recompilation](https://docs.pytorch.org/tutorials/recipes/compiling_optimizer_lr_scheduler.html) if the optimizer uses a tensor LR:
+```python
+for i, param_group in enumerate(self.optimizer.param_groups):
+    old_lr = float(param_group["lr"])
+    new_lr = max(old_lr * self.factor, self.min_lrs[i])
+    if old_lr - new_lr > self.eps:
+        param_group["lr"] = new_lr
+```
+
+Here's a reproduction:
+```python
+import torch
+from torch import optim, nn
+
+torch._logging.set_logs(recompiles=True)
+device = "cuda"
+model = nn.Linear(1, 1).to(device)
+
+lr = torch.tensor(0.1)
+opt = optim.Adam(model.parameters(), lr=lr)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5, patience=1, min_lr=0.001)
+
+# From https://docs.pytorch.org/tutorials/recipes/compiling_optimizer_lr_scheduler.html
+@torch.compile(fullgraph=False)
+def fn(metric):
+    opt.step()
+    scheduler.step(metric)
+
+total_steps = 8
+fake_metrics = torch.linspace(1.0, 0.0, total_steps, device=device)
+fake_metrics[3:6] = fake_metrics[3]
+
+for metric in fake_metrics:
+    fn(metric)
+
+# W0912 20:46:20.358000 89262 torch/_logging/_internal.py:1199] [0/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+# V0912 20:46:20.564000 89262 torch/_dynamo/guards.py:4295] [2/1] [__recompiles] Recompiling function step in /workspace/pytorch/torch/optim/adam.py:213
+# V0912 20:46:20.564000 89262 torch/_dynamo/
+...
+
+Original API Under Test: torch.optim.lr_scheduler.ReduceLROnPlateau
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.qr
+Similarity score: 0.9837244749069214
+
+Similar API information:
+# Extracted call chain for torch.qr
+
+# --- torch._numpy.linalg.qr ---
+def qr(a: ArrayLike, mode="reduced"):
+    a = _atleast_float_1(a)
+    result = torch.linalg.qr(a, mode=mode)
+    if mode == "r":
+        # match NumPy
+        result = result.R
+    return result
+
+# --- torch._numpy.linalg._atleast_float_1 ---
+def _atleast_float_1(a):
+    if not (a.dtype.is_floating_point or a.dtype.is_complex):
+        a = a.to(_dtypes_impl.default_dtypes().float_dtype)
+    return a
+
+# --- _dtypes_impl.default_dtypes ---
+def default_dtypes():
+    global _default_dtypes
+    if _default_dtypes is None:
+        import torch._dynamo.config as config
+
+        _default_dtypes = DefaultDTypes(
+            float_dtype=getattr(torch, config.numpy_default_float),
+            complex_dtype=getattr(torch, config.numpy_default_complex),
+            int_dtype=getattr(torch, config.numpy_default_int),
+        )
+        assert isinstance(_default_dtypes.float_dtype, torch.dtype)
+        assert isinstance(_default_dtypes.complex_dtype, torch.dtype)
+
+Original Test Case:
+import torch
+from torch import optim, nn
+
+torch._logging.set_logs(recompiles=True)
+device = "cuda"
+model = nn.Linear(1, 1).to(device)
+
+lr = torch.tensor(0.1)
+opt = optim.Adam(model.parameters(), lr=lr)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5, patience=1, min_lr=0.001)
+
+# From https://docs.pytorch.org/tutorials/recipes/compiling_optimizer_lr_scheduler.html
+@torch.compile(fullgraph=False)
+def fn(metric):
+    opt.step()
+    scheduler.step(metric)
+
+total_steps = 8
+fake_metrics = torch.linspace(1.0, 0.0, total_steps, device=device)
+fake_metrics[3:6] = fake_metrics[3]
+
+for metric in fake_metrics:
+    fn(metric)
+
+# W0912 20:46:20.358000 89262 torch/_logging/_internal.py:1199] [0/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+# V0912 20:46:20.564000 89262 torch/_dynamo/guards.py:4295] [2/1] [__recompiles] Recompiling function step in /workspace/pytorch/torch/optim/adam.py:213
+# V0912 20:46:20.564000 89262 torch/_dynamo/guards.py:4295] [2/1] [__recompiles]     triggered by the following guard failure(s):
+# V0912 20:46:20.564000 89262 torch/_dynamo/guards.py:4295] [2/1] [__recompiles]     - 2/0: expected type of 'self.param_groups[0]['lr']' to be a tensor type, ' but found <class 'float'>
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

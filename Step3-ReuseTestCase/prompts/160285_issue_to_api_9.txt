@@ -1,0 +1,118 @@
+Issue ID: 160285
+Title: Wrong-size gradients in Expert Parallel MoE
+Bug Description:
+### 🐛 Describe the bug
+
+### Repro
+
+[test_moe_gradients.txt](https://github.com/user-attachments/files/21707913/test_moe_gradients.txt)
+[torch_moe.txt](https://github.com/user-attachments/files/21707912/torch_moe.txt)
+
+Install torchtitan on your system (`pip install torchtitan`). Rename the file extensions to .py. Run with `OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 test_moe_gradients.py`.
+
+The observed behavior is that the gradients for MoE layers are doubled with EP=2.
+
+Use of TorchGroupedExperts in a non-testcase environment shows that loss curves are equivalent even with the doubled gradients; each MoE gradient is exactly 2x in size.
+
+### Observables
+
+This testcase replicates torchtitan's EP+MoE layer by copying code directly into `torch_moe.py`. Possibilities:
+1. torch has a bug (perhaps in the distributed parts)
+2. torchtitan has a bug. I don't see it though.
+
+~3. my replication of torchtitan has a bug.~ I checked, vanilla torchtitan has the same bug.
+
+```
+kevin@kevin-h100-0:/mnt/clusterstorage/workspace/kevin$ OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 test_moe_gradients.py 
+Testing with 2 processes
+
+==================================================
+TEST 1: Without Expert Parallel Sharding
+==================================================
+1 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+1 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), dev
+...
+
+Original API Under Test: torch.distributed.tensor.DTensor
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.masked_select
+Similarity score: 0.9897094964981079
+
+Similar API information:
+# Extracted call chain for torch.masked_select
+
+# --- torch._subclasses.fake_impls.masked_select ---
+def masked_select(fake_mode, func, self, mask):
+    if (
+        fake_mode.shape_env is None
+        or not fake_mode.shape_env.allow_dynamic_output_shape_ops
+    ):
+        # Without symints/symfloats, cannot handle this
+        raise DynamicOutputShapeException(func)
+
+    nnz = fake_mode.shape_env.create_unbacked_symint()
+
+    # see nonzero for commentary
+    maxval = sys.maxsize - 1
+
+    # Avoid importing sympy at a module level
+    from torch.fx.experimental.symbolic_shapes import (
+        _constrain_range_for_size,
+        has_free_symbols,
+    )
+    from torch.utils._sympy.numbers import IntInfinity
+    from torch.utils._sympy.value_ranges import bound_sympy
+
+    # If num elements is expressed symbolically, calculate
+    # the concrete value based on upper bounds. Otherwise,
+    # we can set max val directly.
+    if not has_free_symbols(self.numel()):
+        num_elements = int(self.numel())
+    else:
+
+Original Test Case:
+kevin@kevin-h100-0:/mnt/clusterstorage/workspace/kevin$ OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 test_moe_gradients.py 
+Testing with 2 processes
+
+==================================================
+TEST 1: Without Expert Parallel Sharding
+==================================================
+1 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+1 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+1 experts.w3 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+0 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+0 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+0 experts.w3 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+
+WITHOUT EP Gradient Analysis:
+  experts.w1: grad_norm = 0.066087, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local()[0, 0, 0]=tensor(0.0013, device='cuda:0')
+  experts.w2: grad_norm = 0.554278, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local()[0, 0, 0]=tensor(0.0553, device='cuda:0')
+  experts.w3: grad_norm = 0.122219, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local()[0, 0, 0]=tensor(0.0024, device='cuda:0')
+  Total gradient norm: 0.571427
+
+==================================================
+TEST 2: With Expert Parallel Sharding
+==================================================
+Applying ExpertParallel sharding with EP size: 2Applying ExpertParallel sharding with EP size: 2
+
+0 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+0 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+0 experts.w3 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+1 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+1 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+1 experts.w3 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+
+WITH EP Gradient Analysis:
+  experts.w1: grad_norm = 0.132158, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local()[0, 0, 0]=tensor(0.0026, device='cuda:0')
+  experts.w2: grad_norm = 1.109194, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local
+...
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

@@ -1,0 +1,58 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_custom_gradient_with_one_hot():
+    """
+    Test case adapted from PyTorch Issue 160752.
+    Verifies that tf.custom_gradient works with tf.one_hot inside tf.function.
+    
+    The original bug involves torch.compile failing with torch.func.jacfwd 
+    and one_hot. This test translates the logic to TensorFlow, using 
+    tf.custom_gradient (the similar API) and tf.function (the equivalent of torch.compile).
+    """
+    MAX = 3
+    BATCH = 37
+
+    @tf.custom_gradient
+    def func(x, idxs):
+        # Logic from the bug report: x.square() * one_hot(idxs, MAX)
+        one_hot_val = tf.one_hot(idxs, MAX, dtype=x.dtype)
+        y = tf.square(x) * one_hot_val
+
+        def grad(upstream):
+            # Gradient calculation corresponding to the forward pass
+            # d/dx (x^2 * mask) = 2x * mask
+            # idxs is an integer tensor, so no gradient is returned for it.
+            return upstream * 2.0 * x * one_hot_val, None
+
+        return y, grad
+
+    # Compile the function (equivalent to torch.compile)
+    compiled_func = tf.function(func)
+
+    # Setup inputs
+    idxs = tf.random.uniform((BATCH,), minval=0, maxval=MAX, dtype=tf.int64)
+    x = tf.random.uniform((BATCH, MAX), dtype=tf.float64)
+
+    # Execute the compiled function and compute gradients
+    # This mirrors the jacfunc execution in the bug report
+    with tf.GradientTape() as tape:
+        tape.watch(x)
+        y = compiled_func(x, idxs)
+        loss = tf.reduce_sum(y)
+
+    grads = tape.gradient(loss, x)
+
+    # Assertions to ensure correctness
+    assert grads is not None, "Gradients should not be None"
+    assert grads.shape == (BATCH, MAX), f"Gradient shape mismatch: {grads.shape} vs {(BATCH, MAX)}"
+
+    # Verify gradient values
+    # Expected: 2 * x * one_hot(idxs)
+    expected_grads = 2.0 * x * tf.one_hot(idxs, MAX, dtype=x.dtype)
+    np.testing.assert_allclose(grads.numpy(), expected_grads.numpy(), rtol=1e-5)
+
+if __name__ == "__main__":
+    test_custom_gradient_with_one_hot()
+```

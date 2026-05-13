@@ -1,0 +1,94 @@
+Issue ID: 161116
+Title: NCCL Segfault when initializing a process group on an NVL72
+Bug Description:
+### 🐛 Describe the bug
+
+We are trying to run distributed training with Torchtitan on a GB200 NVL72 cluster but using more than 10 trays (40 GPUs) fails with a NCCL segmentation fault. Using 10 and less trays works fine.
+
+We boiled it down to the creation of the process group, so even this simple example crashes when we increase the number of trays to 11:
+```python
+import torch
+import torch.distributed as dist
+import os
+def main():
+    gpu_id = int(os.environ["LOCAL_RANK"])
+    
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+    dist.init_process_group(backend='nccl',
+                            device_id=gpu_id,
+                            )
+    dist.barrier()
+    
+if __name__ == "__main__":
+    main()
+```
+Error log is enormous but this is the relevant part:
+```
+#1436 0x0000400079529e3c in ncclTopoSearchTryGpu (system=<optimized out>, graph=<optimized out>, saveGraph=<optimized out>, step=<optimized out>, backToNet=<optimized out>, backToFirstRank=<optimized out>, forcedOrder=<optimized out>, time=0x4000fc2e9d74, type=-1, index=-1, g=0) at graph/search.cc:343
+#1437 0x0000400079528a80 in ncclTopoSearchRec (system=system@entry=0x4000fc520010, graph=graph@entry=0x4000fc2e9d78, saveGraph=saveGraph@entry=0x8fa53f8, time=time@entry=0x4000fc2e9d74) at graph/search.cc:725
+#1438 0x000040007952dde4 in ncclTopoCompute (system=0x4000fc520010, graph=graph@entry=0x8fa53f8) at graph/search.cc:1011
+#1439 0x0000400079504524 in initTransportsRank (timers=<optimized out>, paren
+...
+
+Original API Under Test: torch.distributed.init_process_group
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.dtensor.create_tpu_mesh
+Similarity score: 0.994024395942688
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.create_tpu_mesh
+
+# --- tensorflow.dtensor.python.tpu_util.create_tpu_mesh ---
+def create_tpu_mesh(
+    mesh_dim_names: List[str],
+    mesh_shape: List[int],
+    mesh_name: str,
+    ring_dims: Optional[int] = None,
+    ring_axes: Optional[List[str]] = None,
+    ring_bounds: Optional[List[int]] = None,
+    can_split_host_across_rings: bool = True,
+    build_ring_across_rings: bool = False,
+    rotate_ring_across_rings: bool = False,
+    use_xla_spmd: bool = layout_lib.USE_XLA_SPMD) -> layout_lib.Mesh:
+  """Returns a distributed TPU mesh optimized for AllReduce ring reductions.
+
+  Only as many as leading axes specified by `ring_axes` as necessary will be
+  used to build rings, as long as the subslice formed by these axes have enough
+  cores to contain a ring of the required size. The leftover axes in `ring_axes`
+  won't affect results.
+
+  This function always uses all TPU devices, and offers more customization than
+  `tf.experimental.dtensor.create_distributed_mesh`.
+
+  Args:
+    mesh_dim_names: List of mesh dimension names.
+    mesh_shape: Shape of the mesh.
+    mesh_name: A unique name for the mesh. If empty, internally generate one
+...
+
+Original Test Case:
+import torch
+import torch.distributed as dist
+import os
+def main():
+    gpu_id = int(os.environ["LOCAL_RANK"])
+    
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+    dist.init_process_group(backend='nccl',
+                            device_id=gpu_id,
+                            )
+    dist.barrier()
+    
+if __name__ == "__main__":
+    main()
+
+The API tf.experimental.dtensor.create_tpu_mesh is identified as cross-library similar to the original PyTorch API torch.distributed.init_process_group.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

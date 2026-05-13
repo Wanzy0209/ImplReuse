@@ -1,0 +1,148 @@
+Issue ID: 160646
+Title: AOT compilation of Triton op fails in PyTorch 2.8
+Bug Description:
+### 🐛 Describe the bug
+
+I have a model that works fine with `aoti_compile_and_package` in PyTorch 2.7, but after updating to PyTorch 2.8 compilation fails. I managed to distil the issue into a small repro:
+
+```python
+import tempfile
+
+import torch
+import triton
+import triton.language as tl
+from torch.library import triton_op, wrap_triton
+
+
+@triton.jit
+def my_kernel(
+    out1,
+    out2,
+):
+    # the actual kernel does something more meaningful of course
+    tl.store(out1, 1.0)
+    tl.store(out2, 1.0)
+
+
+@triton_op("repro::my_triton_op", mutates_args={})
+def my_triton_op(
+    q: torch.Tensor,
+    block_size: int = 128,
+) -> torch.Tensor:
+    out1 = torch.empty((1,), device=q.device)
+    out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)
+
+    wrap_triton(my_kernel)[(1, 1)](
+        out1,
+        out2,
+    )
+
+    return out1
+
+
+class MyModule(torch.nn.Module):
+
+Original API Under Test: torch._inductor.aoti_compile_and_package
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.special.bessel_j0
+Similarity score: 0.9856446385383606
+
+Similar API information:
+# Extracted call chain for torch.special.bessel_j0
+
+# --- torch.special.torch.special.bessel_j0 ---
+bessel_j0 = _add_docstr(
+    _special.special_bessel_j0,
+    r"""
+bessel_j0(input, *, out=None) -> Tensor
+
+Bessel function of the first kind of order :math:`0`.
+
+"""
+    + r"""
+Args:
+    {input}
+
+Keyword args:
+    {out}
+""".format(
+        **common_args
+    ),
+)
+
+# --- torch.signal.windows.windows._add_docstr ---
+def _add_docstr(*args: str) -> Callable[[_T], _T]:
+    r"""Adds docstrings to a given decorated function.
+
+    Specially useful when then docstrings needs string interpolation, e.g., with
+    str.format().
+    REMARK: Do not use this function if the docstring doesn't need string
+    interpolation, just write a conventional docstring.
+
+Original Test Case:
+import tempfile
+
+import torch
+import triton
+import triton.language as tl
+from torch.library import triton_op, wrap_triton
+
+
+@triton.jit
+def my_kernel(
+    out1,
+    out2,
+):
+    # the actual kernel does something more meaningful of course
+    tl.store(out1, 1.0)
+    tl.store(out2, 1.0)
+
+
+@triton_op("repro::my_triton_op", mutates_args={})
+def my_triton_op(
+    q: torch.Tensor,
+    block_size: int = 128,
+) -> torch.Tensor:
+    out1 = torch.empty((1,), device=q.device)
+    out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)
+
+    wrap_triton(my_kernel)[(1, 1)](
+        out1,
+        out2,
+    )
+
+    return out1
+
+
+class MyModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, q):
+        return my_triton_op(q)
+
+
+def main():
+    model = MyModule().to("cuda")
+    with torch.inference_mode():
+        q = torch.randn(1024, device="cuda")
+        exported_model = torch.export.export(model, (q,), dynamic_shapes=({0: torch.export.Dim("dim")},))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        torch._inductor.aoti_compile_and_package(
+            exported_model,
+            package_path=tmpdir + "/package.pt2",
+        )
+
+
+if __name__ == "__main__":
+    main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

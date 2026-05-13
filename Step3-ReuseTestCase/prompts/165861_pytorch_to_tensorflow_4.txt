@@ -1,0 +1,115 @@
+Issue ID: 165861
+Title: Reflect padding: CUDA errror when one of the batch dimensions is larger than uint16 max value (2**16)
+Bug Description:
+### 🐛 Describe the bug
+
+Reflect padding breaks when one of the batch dimensions is larger than uint16 max value (2**16).
+The total memory footprint is not important, as when the tensor holds more numbers, but all but last dimension is within the uint16 range everything is fine. 
+
+Other padding modes behave fine, the problem is only with the reflection one.
+
+## why is this important?
+`torch.stft` only accepts 2D tensors (B, L), requiring flattening of higher dimensions into the batch dimension. This commonly produces batch sizes > 65536 for large batches or multi-dimensional audio/signal data.
+
+## reproduce
+```python
+import torch
+import torch.nn.functional as F
+
+# these break cuda
+x = torch.rand(2**16, 2, device="cuda")
+# x = torch.rand(1, 2**16, 2, device="cuda")
+# x = torch.rand(2**16, 1, 2, device="cuda")
+
+# these are fine even if the total number of samples is more than 2**16, but not along a single dimension
+# x = torch.rand(2**16 - 1, 200, device="cuda")     # everything ok
+# x = torch.rand(8, 2**16 - 1, 200, device="cuda")  # everything ok
+# x = torch.rand(2**16 - 1, 8, 200, device="cuda")  # everything ok
+
+# x = torch.rand(2, 2**18, device="cuda") # everything ok
+
+F.pad(x, (1, 1), mode="constant")
+print("constant pad ok")
+F.pad(x, (1, 1), mode="circular")
+print("circular pad ok")
+F.pad(x, (1, 1), mode="replicate")
+print("replicate pad ok")
+
+F.pad(x, (1, 1), mode="reflect")
+print("this won't print")
+```
+
+output (error message):
+```
+
+Original API Under Test: torch.nn.functional.pad
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.batch_scatter_update
+Similarity score: 0.9920693039894104
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.batch_scatter_update
+
+# --- tensorflow.python.ops.state_ops.batch_scatter_update ---
+def batch_scatter_update(ref, indices, updates, use_locking=True, name=None):
+  """Generalization of `tf.compat.v1.scatter_update` to axis different than 0.
+
+  Analogous to `batch_gather`. This assumes that `ref`, `indices` and `updates`
+  have a series of leading dimensions that are the same for all of them, and the
+  updates are performed on the last dimension of indices. In other words, the
+  dimensions should be the following:
+
+  `num_prefix_dims = indices.ndims - 1`
+  `batch_dim = num_prefix_dims + 1`
+  `updates.shape = indices.shape + var.shape[batch_dim:]`
+
+  where
+
+  `updates.shape[:num_prefix_dims]`
+  `== indices.shape[:num_prefix_dims]`
+  `== var.shape[:num_prefix_dims]`
+
+  And the operation performed can be expressed as:
+
+  `var[i_1, ..., i_n, indices[i_1, ..., i_n, j]] = updates[i_1, ..., i_n, j]`
+
+  When indices is a 1D tensor, this operation is equivalent to
+  `tf.compat.v1.scatter_update`.
+
+  To avoid this operation there would be 2 alternatives:
+  1) Reshaping the variable by merging the first `ndims` dimensions. However,
+
+Original Test Case:
+import torch
+import torch.nn.functional as F
+
+# these break cuda
+x = torch.rand(2**16, 2, device="cuda")
+# x = torch.rand(1, 2**16, 2, device="cuda")
+# x = torch.rand(2**16, 1, 2, device="cuda")
+
+# these are fine even if the total number of samples is more than 2**16, but not along a single dimension
+# x = torch.rand(2**16 - 1, 200, device="cuda")     # everything ok
+# x = torch.rand(8, 2**16 - 1, 200, device="cuda")  # everything ok
+# x = torch.rand(2**16 - 1, 8, 200, device="cuda")  # everything ok
+
+# x = torch.rand(2, 2**18, device="cuda") # everything ok
+
+F.pad(x, (1, 1), mode="constant")
+print("constant pad ok")
+F.pad(x, (1, 1), mode="circular")
+print("circular pad ok")
+F.pad(x, (1, 1), mode="replicate")
+print("replicate pad ok")
+
+F.pad(x, (1, 1), mode="reflect")
+print("this won't print")
+
+The API tf.compat.v1.batch_scatter_update is identified as cross-library similar to the original PyTorch API torch.nn.functional.pad.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

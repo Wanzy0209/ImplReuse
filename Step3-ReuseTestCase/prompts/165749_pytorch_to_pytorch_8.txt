@@ -1,0 +1,102 @@
+Issue ID: 165749
+Title: Backward pass failure fornn.Conv2dwithweight_normandtorch.compile
+Bug Description:
+### 🐛 Describe the bug
+
+I encountered a failure when training a convolutional model with weight normalization and `torch.compile`.
+Here is the minimal reproducer:
+
+```py
+import torch
+from torch import nn
+from torch.nn.utils.parametrizations import weight_norm
+from torch.optim import SGD
+
+if __name__ == "__main__":
+    d = 65
+    x = torch.randn((1, 2, 32, 32)).cuda()
+    model = torch.compile(weight_norm(nn.Conv2d(2, d, 2)).train().cuda())
+    opt = SGD(model.parameters())
+    for _ in range(1000):
+        model(x).mean().backward()
+        opt.step()
+        opt.zero_grad()
+```
+
+It fails with: `torch._inductor.exc.InductorError: RuntimeError: saved_v must be contiguous`, which seems to be raised during the backward pass: https://github.com/pytorch/pytorch/blob/5d4da26ed067d2d70102f30967f1b09f8fb7018a/aten/src/ATen/native/cuda/WeightNorm.cu#L437
+
+This error is not raised if I remove `torch.compile` or if `d <= 64`.
+I also can't reproduce this behavior with either `nn.Linear` or `nn.Conv1d` instead of `nn.Conv2d`. 
+
+### Error logs
+
+Traceback (most recent call last):
+  File "/home/mpoli/bug.py", line 12, in <module>
+    model(x).mean().backward()
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/mpoli/.venv/lib/python3.13/site-packages/torch/_tensor.py", line 627, in backward
+    torch.autograd.backward(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        self, gradient, retain_graph, create_graph, inputs=inputs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.distributed.recv_object_list
+Similarity score: 0.9941133260726929
+
+Similar API information:
+# Extracted call chain for torch.distributed.recv_object_list
+
+# --- torch.distributed.distributed_c10d.recv_object_list ---
+def recv_object_list(
+    object_list: list[Any],
+    src: Optional[int] = None,
+    group: Optional[ProcessGroup] = None,
+    device: Optional[torch.device] = None,
+    group_src: Optional[int] = None,
+):
+    """
+    Receives picklable objects in ``object_list`` synchronously.
+
+    Similar to :func:`recv`, but can receive Python objects.
+
+    Args:
+        object_list (List[Any]): List of objects to receive into.
+            Must provide a list of sizes equal to the size of the list being sent.
+        src (int, optional): Source rank from which to recv ``object_list``.
+            Source rank is based on global process group (regardless of ``group`` argument)
+            Will receive from any rank if set to None. Default is ``None``.
+        group: (ProcessGroup, optional): The process group to work on. If None,
+            the default process group will be used. Default is ``None``.
+        device (``torch.device``, optional): If not None, receives on this device.
+            Default is ``None``.
+        group_src (int, optional): Destination rank on ``gro
+...
+
+Original Test Case:
+import torch
+from torch import nn
+from torch.nn.utils.parametrizations import weight_norm
+from torch.optim import SGD
+
+if __name__ == "__main__":
+    d = 65
+    x = torch.randn((1, 2, 32, 32)).cuda()
+    model = torch.compile(weight_norm(nn.Conv2d(2, d, 2)).train().cuda())
+    opt = SGD(model.parameters())
+    for _ in range(1000):
+        model(x).mean().backward()
+        opt.step()
+        opt.zero_grad()
+
+The API torch.distributed.recv_object_list is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

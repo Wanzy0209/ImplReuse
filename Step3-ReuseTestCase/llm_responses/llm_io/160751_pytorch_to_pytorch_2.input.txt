@@ -1,0 +1,99 @@
+Issue ID: 160751
+Title: torch.compile aot_eager mode removes torch.cuda.synchronize() causing missed exceptions
+Bug Description:
+### 🐛 Describe the bug
+
+While testing both eager and aot_eager modes, I observed that aot_eager does not capture exceptions as expected. I found that during graph optimization, the torch.cuda.synchronize() call is removed in aot_eager mode.
+
+I ran the following code with TORCH_LOGS="graph_code,aot_graphs". The __graph_code logs show the synchronize function present, but in the __aot_graphs logs, the synchronize call is eliminated. This behavior differs from eager mode, where the assertion is caught and the print statement is not executed.
+
+```python
+import torch
+
+def func():
+    a = torch.tensor([1.0, -2.0], device="cuda")
+    result = torch.all(a > 0)
+    assert result, "should throw"
+    torch.cuda.synchronize()
+    print("should not run")
+
+
+def test_fn():
+    torch._dynamo.reset()
+    f_c = torch.compile(func, backend="aot_eager")
+    f_c()
+
+test_fn()
+```
+
+```
+[karthickps@devvm1752.odn0 ~/work/experiments/aot_eager]$ TORCH_LOGS="graph_code,aot_graphs" python test_aot_eager.py 
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_graph.py:1711] [0/0_1] [__graph_code] TRACED GRAPH
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_graph.py:1711] [0/0_1] [__graph_code]  ===== __compiled_fn_2_c224c13a_e190_4f9e_b8eb_e4c7476b65dc =====
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_graph.py:1711] [0/0_1] [__graph_code]  /home/karthickps/git/karthickai/pytorch/torch/fx/_lazy_graph_module.py class GraphModule(torch.nn.Module):
+V0815 09:24:06.286000 3930698 torch/_dynamo/output_
+...
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.prod
+Similarity score: 0.9944407939910889
+
+Similar API information:
+# Extracted call chain for torch.prod
+
+# --- functorch.dim.reference.prod ---
+def prod(x):
+    return reduce(operator.mul, x, 1)
+
+# --- torch._dynamo.polyfills.functools.reduce ---
+def reduce(
+    function: Callable[[_U, _T], _U],
+    iterable: Iterable[_T],
+    initial: _U = _INITIAL_MISSING,  # type: ignore[assignment]
+    /,
+) -> _U:
+    it = iter(iterable)
+
+    value: _U
+    if initial is _INITIAL_MISSING:
+        try:
+            value = next(it)  # type: ignore[assignment]
+        except StopIteration:
+            raise TypeError(
+                "reduce() of empty iterable with no initial value",
+            ) from None
+    else:
+        value = initial
+
+    for element in it:
+        value = function(value, element)
+
+    return value
+
+Original Test Case:
+import torch
+
+def func():
+    a = torch.tensor([1.0, -2.0], device="cuda")
+    result = torch.all(a > 0)
+    assert result, "should throw"
+    torch.cuda.synchronize()
+    print("should not run")
+
+
+def test_fn():
+    torch._dynamo.reset()
+    f_c = torch.compile(func, backend="aot_eager")
+    f_c()
+
+test_fn()
+
+The API torch.prod is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

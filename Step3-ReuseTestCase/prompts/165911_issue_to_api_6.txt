@@ -1,0 +1,109 @@
+Issue ID: 165911
+Title: Incorrect user code stack when using torch._dynamo.functional_export._dynamo_graph_capture_for_export
+Bug Description:
+### 🐛 Describe the bug
+
+Repro
+
+```python
+import torch
+
+def compute(x, w):
+    return torch.nn.functional.linear(x, w)
+
+def nop(x, w):
+    torch._check(x.shape[0] == 0)
+    return torch.empty_like(x)  # whatever the output size should be
+
+def chunked_compute(x, w):
+    sz = x.shape[0]
+    torch._check(sz <= 8)
+    out0 = torch.cond(sz > 0, compute, nop, (x[0:2], w))
+    out1 = torch.cond(sz > 2, compute, nop, (x[2:4], w))
+    out2 = torch.cond(sz > 4, compute, nop, (x[4:6], w))
+    out3 = torch.cond(sz > 6, compute, nop, (x[6:8], w))
+    return torch.cat([out0, out1, out2, out3])
+
+x, w = torch.randn(4, 16, requires_grad=True), torch.randn(16, 16, requires_grad=True)
+assert torch.equal(compute(x, w), chunked_compute(x, w))
+
+class Model(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = torch.nn.Linear(16, 16)
+
+    def forward(self, x):
+        return chunked_compute(x, self.linear.w)
+
+mod = torch._dynamo.functional_export._dynamo_graph_capture_for_export(Model())(x)
+breakpoint()
+
+```
+
+This errors with:
+
+Original API Under Test: torch._dynamo.functional_export._dynamo_graph_capture_for_export
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.math.add
+Similarity score: 0.982438325881958
+
+Similar API information:
+# Extracted call chain for tf.math.add
+
+# --- tensorflow.python.framework.experimental.math_ops.add ---
+def add(a, b, name=None):
+  ctx = context.get_default()
+  return _math_ops.add(ctx, a, b, name)
+
+# --- tensorflow.python.framework.experimental._math_ops.add ---
+def add(a, b, name=None):
+  ctx = context.get_default()
+  return _math_ops.add(ctx, a, b, name)
+
+# --- tensorflow.python.framework.experimental.context_stack.get_default ---
+def get_default():
+  """Returns the default execution context."""
+  return _default_ctx_stack.peek()
+
+Original Test Case:
+import torch
+
+def compute(x, w):
+    return torch.nn.functional.linear(x, w)
+
+def nop(x, w):
+    torch._check(x.shape[0] == 0)
+    return torch.empty_like(x)  # whatever the output size should be
+
+def chunked_compute(x, w):
+    sz = x.shape[0]
+    torch._check(sz <= 8)
+    out0 = torch.cond(sz > 0, compute, nop, (x[0:2], w))
+    out1 = torch.cond(sz > 2, compute, nop, (x[2:4], w))
+    out2 = torch.cond(sz > 4, compute, nop, (x[4:6], w))
+    out3 = torch.cond(sz > 6, compute, nop, (x[6:8], w))
+    return torch.cat([out0, out1, out2, out3])
+
+x, w = torch.randn(4, 16, requires_grad=True), torch.randn(16, 16, requires_grad=True)
+assert torch.equal(compute(x, w), chunked_compute(x, w))
+
+class Model(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = torch.nn.Linear(16, 16)
+
+    def forward(self, x):
+        return chunked_compute(x, self.linear.w)
+
+mod = torch._dynamo.functional_export._dynamo_graph_capture_for_export(Model())(x)
+breakpoint()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

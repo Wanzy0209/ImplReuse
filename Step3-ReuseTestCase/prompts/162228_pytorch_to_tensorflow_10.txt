@@ -1,0 +1,120 @@
+Issue ID: 162228
+Title: Backpropagation to flex_attentionscore_modbiases fails based on presence of graph breaks
+Bug Description:
+### 🐛 Describe the bug
+
+The following minimal code snippet:
+```python
+import torch
+from torch.nn.attention.flex_attention import flex_attention
+
+@torch.compile()
+def test(x, y):
+    # Materialize a bias matrix
+    B, L, device = x.shape[0], x.shape[1], x.device
+    b = torch.arange(B, device=device, dtype=torch.long).view(B, 1, 1)
+    q_idx = torch.arange(L, device=device, dtype=torch.long).view(1, L, 1)
+    kv_idx = torch.arange(L, device=device, dtype=torch.long).view(1, 1, L)
+    bias_mat = y[b, q_idx] + y[b, kv_idx] # (B, L, L)
+
+    # Dummy score_mod retrieving bias values
+    def score_mod(score, b, h, q_idx, kv_idx):
+        return score + bias_mat[b, q_idx, kv_idx]
+
+    x_ = x[:, :, None].repeat(1, 1, 16, 1)
+    # torch._dynamo.graph_break()
+    return flex_attention(x_, x_, x_, score_mod=score_mod)
+
+
+DEVICE = "cuda"
+B, L, D = 2, 16, 64
+
+x = torch.randn(B, L, D, device=DEVICE, requires_grad=True)
+y = torch.randn(B, L, device=DEVICE, requires_grad=True)
+
+out = test(x, y).mean().backward()
+
+print(torch.__version__)
+print(f"x: {(x.grad is not None) and (x.grad.norm() > 0)}, y: {(y.grad is not None) and (y.grad.norm() > 0)}")
+assert x.grad.norm() > 0
+assert y.grad.norm() > 0
+```
+fails to properly backpropagate gradients into `y` for me (on the current stable PyTorch 2.8.0-cu12.8 installed via pip, the current nightly, and `2.8.0a0+34c6371d24.nv25.08` via the `nvidia/pytorch:25.08-py3` container, across two differently configured systems with H100s & H200s).
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.train.range_input_producer
+Similarity score: 0.9930681586265564
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.train.range_input_producer
+
+# --- tensorflow.python.training.input.range_input_producer ---
+def range_input_producer(limit, num_epochs=None, shuffle=True, seed=None,
+                         capacity=32, shared_name=None, name=None):
+  """Produces the integers from 0 to limit-1 in a queue.
+
+  Note: if `num_epochs` is not `None`, this function creates local counter
+  `epochs`. Use `local_variables_initializer()` to initialize local variables.
+
+  Args:
+    limit: An int32 scalar tensor.
+    num_epochs: An integer (optional). If specified, `range_input_producer`
+      produces each integer `num_epochs` times before generating an
+      OutOfRange error. If not specified, `range_input_producer` can cycle
+      through the integers an unlimited number of times.
+    shuffle: Boolean. If true, the integers are randomly shuffled within each
+      epoch.
+    seed: An integer (optional). Seed used if shuffle == True.
+    capacity: An integer. Sets the queue capacity.
+    shared_name: (optional). If set, this queue will be shared under the given
+      name across multiple sessions.
+    name: A name for the operations (optional).
+
+  Returns:
+    A Queue w
+...
+
+Original Test Case:
+import torch
+from torch.nn.attention.flex_attention import flex_attention
+
+@torch.compile()
+def test(x, y):
+    # Materialize a bias matrix
+    B, L, device = x.shape[0], x.shape[1], x.device
+    b = torch.arange(B, device=device, dtype=torch.long).view(B, 1, 1)
+    q_idx = torch.arange(L, device=device, dtype=torch.long).view(1, L, 1)
+    kv_idx = torch.arange(L, device=device, dtype=torch.long).view(1, 1, L)
+    bias_mat = y[b, q_idx] + y[b, kv_idx] # (B, L, L)
+
+    # Dummy score_mod retrieving bias values
+    def score_mod(score, b, h, q_idx, kv_idx):
+        return score + bias_mat[b, q_idx, kv_idx]
+
+    x_ = x[:, :, None].repeat(1, 1, 16, 1)
+    # torch._dynamo.graph_break()
+    return flex_attention(x_, x_, x_, score_mod=score_mod)
+
+
+DEVICE = "cuda"
+B, L, D = 2, 16, 64
+
+x = torch.randn(B, L, D, device=DEVICE, requires_grad=True)
+y = torch.randn(B, L, device=DEVICE, requires_grad=True)
+
+out = test(x, y).mean().backward()
+
+print(torch.__version__)
+print(f"x: {(x.grad is not None) and (x.grad.norm() > 0)}, y: {(y.grad is not None) and (y.grad.norm() > 0)}")
+assert x.grad.norm() > 0
+assert y.grad.norm() > 0
+
+The API tf.compat.v1.train.range_input_producer is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

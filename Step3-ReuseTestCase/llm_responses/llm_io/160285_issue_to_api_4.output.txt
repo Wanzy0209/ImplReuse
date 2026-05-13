@@ -1,0 +1,101 @@
+```python
+import torch
+import torch.distributed as dist
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.tensor import DTensor
+from torch.distributed.tensor.placement_types import Shard, Replicate
+import os
+
+def initialize_distributed_system(backend="nccl"):
+    """
+    Translates the semantics of tf.compat.v1.tpu.initialize_system to PyTorch.
+    Initializes the distributed process group and device mesh for the current job.
+    
+    Args:
+        backend: The backend to use for distributed training (e.g., 'nccl', 'gloo').
+    """
+    if not dist.is_initialized():
+        # Initialize the process group similar to how TPU system initializes the TPU cluster
+        dist.init_process_group(backend)
+    return dist.get_rank(), dist.get_world_size()
+
+def test_moe_gradient_size():
+    """
+    Test case to reproduce Issue 160285: Wrong-size gradients in Expert Parallel MoE.
+    
+    This test verifies that gradients computed with Expert Parallel (EP) sharding
+    match the expected scale and are not incorrectly doubled.
+    """
+    rank, world_size = initialize_distributed_system()
+    
+    # The bug report specifically observes the issue with 2 processes (EP=2)
+    if world_size < 2:
+        if rank == 0:
+            print("Test requires at least 2 GPUs to reproduce EP=2 behavior. Skipping.")
+        return
+
+    device = "cuda"
+    
+    # --- Scenario 1: Data Parallel (Baseline) ---
+    # Corresponds to the bug report's "Without Expert Parallel Sharding" test.
+    # DeviceMesh((dp=2), ...)
+    mesh_dp = init_device_mesh(device, (world_size,), mesh_dim_names=("dp",))
+    
+    # Create a local weight shard.
+    # Global shape [2, 8, 8], sharded on dim 0 -> local shape [1, 8, 8]
+    # We use ones to make gradient calculation deterministic (grad should be 1.0)
+    local_weight = torch.ones(1, 8, 8, device=device, requires_grad=True)
+    
+    # Initialize DTensor with DP sharding on the first mesh dimension
+    w_dp = DTensor.from_local(local_weight, mesh_dp, [Shard(0)])
+    
+    # Forward pass: simple sum to generate gradients
+    loss_dp = w_dp.sum()
+    loss_dp.backward()
+    
+    # Calculate local gradient norm
+    grad_dp_local = w_dp.grad.to_local()
+    norm_dp = torch.norm(grad_dp_local).item()
+    
+    # --- Scenario 2: Expert Parallel (Bug Case) ---
+    # Corresponds to the bug report's "With Expert Parallel Sharding" test.
+    # DeviceMesh((notep=1, ep=2), ...)
+    # We create a 2D mesh where the second dimension represents the Expert Parallelism
+    mesh_ep = init_device_mesh(device, (1, world_size), mesh_dim_names=("notep", "ep"))
+    
+    # Re-initialize local weight
+    local_weight_ep = torch.ones(1, 8, 8, device=device, requires_grad=True)
+    
+    # Initialize DTensor with EP sharding.
+    # We shard on the 'ep' mesh dimension (index 1).
+    # This maps logical dimension 0 to mesh dimension 1 (EP).
+    w_ep = DTensor.from_local(local_weight_ep, mesh_ep, [Shard(1)])
+    
+    # Forward pass
+    loss_ep = w_ep.sum()
+    loss_ep.backward()
+    
+    # Calculate local gradient norm
+    grad_ep_local = w_ep.grad.to_local()
+    norm_ep = torch.norm(grad_ep_local).item()
+    
+    # --- Verification ---
+    # The bug report states: "The observed behavior is that the gradients for MoE layers are doubled with EP=2."
+    # Expected behavior: norm_ep should be equal to norm_dp (approx 8.0 for a 1x8x8 matrix of ones).
+    # Buggy behavior: norm_ep will be 2 * norm_dp (approx 16.0).
+    
+    if rank == 0:
+        print(f"DP Gradient Norm: {norm_dp}")
+        print(f"EP Gradient Norm: {norm_ep}")
+        
+    # Assert that the norms are consistent (not doubled).
+    # If the bug is present, this assertion will fail.
+    tolerance = 1e-5
+    assert abs(norm_ep - norm_dp) < tolerance, \
+        f"Bug detected: EP gradient norm ({norm_ep}) is significantly different from DP norm ({norm_dp}). " \
+        "This suggests gradients are being doubled in Expert Parallel mode."
+
+if __name__ == "__main__":
+    # Usage: torchrun --nproc_per_node=2 <this_script>.py
+    test_moe_gradient_size()
+```

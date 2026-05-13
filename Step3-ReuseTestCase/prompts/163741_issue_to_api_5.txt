@@ -1,0 +1,129 @@
+Issue ID: 163741
+Title: Unexpected cuda context after dist.destroy_process_group
+Bug Description:
+### 🐛 Describe the bug
+
+During experimentation, I observed unexpected 320MB GPU0(maybe default cuda device) memory allocations in each subprocess that persist after process group destruction. I've constructed a minimal reproducible example demonstrating this issue.
+```python
+import torch
+import os
+import glob
+import time
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+def worker(rank, world_size):
+    torch.cuda.set_device(rank)
+    dist.init_process_group(
+        backend="nccl", 
+        init_method="tcp://127.0.0.1:29500",
+        world_size=world_size,
+        rank=rank
+    )
+    dist.barrier()
+
+    device = f"cuda:{rank}"
+    # do something
+    print("to sleep")
+    time.sleep(5)
+    
+    dist.destroy_process_group()
+
+    # sleep for observing nvidia-smi
+    time.sleep(100)
+
+def test_nccl():
+    world_size = torch.cuda.device_count()
+    mp.spawn(
+        worker,
+        args=(world_size,),
+        nprocs=world_size,
+        join=True,
+    )
+
+Original API Under Test: torch.distributed.destroy_process_grouptorch.distributed.destroy_process_group
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.compat.v1.summary.histogram
+Similarity score: 0.9886271953582764
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.summary.histogram
+
+# --- tensorflow.python.ops.summary_ops_v2.histogram ---
+def histogram(name, tensor, family=None, step=None):
+  """Writes a histogram summary if possible."""
+
+  def function(tag, scope):
+    # Note the identity to move the tensor to the CPU.
+    return gen_summary_ops.write_histogram_summary(
+        _summary_state.writer._resource,  # pylint: disable=protected-access
+        _choose_step(step),
+        tag,
+        array_ops.identity(tensor),
+        name=scope)
+
+  return summary_writer_function(name, tensor, function, family=family)
+
+# --- tensorflow.python.ops.summary_ops_v2._choose_step ---
+def _choose_step(step):
+  if step is None:
+    return training_util.get_or_create_global_step()
+  if not isinstance(step, tensor_lib.Tensor):
+    return ops.convert_to_tensor(step, dtypes.int64)
+  return step
+
+# --- tensorflow.python.framework.ops.convert_to_tensor ---
+def convert_to_tensor(
+    value,
+    dtype=None,
+    name=None,
+
+Original Test Case:
+import torch
+import os
+import glob
+import time
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+def worker(rank, world_size):
+    torch.cuda.set_device(rank)
+    dist.init_process_group(
+        backend="nccl", 
+        init_method="tcp://127.0.0.1:29500",
+        world_size=world_size,
+        rank=rank
+    )
+    dist.barrier()
+
+    device = f"cuda:{rank}"
+    # do something
+    print("to sleep")
+    time.sleep(5)
+    
+    dist.destroy_process_group()
+
+    # sleep for observing nvidia-smi
+    time.sleep(100)
+
+def test_nccl():
+    world_size = torch.cuda.device_count()
+    mp.spawn(
+        worker,
+        args=(world_size,),
+        nprocs=world_size,
+        join=True,
+    )
+
+if __name__ == '__main__':
+    test_nccl()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

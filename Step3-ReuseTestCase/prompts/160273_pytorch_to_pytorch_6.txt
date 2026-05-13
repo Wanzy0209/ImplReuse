@@ -1,0 +1,101 @@
+Issue ID: 160273
+Title: [Documentation Clarity] torch.min/torch.max gradient behavior
+Bug Description:
+### 📚 The doc issue
+
+`torch.min` and `torch.max` do not mention the gradient behavior of theirs, yet the gradient behavior can be found in the documentation of `torch.amin`, `torch.amax`:
+> Both max/min and amax/amin evenly distribute gradients between equal values when there are multiple input elements with the same minimum or maximum value.
+
+Which seems, **unfortunately**, to be wrong, or at least, partially wrong, see the following example:
+
+```python
+>>> # torch.min -> reduce over all dimensions
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a)
+>>> min_val.backward()
+>>> a.grad
+tensor([0.2000, 0.2000, 0.2000, 0.2000, 0.2000], device='cuda:0')
+...
+>>> # torch.min(input, dim=...) -> reduce over specified dimension
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a, dim=0)
+>>> min_val.values.backward()
+>>> a.grad
+tensor([1., 0., 0., 0., 0.], device='cuda:0')
+```
+
+It is obvious that the former one performs a `amin`-like BP while the latter one is more like indexing. My torch version is `'2.7.1+cu126'`, and I think it is the same with CPU devices.
+
+Can you make it clearer? (see Suggest a potential alternative/fix) 
+
+### Suggest a potential alternative/fix
+
+We know that `torch.min` (and `max`) has three sets of behaviors:
+- reduce over all dimensions (single tensor input), its gradient behavior is the same as `amin`. (Evenly distribute).
+- reduce over one specified axis, its gradient behavior is like using an `argm
+...
+
+Original API Under Test: torch.min
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.cummax
+Similarity score: 0.995036244392395
+
+Similar API information:
+# Extracted call chain for torch.cummax
+
+# --- torch._inductor.lowering.cummax ---
+def cummax(x, axis=None):
+    if len(x.get_size()) == 0:
+        assert axis in [0, -1]
+        return clone(x), empty_like(x, dtype=torch.int64)
+
+    dtype = x.get_dtype()
+    combine_fn = ir.get_reduction_combine_fn(
+        "argmax", dtype=dtype, arg_break_ties_left=False
+    )
+
+    kwargs = _make_scan_inner(x, axis=axis, dtype=dtype)
+    kwargs["dtypes"] = (dtype, torch.int64)
+    kwargs["inner_fns"] = (x.make_loader(), lambda _: "rindex")
+    values, indices = ir.Scan.create(**kwargs, combine_fn=combine_fn)  # type: ignore[arg-type]
+    if values is None:
+        return fallback_cummax(x, dim=axis)
+    return values, indices
+
+# --- torch._inductor.lowering._make_scan_inner ---
+def _make_scan_inner(x, *, axis, dtype):
+    if dtype is not None:
+        x = to_dtype(x, dtype)
+    axis = _validate_dim(x, axis)
+
+    return dict(
+        device=x.get_device(),
+        dtypes=(x.get_dtype(),),
+
+Original Test Case:
+>>> # torch.min -> reduce over all dimensions
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a)
+>>> min_val.backward()
+>>> a.grad
+tensor([0.2000, 0.2000, 0.2000, 0.2000, 0.2000], device='cuda:0')
+...
+>>> # torch.min(input, dim=...) -> reduce over specified dimension
+>>> a = torch.ones([5]).cuda()
+>>> a.requires_grad=True
+>>> min_val = torch.min(a, dim=0)
+>>> min_val.values.backward()
+>>> a.grad
+tensor([1., 0., 0., 0., 0.], device='cuda:0')
+
+The API torch.cummax is identified as same-library similar to the original PyTorch API torch.min.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

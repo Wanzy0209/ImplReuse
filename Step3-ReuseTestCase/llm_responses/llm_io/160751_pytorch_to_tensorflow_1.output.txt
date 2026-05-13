@@ -1,0 +1,64 @@
+```python
+import tensorflow as tf
+import sys
+
+# Note: tf.compat.v1.tpu.batch_parallel requires a TPU environment to execute.
+# The following boilerplate attempts to initialize a TPU. If run on a non-TPU machine,
+# it will fall back to the default strategy to allow syntax validation, 
+# but the core TPU execution logic will not actually run on TPU hardware.
+try:
+    resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(resolver)
+    tf.tpu.experimental.initialize_tpu_system(resolver)
+    strategy = tf.distribute.TPUStrategy(resolver)
+    print("Running on TPU")
+except (ValueError, tf.errors.NotFoundError) as e:
+    print(f"TPU not found ({e}). Falling back to default strategy for syntax check.")
+    strategy = tf.distribute.get_strategy()
+
+def computation():
+    # Adapted from: a = torch.tensor([1.0, -2.0], device="cuda")
+    a = tf.constant([1.0, -2.0])
+    
+    # Adapted from: result = torch.all(a > 0)
+    result = tf.reduce_all(a > 0)
+    
+    # Adapted from: assert result, "should throw"
+    # In TensorFlow graph/TPU mode, we use tf.Assert to ensure the check 
+    # is part of the compiled graph and not just a Python-side check.
+    assert_op = tf.Assert(result, ["should throw"])
+    
+    # Adapted from: torch.cuda.synchronize() and print("should not run")
+    # We use control_dependencies to ensure the assertion runs before the print.
+    # If the compiler optimizes away the assertion (similar to the PyTorch bug),
+    # the print statement might execute.
+    with tf.control_dependencies([assert_op]):
+        tf.print("should not run")
+        return result
+
+def test_fn():
+    # Adapted from: f_c = torch.compile(func, backend="aot_eager")
+    # We use tf.compat.v1.tpu.batch_parallel as the similar compilation/execution API.
+    with strategy.scope():
+        try:
+            # inputs=None is used because the original computation takes no arguments.
+            output = tf.compat.v1.tpu.batch_parallel(
+                computation, 
+                inputs=None, 
+                num_shards=1
+            )
+            
+            # Force execution to verify if the assertion is preserved
+            if tf.executing_eagerly():
+                _ = output.numpy()
+                
+        except tf.errors.InvalidArgumentError as e:
+            # Expected behavior: The assertion fails
+            print(f"Caught expected exception: {e}")
+        except Exception as e:
+            # Other potential errors (e.g., TPU not connected)
+            print(f"Execution failed with error: {e}")
+
+if __name__ == "__main__":
+    test_fn()
+```

@@ -1,0 +1,102 @@
+Issue ID: 163483
+Title: all_gather can change memory ordering of tensor
+Bug Description:
+### 🐛 Describe the bug
+
+I try the `all_gather` operation on a tensor with `channels_last` format , then I found the memory ordering of output is changed so that the output and input are not aligned. This is not as expected. I think it's a BUG.
+
+The reproducible minimal example, test.py is:
+```
+import torch
+
+torch.distributed.init_process_group(backend='nccl')
+rank = torch.distributed.get_rank()
+world_size = torch.distributed.get_world_size()
+torch.cuda.set_device(rank)
+
+x = torch.arange(0, 16).reshape(2, 2, 2, 2).cuda().to(memory_format=torch.channels_last)
+x_list = [torch.zeros_like(x) for _ in range(world_size)]
+torch.distributed.all_gather(x_list, x)
+
+print('rank_{}: {}\n x:\n{}\n gathered_x:\n{}\n'.format(rank, torch.equal(x, x_list[rank]), x.storage(), x_list[rank].storage()))
+```
+The command is:
+`torchrun --nproc_per_node 2 test.py`
+The result is:
+```
+rank_1: False
+ x:
+ 0
+ 4
+ 1
+ 5
+ 2
+ 6
+ 3
+ 7
+ 8
+ 12
+ 9
+ 13
+ 10
+ 14
+ 11
+
+Original API Under Test: torch.distributed.all_gather
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.nn.embedding_lookup
+Similarity score: 0.9941849708557129
+
+Similar API information:
+# Extracted call chain for tf.nn.embedding_lookup
+
+# --- tensorflow.python.distribute.sharded_variable.embedding_lookup ---
+def embedding_lookup(
+    params,
+    ids,
+    partition_strategy='mod',
+    name=None,
+    validate_indices=True,
+    max_norm=None,
+):
+  if isinstance(params, list):
+    params = params[0]
+  return embedding_ops.embedding_lookup(
+      params.variables,
+      ids,
+      partition_strategy,
+      name,
+      validate_indices,
+      max_norm,
+  )
+
+# --- tensorflow.python.util.dispatch.dispatch_for_types ---
+def dispatch_for_types(op, *types):
+  """Decorator to declare that a Python function overrides an op for a type.
+
+  The decorated function is used to override `op` if any of the arguments or
+  keyword arguments (including elements of lists or tuples) have one of the
+  specified types.
+
+Original Test Case:
+import torch
+
+torch.distributed.init_process_group(backend='nccl')
+rank = torch.distributed.get_rank()
+world_size = torch.distributed.get_world_size()
+torch.cuda.set_device(rank)
+
+x = torch.arange(0, 16).reshape(2, 2, 2, 2).cuda().to(memory_format=torch.channels_last)
+x_list = [torch.zeros_like(x) for _ in range(world_size)]
+torch.distributed.all_gather(x_list, x)
+
+print('rank_{}: {}\n x:\n{}\n gathered_x:\n{}\n'.format(rank, torch.equal(x, x_list[rank]), x.storage(), x_list[rank].storage()))
+
+The API tf.nn.embedding_lookup is identified as cross-library similar to the original PyTorch API torch.distributed.all_gather.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

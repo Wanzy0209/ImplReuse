@@ -1,0 +1,130 @@
+Issue ID: 166305
+Title: torch.compile() + DDP fails even for the simplest custom autograd.Function when optimize_ddp=True
+Bug Description:
+### 🐛 Describe the bug
+
+Even the **simplest possible DDP+compile test** fails when `torch._dynamo.config.optimize_ddp=True`.
+The error is raised **even for a minimal custom autograd.Function** that just multiplies the tensor by 2 in forward/backward.
+This means **"the most minimal possible code" already triggers DDPOptimizer backend failure**.
+
+## Minimal Repro Code
+```python
+# ddp_compile_test.py
+import os, torch
+import torch.nn as nn, torch.nn.functional as F
+import torch._dynamo as dynamo
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+dynamo.config.optimize_ddp = True  # <== necessary for the bug
+
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+dist.init_process_group(backend="nccl" if dist.is_nccl_available() else "gloo")
+
+class SimplistDoubleFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x): return x * 2
+    @staticmethod
+    def backward(ctx, grad_out): return grad_out * 2
+
+class DoubleLayer(nn.Module):
+    def forward(self, x): return SimplistDoubleFn.apply(x)
+
+def main():
+    device = torch.device(f"cuda:{LOCAL_RANK}")
+    model = nn.Sequential(nn.Conv2d(3,3,3,padding=1), DoubleLayer()).to(device)
+    model = torch.compile(model)
+    model = DDP(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK, find_unused_parameters=True)
+    opt = torch.optim.SGD(model.parameters(), lr=1e-4)
+
+    for it in range(3):
+        x = torch.rand(2,3,256,256, device=device)
+        out = model(x)
+        loss = F.mse
+...
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.distributed.broadcast_object_list
+Similarity score: 0.994113028049469
+
+Similar API information:
+# Extracted call chain for torch.distributed.broadcast_object_list
+
+# --- torch.distributed.distributed_c10d.broadcast_object_list ---
+def broadcast_object_list(
+    object_list: list[Any],
+    src: Optional[int] = None,
+    group: Optional[ProcessGroup] = None,
+    device: Optional[torch.device] = None,
+    group_src: Optional[int] = None,
+):
+    """
+    Broadcasts picklable objects in ``object_list`` to the whole group.
+
+    Similar to :func:`broadcast`, but Python objects can be passed in.
+    Note that all objects in ``object_list`` must be picklable in order to be
+    broadcasted.
+
+    Args:
+        object_list (List[Any]): List of input objects to broadcast.
+            Each object must be picklable. Only objects on the ``src`` rank will
+            be broadcast, but each rank must provide lists of equal sizes.
+        src (int): Source rank from which to broadcast ``object_list``.
+            Source rank is based on global process group (regardless of ``group`` argument)
+        group: (ProcessGroup, optional): The process group to work on. If None,
+            the default process group will be used. Default is ``None``.
+        device (``torch.device``, optional): If not No
+...
+
+Original Test Case:
+# ddp_compile_test.py
+import os, torch
+import torch.nn as nn, torch.nn.functional as F
+import torch._dynamo as dynamo
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+dynamo.config.optimize_ddp = True  # <== necessary for the bug
+
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+dist.init_process_group(backend="nccl" if dist.is_nccl_available() else "gloo")
+
+class SimplistDoubleFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x): return x * 2
+    @staticmethod
+    def backward(ctx, grad_out): return grad_out * 2
+
+class DoubleLayer(nn.Module):
+    def forward(self, x): return SimplistDoubleFn.apply(x)
+
+def main():
+    device = torch.device(f"cuda:{LOCAL_RANK}")
+    model = nn.Sequential(nn.Conv2d(3,3,3,padding=1), DoubleLayer()).to(device)
+    model = torch.compile(model)
+    model = DDP(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK, find_unused_parameters=True)
+    opt = torch.optim.SGD(model.parameters(), lr=1e-4)
+
+    for it in range(3):
+        x = torch.rand(2,3,256,256, device=device)
+        out = model(x)
+        loss = F.mse_loss(out, x)
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        opt.step()
+        print(f"[rank{LOCAL_RANK}] iter={it+1} loss={loss.item():.6f}")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()
+
+The API torch.distributed.broadcast_object_list is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,142 @@
+Issue ID: 164663
+Title: FSDPMemTracker fails with KeyError for RMSNorm during backward
+Bug Description:
+### 🐛 Describe the bug
+
+When sharding a model that uses nn.RMSNorm, FSDPMemTracker raises KeyError during pre-backward. The failure happens when RMSNorm is wrapped with another Linear module in a single fully_sharded().
+
+Repro
+```
+import os
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.tensor.experimental import implicit_replication
+from torch.distributed._tools.fsdp2_mem_tracker import FSDPMemTracker
+
+
+class TestModule(nn.Module):
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.norm = nn.RMSNorm(d_model)
+        self.output = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = self.output(x)
+        return x
+
+
+def main():
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+
+    dist.init_process_group(backend="nccl")
+
+    d_model = 128
+
+    model = TestModule(d_model)
+    model = model.to('cuda:0')
+    mesh = init_device_mesh("cuda", (dist.get_world_size(),))
+
+Original API Under Test: FSDPMemTracker
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.nn.modules.module.register_module_backward_hook
+Similarity score: 0.9896326661109924
+
+Similar API information:
+# Extracted call chain for torch.nn.modules.module.register_module_backward_hook
+
+# --- torch.nn.modules.module.register_module_backward_hook ---
+def register_module_backward_hook(
+    hook: Callable[["Module", _grad_t, _grad_t], Union[None, _grad_t]],
+) -> RemovableHandle:
+    r"""Register a backward hook common to all the modules.
+
+    This function is deprecated in favor of
+    :func:`torch.nn.modules.module.register_module_full_backward_hook`
+    and the behavior of this function will change in future versions.
+
+    Returns:
+        :class:`torch.utils.hooks.RemovableHandle`:
+            a handle that can be used to remove the added hook by calling
+            ``handle.remove()``
+
+    """
+    global _global_is_full_backward_hook
+    if _global_is_full_backward_hook is True:
+        raise RuntimeError(
+            "Cannot use both regular backward hooks and full backward hooks as a "
+            "global Module hook. Please use only one of them."
+        )
+
+    _global_is_full_backward_hook = False
+
+    handle = RemovableHandle(_global_backward_hooks)
+    _global_backward_hooks[handle.id] = hook
+    return handle
+
+Original Test Case:
+import os
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.tensor.experimental import implicit_replication
+from torch.distributed._tools.fsdp2_mem_tracker import FSDPMemTracker
+
+
+class TestModule(nn.Module):
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.norm = nn.RMSNorm(d_model)
+        self.output = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = self.output(x)
+        return x
+
+
+def main():
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+
+    dist.init_process_group(backend="nccl")
+
+    d_model = 128
+
+    model = TestModule(d_model)
+    model = model.to('cuda:0')
+    mesh = init_device_mesh("cuda", (dist.get_world_size(),))
+
+    fully_shard([model.norm, model.output], mesh=mesh)   # shards the RMSNorm's parameters/state across ranks
+    fully_shard(model, mesh=mesh)  # shards the Linear's parameters/state across ranks
+    print(model)
+
+    tracker = FSDPMemTracker(model)
+
+    with tracker, implicit_replication():
+        x = torch.randn(16, d_model, device='cuda:0')
+        y = model(x)
+        loss = y.sum()
+        loss.backward()
+
+
+if __name__ == "__main__":
+    main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

@@ -1,0 +1,79 @@
+Issue ID: 165407
+Title: Specific torch compile memory leak involving flash_attn_varlen_func
+Bug Description:
+### 🐛 Describe the bug
+
+The following code causes a clear memory leak where the # of tensors increases every step. Inductor seems to be holding on to the memory incorrectly, keeping ghosts alive. 
+
+Example repro output:
+```python
+Step  150 | Loss: 2.3023 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2266 (130 w/grad) | AvgSeqLen: 35.8 | Time: 7.0s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  200 | Loss: 2.3037 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2602 (130 w/grad) | AvgSeqLen: 40.2 | Time: 9.0s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  250 | Loss: 2.3055 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3034 (130 w/grad) | AvgSeqLen: 40.6 | Time: 11.6s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  300 | Loss: 2.3029 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3514 (130 w/grad) | AvgSeqLen: 42.9 | Time: 14.4s
+``
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.dtensor.copy_to_mesh
+Similarity score: 0.9937996864318848
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.copy_to_mesh
+
+# --- tensorflow.dtensor.python.api.copy_to_mesh ---
+def copy_to_mesh(
+    tensor: Any,
+    layout: layout_lib.Layout,
+    source_layout: Optional[layout_lib.Layout] = None) -> tensor_lib.Tensor:
+  """Copies a tf.Tensor onto the DTensor device with the given layout.
+
+  Copies a regular tf.Tensor onto the DTensor device. Use the mesh attached to
+  `layout` as target mesh. This method currently only supports replicated
+  layouts, or one-to-one copies for sharded layouts.
+
+  Args:
+    tensor: A regular tf.Tensor to be copied as a DTensor.
+    layout: Target layout (and mesh) for the result DTensor.
+    source_layout: Source layout of the tensor before copy. This argument
+      is deprecated.
+
+  Returns:
+    A DTensor on the DTensor device with the given layout.
+  """
+  del source_layout
+  return relayout(tensor, layout)
+
+# --- tensorflow.dtensor.python.api.relayout ---
+def relayout(
+    tensor: tensor_lib.Tensor,
+    layout: layout_lib.Layout,
+    name: Optional[str] = None,
+
+Original Test Case:
+Step  150 | Loss: 2.3023 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2266 (130 w/grad) | AvgSeqLen: 35.8 | Time: 7.0s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  200 | Loss: 2.3037 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2602 (130 w/grad) | AvgSeqLen: 40.2 | Time: 9.0s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  250 | Loss: 2.3055 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3034 (130 w/grad) | AvgSeqLen: 40.6 | Time: 11.6s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  300 | Loss: 2.3029 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3514 (130 w/grad) | AvgSeqLen: 42.9 | Time: 14.4s
+
+The API tf.experimental.dtensor.copy_to_mesh is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

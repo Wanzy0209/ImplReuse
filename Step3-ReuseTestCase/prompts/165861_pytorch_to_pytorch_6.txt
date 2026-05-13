@@ -1,0 +1,111 @@
+Issue ID: 165861
+Title: Reflect padding: CUDA errror when one of the batch dimensions is larger than uint16 max value (2**16)
+Bug Description:
+### 🐛 Describe the bug
+
+Reflect padding breaks when one of the batch dimensions is larger than uint16 max value (2**16).
+The total memory footprint is not important, as when the tensor holds more numbers, but all but last dimension is within the uint16 range everything is fine. 
+
+Other padding modes behave fine, the problem is only with the reflection one.
+
+## why is this important?
+`torch.stft` only accepts 2D tensors (B, L), requiring flattening of higher dimensions into the batch dimension. This commonly produces batch sizes > 65536 for large batches or multi-dimensional audio/signal data.
+
+## reproduce
+```python
+import torch
+import torch.nn.functional as F
+
+# these break cuda
+x = torch.rand(2**16, 2, device="cuda")
+# x = torch.rand(1, 2**16, 2, device="cuda")
+# x = torch.rand(2**16, 1, 2, device="cuda")
+
+# these are fine even if the total number of samples is more than 2**16, but not along a single dimension
+# x = torch.rand(2**16 - 1, 200, device="cuda")     # everything ok
+# x = torch.rand(8, 2**16 - 1, 200, device="cuda")  # everything ok
+# x = torch.rand(2**16 - 1, 8, 200, device="cuda")  # everything ok
+
+# x = torch.rand(2, 2**18, device="cuda") # everything ok
+
+F.pad(x, (1, 1), mode="constant")
+print("constant pad ok")
+F.pad(x, (1, 1), mode="circular")
+print("circular pad ok")
+F.pad(x, (1, 1), mode="replicate")
+print("replicate pad ok")
+
+F.pad(x, (1, 1), mode="reflect")
+print("this won't print")
+```
+
+output (error message):
+```
+
+Original API Under Test: torch.nn.functional.pad
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.MaxUnpool2d
+Similarity score: 0.9943414926528931
+
+Similar API information:
+# Extracted call chain for torch.nn.MaxUnpool2d
+
+# --- torch.nn.modules.pooling.MaxUnpool2d ---
+class MaxUnpool2d(_MaxUnpoolNd):
+    r"""Computes a partial inverse of :class:`MaxPool2d`.
+
+    :class:`MaxPool2d` is not fully invertible, since the non-maximal values are lost.
+
+    :class:`MaxUnpool2d` takes in as input the output of :class:`MaxPool2d`
+    including the indices of the maximal values and computes a partial inverse
+    in which all non-maximal values are set to zero.
+
+    Note:
+        This operation may behave nondeterministically when the input indices has repeat values.
+        See https://github.com/pytorch/pytorch/issues/80827 and :doc:`/notes/randomness` for more information.
+
+    .. note:: :class:`MaxPool2d` can map several input sizes to the same output
+              sizes. Hence, the inversion process can get ambiguous.
+              To accommodate this, you can provide the needed output size
+              as an additional argument :attr:`output_size` in the forward call.
+              See the Inputs and Example below.
+
+    Args:
+        kernel_size (int or tuple): Size of the max pooling window.
+        stride (int or tuple): Stride of the max pooling window.
+...
+
+Original Test Case:
+import torch
+import torch.nn.functional as F
+
+# these break cuda
+x = torch.rand(2**16, 2, device="cuda")
+# x = torch.rand(1, 2**16, 2, device="cuda")
+# x = torch.rand(2**16, 1, 2, device="cuda")
+
+# these are fine even if the total number of samples is more than 2**16, but not along a single dimension
+# x = torch.rand(2**16 - 1, 200, device="cuda")     # everything ok
+# x = torch.rand(8, 2**16 - 1, 200, device="cuda")  # everything ok
+# x = torch.rand(2**16 - 1, 8, 200, device="cuda")  # everything ok
+
+# x = torch.rand(2, 2**18, device="cuda") # everything ok
+
+F.pad(x, (1, 1), mode="constant")
+print("constant pad ok")
+F.pad(x, (1, 1), mode="circular")
+print("circular pad ok")
+F.pad(x, (1, 1), mode="replicate")
+print("replicate pad ok")
+
+F.pad(x, (1, 1), mode="reflect")
+print("this won't print")
+
+The API torch.nn.MaxUnpool2d is identified as same-library similar to the original PyTorch API torch.nn.functional.pad.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

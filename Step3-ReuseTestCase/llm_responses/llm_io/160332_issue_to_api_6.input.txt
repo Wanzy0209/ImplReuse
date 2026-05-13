@@ -1,0 +1,102 @@
+Issue ID: 160332
+Title: Use FP32 for ConvTranspose3D when using autocast on MPS
+Bug Description:
+### 🐛 Describe the bug
+
+#154696 adds MPS support for ConvTranspose3D for FP32 and Complex64 types. However, `amp.autocast` tries to use a half-precision floats for this operation, which is not supported:
+
+```python
+import torch
+from torch import nn
+
+device = torch.device('mps')
+
+with torch.amp.autocast(device_type=device.type):
+    m = nn.ConvTranspose3d(16, 33, 3, stride=2)
+    m.to(device)
+    x = torch.randn(20, 16, 10, 50, 100).to(device)
+    u = m(x)
+```
+```
+Traceback (most recent call last):
+  File "/Users/REDACTED/test_amp.py", line 10, in <module>
+    u = m(x)
+        ^^^^
+  File "/Users/REDACTED/venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/REDACTED/venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/REDACTED/venv/lib/python3.11/site-packages/torch/nn/modules/conv.py", line 1344, in forward
+    return F.conv_transpose3d(
+           ^^^^^^^^^^^^^^^^^^^
+RuntimeError: ConvTranspose 3D with BF16 or FP16 types is not supported on MPS
+```
+
+And of course, when the dtype is manually specified as FP32, autocast disables itself (understandably):
+```python
+with torch.amp.autocast(device_type=device.type, dtype=torch.float32):
+```
+```
+UserWarning: In MPS autocast, but the target dtype is not suppor
+...
+
+Original API Under Test: torch.amp.autocast
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.backends.cusparselt.version
+Similarity score: 0.9858348369598389
+
+Similar API information:
+# Extracted call chain for torch.backends.cusparselt.version
+
+# --- torch.backends.cusparselt.version ---
+def version() -> Optional[int]:
+    """Return the version of cuSPARSELt"""
+    if not _init():
+        return None
+    return __cusparselt_version
+
+# --- benchmarks.operator_benchmark.pt.qbatchnorm_test.QBatchNorm1dBenchmark._init ---
+def _init():
+    r"""Register prims as implementation of var_mean and group_norm."""
+    global _lib
+
+    if _lib is not None or not is_built():
+        return
+
+    from torch._decomp.decompositions import native_group_norm_backward
+    from torch._refs import native_group_norm
+
+    _lib = _Library("aten", "IMPL")  # noqa: TOR901
+    _lib.impl("native_group_norm", native_group_norm, "MPS")
+    _lib.impl("native_group_norm_backward", native_group_norm_backward, "MPS")
+
+# --- _lib.impl ---
+def impl(qualname, *, device_types=("cpu", "cuda"), func=None):
+    r"""Register an implementation for a device type for this custom op.
+
+    If the op is passed multiple Tensor inputs with different device
+    types, it will dispatch to the registered implementation for the highest
+
+Original Test Case:
+import torch
+from torch import nn
+
+device = torch.device('mps')
+
+with torch.amp.autocast(device_type=device.type):
+    m = nn.ConvTranspose3d(16, 33, 3, stride=2)
+    m.to(device)
+    x = torch.randn(20, 16, 10, 50, 100).to(device)
+    u = m(x)
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

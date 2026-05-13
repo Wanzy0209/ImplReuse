@@ -1,0 +1,91 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_depthwise_conv2d_dtype_precision():
+    """
+    Test case adapted from Issue 160841 (phi-2 MacOS garbage output).
+    
+    The original issue describes a scenario where running a model with 'auto' dtype
+    (defaulting to float16 on MacOS/MPS) produces garbage output, whereas explicitly
+    using bfloat16 fixes the problem.
+    
+    This test replicates that logic for tf.compat.v1.nn.depthwise_conv2d_native by:
+    1. Running the operation with float16 (simulating the 'auto' failure).
+    2. Running the operation with bfloat16 (simulating the fix).
+    3. Comparing both against a float32 baseline to verify that float16 introduces
+       significantly more error (garbage) than bfloat16.
+    """
+    
+    # Setup inputs to simulate a layer within a model
+    batch_size = 1
+    height, width = 8, 8
+    in_channels = 3
+    channel_multiplier = 2
+    
+    input_shape = [batch_size, height, width, in_channels]
+    filter_shape = [3, 3, in_channels, channel_multiplier]
+    
+    # Create random input and filter data
+    np.random.seed(42)
+    np_input = np.random.randn(*input_shape).astype(np.float32)
+    np_filter = np.random.randn(*filter_shape).astype(np.float32)
+    
+    # --- Baseline: Float32 (High Precision) ---
+    input_fp32 = tf.constant(np_input, dtype=tf.float32)
+    filter_fp32 = tf.constant(np_filter, dtype=tf.float32)
+    
+    output_fp32 = tf.compat.v1.nn.depthwise_conv2d_native(
+        input_fp32,
+        filter_fp32,
+        strides=[1, 1, 1, 1],
+        padding='SAME',
+        data_format='NHWC'
+    )
+    
+    # --- Scenario A: Float16 (Simulating the Bug/Garbage) ---
+    # In the original bug, 'auto' often picked float16 on MacOS, leading to bad results.
+    input_fp16 = tf.cast(input_fp32, tf.float16)
+    filter_fp16 = tf.cast(filter_fp32, tf.float16)
+    
+    output_fp16 = tf.compat.v1.nn.depthwise_conv2d_native(
+        input_fp16,
+        filter_fp16,
+        strides=[1, 1, 1, 1],
+        padding='SAME',
+        data_format='NHWC'
+    )
+    
+    # --- Scenario B: BFloat16 (Simulating the Fix) ---
+    # The issue report states changing to bf16 fixed the garbage output.
+    input_bf16 = tf.cast(input_fp32, tf.bfloat16)
+    filter_bf16 = tf.cast(filter_fp32, tf.bfloat16)
+    
+    output_bf16 = tf.compat.v1.nn.depthwise_conv2d_native(
+        input_bf16,
+        filter_bf16,
+        strides=[1, 1, 1, 1],
+        padding='SAME',
+        data_format='NHWC'
+    )
+    
+    # --- Verification ---
+    # Calculate deviation from the float32 baseline
+    error_fp16 = tf.reduce_mean(tf.abs(tf.cast(output_fp16, tf.float32) - output_fp32))
+    error_bf16 = tf.reduce_mean(tf.abs(tf.cast(output_bf16, tf.float32) - output_fp32))
+    
+    print(f"Float16 Error (Simulated Bug): {error_fp16.numpy()}")
+    print(f"BFloat16 Error (Simulated Fix): {error_bf16.numpy()}")
+    
+    # Assert that Float16 produces significantly more error than BFloat16
+    # This reflects the "garbage" vs "working" behavior described in the issue.
+    assert error_fp16 > error_bf16, \
+        "Float16 should produce more error (garbage) than BFloat16 relative to FP32 baseline."
+        
+    # Assert that the Float16 error is non-negligible (simulating visible garbage output)
+    assert error_fp16 > 1e-3, \
+        "Float16 error should be significant to reflect the garbage output issue."
+
+if __name__ == "__main__":
+    test_depthwise_conv2d_dtype_precision()
+```
