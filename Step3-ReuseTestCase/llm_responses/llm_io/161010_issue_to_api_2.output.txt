@@ -1,0 +1,58 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_mirrored_compile_preserve_properties():
+    """
+    Test case for tf.types.experimental.distributed.Mirrored (via MirroredStrategy).
+    
+    This test is derived from a PyTorch issue where torch.compile failed to preserve
+    stride information during a clone operation with memory_format=preserve_format.
+    
+    Here, we translate the semantics to TensorFlow:
+    - torch.compile -> tf.function (graph compilation)
+    - clone(memory_format=...) -> tf.identity (copy operation)
+    - stride() -> shape/dtype (tensor properties that should be preserved)
+    - Mirrored context -> tf.distribute.MirroredStrategy
+    """
+    
+    # Enable MirroredStrategy to work with Mirrored values
+    strategy = tf.distribute.MirroredStrategy()
+    
+    with strategy.scope():
+        # Create a random tensor analogous to torch.rand(5, 5)
+        # In a distributed context, this creates a Mirrored variable/tensor
+        A = tf.random.uniform((5, 5), seed=42)
+
+        def f(val, count):
+            # PyTorch: a.clone(memory_format=torch.preserve_format)
+            # TensorFlow: tf.identity (creates a copy of the tensor)
+            cloned_val = tf.identity(val)
+            
+            # PyTorch: if a.stride() == a.clone(...).stride()
+            # TensorFlow: Check if shape and dtype are preserved.
+            # Note: TensorFlow does not expose 'stride' publicly, so we check 
+            # shape and dtype as the semantic equivalent of memory layout properties.
+            if val.shape == cloned_val.shape and val.dtype == cloned_val.dtype:
+                return count + 1
+            return count
+
+        # 1. Run in Eager mode (PyTorch default)
+        # Initialize count as 0
+        res_eager = f(A, tf.zeros(1, dtype=tf.int32))
+        print(f"Eager Result: {res_eager.numpy()}")
+
+        # 2. Run in Compiled mode (tf.function is analogous to torch.compile)
+        compiled_f = tf.function(f)
+        res_compiled = compiled_f(A, tf.zeros(1, dtype=tf.int32))
+        print(f"Compiled Result: {res_compiled.numpy()}")
+
+        # 3. Assert consistency
+        # The PyTorch bug resulted in res_eager=1 and res_compiled=0.
+        # We assert that both modes produce the same result.
+        assert tf.reduce_all(res_eager == res_compiled).numpy(), \
+            "Compiled mode (tf.function) failed to preserve tensor properties compared to eager mode."
+
+if __name__ == "__main__":
+    test_mirrored_compile_preserve_properties()
+```

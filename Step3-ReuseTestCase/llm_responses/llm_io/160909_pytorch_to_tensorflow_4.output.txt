@@ -1,0 +1,72 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Ensure we are in graph mode to match the compilation/tracing context of the original issue
+tf.compat.v1.disable_eager_execution()
+
+def test_string_input_producer_device_handling():
+    """
+    Adapted from PyTorch Issue 160909.
+    Original Issue: torch.compile with PrivateUse1 sees tensors on "meta" device,
+    causing a RuntimeError about storage being on the wrong device.
+    
+    This test verifies that tf.compat.v1.train.string_input_producer
+    respects device placement and does not raise device mismatch errors
+    during graph construction or execution.
+    """
+    
+    # Define input data (strings)
+    filenames = ["file1.txt", "file2.txt", "file3.txt"]
+    string_tensor = tf.constant(filenames)
+
+    # In the PyTorch bug, the issue was that tensors were on 'meta' instead of 'PrivateUse1'.
+    # Here we explicitly place the producer on a device (CPU) to check for consistency.
+    with tf.device("/cpu:0"):
+        # API Under Test
+        queue = tf.compat.v1.train.string_input_producer(
+            string_tensor, 
+            num_epochs=1, 
+            shuffle=False
+        )
+        
+        # Dequeue to simulate the "run" phase
+        result_op = queue.dequeue()
+
+    # Verify graph construction (analogous to the compile phase in PyTorch)
+    # If there was a device mismatch like in the PyTorch bug, it might manifest here or during session run.
+    assert result_op is not None
+    assert result_op.device == "/device:CPU:0" # Check if device is respected
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize local variables (required for num_epochs)
+        sess.run(tf.compat.v1.local_variables_initializer())
+        
+        # Start queue runners
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+
+        try:
+            # Run the operation
+            # In the PyTorch bug, this raised: RuntimeError('flatten(): flatten: Dispatch failed...')
+            # We check if this runs successfully.
+            result = sess.run(result_op)
+            
+            # Assertion to verify execution
+            assert isinstance(result, bytes)
+            print(f"Successfully dequeued: {result}")
+            
+        except RuntimeError as e:
+            # Catching the specific error type mentioned in the PyTorch bug
+            if "device" in str(e).lower():
+                print(f"Device mismatch error detected: {e}")
+                raise
+            else:
+                raise
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_string_input_producer_device_handling()
+```

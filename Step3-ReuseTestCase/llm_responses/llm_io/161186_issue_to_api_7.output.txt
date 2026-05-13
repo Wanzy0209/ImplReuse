@@ -1,0 +1,63 @@
+```python
+import torch
+import torch.utils.checkpoint
+import torch.backends.mps
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        # Create outputs on the same device as input
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        # Save tensors for backward, which triggers the potential memory leak
+        # when used with activation checkpointing.
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary to access saved tensors
+        return None
+
+
+def op_fn(inp):
+    return MyOp.apply(inp)[0]
+
+
+def test_checkpoint_memory_leak():
+    """
+    Test case for memory leak when custom autograd Function is used with 
+    activation checkpointing. This version leverages the similar API 
+    torch.backends.mps.is_built to check for backend availability.
+    """
+    # Leverage the similar API: torch.backends.mps.is_built
+    # to check if MPS is supported before attempting to run the test on MPS.
+    if torch.backends.mps.is_built():
+        print("MPS backend is built. Running test on MPS device.")
+        device = "mps"
+        
+        if torch.backends.mps.is_available():
+            dummy_input = torch.nn.Parameter(torch.randn(2**20, device=device))
+            
+            # Run the loop to detect memory leaks
+            for i in range(100):
+                full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+                full_out.sum().backward()
+                dummy_input.grad = None  # free gradient memory
+                
+                # Monitor memory usage
+                mem = torch.mps.current_allocated_memory()
+                print(f"Iter {i}: {mem / 1024**2:.2f} MiB")
+        else:
+            print("MPS is built but not available. Skipping test.")
+    else:
+        print("MPS is not built. Skipping test.")
+
+
+if __name__ == "__main__":
+    test_checkpoint_memory_leak()
+```

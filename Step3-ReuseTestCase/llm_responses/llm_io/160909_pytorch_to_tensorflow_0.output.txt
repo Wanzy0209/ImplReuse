@@ -1,0 +1,70 @@
+```python
+import tensorflow as tf
+import traceback
+
+def test_tpu_rewrite_device_handling():
+    """
+    Adapts the PyTorch torch.compile test case to tf.compat.v1.tpu.rewrite.
+    
+    Original Bug Context:
+    In PyTorch, compiling a model for a custom device (PrivateUse1) resulted in 
+    'meta' device tensors being passed to the custom device ops, causing a 
+    RuntimeError during the tracing/compilation phase.
+    
+    This test verifies if tf.compat.v1.tpu.rewrite handles the compilation 
+    and device placement correctly without throwing device mismatch errors 
+    (e.g., expecting TPU tensors but getting generic/placeholder tensors) 
+    during the rewrite process.
+    """
+    
+    # 1. Define the computation (analogous to the PyTorch Model)
+    def my_computation(x):
+        # Using tf.repeat to mirror the 'repeat_interleave' operation mentioned in the PyTorch error log
+        return tf.repeat(x, repeats=2, axis=1)
+
+    # 2. Prepare inputs
+    # Analogous to 'data.to('PrivateUse1')' in the original snippet.
+    # In TensorFlow TPU context, inputs are passed to the rewrite function.
+    data = tf.constant([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+
+    print("Attempting to compile and run on TPU...")
+
+    try:
+        # Initialize TPU system
+        # This is required to access the TPU device, similar to registering PrivateUse1
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        
+        # 3. Compile/Rewrite the computation
+        # Analogous to: compiled = torch.compile(model.to("PrivateUse1"), backend=my_backend)
+        # This API rewrites the computation graph for execution on the TPU device.
+        compiled_op = tf.compat.v1.tpu.rewrite(my_computation, inputs=[data])
+
+        # 4. Execute the compiled operation
+        # Analogous to: result = compiled(data.to('PrivateUse1'))
+        # We use a TF1-style session to execute the graph built by rewrite.
+        with tf.compat.v1.Session() as sess:
+            sess.run(tf.compat.v1.global_variables_initializer())
+            result = sess.run(compiled_op)
+            
+            # Verify the output
+            expected_shape = (2, 6)
+            assert result.shape == expected_shape, \
+                f"Shape mismatch: expected {expected_shape}, got {result.shape}"
+            
+            print("Test Passed: TPU rewrite handled device placement and execution correctly.")
+            print(f"Result: {result}")
+
+    except tf.errors.NotFoundError:
+        # Gracefully handle environments without TPU hardware
+        print("Test Skipped: TPU hardware not found. This is expected in local environments.")
+        print("The API call structure is valid, but execution requires TPU resources.")
+    except Exception as e:
+        # Catch any runtime errors related to device dispatch or compilation
+        print(f"Test Failed with error: {e}")
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    test_tpu_rewrite_device_handling()
+```

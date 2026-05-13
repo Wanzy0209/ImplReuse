@@ -1,0 +1,120 @@
+Issue ID: 161324
+Title: Data inconsistencies when using batch_isend_irecv with 2D tensor views in PyTorch distributed
+Bug Description:
+### 🐛 Describe the bug
+
+Transferring data from two 2D tensors on one rank into a single 2D tensor on another rank using batch_isend_irecv and tensor views fails silently, the output contains inconsistent data. This issue occurs silently without explicit errors.  
+Note: This does not happen if entire 2D tensor is used for the communication.Only, happens when slices are used.
+
+E.g 
+```if rank == 0:
+        # Sender rank
+        local_tensor = torch.randn(batch_size, total_columns)
+        dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+        dst_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+        process_group = dist.group.WORLD
+        send_op1 = dist.P2POp(
+            dist.isend, dst_t1, 1, process_group, tag1
+        )
+        send_op2 = dist.P2POp(
+            dist.isend, dst_t2, 1, process_group, tag2
+        )
+        # Batch send operations
+        dist.batch_isend_irecv([send_op1, send_op2])
+        print(f"Rank {rank} sent tensors with shapes {dst_t1.shape} and {dst_t2.shape}")
+    elif rank == 1:
+        # Receiver rank
+        local_tensor_dst = torch.zeros(batch_size, total_columns)
+        tensor_col_offset1 = split_offsets[0]
+        end_col_offset1 = split_offsets[1]
+        tensor_col_offset2 = split_offsets[2]
+        end_col_offset2 = split_offsets[3]
+        receiving_tensor_view1 = local_tensor_dst[:, tensor_col_offset1:end_col_offset1]
+        receiving_tensor_view2 = local_tensor_dst[:, tensor_col_offset2:end_col_offset2]
+...
+
+Original API Under Test: torch.distributed.irecv
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.diff
+Similarity score: 0.9953798055648804
+
+Similar API information:
+# Extracted call chain for torch.diff
+
+# --- torch._numpy._funcs_impl.diff ---
+def diff(
+    a: ArrayLike,
+    n=1,
+    axis=-1,
+    prepend: Optional[ArrayLike] = None,
+    append: Optional[ArrayLike] = None,
+):
+    axis = _util.normalize_axis_index(axis, a.ndim)
+
+    if n < 0:
+        raise ValueError(f"order must be non-negative but got {n}")
+
+    if n == 0:
+        # match numpy and return the input immediately
+        return a
+
+    if prepend is not None:
+        shape = list(a.shape)
+        shape[axis] = prepend.shape[axis] if prepend.ndim > 0 else 1
+        prepend = torch.broadcast_to(prepend, shape)
+
+    if append is not None:
+        shape = list(a.shape)
+        shape[axis] = append.shape[axis] if append.ndim > 0 else 1
+        append = torch.broadcast_to(append, shape)
+
+    return torch.diff(a, n, axis=axis, prepend=prepend, append=append)
+
+Original Test Case:
+# Sender rank
+        local_tensor = torch.randn(batch_size, total_columns)
+        dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+        dst_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+        process_group = dist.group.WORLD
+        send_op1 = dist.P2POp(
+            dist.isend, dst_t1, 1, process_group, tag1
+        )
+        send_op2 = dist.P2POp(
+            dist.isend, dst_t2, 1, process_group, tag2
+        )
+        # Batch send operations
+        dist.batch_isend_irecv([send_op1, send_op2])
+        print(f"Rank {rank} sent tensors with shapes {dst_t1.shape} and {dst_t2.shape}")
+    elif rank == 1:
+        # Receiver rank
+        local_tensor_dst = torch.zeros(batch_size, total_columns)
+        tensor_col_offset1 = split_offsets[0]
+        end_col_offset1 = split_offsets[1]
+        tensor_col_offset2 = split_offsets[2]
+        end_col_offset2 = split_offsets[3]
+        receiving_tensor_view1 = local_tensor_dst[:, tensor_col_offset1:end_col_offset1]
+        receiving_tensor_view2 = local_tensor_dst[:, tensor_col_offset2:end_col_offset2]
+        process_group = dist.group.WORLD
+        receive_op1 = dist.P2POp(
+            dist.irecv, receiving_tensor_view1, 0, process_group, tag1
+        )
+        receive_op2 = dist.P2POp(
+            dist.irecv, receiving_tensor_view2, 0, process_group, tag2
+        )
+        # Batch receive operations
+        dist.batch_isend_irecv([receive_op1, receive_op2])```
+
+### Versions
+
+version: main branch
+
+cc @ezyang @gchanan @zou3519 @kadeng @msaroufim @H-Huang @awgu @wanchaol @fegin @fduwjj @wz337 @wconstab @d4l3k @pragupta @dcci
+
+The API torch.diff is identified as same-library similar to the original PyTorch API torch.distributed.irecv.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

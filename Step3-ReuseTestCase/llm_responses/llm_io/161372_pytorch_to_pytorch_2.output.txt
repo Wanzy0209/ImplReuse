@@ -1,0 +1,63 @@
+```python
+import torch
+import torch._dynamo as dynamo
+
+def test_torch_prod_compile_regression():
+    """
+    Test case for torch.prod under torch.compile with dynamic shapes.
+    Based on Issue 161372 regarding torch.compile regression in 2.8.0
+    where dynamic shapes (e.g., seq_len 77 vs 78) caused recompilation limits
+    or tensor size mismatch errors.
+    """
+
+    # Define a simple function using torch.prod, the similar API identified.
+    # We simulate a scenario where the input tensor has a dynamic dimension
+    # (e.g., sequence length in an LLM).
+    def forward(x):
+        # Reduce over the sequence dimension (dim 1)
+        # Input shape: (Batch, Seq, Hidden) -> Output shape: (Batch, Hidden)
+        return torch.prod(x, dim=1)
+
+    # Compile the function. 
+    # We explicitly enable dynamic shapes to test the compiler's ability
+    # to handle varying input sizes without hitting recompilation limits.
+    compiled_forward = torch.compile(forward, dynamic=True)
+
+    # Test Case 1: Sequence length 77
+    batch_size = 1
+    seq_len_1 = 77
+    hidden_dim = 128
+    x1 = torch.randn(batch_size, seq_len_1, hidden_dim)
+    
+    # Run the compiled function
+    out1 = compiled_forward(x1)
+    
+    # Verify shape
+    assert out1.shape == (batch_size, hidden_dim), \
+        f"Shape mismatch for seq_len {seq_len_1}. Expected {(batch_size, hidden_dim)}, got {out1.shape}"
+
+    # Test Case 2: Sequence length 78
+    # This specific change (77 -> 78) triggered the "size mismatch" error 
+    # and recompilation limit in the original bug report.
+    seq_len_2 = 78
+    x2 = torch.randn(batch_size, seq_len_2, hidden_dim)
+    
+    # Run the compiled function again with the new shape
+    out2 = compiled_forward(x2)
+    
+    # Verify shape
+    assert out2.shape == (batch_size, hidden_dim), \
+        f"Shape mismatch for seq_len {seq_len_2}. Expected {(batch_size, hidden_dim)}, got {out2.shape}"
+
+    # Verify correctness against eager execution (non-compiled)
+    expected_out1 = torch.prod(x1, dim=1)
+    expected_out2 = torch.prod(x2, dim=1)
+    
+    assert torch.allclose(out1, expected_out1), "Output value mismatch for seq_len 77"
+    assert torch.allclose(out2, expected_out2), "Output value mismatch for seq_len 78"
+
+    print("Test passed: torch.compile handles torch.prod with dynamic shapes (77 vs 78) correctly.")
+
+if __name__ == "__main__":
+    test_torch_prod_compile_regression()
+```

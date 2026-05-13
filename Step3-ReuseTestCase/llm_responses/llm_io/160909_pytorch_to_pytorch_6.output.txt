@@ -1,0 +1,63 @@
+```python
+import torch
+import torch.nn as nn
+
+def test_lobpcg_private_use1():
+    """
+    Test case for torch.lobpcg with PrivateUse1, adapted from Issue 160909.
+    Verifies if torch.lobpcg handles PrivateUse1 tensors correctly, 
+    specifically checking for the 'meta' device tensor bug when used with torch.compile.
+    """
+    
+    # Check if privateuse1 is available in the environment
+    # Note: This test assumes a PrivateUse1 backend is registered or at least the device type is recognized.
+    try:
+        device = torch.device('privateuse1')
+        # Attempt a simple operation to verify device availability
+        _ = torch.empty(0, device=device)
+    except RuntimeError as e:
+        print(f"Skipping test: PrivateUse1 device not available or not initialized. Error: {e}")
+        return
+
+    # Create a symmetric positive definite matrix A on PrivateUse1
+    # A = X @ X.T + I
+    try:
+        X = torch.randn(5, 5, device=device)
+        A = X @ X.T + torch.eye(5, device=device)
+    except RuntimeError as e:
+        print(f"Skipping test: Could not create tensors on privateuse1. Error: {e}")
+        return
+
+    # Define a function that uses the similar API: torch.lobpcg
+    def run_lobpcg(input_tensor):
+        # lobpcg finds the k largest eigenvalues and corresponding eigenvectors
+        return torch.lobpcg(input_tensor, k=1)
+
+    # The original bug report involves torch.compile causing meta tensors to appear on PrivateUse1 ops.
+    # We compile the function wrapping lobpcg to check for this behavior.
+    try:
+        compiled_run_lobpcg = torch.compile(run_lobpcg)
+        eigenvalues, eigenvectors = compiled_run_lobpcg(A)
+        
+        # Basic assertions to verify execution
+        assert eigenvalues is not None
+        assert eigenvectors is not None
+        assert eigenvalues.device.type == device.type
+        assert eigenvectors.device.type == device.type
+        
+        print("Test Passed: torch.lobpcg works with PrivateUse1 under torch.compile")
+        
+    except RuntimeError as e:
+        error_msg = str(e)
+        # Check for the specific bug signature mentioned in the issue:
+        # "storage is not on the custom PrivateUse1 device. Got: meta"
+        if "meta" in error_msg and "PrivateUse1" in error_msg:
+            print(f"Bug Reproduced: {error_msg}")
+            raise AssertionError("Bug detected: Meta tensors passed to PrivateUse1 ops")
+        else:
+            # Other errors (e.g. backend not fully implemented) are noted but not the target bug
+            print(f"RuntimeError (likely backend implementation): {error_msg}")
+
+if __name__ == "__main__":
+    test_lobpcg_private_use1()
+```

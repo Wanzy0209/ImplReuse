@@ -1,0 +1,50 @@
+```python
+import torch
+
+def test_torch_full_large_tensor_mps():
+    """
+    Test case for Issue 161265: torch.full fails for 4+Gb tensors on MacOS MPS.
+    This test preserves the original bug reproduction logic while leveraging
+    torch.profiler.itt.range_pop to wrap the operation.
+    """
+    # Skip if MPS is not available
+    if not torch.backends.mps.is_available():
+        print("MPS device not found. Skipping test.")
+        return
+
+    # Leveraging the similar API: torch.profiler.itt.range_pop
+    # We establish a range to profile the tensor creation, ensuring the 
+    # interaction between large tensor ops and profiling ranges is valid.
+    torch.profiler.itt.range_push("large_tensor_fill_operation")
+
+    try:
+        # Original bug reproduction logic adapted for torch.full
+        # Size calculation: 2 * (2^31 + 5) bytes > 4GB
+        # This triggers the buffer filling issue described in the bug report.
+        size = (2, (1 << 31) + 5)
+        fill_value = 1
+        
+        # Original API Under Test: torch.full
+        # torch.ones is implemented via torch.full, so testing torch.full directly
+        # addresses the root cause mentioned in the issue.
+        a = torch.full(size, fill_value, dtype=torch.int8, device='mps')
+        
+        # Verify the fix: values should be 1, not 0
+        # Bug report showed a[1, -2] was 0
+        assert a[1, -2] == fill_value, \
+            f"Expected {fill_value}, got {a[1, -2]} at index [1, -2]"
+            
+        # Bug report showed slice contained 0s
+        assert torch.all(a[:, -2] == fill_value), \
+            "Slice [:, -2] contains incorrect values"
+            
+        print("Test passed: torch.full correctly filled large tensor on MPS.")
+
+    finally:
+        # Leveraging the similar API: torch.profiler.itt.range_pop
+        # Ensure the range is closed even if assertions fail.
+        torch.profiler.itt.range_pop()
+
+if __name__ == "__main__":
+    test_torch_full_large_tensor_mps()
+```

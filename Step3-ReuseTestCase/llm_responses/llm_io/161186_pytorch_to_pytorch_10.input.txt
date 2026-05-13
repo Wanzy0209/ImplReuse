@@ -1,0 +1,113 @@
+Issue ID: 161186
+Title: Memory leak when custom autograd Function is used with AC due to early-stopping
+Bug Description:
+### 🐛 Describe the bug
+
+Originally reported by Alex Nichol in slack channel
+
+```python
+import torch
+import torch.utils.checkpoint
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary
+        return None
+
+
+def op_fn(inp):
+    return MyOp.apply(inp)[0]
+
+
+dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+for i in range(1000):
+    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+    full_out.sum().backward()
+    dummy_input.grad = None  # free gradient memory
+    print(i, torch.cuda.memory_allocated() / 1024**2, "MiB")
+```
+
+This leak happens when a custom autograd Function is the last operation in a checkpointed region (and the autograd Function saves an output for backward). It happens because AC raises an exception to exit the forward early prior to the proper clean up custom autograd Function needs to do when it saves tensors.
+
+Original API Under Test: torch.utils.checkpoint.checkpoint
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.hub.help
+Similarity score: 0.9935280084609985
+
+Similar API information:
+# Extracted call chain for torch.hub.help
+
+# --- torch.hub.help ---
+def help(github, model, force_reload=False, skip_validation=False, trust_repo=None):
+    r"""
+    Show the docstring of entrypoint ``model``.
+
+    Args:
+        github (str): a string with format <repo_owner/repo_name[:ref]> with an optional
+            ref (a tag or a branch). If ``ref`` is not specified, the default branch is assumed
+            to be ``main`` if it exists, and otherwise ``master``.
+            Example: 'pytorch/vision:0.10'
+        model (str): a string of entrypoint name defined in repo's ``hubconf.py``
+        force_reload (bool, optional): whether to discard the existing cache and force a fresh download.
+            Default is ``False``.
+        skip_validation (bool, optional): if ``False``, torchhub will check that the ref
+            specified by the ``github`` argument properly belongs to the repo owner. This will make
+            requests to the GitHub API; you can specify a non-default GitHub token by setting the
+            ``GITHUB_TOKEN`` environment variable. Default is ``False``.
+        trust_repo (bool, str or None): ``"check"``, ``True``, ``False`` or ``None``.
+            This
+...
+
+Original Test Case:
+import torch
+import torch.utils.checkpoint
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary
+        return None
+
+
+def op_fn(inp):
+    return MyOp.apply(inp)[0]
+
+
+dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+for i in range(1000):
+    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+    full_out.sum().backward()
+    dummy_input.grad = None  # free gradient memory
+    print(i, torch.cuda.memory_allocated() / 1024**2, "MiB")
+
+The API torch.hub.help is identified as same-library similar to the original PyTorch API torch.utils.checkpoint.checkpoint.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

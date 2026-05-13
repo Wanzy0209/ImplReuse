@@ -1,0 +1,55 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_gather_object_stride(rank, world_size):
+    """
+    Test case to verify if torch.distributed.gather_object preserves 
+    the stride of tensors, similar to the stride preservation issue 
+    found with torch.compile and clone(memory_format=torch.preserve_format).
+    """
+    # Initialize distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Setup data from the original bug report
+    A = torch.rand(5, 5)
+    Q, R = torch.linalg.qr(A)
+    rhs = torch.ones(Q.shape[0], 1)
+    a = torch.linalg.solve_triangular(R, Q.T @ rhs, upper=True)
+
+    # Adaptation: Use gather_object instead of torch.compile
+    # We want to check if the stride is preserved after gathering the object
+    if rank == 0:
+        gather_list = [None] * world_size
+    else:
+        gather_list = None
+
+    dist.gather_object(a, gather_list, dst=0)
+
+    if rank == 0:
+        # Verify the stride of the gathered object matches the original
+        # This mirrors the check in the original bug: 
+        # a.stride() == a.clone(memory_format=torch.preserve_format).stride()
+        original_stride = a.stride()
+        gathered_a = gather_list[0]
+        gathered_stride = gathered_a.stride()
+
+        print(f"Rank 0 - Original stride: {original_stride}")
+        print(f"Rank 0 - Gathered stride:  {gathered_stride}")
+
+        assert original_stride == gathered_stride, (
+            f"torch.distributed.gather_object failed to preserve stride. "
+            f"Expected {original_stride}, got {gathered_stride}"
+        )
+        print("Test Passed: Strides preserved by gather_object.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_gather_object_stride, args=(world_size,), nprocs=world_size, join=True)
+```

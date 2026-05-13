@@ -1,0 +1,80 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_data_dependent_range_producer():
+    """
+    Adapts the PyTorch data-dependent slice bug reproduction logic to 
+    tf.compat.v1.train.range_input_producer.
+    
+    Original Logic:
+    1. Create a mask.
+    2. Calculate a scalar limit (text_len) based on the sum of the mask.
+    3. Use that scalar to slice/limit data processing.
+    
+    TensorFlow Adaptation:
+    1. Create a mask tensor.
+    2. Calculate a dynamic limit tensor (text_len) via reduce_sum.
+    3. Pass this dynamic limit to range_input_producer to verify it handles
+       data-dependent graph inputs correctly.
+    """
+    # Disable eager execution to use tf.compat.v1 graph mode
+    tf.compat.v1.disable_eager_execution()
+
+    # Mimic the mask creation from the PyTorch bug report
+    # PyTorch: mask = (torch.arange(512) < 8).unsqueeze(0).cuda()
+    # TensorFlow: Create a boolean mask and cast to int32 for summation
+    mask = tf.cast(tf.range(512) < 8, tf.int32)
+
+    # Mimic the data-dependent scalar calculation
+    # PyTorch: text_len = encoder_attention_mask.sum().item()
+    # TensorFlow: Calculate the sum to determine the limit dynamically
+    text_len = tf.reduce_sum(mask)
+
+    # Use the similar API: tf.compat.v1.train.range_input_producer
+    # The 'limit' is now a data-dependent tensor, mirroring the bug's scenario
+    # where a tensor-derived scalar was used for slicing.
+    # We set shuffle=False to match the ordered nature of the original slice.
+    # We set num_epochs=1 to ensure the queue finishes after one pass.
+    range_producer = tf.compat.v1.train.range_input_producer(
+        limit=text_len,
+        num_epochs=1,
+        shuffle=False,
+        capacity=32
+    )
+
+    # Dequeue the elements to verify the range
+    dequeue_op = range_producer.dequeue()
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize local variables (required for range_input_producer with num_epochs)
+        sess.run(tf.compat.v1.local_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        # Start queue runners
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+        results = []
+        try:
+            # The expected limit is 8 (since mask is < 8)
+            # We attempt to dequeue more than 8 to ensure we hit the end of the queue
+            for _ in range(20):
+                val = sess.run(dequeue_op)
+                results.append(val)
+        except tf.errors.OutOfRangeError:
+            # Expected when num_epochs is exhausted
+            pass
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+    # Assertions to verify correct behavior
+    # We expect the range 0 to 7 (8 items total)
+    expected = list(range(8))
+    assert results == expected, f"Expected {expected}, but got {results}"
+    print("Test passed: Data-dependent range producer handled correctly.")
+
+if __name__ == "__main__":
+    test_data_dependent_range_producer()
+```

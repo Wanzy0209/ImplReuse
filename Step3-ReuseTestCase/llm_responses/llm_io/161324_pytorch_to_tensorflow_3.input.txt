@@ -1,0 +1,118 @@
+Issue ID: 161324
+Title: Data inconsistencies when using batch_isend_irecv with 2D tensor views in PyTorch distributed
+Bug Description:
+### 🐛 Describe the bug
+
+Transferring data from two 2D tensors on one rank into a single 2D tensor on another rank using batch_isend_irecv and tensor views fails silently, the output contains inconsistent data. This issue occurs silently without explicit errors.  
+Note: This does not happen if entire 2D tensor is used for the communication.Only, happens when slices are used.
+
+E.g 
+```if rank == 0:
+        # Sender rank
+        local_tensor = torch.randn(batch_size, total_columns)
+        dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+        dst_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+        process_group = dist.group.WORLD
+        send_op1 = dist.P2POp(
+            dist.isend, dst_t1, 1, process_group, tag1
+        )
+        send_op2 = dist.P2POp(
+            dist.isend, dst_t2, 1, process_group, tag2
+        )
+        # Batch send operations
+        dist.batch_isend_irecv([send_op1, send_op2])
+        print(f"Rank {rank} sent tensors with shapes {dst_t1.shape} and {dst_t2.shape}")
+    elif rank == 1:
+        # Receiver rank
+        local_tensor_dst = torch.zeros(batch_size, total_columns)
+        tensor_col_offset1 = split_offsets[0]
+        end_col_offset1 = split_offsets[1]
+        tensor_col_offset2 = split_offsets[2]
+        end_col_offset2 = split_offsets[3]
+        receiving_tensor_view1 = local_tensor_dst[:, tensor_col_offset1:end_col_offset1]
+        receiving_tensor_view2 = local_tensor_dst[:, tensor_col_offset2:end_col_offset2]
+...
+
+Original API Under Test: torch.distributed.irecv
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.math.logical_and
+Similarity score: 0.9944823980331421
+
+Similar API information:
+# Extracted call chain for tf.math.logical_and
+
+# --- tensorflow.python.ops.numpy_ops.np_math_ops.logical_and ---
+def logical_and(x1, x2):
+  return _logical_binary_op(math_ops.logical_and, x1, x2)
+
+# --- tensorflow.python.ops.numpy_ops.np_math_ops._logical_binary_op ---
+def _logical_binary_op(tf_fun, x1, x2):
+  x1 = np_array_ops.array(x1, dtype=np.bool_)
+  x2 = np_array_ops.array(x2, dtype=np.bool_)
+  return tf_fun(x1, x2)
+
+# --- tensorflow.python.ops.numpy_ops.np_array_ops.array ---
+def array(val, dtype=None, copy=True, ndmin=0):  # pylint: disable=redefined-outer-name
+  """Since Tensors are immutable, a copy is made only if val is placed on a
+
+  different device than the current one. Even if `copy` is False, a new Tensor
+  may need to be built to satisfy `dtype` and `ndim`. This is used only if `val`
+  is an ndarray or a Tensor.
+  """  # pylint:disable=g-docstring-missing-newline
+  if dtype:
+    dtype = np_utils.result_type(dtype)
+  return _array_internal(val, dtype, copy, ndmin)
+
+# --- tensorflow.python.ops.numpy_ops.np_array_ops._array_internal ---
+def _array_internal(val, dtype=None, copy=True, ndmin=0):  # pylint: disable=redefined-outer-name
+  """Main implementation of np.ar
+...
+
+Original Test Case:
+# Sender rank
+        local_tensor = torch.randn(batch_size, total_columns)
+        dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+        dst_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+        process_group = dist.group.WORLD
+        send_op1 = dist.P2POp(
+            dist.isend, dst_t1, 1, process_group, tag1
+        )
+        send_op2 = dist.P2POp(
+            dist.isend, dst_t2, 1, process_group, tag2
+        )
+        # Batch send operations
+        dist.batch_isend_irecv([send_op1, send_op2])
+        print(f"Rank {rank} sent tensors with shapes {dst_t1.shape} and {dst_t2.shape}")
+    elif rank == 1:
+        # Receiver rank
+        local_tensor_dst = torch.zeros(batch_size, total_columns)
+        tensor_col_offset1 = split_offsets[0]
+        end_col_offset1 = split_offsets[1]
+        tensor_col_offset2 = split_offsets[2]
+        end_col_offset2 = split_offsets[3]
+        receiving_tensor_view1 = local_tensor_dst[:, tensor_col_offset1:end_col_offset1]
+        receiving_tensor_view2 = local_tensor_dst[:, tensor_col_offset2:end_col_offset2]
+        process_group = dist.group.WORLD
+        receive_op1 = dist.P2POp(
+            dist.irecv, receiving_tensor_view1, 0, process_group, tag1
+        )
+        receive_op2 = dist.P2POp(
+            dist.irecv, receiving_tensor_view2, 0, process_group, tag2
+        )
+        # Batch receive operations
+        dist.batch_isend_irecv([receive_op1, receive_op2])```
+
+### Versions
+
+version: main branch
+
+cc @ezyang @gchanan @zou3519 @kadeng @msaroufim @H-Huang @awgu @wanchaol @fegin @fduwjj @wz337 @wconstab @d4l3k @pragupta @dcci
+
+The API tf.math.logical_and is identified as cross-library similar to the original PyTorch API torch.distributed.irecv.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

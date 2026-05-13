@@ -1,0 +1,70 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_name_scope_with_symbolic_tensors():
+    """
+    Adapted from PyTorch Issue 160909.
+    
+    Original Issue: torch.compile with PrivateUse1 sees tensors on "meta" device,
+    causing ops like repeat_interleave to fail because they expect real device storage.
+    
+    TensorFlow Adaptation: 
+    - torch.compile -> tf.function (which uses symbolic tensors during tracing, analogous to meta tensors).
+    - PrivateUse1 backend -> tf.keras.backend.name_scope (the target API).
+    - Model -> A simple tf.Module or function.
+    
+    This test verifies that tf.keras.backend.name_scope handles the execution mode
+    (eager vs graph/symbolic) correctly without crashing when encountering symbolic tensors.
+    """
+    
+    # Define a simple model/operation
+    class Model(tf.Module):
+        def __call__(self, x):
+            # Use the target API: tf.keras.backend.name_scope
+            # This acts as the context for our "backend" logic
+            with tf.keras.backend.name_scope("custom_backend_scope"):
+                # Perform operations similar to the PyTorch bug report (repeat/flatten)
+                # In PyTorch, these failed when receiving meta tensors.
+                # In TF, tf.function traces with symbolic tensors.
+                x = tf.repeat(x, repeats=2, axis=1)
+                # Flatten operation
+                x = tf.reshape(x, [tf.shape(x)[0], -1])
+                return x
+
+    # Instantiate model
+    model = Model()
+
+    # Compile the model using tf.function (analogous to torch.compile)
+    # This triggers tracing with symbolic tensors (meta tensors)
+    compiled_model = tf.function(model)
+
+    # Create data (simulating data.to('PrivateUse1'))
+    # Using CPU as the standard device
+    data = tf.ones((1, 8, 3, 128), dtype=tf.float32)
+
+    # Run the compiled model
+    # In the original bug, this raised:
+    # RuntimeError('flatten(): flatten: Dispatch failed: storage is not on the custom PrivateUse1 device. Got: meta')
+    try:
+        result = compiled_model(data)
+        
+        # Assertions to verify correctness
+        # Expected shape after repeat (dim 1 -> 16) and flatten
+        expected_shape = (1, 16 * 3 * 128)
+        assert result.shape == expected_shape, f"Shape mismatch: {result.shape} != {expected_shape}"
+        
+        print("Test Passed: tf.keras.backend.name_scope handled symbolic tensors (meta) correctly during compilation.")
+        
+    except RuntimeError as e:
+        # Check for errors similar to the PyTorch bug (device/storage mismatch with meta/symbolic tensors)
+        error_msg = str(e)
+        if "meta" in error_msg.lower() or "symbolic" in error_msg.lower() or "device" in error_msg.lower():
+            print(f"Test Failed: Encountered device/meta tensor error similar to PyTorch issue: {e}")
+            raise
+        else:
+            raise
+
+if __name__ == "__main__":
+    test_name_scope_with_symbolic_tensors()
+```

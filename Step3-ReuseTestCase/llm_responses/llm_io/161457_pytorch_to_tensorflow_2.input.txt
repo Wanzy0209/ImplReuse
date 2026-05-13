@@ -1,0 +1,135 @@
+Issue ID: 161457
+Title: [compile] meta-llama correctness issue
+Bug Description:
+### 🐛 Describe the bug
+
+There seems to be an accuracy issue in torch.compile when running meta-llama/Llama-3.2-1B with bfloat16.
+
+Things I've tried: 
+* torch.compile backend eager/aot_eager/aot_eager_decomp_partition all work fine, so I guess this is an inductor issue 
+* dtype=float32 works fine too 
+* TORCHINDUCTOR_EMULATE_PRECISION_CASTS=1 does not seem to fix the issue
+
+repro script:
+```python
+    def test_meta_llama(self):
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        import torch
+        import time 
+        import copy
+
+        model_name = "meta-llama/Llama-3.2-1B"
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=torch.bfloat16, device_map="cuda"
+        )
+        model.eval()
+        
+        model.generation_config.do_sample = False
+        model.generation_config.use_cache = True
+        model.generation_config.cache_implementation = "static"
+        model.generation_config.max_new_tokens = 2000
+        model.generation_config.pad_token_id = tokenizer.eos_token_id
+        model.generation_config.temperature = 0.0
+
+        vocab_size = tokenizer.vocab_size
+        input_ids = torch.randint(
+            low=0,
+            high=vocab_size,
+            size=(1, 1000),
+            device="cuda",
+            dtype=torch.long,
+        )
+        example_inputs = {"input_ids": input_ids}
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.dtensor.copy_to_mesh
+Similarity score: 0.9937996864318848
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.copy_to_mesh
+
+# --- tensorflow.dtensor.python.api.copy_to_mesh ---
+def copy_to_mesh(
+    tensor: Any,
+    layout: layout_lib.Layout,
+    source_layout: Optional[layout_lib.Layout] = None) -> tensor_lib.Tensor:
+  """Copies a tf.Tensor onto the DTensor device with the given layout.
+
+  Copies a regular tf.Tensor onto the DTensor device. Use the mesh attached to
+  `layout` as target mesh. This method currently only supports replicated
+  layouts, or one-to-one copies for sharded layouts.
+
+  Args:
+    tensor: A regular tf.Tensor to be copied as a DTensor.
+    layout: Target layout (and mesh) for the result DTensor.
+    source_layout: Source layout of the tensor before copy. This argument
+      is deprecated.
+
+  Returns:
+    A DTensor on the DTensor device with the given layout.
+  """
+  del source_layout
+  return relayout(tensor, layout)
+
+# --- tensorflow.dtensor.python.api.relayout ---
+def relayout(
+    tensor: tensor_lib.Tensor,
+    layout: layout_lib.Layout,
+    name: Optional[str] = None,
+
+Original Test Case:
+def test_meta_llama(self):
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        import torch
+        import time 
+        import copy
+
+        model_name = "meta-llama/Llama-3.2-1B"
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=torch.bfloat16, device_map="cuda"
+        )
+        model.eval()
+        
+        model.generation_config.do_sample = False
+        model.generation_config.use_cache = True
+        model.generation_config.cache_implementation = "static"
+        model.generation_config.max_new_tokens = 2000
+        model.generation_config.pad_token_id = tokenizer.eos_token_id
+        model.generation_config.temperature = 0.0
+
+        vocab_size = tokenizer.vocab_size
+        input_ids = torch.randint(
+            low=0,
+            high=vocab_size,
+            size=(1, 1000),
+            device="cuda",
+            dtype=torch.long,
+        )
+        example_inputs = {"input_ids": input_ids}
+
+        model_copy = copy.deepcopy(model)
+
+        start = time.time()
+        res1 = model_copy(**example_inputs).logits
+        print(time.time() - start)
+
+        model_copy = copy.deepcopy(model)
+        model_copy.forward = torch.compile(model_copy.forward)
+
+        start = time.time()
+        res2 = model_copy(**example_inputs).logits
+        print(time.time() - start)
+        
+        self.assertTrue(torch.allclose(res1, res2, atol=0.001))
+
+The API tf.experimental.dtensor.copy_to_mesh is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

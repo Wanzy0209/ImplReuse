@@ -1,0 +1,65 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_gradient_descent_with_dynamic_shapes():
+    """
+    Test case for tf.compat.v1.train.GradientDescentOptimizer.
+    
+    This test is derived from a PyTorch issue (ID: 161372) where torch.compile 
+    failed due to dynamic tensor shapes (size mismatch 77 vs 78) causing 
+    excessive recompilations. 
+    
+    This test verifies that the TensorFlow GradientDescentOptimizer can handle 
+    optimization steps where the input tensor shapes vary dynamically between 
+    executions, ensuring the optimizer updates variables correctly without 
+    crashing or requiring recompilation (in the graph sense).
+    """
+    # Reset graph to ensure clean state
+    tf.compat.v1.reset_default_graph()
+
+    # Define a variable to optimize
+    var = tf.compat.v1.get_variable("weights", shape=[10], initializer=tf.compat.v1.zeros_initializer())
+
+    # Define a placeholder with a dynamic first dimension (None)
+    # This mimics the dynamic sequence length/batch size causing issues in the PyTorch bug
+    inputs = tf.compat.v1.placeholder(tf.float32, shape=[None, 10])
+
+    # Simple loss: sum of (inputs * var)
+    # The gradient depends on the sum of inputs, which changes with the batch size
+    loss = tf.reduce_sum(inputs * var)
+
+    # Instantiate the specific API requested
+    optimizer = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=0.1)
+    train_op = optimizer.minimize(loss)
+
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        # Step 1: Feed data with batch size 5
+        data_batch_1 = np.ones((5, 10))
+        _, val_after_step1 = sess.run([train_op, var], feed_dict={inputs: data_batch_1})
+        
+        # Gradient calculation: d(loss)/d(var) = sum(inputs) = 5 * 1 = 5
+        # var = var - lr * grad = 0 - 0.1 * 5 = -0.5
+        expected_val_1 = np.full((10,), -0.5)
+        assert np.allclose(val_after_step1, expected_val_1), \
+            f"Step 1 failed: Expected {expected_val_1}, got {val_after_step1}"
+
+        # Step 2: Feed data with batch size 6 (Dynamic shape change)
+        # In the PyTorch issue, a change from 77 to 78 triggered a recompile limit error.
+        # Here we verify TF handles this shape change gracefully.
+        data_batch_2 = np.ones((6, 10))
+        _, val_after_step2 = sess.run([train_op, var], feed_dict={inputs: data_batch_2})
+        
+        # Gradient: sum(inputs) = 6 * 1 = 6
+        # var = -0.5 - 0.1 * 6 = -1.1
+        expected_val_2 = np.full((10,), -1.1)
+        assert np.allclose(val_after_step2, expected_val_2), \
+            f"Step 2 failed: Expected {expected_val_2}, got {val_after_step2}"
+
+    print("Test passed: GradientDescentOptimizer handles dynamic shapes correctly.")
+
+if __name__ == "__main__":
+    test_gradient_descent_with_dynamic_shapes()
+```

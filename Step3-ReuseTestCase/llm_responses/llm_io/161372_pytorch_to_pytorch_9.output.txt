@@ -1,0 +1,75 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    """
+    Initialize the distributed environment.
+    """
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use 'gloo' backend for CPU-based testing
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    """
+    Destroy the process group.
+    """
+    dist.destroy_process_group()
+
+def test_broadcast_object_list(rank, world_size):
+    """
+    Test case for torch.distributed.broadcast_object_list.
+    
+    This test verifies that a list of objects (including tensors of varying shapes)
+    can be correctly broadcasted from the source rank to all other ranks.
+    """
+    setup(rank, world_size)
+
+    # Prepare data
+    # The original bug report involved dynamic tensor sizes (e.g., 77 vs 78).
+    # We test broadcasting a list containing tensors of different shapes to ensure
+    # the serialization and deserialization handles shape variations correctly.
+    if rank == 0:
+        tensor_a = torch.randn(10, 10)
+        tensor_b = torch.randn(5, 5)
+        # Include a non-tensor object to test general picklability
+        obj_list = [tensor_a, tensor_b, "test_string", 123]
+    else:
+        # Other ranks initialize with None or placeholders of the same length
+        obj_list = [None, None, None, None]
+
+    # Perform the broadcast
+    # Rank 0 is the source
+    dist.broadcast_object_list(obj_list, src=0)
+
+    # Verify the received objects on non-source ranks
+    if rank != 0:
+        assert isinstance(obj_list[0], torch.Tensor), "First element should be a Tensor"
+        assert obj_list[0].shape == (10, 10), f"Shape mismatch for tensor_a: expected (10, 10), got {obj_list[0].shape}"
+        
+        assert isinstance(obj_list[1], torch.Tensor), "Second element should be a Tensor"
+        assert obj_list[1].shape == (5, 5), f"Shape mismatch for tensor_b: expected (5, 5), got {obj_list[1].shape}"
+        
+        assert obj_list[2] == "test_string", "String mismatch"
+        assert obj_list[3] == 123, "Integer mismatch"
+        
+        print(f"Rank {rank}: Test passed. Objects received correctly.")
+    else:
+        print(f"Rank {rank}: Objects broadcasted successfully.")
+
+    cleanup()
+
+def run_test():
+    """
+    Helper function to spawn processes.
+    """
+    world_size = 2
+    # Start 2 processes
+    mp.spawn(test_broadcast_object_list, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    run_test()
+```

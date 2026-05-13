@@ -1,0 +1,118 @@
+Issue ID: 161186
+Title: Memory leak when custom autograd Function is used with AC due to early-stopping
+Bug Description:
+### 🐛 Describe the bug
+
+Originally reported by Alex Nichol in slack channel
+
+```python
+import torch
+import torch.utils.checkpoint
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary
+        return None
+
+
+def op_fn(inp):
+    return MyOp.apply(inp)[0]
+
+
+dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+for i in range(1000):
+    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+    full_out.sum().backward()
+    dummy_input.grad = None  # free gradient memory
+    print(i, torch.cuda.memory_allocated() / 1024**2, "MiB")
+```
+
+This leak happens when a custom autograd Function is the last operation in a checkpointed region (and the autograd Function saves an output for backward). It happens because AC raises an exception to exit the forward early prior to the proper clean up custom autograd Function needs to do when it saves tensors.
+
+Original API Under Test: torch.utils.checkpoint.checkpoint
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.export.export
+Similarity score: 0.9940975308418274
+
+Similar API information:
+# Extracted call chain for torch.export.export
+
+# --- torch.export.export ---
+def export(
+    mod: torch.nn.Module,
+    args: tuple[Any, ...],
+    kwargs: Optional[dict[str, Any]] = None,
+    *,
+    dynamic_shapes: Optional[Union[dict[str, Any], tuple[Any], list[Any]]] = None,
+    strict: bool = False,
+    preserve_module_call_signature: tuple[str, ...] = (),
+) -> ExportedProgram:
+    """
+    :func:`export` takes any nn.Module along with example inputs, and produces a traced graph representing
+    only the Tensor computation of the function in an Ahead-of-Time (AOT) fashion,
+    which can subsequently be executed with different inputs or serialized.  The
+    traced graph (1) produces normalized operators in the functional ATen operator set
+    (as well as any user-specified custom operators), (2) has eliminated all Python control
+    flow and data structures (with certain exceptions), and (3) records the set of
+    shape constraints needed to show that this normalization and control-flow elimination
+    is sound for future inputs.
+
+    **Soundness Guarantee**
+
+    While tracing, :func:`export()` takes note of shape-related assumptions
+    made by the user program and the underlying
+...
+
+Original Test Case:
+import torch
+import torch.utils.checkpoint
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary
+        return None
+
+
+def op_fn(inp):
+    return MyOp.apply(inp)[0]
+
+
+dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+for i in range(1000):
+    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+    full_out.sum().backward()
+    dummy_input.grad = None  # free gradient memory
+    print(i, torch.cuda.memory_allocated() / 1024**2, "MiB")
+
+The API torch.export.export is identified as same-library similar to the original PyTorch API torch.utils.checkpoint.checkpoint.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

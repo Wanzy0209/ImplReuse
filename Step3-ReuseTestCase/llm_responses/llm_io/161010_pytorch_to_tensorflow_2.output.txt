@@ -1,0 +1,49 @@
+```python
+import tensorflow as tf
+from tensorflow.experimental import dtensor
+
+def test_copy_to_mesh_layout_preservation():
+    """
+    Adapted test case for tf.experimental.dtensor.copy_to_mesh.
+    Original bug: torch.compile doesn't preserve stride with clone(memory_format=torch.preserve_format).
+    This test verifies that copy_to_mesh correctly applies the requested layout
+    in both eager and compiled (tf.function) modes.
+    """
+    
+    # Setup a single-device mesh for testing
+    mesh = dtensor.create_mesh([("x", 1)], devices=["CPU:0"])
+    
+    # Create a regular tensor
+    A = tf.random.uniform((5, 5))
+    
+    def f(A, count):
+        # Define a target layout (Replicated in this case)
+        layout = dtensor.Layout([dtensor.UNSHARDED, dtensor.UNSHARDED], mesh)
+        
+        # Perform the copy operation (API under test)
+        # Analogous to the clone operation in the PyTorch bug
+        d_A = dtensor.copy_to_mesh(A, layout)
+        
+        # Verify if the layout is preserved/applied correctly
+        # Analogous to checking stride() in the PyTorch bug
+        if d_A.layout == layout:
+            return count + 1
+        return count
+
+    # 1. Run in Eager mode
+    res1 = f(A, tf.zeros(1, dtype=tf.int32))
+    print(f"Eager result: {res1}")
+
+    # 2. Run in Compiled mode (tf.function is analogous to torch.compile)
+    compiled_f = tf.function(f)
+    res2 = compiled_f(A, tf.zeros(1, dtype=tf.int32))
+    print(f"Compiled result: {res2}")
+
+    # Assert that the behavior is consistent between eager and compiled modes
+    # The original PyTorch bug showed a discrepancy here (res1 != res2)
+    assert res1 == res2, f"Layout preservation mismatch: Eager={res1}, Compiled={res2}"
+    assert res1 == 1, "Layout was not preserved/applied correctly"
+
+if __name__ == "__main__":
+    test_copy_to_mesh_layout_preservation()
+```

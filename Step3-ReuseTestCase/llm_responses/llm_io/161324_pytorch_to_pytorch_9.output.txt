@@ -1,0 +1,49 @@
+```python
+import torch
+
+def test_randn_like_with_2d_tensor_views():
+    """
+    Test case for torch.randn_like using 2D tensor views.
+    Adapted from the context of Issue 161324 to verify behavior with tensor slices.
+    """
+    # Setup parameters mimicking the bug report
+    batch_size = 4
+    total_columns = 10
+    split_offsets = [0, 3, 7, 10]
+
+    # Create a base tensor
+    local_tensor = torch.randn(batch_size, total_columns)
+
+    # Create views (slices) similar to the bug report scenario
+    # Rank 0 sends slices, Rank 1 receives into slices.
+    # Here we create slices to test randn_like.
+    view1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+    view2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+
+    print(f"Base tensor shape: {local_tensor.shape}")
+    print(f"View 1 shape: {view1.shape}, View 2 shape: {view2.shape}")
+
+    # Replace the distributed communication call site (dist.irecv) 
+    # with the similar API call (torch.randn_like)
+    # Original: receive_op1 = dist.P2POp(dist.irecv, receiving_tensor_view1, ...)
+    # Adapted:
+    result1 = torch.randn_like(view1)
+    result2 = torch.randn_like(view2)
+
+    # Verify that the resulting tensors have the correct shapes matching the views
+    assert result1.shape == view1.shape, f"Shape mismatch for result1: {result1.shape} != {view1.shape}"
+    assert result2.shape == view2.shape, f"Shape mismatch for result2: {result2.shape} != {view2.shape}"
+
+    # Verify that the resulting tensors have the same dtype as the input views
+    assert result1.dtype == view1.dtype, f"Dtype mismatch for result1"
+    assert result2.dtype == view2.dtype, f"Dtype mismatch for result2"
+
+    # Verify that the data is actually random and not just a copy of the view
+    assert not torch.equal(result1, view1), "Result1 should contain new random data"
+    assert not torch.equal(result2, view2), "Result2 should contain new random data"
+
+    print("Test passed: torch.randn_like works correctly with 2D tensor views.")
+
+if __name__ == "__main__":
+    test_randn_like_with_2d_tensor_views()
+```

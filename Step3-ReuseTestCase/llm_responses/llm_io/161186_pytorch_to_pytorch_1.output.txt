@@ -1,0 +1,59 @@
+```python
+import torch
+import torch.utils.checkpoint
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary
+        return None
+
+
+def op_fn(inp):
+    # MyOp returns two tensors, but checkpoint_sequential expects functions
+    # in the sequence to take one tensor and return one tensor.
+    # We select the first one to match the original test case's behavior.
+    return MyOp.apply(inp)[0]
+
+
+if torch.cuda.is_available():
+    dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+    
+    # Run a loop to check for memory accumulation
+    for i in range(100):
+        # Adaptation: Replace torch.utils.checkpoint.checkpoint with 
+        # torch.utils.checkpoint.checkpoint_sequential.
+        # checkpoint_sequential requires a list of functions and segments.
+        # We wrap op_fn in a list and use 1 segment to simulate the original behavior.
+        full_out = torch.utils.checkpoint.checkpoint_sequential(
+            [op_fn], 
+            segments=1, 
+            input=dummy_input, 
+            use_reentrant=False
+        )
+        
+        full_out.sum().backward()
+        dummy_input.grad = None  # free gradient memory
+        
+        mem = torch.cuda.memory_allocated() / 1024**2
+        print(f"Iteration {i}: {mem:.2f} MiB")
+        
+        # Assertion to detect leak: 
+        # If memory grows significantly (e.g., > 50MB) after a few iterations, it indicates a leak.
+        # 2**20 floats is 4MB. MyOp saves 2 tensors (8MB) + input (4MB) = 12MB per iter if leaked.
+        if i > 5 and mem > 50: 
+            raise AssertionError(f"Memory leak detected! Memory at iteration {i} is {mem:.2f} MiB")
+else:
+    print("CUDA not available, skipping test.")
+```

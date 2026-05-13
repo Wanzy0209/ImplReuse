@@ -1,0 +1,71 @@
+```python
+import tensorflow as tf
+import tempfile
+import os
+
+def test_matching_files_large_input():
+    """
+    Adapted test case for tf.raw_ops.MatchingFilesDataset based on PyTorch MPS issue #161265.
+    
+    Original Bug Logic:
+    - Create a tensor with a size exceeding 4GB (2^31 + 5 elements).
+    - Verify that the buffer is filled correctly (values are not 0).
+    
+    Adapted Logic:
+    - Create a large input tensor of patterns (simulating large data handling).
+    - Verify that the API processes the large tensor correctly and returns the expected files.
+    """
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create a few dummy files to match
+        for i in range(5):
+            filepath = os.path.join(tmpdir, f"file_{i}.txt")
+            with open(filepath, "w") as f:
+                f.write("content")
+
+        # Create a large list of patterns.
+        # The original bug used (1 << 31) + 5 elements (approx 4GB+).
+        # We use a smaller but significant number (100,000) to test large input handling
+        # without causing Out-Of-Memory errors in the test environment.
+        num_patterns = 100000
+        pattern = os.path.join(tmpdir, "*.txt")
+        large_patterns = [pattern] * num_patterns
+
+        # Convert to tensor (analogous to torch.ones creation)
+        patterns_tensor = tf.constant(large_patterns, dtype=tf.string)
+
+        # Call the target API
+        try:
+            variant_tensor = tf.raw_ops.MatchingFilesDataset(patterns=patterns_tensor)
+            
+            # Wrap the variant tensor in a Dataset to access results
+            # Output spec for MatchingFilesDataset is a scalar string (filename)
+            dataset = tf.data.Dataset.from_variant(
+                variant_tensor, 
+                output_classes=tf.string, 
+                output_shapes=(), 
+                output_types=tf.string
+            )
+
+            # Verify the dataset works and returns files
+            # Note: Since we repeated the pattern 100,000 times, we expect many results.
+            # We just check that it doesn't crash and returns valid data.
+            files = list(dataset.as_numpy_iterator())
+            
+            # Assertions
+            assert len(files) > 0, "Dataset should return matching files"
+            
+            # Check that one of our created files is present in the results
+            # (Results are bytes in numpy iterator)
+            found = any(b"file_0.txt" in f for f in files)
+            assert found, "Expected file file_0.txt not found in results"
+
+            print("Test passed: API handled large input tensor correctly.")
+
+        except Exception as e:
+            print(f"Test failed with error: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_matching_files_large_input()
+```

@@ -1,0 +1,42 @@
+```python
+import torch
+from torch import library
+
+# Define a custom operator that encapsulates the logic from the bug report
+library.define("custom::neg_add_uint8", "(Tensor c, Tensor x) -> Tensor")
+
+# Register the abstract implementation (the API under test)
+# This defines the behavior on FakeTensors (shape/dtype inference)
+@library.impl_abstract("custom::neg_add_uint8")
+def neg_add_uint8_abstract(c, x):
+    # The result of neg(uint8) + float is a float tensor with the shape of x
+    return torch.empty_like(x)
+
+# Register the concrete implementation
+@library.impl("custom::neg_add_uint8", "CPU")
+def neg_add_uint8_impl(c, x):
+    return torch.neg(c) + x
+
+def foo(x):
+    c = torch.tensor(7, dtype=torch.uint8)
+    # Use the custom operator
+    return torch.ops.custom.neg_add_uint8(c, x)
+
+torch.manual_seed(0)
+x = torch.randn(2, 2, dtype=torch.float32)
+
+# Run eager
+res_eager = foo(x)
+
+# Run compiled
+cfoo = torch.compile(foo)
+res_compiled = cfoo(x)
+
+print(f"Eager: {res_eager}")
+print(f"Compiled: {res_compiled}")
+
+# Verify correctness
+# Note: If the compiler traces into the implementation, this might catch the original bug.
+# If it treats it as a kernel call, it verifies the custom op integration.
+assert torch.allclose(res_eager, res_compiled), "Results differ between eager and compiled"
+```

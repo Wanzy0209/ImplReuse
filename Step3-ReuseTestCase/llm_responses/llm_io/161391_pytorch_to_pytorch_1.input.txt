@@ -1,0 +1,127 @@
+Issue ID: 161391
+Title: Memory leak when in-place op is applied to non-leaf tensor with requires_grad=True
+Bug Description:
+### 🐛 Describe the bug
+
+### **Description:**
+ When an in-place operation is applied to a non-leaf tensor with requires_grad=True, and the tensor subsequently loses its backward graph node because of Python arithmetic operators, the process’s resident memory keeps growing, indicating a memory leak caused by unreleased reference counts.
+### To Reproduce
+```
+import torch
+import unittest
+import gc, psutil
+
+def mem_mb_print():
+    gc.collect()
+    mem = psutil.virtual_memory()
+    process = psutil.Process().memory_info().rss
+
+    print(f"used: {mem.used // 1024**1} KB,"
+       f"process: {process // 1024**1} KB,"
+       f"percent: {mem.percent} %,"
+       f"PyTorch tensors: {sum(1 for o in gc.get_objects() if torch.is_tensor(o))}")
+
+class TestLeafGradMaxCUDA(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_cross_grad_max_cuda(self):
+        device = torch.device("cuda")
+
+        # leaf GPU tensor
+        leaf = torch.randn(8, 1, 24, device=device, requires_grad=True)
+        no_leaf= leaf * 1.0
+
+        for _ in range(100):
+            window_left = no_leaf[:, :, :-1]          # [8, 1, 23]
+            # inplace operators
+            no_leaf[:, :, 1:] = torch.max( 
+                no_leaf[:, :, 1:],  
+                window_left   
+            )
+            # Python arithmetic operators
+            mask = (no_leaf >= 0)
+            mem_mb_print()
+
+Original API Under Test: torch.max
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.min
+Similarity score: 0.9999419450759888
+
+Similar API information:
+# Extracted call chain for torch.min
+
+# --- torch.onnx.symbolic_opset18.min ---
+def min(g: jit_utils.GraphContext, self, dim_or_y=None, keepdim=None):
+    return symbolic_helper._min_helper(g, self, dim_or_y, keepdim)
+
+# --- torch.onnx.symbolic_helper._min_helper ---
+def _min_helper(g: jit_utils.GraphContext, self, dim_or_y=None, keepdim=None):
+    # torch.min(input)
+    if dim_or_y is None and keepdim is None:
+        return g.op("ReduceMin", self, keepdims_i=0)
+    # torch.min(input, other)
+    if keepdim is None:
+        return _op_with_optional_float_cast(g, "Min", self, dim_or_y, opset_before=12)
+    # torch.min(input, dim, keepdim)
+    else:
+        keepdim = _get_const(keepdim, "i", "keepdim")
+        dim = _get_const(dim_or_y, "i", "dim")
+        if g.opset < 18:
+            min = g.op("ReduceMin", self, axes_i=[dim], keepdims_i=keepdim)
+        else:
+            axes = g.op("Constant", value_t=torch.tensor([dim], dtype=torch.long))
+            min = g.op("ReduceMin", self, axes, keepdims_i=keepdim)
+        indices = g.op("ArgMin", self, axis_i=dim, keepdims_i=keepdim)
+        return min, indices
+
+# --- torch.onnx.symbolic_helper._get_const ---
+def _get_const(value, desc, a
+...
+
+Original Test Case:
+import torch
+import unittest
+import gc, psutil
+
+def mem_mb_print():
+    gc.collect()
+    mem = psutil.virtual_memory()
+    process = psutil.Process().memory_info().rss
+
+    print(f"used: {mem.used // 1024**1} KB,"
+       f"process: {process // 1024**1} KB,"
+       f"percent: {mem.percent} %,"
+       f"PyTorch tensors: {sum(1 for o in gc.get_objects() if torch.is_tensor(o))}")
+
+class TestLeafGradMaxCUDA(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_cross_grad_max_cuda(self):
+        device = torch.device("cuda")
+
+        # leaf GPU tensor
+        leaf = torch.randn(8, 1, 24, device=device, requires_grad=True)
+        no_leaf= leaf * 1.0
+
+        for _ in range(100):
+            window_left = no_leaf[:, :, :-1]          # [8, 1, 23]
+            # inplace operators
+            no_leaf[:, :, 1:] = torch.max( 
+                no_leaf[:, :, 1:],  
+                window_left   
+            )
+            # Python arithmetic operators
+            mask = (no_leaf >= 0)
+            mem_mb_print()
+
+        loss = mask.sum()
+
+if __name__ == "__main__":
+      unittest.main()
+
+The API torch.min is identified as same-library similar to the original PyTorch API torch.max.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,83 @@
+```python
+import unittest
+import os
+import logging
+import torch
+import torch.utils.cpp_extension
+from unittest.mock import patch
+
+class TestCppExtensionWarning(unittest.TestCase):
+    """
+    Test case for Issue 161629: Verifies that the TORCH_CUDA_ARCH_LIST warning
+    is rank-aware and logged at the appropriate level.
+    """
+    
+    def setUp(self):
+        # Ensure TORCH_CUDA_ARCH_LIST is not set to trigger the warning logic
+        self.env_patcher = patch.dict(os.environ, {}, clear=False)
+        self.env_patcher.start()
+        if 'TORCH_CUDA_ARCH_LIST' in os.environ:
+            del os.environ['TORCH_CUDA_ARCH_LIST']
+
+    def tearDown(self):
+        self.env_patcher.stop()
+
+    @patch('torch.utils.cpp_extension.torch.distributed.is_initialized')
+    @patch('torch.utils.cpp_extension.torch.distributed.get_rank')
+    @patch('torch.utils.cpp_extension._jit_compile')
+    def test_warning_on_rank_0(self, mock_compile, mock_get_rank, mock_is_init):
+        """
+        Test that the warning is printed on rank 0 with the correct message.
+        """
+        mock_is_init.return_value = True
+        mock_get_rank.return_value = 0
+        
+        # Set log level to INFO to capture the warning
+        logger = logging.getLogger('torch.utils.cpp_extension')
+        logger.setLevel(logging.INFO)
+        
+        with self.assertLogs('torch.utils.cpp_extension', level='INFO') as cm:
+            try:
+                torch.utils.cpp_extension.CUDAExtension(
+                    name='test_ext',
+                    sources=['dummy.cpp']
+                )
+            except Exception:
+                # Ignore errors from dummy compilation as we are testing the warning logic
+                pass
+
+        # Verify the warning message is present
+        logs = '\n'.join(cm.output)
+        self.assertIn('TORCH_CUDA_ARCH_LIST', logs)
+        # Check for the improved message content indicating what it is setting the var to
+        self.assertIn('setting', logs.lower())
+
+    @patch('torch.utils.cpp_extension.torch.distributed.is_initialized')
+    @patch('torch.utils.cpp_extension.torch.distributed.get_rank')
+    @patch('torch.utils.cpp_extension._jit_compile')
+    def test_no_warning_on_rank_7(self, mock_compile, mock_get_rank, mock_is_init):
+        """
+        Test that the warning is NOT printed on non-zero ranks (e.g., rank 7).
+        """
+        mock_is_init.return_value = True
+        mock_get_rank.return_value = 7
+        
+        logger = logging.getLogger('torch.utils.cpp_extension')
+        logger.setLevel(logging.INFO)
+        
+        with self.assertLogs('torch.utils.cpp_extension', level='INFO') as cm:
+            try:
+                torch.utils.cpp_extension.CUDAExtension(
+                    name='test_ext',
+                    sources=['dummy.cpp']
+                )
+            except Exception:
+                pass
+        
+        logs = '\n'.join(cm.output)
+        # The warning should not be present on rank 7
+        self.assertNotIn('TORCH_CUDA_ARCH_LIST', logs)
+
+if __name__ == '__main__':
+    unittest.main()
+```

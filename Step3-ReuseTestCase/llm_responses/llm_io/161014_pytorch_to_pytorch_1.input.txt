@@ -1,0 +1,89 @@
+Issue ID: 161014
+Title: Inconsistent constant_pad_nd behavior with negative padding
+Bug Description:
+### 🕵️‍♂️ Detected with [FACTO](https://github.com/meta-pytorch/FACTO)
+
+### 🐛 Describe the bug
+
+The aten op `constant_pad_nd` allows for negative padding, as long as the absolute value of the padding is smaller than the size, and as long as the resulting output doesn't have negative size
+
+For example:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2]).shape
+torch.Size([5, 0])
+```
+Notice that the -1, -2 padding applies to the last dimension
+
+We can also pad the first dimension, by adding two more pads:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 0, 0]).shape
+torch.Size([5, 0])
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, -1, -1]).shape
+torch.Size([3, 0])
+```
+
+However, in the following case, it throws an error:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 1, 1]).shape
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/Users/mcandales/miniconda3/envs/facto/lib/python3.11/site-packages/torch/_ops.py", line 840, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: The input size 3, plus negative padding -1 and -2 resulted in a negative output size, which is invalid. Check dimension 1 of your input.
+```
+
+Notice that, if we make sure the output won't have size 0, we always avoid the bug:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -1, 1, 1])
+...
+
+Original API Under Test: torch.nn.functional.pad
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.functional.conv1d
+Similarity score: 0.9949925541877747
+
+Similar API information:
+# Extracted call chain for torch.nn.functional.conv1d
+
+# --- torch.ao.nn.quantized.functional.conv1d ---
+def conv1d(
+    input,
+    weight,
+    bias,
+    stride=1,
+    padding=0,
+    dilation=1,
+    groups=1,
+    padding_mode="zeros",
+    scale=1.0,
+    zero_point=0,
+    dtype=torch.quint8,
+):
+    r"""
+    Applies a 1D convolution over a quantized 1D input composed of several input
+    planes.
+
+    See :class:`~torch.ao.nn.quantized.Conv1d` for details and output shape.
+
+    Args:
+        input: quantized input tensor of shape :math:`(\text{minibatch} , \text{in\_channels} , iW)`
+        weight: quantized filters of shape :math:`(\text{out\_channels} , \frac{\text{in\_channels}}{\text{groups}} , iW)`
+        bias: **non-quantized** bias tensor of shape :math:`(\text{out\_channels})`. The tensor type must be `torch.float`.
+        stride: the stride of the convolving kernel. Can be a single number or a
+          tuple `(sW,)`. Default: 1
+        padding: implicit paddings on both sides of the input. Can be a
+          single number or a tuple `(padW,)`. Default: 0
+
+Original Test Case:
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2]).shape
+torch.Size([5, 0])
+
+The API torch.nn.functional.conv1d is identified as same-library similar to the original PyTorch API torch.nn.functional.pad.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

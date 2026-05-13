@@ -1,0 +1,105 @@
+```python
+import tensorflow as tf
+import os
+import shutil
+from tensorflow.experimental import dtensor
+
+class DTensorCheckpointDynamicShapeTest(tf.test.TestCase):
+    """
+    Test case for tf.experimental.dtensor.DTensorCheckpoint based on the 
+    torch.compile regression (Issue 161372).
+    
+    The original bug involves a tensor size mismatch (expected 77, actual 78) 
+    causing a recompilation limit error in a cache. This test verifies that 
+    DTensorCheckpoint correctly handles state updates where tensor shapes 
+    change dynamically (e.g., sequence length changes in LLMs), ensuring 
+    the checkpointing mechanism does not fail when saving/restoring tensors 
+    of varying dimensions.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.test_dir = self.get_temp_dir()
+        # Ensure a clean directory for checkpoints
+        if os.path.exists(self.test_dir):
+            shutil.rmtree(self.test_dir)
+        os.makedirs(self.test_dir, exist_ok=True)
+
+        # Setup a basic mesh for DTensor
+        # Using CPU to ensure the test runs in most environments
+        devices = tf.config.list_physical_devices("CPU")
+        if not devices:
+            self.skipTest("No CPU devices found")
+        self.mesh = dtensor.create_mesh(
+            [("batch", 1), ("model", 1)], 
+            devices=devices
+        )
+
+    def test_dynamic_shape_checkpoint_save_and_restore(self):
+        """
+        Tests saving and restoring checkpoints when the underlying tensor 
+        shape changes from 77 to 78, mirroring the specific error condition 
+        in the original bug report.
+        """
+        
+        class SimpleModel(tf.Module):
+            def __init__(self, mesh, initial_shape):
+                self.mesh = mesh
+                # Initialize a variable acting as a 'cache' or state
+                # Initial shape mimics the 'expected 77' in the bug
+                self.state = dtensor.DTensor(
+                    tf.zeros(initial_shape, dtype=tf.float32),
+                    layout=dtensor.Layout([dtensor.UNSHARDED, dtensor.UNSHARDED], mesh)
+                )
+
+        # 1. Initialize model with shape [1, 77]
+        model = SimpleModel(self.mesh, initial_shape=[1, 77])
+        
+        # 2. Setup DTensorCheckpoint
+        checkpoint = tf.train.Checkpoint(model=model)
+        dtensor_checkpoint = tf.experimental.dtensor.DTensorCheckpoint(
+            mesh=self.mesh, 
+            root=checkpoint
+        )
+        manager = tf.train.CheckpointManager(
+            dtensor_checkpoint, 
+            directory=self.test_dir, 
+            max_to_keep=2
+        )
+
+        # 3. Save the initial state
+        path_1 = manager.save()
+        self.assertIsNotNone(path_1)
+        self.assertEqual(model.state.shape.as_list(), [1, 77])
+
+        # 4. Simulate the bug scenario: Update tensor size from 77 to 78
+        # In the original bug, this triggered: "tensor 'cache.cache[0][0]' size mismatch... expected 77, actual 78"
+        model.state = dtensor.DTensor(
+            tf.zeros([1, 78], dtype=tf.float32), # Actual 78
+            layout=dtensor.Layout([dtensor.UNSHARDED, dtensor.UNSHARDED], self.mesh)
+        )
+        self.assertEqual(model.state.shape.as_list(), [1, 78])
+
+        # 5. Save the updated state
+        # This should succeed without hitting a limit or mismatch error
+        path_2 = manager.save()
+        self.assertIsNotNone(path_2)
+
+        # 6. Verify restoration of the new shape
+        new_model = SimpleModel(self.mesh, initial_shape=[1, 1]) # Dummy init
+        new_checkpoint = tf.train.Checkpoint(model=new_model)
+        new_dtensor_checkpoint = tf.experimental.dtensor.DTensorCheckpoint(
+            mesh=self.mesh, 
+            root=new_checkpoint
+        )
+        
+        # Restore the second checkpoint (shape 78)
+        status = new_dtensor_checkpoint.restore(path_2)
+        status.assert_existing_objects_matched()
+        
+        # Assert that the restored tensor has the updated shape (78), not the initial one (77)
+        self.assertEqual(new_model.state.shape.as_list(), [1, 78])
+
+if __name__ == "__main__":
+    tf.test.main()
+```

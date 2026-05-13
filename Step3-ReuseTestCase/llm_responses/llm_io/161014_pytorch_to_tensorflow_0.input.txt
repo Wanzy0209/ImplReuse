@@ -1,0 +1,89 @@
+Issue ID: 161014
+Title: Inconsistent constant_pad_nd behavior with negative padding
+Bug Description:
+### 🕵️‍♂️ Detected with [FACTO](https://github.com/meta-pytorch/FACTO)
+
+### 🐛 Describe the bug
+
+The aten op `constant_pad_nd` allows for negative padding, as long as the absolute value of the padding is smaller than the size, and as long as the resulting output doesn't have negative size
+
+For example:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2]).shape
+torch.Size([5, 0])
+```
+Notice that the -1, -2 padding applies to the last dimension
+
+We can also pad the first dimension, by adding two more pads:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 0, 0]).shape
+torch.Size([5, 0])
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, -1, -1]).shape
+torch.Size([3, 0])
+```
+
+However, in the following case, it throws an error:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 1, 1]).shape
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/Users/mcandales/miniconda3/envs/facto/lib/python3.11/site-packages/torch/_ops.py", line 840, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: The input size 3, plus negative padding -1 and -2 resulted in a negative output size, which is invalid. Check dimension 1 of your input.
+```
+
+Notice that, if we make sure the output won't have size 0, we always avoid the bug:
+```python
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -1, 1, 1])
+...
+
+Original API Under Test: torch.nn.functional.pad
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.image.yiq_to_rgb
+Similarity score: 0.9925280809402466
+
+Similar API information:
+# Extracted call chain for tf.image.yiq_to_rgb
+
+# --- tensorflow.python.ops.image_ops_impl.yiq_to_rgb ---
+def yiq_to_rgb(images):
+  """Converts one or more images from YIQ to RGB.
+
+  Outputs a tensor of the same shape as the `images` tensor, containing the RGB
+  value of the pixels.
+  The output is only well defined if the Y value in images are in [0,1],
+  I value are in [-0.5957,0.5957] and Q value are in [-0.5226,0.5226].
+
+  Args:
+    images: 2-D or higher rank. Image data to convert. Last dimension must be
+      size 3.
+
+  Returns:
+    images: tensor with the same shape as `images`.
+  """
+  images = ops.convert_to_tensor(images, name='images')
+  kernel = ops.convert_to_tensor(
+      _yiq_to_rgb_kernel, dtype=images.dtype, name='kernel')
+  ndims = images.get_shape().ndims
+  return math_ops.tensordot(images, kernel, axes=[[ndims - 1], [0]])
+
+# --- tensorflow.python.ops.math_ops.tensordot ---
+def tensordot(a, b, axes, name=None):
+  r"""Tensor contraction of a and b along specified axes and outer product.
+
+  Tensordot (also known as tensor contraction) sums the product of elements
+  from `a` and `b` over the indices specified by `axes`.
+
+Original Test Case:
+>>> torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2]).shape
+torch.Size([5, 0])
+
+The API tf.image.yiq_to_rgb is identified as cross-library similar to the original PyTorch API torch.nn.functional.pad.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

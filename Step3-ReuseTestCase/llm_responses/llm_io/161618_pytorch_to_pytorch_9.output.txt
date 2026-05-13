@@ -1,0 +1,57 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Adapted data definitions from the original bug report
+    m = 20120
+    k = 1536
+    n = 512
+
+    # Prepare object list
+    # Rank 0 initializes the objects (tensors), others prepare empty lists
+    if rank == 0:
+        a = torch.randn((m, n))
+        mat1 = torch.randn((m, k))
+        mat2 = torch.randn((k, n))
+        object_list = [a, mat1, mat2]
+    else:
+        object_list = [None, None, None]
+
+    # Call the similar API: torch.distributed.broadcast_object_list
+    dist.broadcast_object_list(object_list, src=0)
+
+    # Verification for non-source ranks
+    if rank != 0:
+        assert isinstance(object_list[0], torch.Tensor), "Rank 1 failed to receive tensor a"
+        assert isinstance(object_list[1], torch.Tensor), "Rank 1 failed to receive tensor mat1"
+        assert isinstance(object_list[2], torch.Tensor), "Rank 1 failed to receive tensor mat2"
+        
+        assert object_list[0].shape == (m, n), f"Shape mismatch for a: {object_list[0].shape} vs {(m, n)}"
+        assert object_list[1].shape == (m, k), f"Shape mismatch for mat1: {object_list[1].shape} vs {(m, k)}"
+        assert object_list[2].shape == (k, n), f"Shape mismatch for mat2: {object_list[2].shape} vs {(k, n)}"
+        print(f"Rank {rank} successfully verified broadcasted objects.")
+
+    cleanup()
+
+def main():
+    world_size = 2
+    # Spawn 2 processes to simulate a distributed environment
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()
+```

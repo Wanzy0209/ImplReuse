@@ -1,0 +1,52 @@
+```python
+import torch
+import torch.library
+
+# Define a custom operator that exhibits dynamic shape behavior.
+# This mimics the scenario in the bug report where tensor sizes changed (77 -> 78),
+# causing torch.compile to fail due to recompilation limits.
+def dynamic_op_meta(x):
+    # The abstract implementation (meta kernel) defines the shape inference.
+    # Here we specify that the output size is input size + 1.
+    return x.new_empty(x.size(0) + 1)
+
+def dynamic_op_impl(x):
+    # The concrete implementation matches the meta shape.
+    return torch.cat([x, torch.zeros(1, device=x.device, dtype=x.dtype)])
+
+# Register the custom operator
+try:
+    torch.library.define("test_ns::dynamic_op", "(Tensor x) -> Tensor")
+except AssertionError:
+    pass # Ignore if already defined in previous runs
+
+# Use the similar API: torch.library.impl_abstract
+# This registers the FakeTensor implementation required by torch.compile
+torch.library.impl_abstract("test_ns::dynamic_op", dynamic_op_meta)
+
+# Register the actual implementation
+torch.library.impl("test_ns::dynamic_op", dynamic_op_impl, "Autograd")
+
+# The function to be compiled, using the custom operator
+def forward(x):
+    return torch.ops.test_ns.dynamic_op(x)
+
+# Compile the function
+compiled_forward = torch.compile(forward)
+
+# Test Case 1: Input size 77
+# This establishes the initial graph
+input_77 = torch.randn(77)
+output_77 = compiled_forward(input_77)
+assert output_77.shape == (78,), f"Test failed for size 77: expected shape (78,), got {output_77.shape}"
+
+# Test Case 2: Input size 78
+# In the bug report (Issue 161372), changing sizes caused a "size mismatch" error
+# and hit the recompile_limit. This verifies that the abstract implementation
+# correctly handles the dynamic shape transition.
+input_78 = torch.randn(78)
+output_78 = compiled_forward(input_78)
+assert output_78.shape == (79,), f"Test failed for size 78: expected shape (79,), got {output_78.shape}"
+
+print("Test passed: torch.compile successfully handled dynamic shapes defined by torch.library.impl_abstract")
+```

@@ -1,0 +1,115 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_batch_parallel_stride_preservation():
+    """
+    Adapts the PyTorch torch.compile stride preservation test to 
+    tf.compat.v1.tpu.batch_parallel.
+    
+    The original bug checks if torch.compile preserves the stride of a tensor
+    when clone(memory_format=torch.preserve_format) is used.
+    
+    In TensorFlow, tensors are immutable, so we check if the parallel execution
+    (batch_parallel) preserves the tensor properties (shape/layout) compared
+    to eager execution, using tf.identity as the clone equivalent.
+    """
+    
+    # Check for TPU availability
+    tpu_available = False
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        tpu_available = True
+        print("Running on TPU:", resolver.master())
+    except ValueError:
+        print("TPU not found. This test requires a TPU to run batch_parallel.")
+        print("Skipping execution.")
+        return
+
+    # Define inputs
+    # We use a batch dimension to allow sharding. 
+    # Original: (5, 5). Adapted: (10, 5, 5) to allow 2 shards of (5, 5, 5).
+    batch_size = 10
+    A = tf.random.uniform((batch_size, 5, 5))
+    
+    # The 'count' variable from the original test. 
+    # In batch_parallel, lexically captured tensors are broadcast to all shards.
+    count = tf.zeros(1, dtype=tf.int32)
+
+    # Define the computation function
+    # This function will run on each shard.
+    def computation(A_shard):
+        # A_shard shape: (5, 5, 5) if num_shards=2
+        
+        # PyTorch: Q, R = torch.linalg.qr(A)
+        Q, R = tf.linalg.qr(A_shard)
+        
+        # PyTorch: rhs = torch.ones(Q.shape[0], 1, device=A.device)
+        # Q shape is (5, 5, 5). Q.shape[0] is 5.
+        rhs = tf.ones([tf.shape(Q)[0], 1], dtype=A_shard.dtype)
+        
+        # PyTorch: a = torch.linalg.solve_triangular(R, Q.T @ rhs, upper=True)
+        # TF: triangular_solve(R, rhs, lower=False)
+        # Q.T @ rhs -> tf.matmul(Q, rhs, transpose_a=True)
+        a = tf.linalg.triangular_solve(R, tf.matmul(Q, rhs, transpose_a=True), lower=False)
+        
+        # PyTorch: if a.stride() == a.clone(memory_format=torch.preserve_format).stride():
+        # TF adaptation: Check if shape is preserved after identity (clone equivalent).
+        # Note: TF doesn't expose strides in the same way. We check shape equality.
+        # The bug in PyTorch was that the optimized path changed the stride.
+        # Here we check if the parallel path changes the shape/properties unexpectedly.
+        
+        # We use tf.identity to mimic clone.
+        a_clone = tf.identity(a)
+        
+        # Check if properties are preserved (e.g. shape)
+        # In the original bug, this check failed (returned False) in the compiled version.
+        is_preserved = tf.reduce_all(tf.equal(tf.shape(a), tf.shape(a_clone)))
+        
+        # Return count + 1 if preserved, else count
+        # Since 'count' is captured, it is broadcasted.
+        return tf.cond(is_preserved, lambda: count + 1, lambda: count)
+
+    # 1. Run Eager (Standard execution)
+    # We run the computation on the full batch
+    res_eager = computation(A)
+    print(f"Eager result: {res_eager.numpy()}")
+
+    # 2. Run via batch_parallel (Optimized/Parallel execution)
+    # We shard the batch dimension (0-th dimension) into 2 shards.
+    num_shards = 2
+    
+    # batch_parallel expects inputs to be a list of tensors to shard.
+    # 'count' is not in inputs, so it is broadcasted (captured).
+    res_parallel = tf.compat.v1.tpu.batch_parallel(
+        computation, 
+        inputs=[A], 
+        num_shards=num_shards
+    )
+    
+    # batch_parallel concatenates the results from shards.
+    # Since we had 2 shards, res_parallel will have shape (2,).
+    print(f"Batch parallel result: {res_parallel.numpy()}")
+
+    # Verification
+    # The eager result is a scalar (or 1-element tensor).
+    # The parallel result is a batch of results from each shard.
+    # We expect all shard results to match the eager result.
+    
+    # Extract scalar value from eager result
+    expected_val = res_eager.numpy()[0]
+    
+    # Check all parallel results
+    for i, val in enumerate(res_parallel.numpy()):
+        assert val == expected_val, (
+            f"Mismatch found: Eager={expected_val}, Parallel Shard {i}={val}. "
+            "This indicates batch_parallel changed the behavior of the computation."
+        )
+    
+    print("Test passed: Batch parallel preserved the computation logic.")
+
+if __name__ == "__main__":
+    test_batch_parallel_stride_preservation()
+```

@@ -1,0 +1,53 @@
+```python
+import torch
+import torch.nn.functional as F
+import numpy as np
+
+def test_einsum_contiguity():
+    """
+    Test case for Issue 161729: Einsum produces transposed output.
+    Verifies that torch.einsum produces a contiguous output with correct strides
+    matching the behavior of F.linear and numpy.einsum.
+    """
+    # Setup dimensions from the bug report
+    batch, in_dim, out_dim = 128, 1024, 4096
+
+    # Determine device (prefer CUDA as per original bug report)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Running test on device: {device}")
+
+    # Create inputs
+    x = torch.randn(batch, in_dim, dtype=torch.float, device=device)
+    w = torch.randn(out_dim, in_dim, dtype=torch.float, device=device)
+
+    # Reference implementation: F.linear
+    out_linear = F.linear(x, w)
+
+    # Target implementation: torch.einsum
+    # Equation "fd,bd->bf" corresponds to a linear transformation
+    out_einsum = torch.einsum("fd,bd->bf", w, x)
+
+    # Numpy reference for layout verification
+    out_np = np.einsum("fd,bd->bf", w.cpu().numpy(), x.cpu().numpy())
+
+    print(f"Linear output shape: {out_linear.shape}, stride: {out_linear.stride()}, is_contiguous: {out_linear.is_contiguous()}")
+    print(f"Einsum output shape: {out_einsum.shape}, stride: {out_einsum.stride()}, is_contiguous: {out_einsum.is_contiguous()}")
+    print(f"Numpy output shape: {out_np.shape}, stride (bytes): {out_np.strides}, is_contiguous: {out_np.flags['C_CONTIGUOUS']}")
+
+    # Assertion 1: Shape must match
+    assert out_einsum.shape == out_linear.shape, "Shape mismatch between einsum and linear"
+
+    # Assertion 2: Einsum should produce contiguous output like Linear and Numpy
+    # The bug report shows einsum returns stride (1, 128) which is transposed/non-contiguous
+    # relative to the expected (4096, 1).
+    assert out_einsum.is_contiguous(), "Einsum output is not contiguous (transposed output bug reproduced)"
+
+    # Assertion 3: Strides should match the reference implementation
+    assert out_einsum.stride() == out_linear.stride(), \
+        f"Stride mismatch: Einsum {out_einsum.stride()} vs Linear {out_linear.stride()}"
+
+    print("Test passed: Einsum output is contiguous and strides match reference.")
+
+if __name__ == "__main__":
+    test_einsum_contiguity()
+```

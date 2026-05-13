@@ -1,0 +1,66 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_reduce_with_dynamic_shapes(rank, world_size):
+    """
+    Test case for torch.distributed.reduce with dynamic shapes inside torch.compile.
+    This test is adapted from the torch.compile regression report (Issue 161372)
+    where dynamic tensor sizes (77 vs 78) caused recompilation issues.
+    """
+    
+    # Initialize the process group
+    dist.init_process_group(
+        backend="gloo", # Using gloo for CPU compatibility
+        init_method=f"tcp://127.0.0.1:{29500}",
+        rank=rank,
+        world_size=world_size
+    )
+
+    # Define a function that performs the distributed reduce operation
+    def reduce_func(tensor):
+        # Reduce operation: sum all tensors to rank 0
+        dist.reduce(tensor, dst=0)
+        return tensor
+
+    # Compile the function using torch.compile
+    # This mirrors the original bug report where torch.compile was used
+    compiled_reduce = torch.compile(reduce_func)
+
+    # Test with dynamic shapes (sizes 77 and 78) as seen in the bug report
+    # This verifies that the compiled function handles dynamic shapes without
+    # hitting recompile limits or crashing.
+    sizes = [77, 78]
+    
+    for size in sizes:
+        # Create a tensor specific to the rank
+        # Rank 0 has value 1, Rank 1 has value 2, etc.
+        input_tensor = torch.ones(size) * (rank + 1)
+        
+        # Execute the compiled function
+        compiled_reduce(input_tensor)
+        
+        # Verify results on rank 0
+        if rank == 0:
+            # Expected sum: (1 + 2 + ... + world_size) * ones(size)
+            # For world_size=2, ranks 0 and 1: (1 + 2) = 3
+            expected_sum = sum(range(1, world_size + 1))
+            expected_tensor = torch.ones(size) * expected_sum
+            
+            # Check if the reduction was successful
+            assert torch.allclose(input_tensor, expected_tensor), \
+                f"Reduction failed for size {size}. Expected {expected_tensor}, got {input_tensor}"
+            
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Check if distributed is available
+    if not dist.is_available():
+        print("torch.distributed is not available. Skipping test.")
+    else:
+        world_size = 2
+        # Use spawn to run the distributed test
+        mp.spawn(test_reduce_with_dynamic_shapes, args=(world_size,), nprocs=world_size, join=True)
+```

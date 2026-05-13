@@ -1,0 +1,100 @@
+```python
+import tensorflow as tf
+import time
+import numpy as np
+
+def test_crossed_column_performance_regression():
+    """
+    Test case for tf.feature_column.crossed_column inspired by 
+    PyTorch Issue 161878 (Inductor CPU performance regression).
+    
+    This test preserves the original bug reproduction logic:
+    1. Uses a specific batch size (batch_size=2).
+    2. Runs a benchmark loop (50 iterations).
+    3. Measures latency to detect performance regressions.
+    4. Verifies correctness of the transformation (static shape).
+    
+    The similar API (crossed_column) involves hashing and sparse tensor operations,
+    which mirrors the complexity of the operations in the original BERT_pytorch
+    workload that experienced the regression.
+    """
+    
+    # --- Setup Inputs (Matching the API documentation example) ---
+    # Feature 1: SparseTensor
+    indices_1 = np.array([[0, 0], [1, 0], [1, 1]], dtype=np.int64)
+    values_1 = np.array([b"a", b"b", b"c"], dtype=np.string_) # Using bytes for TF compatibility
+    shape_1 = np.array([2, 2], dtype=np.int64)
+    
+    # Feature 2: SparseTensor
+    indices_2 = np.array([[0, 0], [1, 0]], dtype=np.int64)
+    values_2 = np.array([b"d", b"e"], dtype=np.string_)
+    shape_2 = np.array([2, 1], dtype=np.int64)
+    
+    # --- Define the Feature Column ---
+    # The bug report highlights "static shape". We ensure the bucket size is fixed.
+    hash_bucket_size = 10
+    crossed_col = tf.feature_column.crossed_column(
+        keys=['feature_1', 'feature_2'], 
+        hash_bucket_size=hash_bucket_size
+    )
+    
+    # To execute the feature column logic (inference), we wrap it in a Keras layer.
+    # This simulates the "model" execution in the original bug report.
+    input_layer = tf.keras.layers.DenseFeatures([crossed_col])
+    
+    # Prepare the features dictionary
+    features = {
+        'feature_1': tf.SparseTensor(indices_1, values_1, shape_1),
+        'feature_2': tf.SparseTensor(indices_2, values_2, shape_2)
+    }
+    
+    # --- Warmup ---
+    # Ensures any compilation (graph tracing) happens before timing starts.
+    _ = input_layer(features)
+    
+    # --- Benchmark Loop ---
+    # The original bug report ran 50 iterations.
+    num_iterations = 50
+    start_time = time.time()
+    
+    for _ in range(num_iterations):
+        # Run the transformation
+        output = input_layer(features)
+        # Force execution to ensure timing is accurate
+        _ = output.numpy()
+        
+    end_time = time.time()
+    
+    # --- Metrics Calculation ---
+    total_time = end_time - start_time
+    avg_latency = total_time / num_iterations
+    
+    print(f"Test: tf.feature_column.crossed_column performance")
+    print(f"Iterations: {num_iterations}")
+    print(f"Total Time: {total_time:.6f}s")
+    print(f"Average Latency: {avg_latency:.6f}s")
+    
+    # --- Assertions ---
+    
+    # 1. Correctness: Verify the output shape matches the static shape expectation.
+    # Batch size is 2, bucket size is 10. Output should be (2, 10).
+    expected_shape = (2, hash_bucket_size)
+    assert output.shape == expected_shape, \
+        f"Shape mismatch: expected {expected_shape}, got {output.shape}"
+        
+    # 2. Correctness: Verify the output contains valid categorical indicators (0 or 1).
+    # crossed_column produces a one-hot (or multi-hot) encoded tensor.
+    unique_values = np.unique(output.numpy())
+    assert np.all(np.isin(unique_values, [0.0, 1.0])), \
+        f"Output contains unexpected values: {unique_values}"
+        
+    # 3. Performance: Check for regression.
+    # The original issue reported a significant slowdown (speedup dropped from 2.59x to 1.57x).
+    # We assert that the average latency is reasonable (e.g., < 1.0s per iteration for this small data).
+    # This threshold is arbitrary for the test but serves as a sanity check for regressions.
+    assert avg_latency < 1.0, \
+        f"Performance regression detected: Latency {avg_latency:.6f}s exceeds threshold 1.0s"
+
+if __name__ == "__main__":
+    test_crossed_column_performance_regression()
+```

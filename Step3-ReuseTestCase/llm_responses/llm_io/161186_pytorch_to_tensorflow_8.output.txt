@@ -1,0 +1,100 @@
+```python
+import tensorflow as tf
+import numpy as np
+import gc
+import sys
+import os
+
+# Try to import psutil for CPU memory tracking if GPU is not available
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+
+# Configure GPU memory growth to observe allocation changes dynamically
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
+
+# Define a custom operation that mimics the memory allocation of the PyTorch MyOp
+# In PyTorch, this is an autograd Function. In TF data, we use a map function.
+def my_op_fn(x):
+    # Allocate large tensors similar to out_0 and out_1 in the PyTorch example
+    # 2**20 floats is approx 4MB
+    out_0 = tf.zeros((2**20,), dtype=tf.float32)
+    out_1 = tf.zeros((2**20,), dtype=tf.float32)
+    
+    # In PyTorch, ctx.save_for_backward is called. 
+    # In TF, simply creating these tensors in the graph/function holds memory.
+    # We return one, mimicking the return of MyOp.apply(inp)[0]
+    return out_0
+
+# Create a dummy dataset
+# Analogous to dummy_input = torch.nn.Parameter(...)
+# We use a small input but heavy processing to stress the pipeline
+dummy_input_data = np.random.randn(10).astype(np.float32)
+dataset = tf.data.Dataset.from_tensor_slices(dummy_input_data)
+
+# Apply the heavy operation (analogous to op_fn)
+dataset = dataset.map(my_op_fn)
+
+# Apply the similar API: tf.data.experimental.service.distribute
+# Note: This API requires a running tf.data service (dispatcher and worker).
+# We define the transformation here.
+SERVICE_ADDRESS = "localhost:50051" 
+
+print(f"Attempting to run test with tf.data service at {SERVICE_ADDRESS}...")
+print("If the service is not running, this test will skip or fail.")
+
+try:
+    # Define the distribute transformation
+    # processing_mode="parallel_epochs" is a common mode analogous to distributed processing
+    distribute_fn = tf.data.experimental.service.distribute(
+        processing_mode="parallel_epochs",
+        service=SERVICE_ADDRESS,
+        job_name="memory_leak_test_job"
+    )
+    
+    # Apply the distribute transformation to the dataset
+    distributed_dataset = dataset.apply(distribute_fn)
+
+    # Run the loop to check for memory leaks
+    # Analogous to: for i in range(1000): ...
+    for i in range(100):
+        # Consume the dataset
+        # In PyTorch: full_out.sum().backward() triggers the backward pass.
+        # In TF: Iterating the dataset triggers the data processing pipeline.
+        for _ in distributed_dataset:
+            pass
+        
+        # Check memory usage
+        if gpus:
+            # Use TensorFlow's GPU memory tracking
+            mem_info = tf.config.experimental.get_memory_info('GPU:0')
+            allocated_mb = mem_info['current'] / (1024**2)
+        elif HAS_PSUTIL:
+            # Fallback to process memory tracking
+            process = psutil.Process(os.getpid())
+            allocated_mb = process.memory_info().rss / (1024**2)
+        else:
+            allocated_mb = 0
+            print("Warning: No GPU or psutil found, skipping memory tracking.")
+
+        print(f"Iteration {i}: {allocated_mb:.2f} MiB")
+        
+        # Explicit cleanup attempt
+        # Analogous to dummy_input.grad = None
+        gc.collect()
+
+except tf.errors.UnavailableError:
+    print("\nTest skipped: tf.data service is not available or unreachable.")
+    print("To run this test, you must start a tf.data service dispatcher and worker:")
+    print("  python -m tensorflow.python.data.experimental.service.worker --port=50051")
+except Exception as e:
+    print(f"\nAn unexpected error occurred: {e}")
+```

@@ -1,0 +1,57 @@
+```python
+import torch
+
+def test_compile_preserve_format_stride():
+    """
+    Test case for Issue 161010: torch.compile doesn't preserve stride with 
+    clone(memory_format=torch.preserve_format).
+    
+    This test leverages the semantic concept of 'preservation' found in 
+    similar APIs like tf.keras.losses.serialize (which preserves the structure 
+    of a loss function). Here, we verify that torch.compile preserves the 
+    memory layout (stride) of tensors, ensuring the compiled graph maintains 
+    the same data format semantics as the eager execution.
+    """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Create a random input matrix
+    A = torch.rand(5, 5, device=device)
+
+    def check_stride_preservation(A):
+        # Perform linear algebra operations that may result in non-contiguous tensors
+        Q, R = torch.linalg.qr(A)
+        rhs = torch.ones(Q.shape[0], 1, device=A.device)
+        
+        # Q.T is likely to have non-standard strides
+        a = torch.linalg.solve_triangular(R, Q.T @ rhs, upper=True)
+        
+        # The critical operation: clone with preserve_format
+        # This should retain the stride information of 'a'
+        cloned = a.clone(memory_format=torch.preserve_format)
+        
+        # Return True if strides match (preservation successful), False otherwise
+        return a.stride() == cloned.stride()
+
+    # 1. Baseline: Eager execution
+    eager_result = check_stride_preservation(A)
+    
+    # 2. Target: Compiled execution
+    compiled_fn = torch.compile(check_stride_preservation)
+    compiled_result = compiled_fn(A)
+
+    # 3. Assertion
+    # The compiled version must match the eager version.
+    # The bug report indicates eager_result was True (preserved) 
+    # while compiled_result was False (not preserved).
+    assert eager_result == compiled_result, (
+        f"torch.compile failed to preserve stride semantics. "
+        f"Eager result: {eager_result}, Compiled result: {compiled_result}"
+    )
+    
+    # Explicitly check that preservation is actually working (expected True)
+    assert eager_result, "Eager execution failed to preserve stride (unexpected baseline failure)."
+    assert compiled_result, "Compiled execution failed to preserve stride (bug reproduced)."
+
+if __name__ == "__main__":
+    test_compile_preserve_format_stride()
+```

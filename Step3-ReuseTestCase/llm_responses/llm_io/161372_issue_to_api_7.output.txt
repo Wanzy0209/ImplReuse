@@ -1,0 +1,67 @@
+```python
+import tensorflow as tf
+
+def test_feed_fn_hook_dynamic_shapes():
+    """
+    Test case for tf.compat.v1.train.FeedFnHook.
+    
+    This test is derived from a PyTorch bug report (Issue 161372) where 
+    torch.compile failed due to dynamic input shapes (size mismatch 77 vs 78).
+    
+    This test verifies that the TensorFlow FeedFnHook correctly handles 
+    feeding tensors with dynamic shapes (varying batch sizes) to the session,
+    ensuring the mechanism supports the variability that caused the regression
+    in the original issue.
+    """
+    # Disable eager execution to use Session and Hooks (v1 style)
+    tf.compat.v1.disable_eager_execution()
+
+    # Create a placeholder with a dynamic first dimension (None)
+    # This mirrors the LLM input scenario where sequence lengths can vary.
+    input_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, 10], name="dynamic_input")
+    
+    # A simple operation to process the input
+    output_op = tf.add(input_ph, 1.0)
+
+    # State to simulate changing input sizes across runs
+    # In the bug report, size changed from 77 to 78.
+    # Here we alternate between batch size 2 and 3.
+    run_counter = [0]
+
+    def feed_fn():
+        """Function to generate feed_dict with varying shapes."""
+        current_batch_size = 2 if run_counter[0] % 2 == 0 else 3
+        run_counter[0] += 1
+        
+        # Return a dictionary mapping the placeholder to a tensor of the current size
+        return {
+            input_ph: tf.constant(1.0, shape=[current_batch_size, 10])
+        }
+
+    # Initialize the hook with the feed function
+    hook = tf.compat.v1.train.FeedFnHook(feed_fn)
+
+    # Run the session
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
+        
+        # Run multiple iterations to verify the hook handles the dynamic shape changes
+        for i in range(4):
+            # The hook injects the feed_dict before the run
+            result = sess.run(output_op, hooks=[hook])
+            
+            # Assertions to verify the shape matches the expected dynamic size
+            expected_batch = 2 if i % 2 == 0 else 3
+            expected_shape = (expected_batch, 10)
+            
+            assert result.shape == expected_shape, (
+                f"Iteration {i}: Expected shape {expected_shape}, "
+                f"but got {result.shape}. "
+                "This indicates a failure to handle dynamic inputs similar to the reported bug."
+            )
+
+    print("Test passed: FeedFnHook successfully handled dynamic input shapes.")
+
+if __name__ == "__main__":
+    test_feed_fn_hook_dynamic_shapes()
+```

@@ -1,0 +1,128 @@
+Issue ID: 161391
+Title: Memory leak when in-place op is applied to non-leaf tensor with requires_grad=True
+Bug Description:
+### 🐛 Describe the bug
+
+### **Description:**
+ When an in-place operation is applied to a non-leaf tensor with requires_grad=True, and the tensor subsequently loses its backward graph node because of Python arithmetic operators, the process’s resident memory keeps growing, indicating a memory leak caused by unreleased reference counts.
+### To Reproduce
+```
+import torch
+import unittest
+import gc, psutil
+
+def mem_mb_print():
+    gc.collect()
+    mem = psutil.virtual_memory()
+    process = psutil.Process().memory_info().rss
+
+    print(f"used: {mem.used // 1024**1} KB,"
+       f"process: {process // 1024**1} KB,"
+       f"percent: {mem.percent} %,"
+       f"PyTorch tensors: {sum(1 for o in gc.get_objects() if torch.is_tensor(o))}")
+
+class TestLeafGradMaxCUDA(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_cross_grad_max_cuda(self):
+        device = torch.device("cuda")
+
+        # leaf GPU tensor
+        leaf = torch.randn(8, 1, 24, device=device, requires_grad=True)
+        no_leaf= leaf * 1.0
+
+        for _ in range(100):
+            window_left = no_leaf[:, :, :-1]          # [8, 1, 23]
+            # inplace operators
+            no_leaf[:, :, 1:] = torch.max( 
+                no_leaf[:, :, 1:],  
+                window_left   
+            )
+            # Python arithmetic operators
+            mask = (no_leaf >= 0)
+            mem_mb_print()
+
+Original API Under Test: torch.max
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.functional.cosine_similarity
+Similarity score: 0.9946362376213074
+
+Similar API information:
+# Extracted call chain for torch.nn.functional.cosine_similarity
+
+# --- torch.onnx.symbolic_opset9.cosine_similarity ---
+def cosine_similarity(g: jit_utils.GraphContext, x1, x2, dim, eps):
+    cross = symbolic_helper._reducesum_helper(
+        g, mul(g, x1, x2), axes_i=[dim], keepdims_i=0
+    )
+    x1_l2 = symbolic_helper._reducesum_helper(
+        g, mul(g, x1, x1), axes_i=[dim], keepdims_i=0
+    )
+    x2_l2 = symbolic_helper._reducesum_helper(
+        g, mul(g, x2, x2), axes_i=[dim], keepdims_i=0
+    )
+    div_tens = max(
+        g, sqrt(g, mul(g, x1_l2, x2_l2)), g.op("Constant", value_t=torch.tensor([eps]))
+    )
+    return div(g, cross, div_tens)
+
+# --- torch.onnx.symbolic_opset9.div ---
+def div(g: jit_utils.GraphContext, self, other, *args):
+    if len(args) == 0:
+        return true_divide(g, self, other)
+    else:
+        return _div_rounding_mode(g, self, other, *args)
+
+# --- torch.onnx.symbolic_opset9._div_rounding_mode ---
+def _div_rounding_mode(g: jit_utils.GraphContext, self, other, rounding_mode):
+    if rounding_mode is None:
+        return true_divide(g, self, other)
+    elif rounding_mode == "floor":
+
+Original Test Case:
+import torch
+import unittest
+import gc, psutil
+
+def mem_mb_print():
+    gc.collect()
+    mem = psutil.virtual_memory()
+    process = psutil.Process().memory_info().rss
+
+    print(f"used: {mem.used // 1024**1} KB,"
+       f"process: {process // 1024**1} KB,"
+       f"percent: {mem.percent} %,"
+       f"PyTorch tensors: {sum(1 for o in gc.get_objects() if torch.is_tensor(o))}")
+
+class TestLeafGradMaxCUDA(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_cross_grad_max_cuda(self):
+        device = torch.device("cuda")
+
+        # leaf GPU tensor
+        leaf = torch.randn(8, 1, 24, device=device, requires_grad=True)
+        no_leaf= leaf * 1.0
+
+        for _ in range(100):
+            window_left = no_leaf[:, :, :-1]          # [8, 1, 23]
+            # inplace operators
+            no_leaf[:, :, 1:] = torch.max( 
+                no_leaf[:, :, 1:],  
+                window_left   
+            )
+            # Python arithmetic operators
+            mask = (no_leaf >= 0)
+            mem_mb_print()
+
+        loss = mask.sum()
+
+if __name__ == "__main__":
+      unittest.main()
+
+The API torch.nn.functional.cosine_similarity is identified as same-library similar to the original PyTorch API torch.max.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,43 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def run_test(rank):
+    # Initialize the distributed process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=1)
+
+    # Configuration from the original bug report
+    torch._dynamo.config.capture_scalar_outputs = True
+
+    @torch.compile(fullgraph=True)
+    def fn(mask, tensor):
+        # Mimic the data-dependent logic from the original bug
+        # Original: text_len = encoder_attention_mask.sum().item()
+        # We perform a similar scalar extraction to test compiler behavior
+        _ = mask.sum().item()
+        
+        # Adapt the call site to use the similar API: torch.distributed.reduce
+        # Note: With world_size=1, dst must be 0.
+        # This replaces the slicing operation from the original bug.
+        dist.reduce(tensor, dst=0)
+
+    # Setup inputs (CPU tensors for portability, original used CUDA)
+    mask = (torch.arange(512) < 8)
+    tensor = torch.randn((1, 512, 4096))
+
+    # Execute the compiled function
+    fn(mask, tensor)
+
+    # Assertion to verify the tensor shape remains consistent
+    assert tensor.shape == (1, 512, 4096)
+    
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Spawn a single process to run the test
+    mp.spawn(run_test, nprocs=1, join=True)
+```

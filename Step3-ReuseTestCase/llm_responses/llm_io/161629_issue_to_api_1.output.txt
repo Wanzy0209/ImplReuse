@@ -1,0 +1,72 @@
+```python
+import unittest
+from unittest import mock
+import os
+import tensorflow as tf
+
+class TestDTensorClientId(unittest.TestCase):
+    """
+    Test cases for tf.experimental.dtensor.client_id.
+    
+    These tests reflect the relationship to Issue #161629 (PyTorch cpp_ext warning).
+    The issue describes a warning appearing on all ranks (e.g., rank7) when it should
+    only appear on rank0. The fix requires identifying the current rank/client ID.
+    
+    These tests verify that tf.experimental.dtensor.client_id correctly identifies
+    the client ID (defaulting to 0 or reading from env vars), which is the 
+    prerequisite logic for implementing rank-aware logging.
+    """
+
+    def setUp(self):
+        # Clear environment variables before each test to ensure isolation
+        self.environ_patcher = mock.patch.dict(os.environ, {}, clear=True)
+        self.environ_patcher.start()
+
+    def tearDown(self):
+        self.environ_patcher.stop()
+
+    @mock.patch('tensorflow.dtensor.python.config.num_clients', return_value=1)
+    def test_default_client_id_is_zero(self, mock_num_clients):
+        """
+        Test that client_id defaults to 0 if the environment variable is not set.
+        
+        This corresponds to the 'rank0' requirement in the bug report, where 
+        logic should default to or specifically check for rank 0 to print warnings.
+        """
+        client_id = tf.experimental.dtensor.client_id()
+        self.assertEqual(client_id, 0)
+        mock_num_clients.assert_called_once()
+
+    @mock.patch('tensorflow.dtensor.python.config.num_clients', return_value=8)
+    def test_explicit_client_id_rank_seven(self, mock_num_clients):
+        """
+        Test that client_id correctly returns the ID set in the environment variable.
+        
+        This simulates the 'rank7' scenario from the bug report. The API must 
+        correctly identify that it is NOT rank 0 so that logging logic can 
+        suppress the warning on this rank.
+        """
+        # The snippet uses _DT_CLIENT_ID as the key
+        with mock.patch.dict(os.environ, {'_DT_CLIENT_ID': '7'}):
+            client_id = tf.experimental.dtensor.client_id()
+            self.assertEqual(client_id, 7)
+
+    @mock.patch('tensorflow.dtensor.python.config.num_clients', return_value=2)
+    def test_invalid_client_id_raises_value_error(self, mock_num_clients):
+        """
+        Test that client_id raises a ValueError if the ID is out of bounds.
+        
+        This ensures the API respects the distributed context (num_clients),
+        similar to how the PyTorch warning logic needs to respect the 
+        distributed context (torch.dist).
+        """
+        with mock.patch.dict(os.environ, {'_DT_CLIENT_ID': '5'}):
+            with self.assertRaises(ValueError) as context:
+                tf.experimental.dtensor.client_id()
+            
+            self.assertIn("must be < 2", str(context.exception))
+            self.assertIn("got 5", str(context.exception))
+
+if __name__ == '__main__':
+    unittest.main()
+```

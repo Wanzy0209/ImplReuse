@@ -1,0 +1,95 @@
+Issue ID: 161116
+Title: NCCL Segfault when initializing a process group on an NVL72
+Bug Description:
+### 🐛 Describe the bug
+
+We are trying to run distributed training with Torchtitan on a GB200 NVL72 cluster but using more than 10 trays (40 GPUs) fails with a NCCL segmentation fault. Using 10 and less trays works fine.
+
+We boiled it down to the creation of the process group, so even this simple example crashes when we increase the number of trays to 11:
+```python
+import torch
+import torch.distributed as dist
+import os
+def main():
+    gpu_id = int(os.environ["LOCAL_RANK"])
+    
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+    dist.init_process_group(backend='nccl',
+                            device_id=gpu_id,
+                            )
+    dist.barrier()
+    
+if __name__ == "__main__":
+    main()
+```
+Error log is enormous but this is the relevant part:
+```
+#1436 0x0000400079529e3c in ncclTopoSearchTryGpu (system=<optimized out>, graph=<optimized out>, saveGraph=<optimized out>, step=<optimized out>, backToNet=<optimized out>, backToFirstRank=<optimized out>, forcedOrder=<optimized out>, time=0x4000fc2e9d74, type=-1, index=-1, g=0) at graph/search.cc:343
+#1437 0x0000400079528a80 in ncclTopoSearchRec (system=system@entry=0x4000fc520010, graph=graph@entry=0x4000fc2e9d78, saveGraph=saveGraph@entry=0x8fa53f8, time=time@entry=0x4000fc2e9d74) at graph/search.cc:725
+#1438 0x000040007952dde4 in ncclTopoCompute (system=0x4000fc520010, graph=graph@entry=0x8fa53f8) at graph/search.cc:1011
+#1439 0x0000400079504524 in initTransportsRank (timers=<optimized out>, paren
+...
+
+Original API Under Test: torch.distributed.init_process_group
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.image.random_hue
+Similarity score: 0.9934625625610352
+
+Similar API information:
+# Extracted call chain for tf.image.random_hue
+
+# --- tensorflow.python.ops.image_ops_impl.random_hue ---
+def random_hue(image, max_delta, seed=None):
+  """Adjust the hue of RGB images by a random factor.
+
+  Equivalent to `adjust_hue()` but uses a `delta` randomly
+  picked in the interval `[-max_delta, max_delta)`.
+
+  `max_delta` must be in the interval `[0, 0.5]`.
+
+  Usage Example:
+
+  >>> x = [[[1.0, 2.0, 3.0],
+  ...       [4.0, 5.0, 6.0]],
+  ...     [[7.0, 8.0, 9.0],
+  ...       [10.0, 11.0, 12.0]]]
+  >>> tf.image.random_hue(x, 0.2)
+  <tf.Tensor: shape=(2, 2, 3), dtype=float32, numpy=...>
+
+  For producing deterministic results given a `seed` value, use
+  `tf.image.stateless_random_hue`. Unlike using the `seed` param with
+  `tf.image.random_*` ops, `tf.image.stateless_random_*` ops guarantee the same
+  results given the same seed independent of how many times the function is
+  called, and independent of global seed settings (e.g. tf.random.set_seed).
+
+  Args:
+    image: RGB image or images. The size of the last dimension must be 3.
+    max_delta: float. The maximum value for the random delta.
+    seed: An operation-specific seed. It will be used in conjunction with the
+
+Original Test Case:
+import torch
+import torch.distributed as dist
+import os
+def main():
+    gpu_id = int(os.environ["LOCAL_RANK"])
+    
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+    dist.init_process_group(backend='nccl',
+                            device_id=gpu_id,
+                            )
+    dist.barrier()
+    
+if __name__ == "__main__":
+    main()
+
+The API tf.image.random_hue is identified as cross-library similar to the original PyTorch API torch.distributed.init_process_group.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,86 @@
+Issue ID: 161812
+Title: Crash in jagged tensor stack/cat along dimension 0
+Bug Description:
+### 🐛 Describe the bug
+
+```python
+import torch as th
+x = th.nested.nested_tensor([th.ones(3, 2, 3), th.ones(4, 2, 3)], layout=th.jagged)
+th.cat([x, x])
+```
+fails with
+```
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/Users/monroe/.pyenv/versions/pyenv-311/lib/python3.11/site-packages/torch/nested/_internal/nested_tensor.py", line 367, in __torch_function__
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/monroe/.pyenv/versions/pyenv-311/lib/python3.11/site-packages/torch/nested/_internal/nested_tensor.py", line 332, in __torch_dispatch__
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/monroe/.pyenv/versions/pyenv-311/lib/python3.11/site-packages/torch/nested/_internal/ops.py", line 217, in inner
+    check_schema(schema_str, func, *args, **kwargs)
+  File "/Users/monroe/.pyenv/versions/pyenv-311/lib/python3.11/site-packages/torch/nested/_internal/ops.py", line 106, in check_schema
+    raise ValueError(
+ValueError: NestedTensor cat_default(tensors: any, dim: any): expected at least 2 arguments and at most 2 arguments, but got: 1 arguments
+```
+
+Variations that produce identical errors:
+* Passing an explicit `dim=0`
+* Calling `th.vstack` instead of `th.cat`
+* Calling `th.stack` instead of `th.cat` (except the traceback has `stack_default` in place of `cat_default`)
+
+Things that do work:
+* Passing any other `dim` argument besides 0 and the jagged dimension, including other dimensions be
+...
+
+Original API Under Test: torch.cat
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.isinf
+Similarity score: 0.9943469762802124
+
+Similar API information:
+# Extracted call chain for torch.isinf
+
+# --- torch._inductor.lowering.isinf ---
+def isinf(x):
+    if is_integer_type(x):
+        return full_like(x, False, dtype=torch.bool)
+    fn = ops_wrapper("isinf")
+    return make_pointwise(fn, override_return_dtype=torch.bool)(x)
+
+# --- torch._inductor.lowering.full_like ---
+def full_like(x, fill_value, **kwargs):
+    return create_tensor_like(tensor_constructor(fill_value))(x, **kwargs)
+
+# --- torch._inductor.lowering.create_tensor_like ---
+def create_tensor_like(creation_fn):
+    """
+    Shim to convert X_like(...) into X(...).  For example zeros_like() into zeros().
+    """
+
+    def _constant_like(
+        x, *, dtype=None, device=None, layout=None, pin_memory=False, memory_format=None
+    ):
+        assert_nyi(not pin_memory, "pin_memory")
+        assert_nyi(layout in (None, torch.strided), f"layout={layout}")
+        if dtype is None:
+            dtype = x.get_dtype()
+        else:
+            dtype = decode_dtype(dtype)
+        device = device or x.get_device()
+        size = list(x.get_size())
+
+Original Test Case:
+import torch as th
+x = th.nested.nested_tensor([th.ones(3, 2, 3), th.ones(4, 2, 3)], layout=th.jagged)
+th.cat([x, x])
+
+The API torch.isinf is identified as same-library similar to the original PyTorch API torch.cat.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

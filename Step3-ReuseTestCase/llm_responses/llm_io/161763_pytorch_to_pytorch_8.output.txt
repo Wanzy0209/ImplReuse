@@ -1,0 +1,72 @@
+```python
+import torch
+import torch.distributed as dist
+import multiprocessing as mp
+import os
+
+def test_recv_object_list_uint8(rank, world_size):
+    """
+    Test case for torch.distributed.recv_object_list adapted from 
+    the uint8 arithmetic bug report.
+    
+    This verifies that uint8 tensors involved in neg+add computations
+    are correctly transmitted via recv_object_list.
+    """
+    # Setup distributed environment
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
+    
+    dist.init_process_group(
+        backend="gloo", # gloo backend supports object transfer
+        rank=rank,
+        world_size=world_size
+    )
+
+    if rank == 0:
+        # --- Sender ---
+        # Create the uint8 tensor from the original bug report
+        c = torch.tensor(7, dtype=torch.uint8)
+        
+        # Send the object list containing the uint8 tensor
+        # Adapted from: cfoo = torch.compile(foo); cres = cfoo(x)
+        # Here we simply send the data structure that caused the bug.
+        dist.send_object_list([c], dst=1)
+        
+    elif rank == 1:
+        # --- Receiver ---
+        obj_list = [None]
+        
+        # Receive the object list
+        # Adapted from: res = foo(x)
+        dist.recv_object_list(obj_list, src=0)
+        
+        received_c = obj_list[0]
+        
+        # Verify the received object matches the original
+        # This ensures the data integrity required for the arithmetic operations
+        assert received_c is not None, "Received object is None"
+        assert received_c.dtype == torch.uint8, f"Expected dtype uint8, got {received_c.dtype}"
+        assert received_c.item() == 7, f"Expected value 7, got {received_c.item()}"
+        
+        # Perform the arithmetic from the original bug to ensure the received 
+        # tensor behaves correctly in eager mode (post-transfer).
+        x = torch.randn(2, 2, dtype=torch.float32)
+        
+        # Original logic: torch.neg(c)+x
+        # We verify this runs without error on the received tensor
+        res = torch.neg(received_c) + x
+        
+        # Basic sanity check on the result shape
+        assert res.shape == (2, 2), f"Expected shape (2, 2), got {res.shape}"
+        
+        print(f"Rank {rank}: Test passed. Received uint8 tensor correctly and performed arithmetic.")
+
+    dist.destroy_process_group()
+
+def main():
+    world_size = 2
+    mp.spawn(test_recv_object_list_uint8, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()
+```

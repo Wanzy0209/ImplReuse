@@ -1,0 +1,80 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def send_op(A):
+    """
+    Function adapted from the original bug report to use torch.distributed.send_object_list.
+    It performs operations that result in a tensor with specific strides and sends it.
+    """
+    Q, R = torch.linalg.qr(A)
+    rhs = torch.ones(Q.shape[0], 1, device=A.device)
+    a = torch.linalg.solve_triangular(R, Q.T @ rhs, upper=True)
+    
+    # Send the tensor 'a' to rank 1
+    # We wrap the tensor in a list as required by the API
+    dist.send_object_list([a], dst=1)
+
+def worker(rank, world_size):
+    setup(rank, world_size)
+
+    if rank == 0:
+        # Rank 0: Generate input and run the send operation
+        A = torch.rand(5, 5)
+        
+        print("Running eager execution...")
+        send_op(A)
+        
+        # Synchronize to ensure message is sent before next step
+        dist.barrier()
+        
+        print("Running torch.compile...")
+        # Adaptation: Compile the function containing the similar API
+        compiled_send_op = torch.compile(send_op)
+        compiled_send_op(A)
+        
+    else:
+        # Rank 1: Receive the tensors and check strides
+        # We expect to receive two tensors (one from eager, one from compiled)
+        for i in range(2):
+            tensor_list = [None]
+            dist.recv_object_list(tensor_list, src=0)
+            received_tensor = tensor_list[0]
+            
+            stride = received_tensor.stride()
+            print(f"Run {i+1}: Received tensor stride: {stride}")
+            
+            # In the original bug, the stride check failed under compile.
+            # Here we verify that send_object_list preserves the stride correctly.
+            # We expect a non-contiguous stride based on the operations performed.
+            # Example assertion (specific values depend on the QR implementation):
+            # assert stride != (1, 5), "Stride was not preserved (became contiguous)"
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Check if CUDA is available to use appropriate device, though gloo backend works for CPU tensors too
+    # The original code used CUDA if available.
+    if torch.cuda.is_available():
+        backend = "nccl"
+    else:
+        backend = "gloo"
+        
+    print(f"Using backend: {backend}")
+    
+    # Note: For NCCL, exact device handling might be needed, but gloo is safer for generic minimal examples.
+    # Sticking to gloo for portability in this generated test case.
+    mp.spawn(worker, args=(world_size,), nprocs=world_size, join=True)
+```

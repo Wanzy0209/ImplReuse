@@ -1,0 +1,104 @@
+Issue ID: 161729
+Title: Einsum produces transposed output for some cases
+Bug Description:
+```
+import torch
+import torch.nn.functional as F
+import numpy as np
+
+torch.set_default_device("cuda")
+
+
+torch.set_default_device("cuda")
+batch, in_dim, out_dim = 128, 1024, 4096
+x = torch.randn(batch, in_dim, dtype=torch.float)
+w = torch.randn(out_dim, in_dim, dtype=torch.float)
+
+def linear(x, w):
+    return F.linear(x, w)
+
+out = linear(x, w)
+print(out.shape, out.stride())
+out = torch.einsum("fd,bd->bf", w, x)
+print(out.shape, out.stride())
+out_np = np.einsum("fd,bd->bf", w.cpu().numpy(), x.cpu().numpy())
+print(out_np.shape, out_np.strides)
+```
+outputs 
+```
+torch.Size([128, 4096]) (4096, 1)
+torch.Size([128, 4096]) (1, 128)
+(128, 4096) (16384, 4)
+```
+`linear` and `numpy` produce contiguous output, `einsum` produces transposed output, there are probably other cases when this happens
+
+cc @jianyuh @nikitaved @mruberry @walterddr @xwang233 @Lezcano
+
+Original API Under Test: torch.einsum
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.einsum
+Similarity score: 1.0
+
+Similar API information:
+# Extracted call chain for torch.einsum
+
+# --- torch._numpy._funcs_impl.einsum ---
+def einsum(*operands, out=None, dtype=None, order="K", casting="safe", optimize=False):
+    # Have to manually normalize *operands and **kwargs, following the NumPy signature
+    # We have a local import to avoid poluting the global space, as it will be then
+    # exported in funcs.py
+    from ._ndarray import ndarray
+    from ._normalizations import (
+        maybe_copy_to,
+        normalize_array_like,
+        normalize_casting,
+        normalize_dtype,
+        wrap_tensors,
+    )
+
+    dtype = normalize_dtype(dtype)
+    casting = normalize_casting(casting)
+    if out is not None and not isinstance(out, ndarray):
+        raise TypeError("'out' must be an array")
+    if order != "K":
+        raise NotImplementedError("'order' parameter is not supported.")
+
+    # parse arrays and normalize them
+    sublist_format = not isinstance(operands[0], str)
+    if sublist_format:
+        # op, str, op, str ... [sublistout] format: normalize every other argument
+
+        # - if sublistout is not given, the length of operands is even, and we pick
+        #   odd-numbered elements, which are arrays.
+
+Original Test Case:
+import torch
+import torch.nn.functional as F
+import numpy as np
+
+torch.set_default_device("cuda")
+
+
+torch.set_default_device("cuda")
+batch, in_dim, out_dim = 128, 1024, 4096
+x = torch.randn(batch, in_dim, dtype=torch.float)
+w = torch.randn(out_dim, in_dim, dtype=torch.float)
+
+def linear(x, w):
+    return F.linear(x, w)
+
+out = linear(x, w)
+print(out.shape, out.stride())
+out = torch.einsum("fd,bd->bf", w, x)
+print(out.shape, out.stride())
+out_np = np.einsum("fd,bd->bf", w.cpu().numpy(), x.cpu().numpy())
+print(out_np.shape, out_np.strides)
+
+The API torch.einsum is identified as same-library similar to the original PyTorch API torch.einsum.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

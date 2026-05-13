@@ -1,0 +1,74 @@
+```python
+import tensorflow as tf
+import unittest
+
+class TestStringInputProducer(unittest.TestCase):
+    def test_string_input_producer_correctness(self):
+        """
+        Adapted from the PyTorch meta-llama correctness test.
+        Original Logic: Setup -> Run Eager (Baseline) -> Run Compiled (API) -> Compare.
+        
+        This test verifies the correctness of tf.compat.v1.train.string_input_producer
+        by comparing the dequeued output against the original input data.
+        """
+        # 1. Setup
+        # Disable eager execution as required for tf.compat.v1 queue APIs
+        tf.compat.v1.disable_eager_execution()
+        
+        # Create a list of strings (analogous to input_ids in the original test)
+        num_strings = 1000
+        string_data = [f"input_string_{i}" for i in range(num_strings)]
+        
+        # 2. "Eager" / Baseline
+        # In the original test, this is the uncompiled model output.
+        # Here, it is the raw data we expect to retrieve from the queue.
+        expected_output = string_data
+
+        # 3. "Compiled" / API Under Test
+        # Using tf.compat.v1.train.string_input_producer to process the input
+        with tf.compat.v1.Session() as sess:
+            # Define the string tensor
+            string_tensor = tf.constant(string_data)
+            
+            # Use the API under test
+            # shuffle=False is used to ensure order matches expected_output for direct comparison
+            queue = tf.compat.v1.train.string_input_producer(
+                string_tensor,
+                num_epochs=1,
+                shuffle=False,
+                capacity=1000
+            )
+            
+            # Dequeue operation to get data out
+            dequeue_op = queue.dequeue()
+            
+            # Initialize local variables (required for num_epochs counter)
+            init_local = tf.compat.v1.local_variables_initializer()
+            sess.run([tf.compat.v1.global_variables_initializer(), init_local])
+            
+            # Start queue runners
+            coord = tf.compat.v1.train.Coordinator()
+            threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+            
+            # Collect results from the queue
+            actual_output = []
+            try:
+                while True:
+                    val = sess.run(dequeue_op)
+                    # Decode bytes to string for comparison
+                    actual_output.append(val.decode('utf-8'))
+            except tf.errors.OutOfRangeError:
+                # Expected when num_epochs is reached
+                pass
+            finally:
+                coord.request_stop()
+                coord.join(threads)
+            
+        # 4. Assertion
+        # Verify that the API produced the correct output without corruption or loss,
+        # analogous to checking logits in the original test.
+        self.assertEqual(expected_output, actual_output)
+
+if __name__ == '__main__':
+    unittest.main()
+```

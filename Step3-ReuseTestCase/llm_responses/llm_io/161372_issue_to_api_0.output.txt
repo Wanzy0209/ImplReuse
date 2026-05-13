@@ -1,0 +1,52 @@
+```python
+import torch
+
+def test_compile_dynamic_shape_with_masked_select():
+    """
+    Test case for Issue 161372: torch.compile regression in 2.8.0.
+    
+    The original issue reported that torch.compile failed with a recompile_limit error
+    due to tensor size mismatches (expected 77, actual 78) when using torch.where.
+    This behavior is characteristic of operations with dynamic output shapes.
+    
+    This test leverages torch.masked_select, which is a similar API that inherently
+    produces dynamic output shapes depending on the input mask. The test verifies
+    that torch.compile can handle repeated calls where the output size varies,
+    ensuring the compiler generalizes over the dynamic shape rather than recompiling
+    excessively or failing.
+    """
+    
+    # Define a function using torch.masked_select
+    # This operation's output size depends on the number of True values in the mask
+    def dynamic_select_fn(tensor, mask):
+        return torch.masked_select(tensor, mask)
+
+    # Compile the function
+    # The bug report mentioned hitting the default recompile_limit (8)
+    compiled_fn = torch.compile(dynamic_select_fn)
+
+    # Create a fixed input tensor
+    input_tensor = torch.randn(100)
+
+    # Simulate the scenario where the output size changes on every call.
+    # The bug report showed "expected 77, actual 78", implying varying sizes.
+    # We iterate 10 times to exceed the default limit if the compiler treats
+    # every new size as a new graph (the regression).
+    for i in range(10):
+        # Generate a mask that selects a varying number of elements
+        # This simulates the dynamic shape behavior that caused the bug
+        threshold = i * 0.1
+        mask = input_tensor > threshold
+        
+        # Execute the compiled function
+        result = compiled_fn(input_tensor, mask)
+        
+        # Verify correctness
+        expected_size = mask.sum().item()
+        assert result.numel() == expected_size, \
+            f"Output size mismatch at iteration {i}: expected {expected_size}, got {result.numel()}"
+
+if __name__ == "__main__":
+    test_compile_dynamic_shape_with_masked_select()
+    print("Test passed successfully.")
+```

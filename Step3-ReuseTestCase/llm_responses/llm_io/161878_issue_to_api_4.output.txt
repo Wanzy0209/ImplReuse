@@ -1,0 +1,76 @@
+```python
+import tensorflow as tf
+import time
+
+def test_execution_mode_performance():
+    """
+    This test case mirrors the logic of the PyTorch Inductor performance regression.
+    It compares Eager execution vs. Compiled (Graph) execution, leveraging 
+    tf.executing_eagerly to verify the execution context.
+    
+    Context from Issue #161878:
+    - The bug compares 'eager' vs 'inductor' (compiled) performance.
+    - It highlights a regression in the speedup ratio.
+    - Here, tf.function acts as the 'Inductor' equivalent, and tf.executing_eagerly
+      verifies the mode.
+    """
+    
+    # Define a batch size matching the bug report (batch_size=2)
+    batch_size = 2
+    feature_size = 128
+    inputs = tf.random.normal((batch_size, feature_size))
+
+    # 1. Eager Execution (Baseline)
+    # The bug report tracks 'eager_new' and 'eager_old'.
+    # We verify that the default context is eager.
+    assert tf.executing_eagerly(), "Global execution should be eager by default"
+
+    def eager_step(x):
+        # Simulate a simple layer operation (e.g., a BERT embedding or linear layer)
+        return tf.matmul(x, tf.random.normal((feature_size, feature_size)))
+
+    # Warmup
+    _ = eager_step(inputs)
+
+    # Measure Eager Latency
+    start_time = time.time()
+    for _ in range(50):
+        _ = eager_step(inputs)
+    eager_latency = time.time() - start_time
+
+    # 2. Compiled Execution (Inductor equivalent)
+    # In TensorFlow, @tf.function compiles the computation graph, similar to torch._inductor.
+    @tf.function
+    def compiled_step(x):
+        # Inside tf.function, executing_eagerly should return False.
+        # This is the core usage of the Similar API to distinguish the mode.
+        is_eager = tf.executing_eagerly()
+        assert not is_eager, "Should be in graph mode inside tf.function"
+        
+        return tf.matmul(x, tf.random.normal((feature_size, feature_size)))
+
+    # Warmup (tracing)
+    _ = compiled_step(inputs)
+
+    # Measure Compiled Latency
+    start_time = time.time()
+    for _ in range(50):
+        _ = compiled_step(inputs)
+    compiled_latency = time.time() - start_time
+
+    # 3. Calculate Speedup
+    # The bug report highlights a drop in 'Ratio Speedup(New/old)'.
+    # We calculate the speedup here to ensure the compiled path is performing as expected.
+    speedup = eager_latency / compiled_latency
+    
+    print(f"Eager Latency: {eager_latency:.6f}s")
+    print(f"Compiled Latency: {compiled_latency:.6f}s")
+    print(f"Speedup: {speedup:.2f}x")
+
+    # Assertion: Compiled mode should generally be faster than eager mode for this workload.
+    # If this fails, it indicates a performance regression similar to the reported issue.
+    assert speedup > 1.0, f"Performance regression detected: Compiled mode ({compiled_latency:.4f}s) is slower than Eager mode ({eager_latency:.4f}s)"
+
+if __name__ == "__main__":
+    test_execution_mode_performance()
+```

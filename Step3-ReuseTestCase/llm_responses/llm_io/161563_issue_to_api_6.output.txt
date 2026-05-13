@@ -1,0 +1,104 @@
+```python
+import tensorflow as tf
+import numpy as np
+import os
+import shutil
+
+def test_export_with_bucketed_sequence_length():
+    """
+    Test case that mirrors the logic of the PyTorch export bug (Issue 161563)
+    but translates the semantics to TensorFlow.
+    
+    Original Bug: torch.export.export fails when processing inputs prepared 
+    by a tokenizer (variable length sequences).
+    
+    Adaptation: Uses tf.data.experimental.bucket_by_sequence_length (the similar API)
+    to prepare variable length inputs, and then attempts to export the model
+    using tf.saved_model.save (the TF equivalent of torch.export).
+    """
+    
+    # 1. Define a simple model (mimicking AutoModelForCausalLM)
+    # We use a simple Keras layer for reproducibility without external dependencies.
+    class SimpleModel(tf.Module):
+        def __init__(self):
+            super().__init__()
+            self.dense = tf.keras.layers.Dense(10)
+
+        # Using @tf.function to trace the graph, similar to torch.export.export
+        @tf.function(input_signature=[
+            tf.TensorSpec(shape=[None, None], dtype=tf.float32, name="input_ids"),
+            tf.TensorSpec(shape=[None, None], dtype=tf.float32, name="attention_mask")
+        ])
+        def __call__(self, input_ids, attention_mask):
+            return self.dense(input_ids)
+
+    model = SimpleModel()
+
+    # 2. Create a dataset with variable length sequences
+    # This mimics the output of a tokenizer where different messages have different lengths.
+    def data_generator():
+        for _ in range(10):
+            # Random sequence length between 5 and 20
+            length = np.random.randint(5, 20)
+            # Generate dummy input_ids and attention_mask
+            yield (
+                np.random.rand(length, 10).astype(np.float32),
+                np.random.rand(length, 10).astype(np.float32)
+            )
+
+    dataset = tf.data.Dataset.from_generator(
+        data_generator,
+        output_signature=(
+            tf.TensorSpec(shape=[None, 10], dtype=tf.float32),
+            tf.TensorSpec(shape=[None, 10], dtype=tf.float32)
+        )
+    )
+
+    # 3. Leverage the Similar API: tf.data.experimental.bucket_by_sequence_length
+    # This replaces the manual input preparation in the original bug.
+    # It groups elements of similar length together, reducing padding.
+    bucket_boundaries = [10, 15]
+    bucket_batch_sizes = [2, 2, 2]
+
+    bucketed_dataset = dataset.apply(
+        tf.data.experimental.bucket_by_sequence_length(
+            element_length_func=lambda x, y: tf.shape(x)[0],
+            bucket_boundaries=bucket_boundaries,
+            bucket_batch_sizes=bucket_batch_sizes,
+            padded_shapes=([None, 10], [None, 10]),
+            padding_values=(tf.constant(0, dtype=tf.float32), tf.constant(0, dtype=tf.float32)),
+            drop_remainder=True
+        )
+    )
+
+    # 4. Export the model (mimicking torch.export.export)
+    # We attempt to save the model using inputs derived from the bucketed dataset.
+    export_dir = "/tmp/tf_model_export_test"
+    
+    # Clean up if directory exists
+    if os.path.exists(export_dir):
+        shutil.rmtree(export_dir)
+
+    try:
+        # Get a concrete batch to ensure the model can handle the bucketed shapes
+        # This step corresponds to passing example_inputs to torch.export.export
+        for batch_inputs, batch_masks in bucketed_dataset.take(1):
+            # Run inference to ensure tracing works with these specific dynamic shapes
+            _ = model(batch_inputs, batch_masks)
+
+        # Perform the export
+        tf.saved_model.save(model, export_dir)
+        
+        # Assertion to verify the export succeeded
+        assert os.path.exists(export_dir), "Model export directory was not created"
+        print("Test Passed: Model exported successfully with bucketed inputs.")
+
+    except Exception as e:
+        # This mimics the "Current active mode not registered" error check
+        # In TF, this might manifest as graph tracing errors or shape mismatches
+        print(f"Test Failed: Export failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_export_with_bucketed_sequence_length()
+```

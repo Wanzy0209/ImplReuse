@@ -1,0 +1,50 @@
+```python
+import torch
+
+# Check for CUDA availability to ensure the test is runnable on different setups
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+
+@torch.compile(fullgraph=True)
+def fn(mask, hidden_states):
+    # Initialize a tensor with a fixed size
+    hidden_states = hidden_states.new_zeros([1, 512, 3072])
+    
+    # Adaptation: Use torch.all instead of sum to determine the slice length.
+    # This tests if the inductor handles data-dependent slices derived from torch.all.
+    # Original: text_len = encoder_attention_mask.sum().item()
+    is_all_true = mask.all().item()
+    
+    # Determine slice length based on the result of torch.all
+    # If all elements in the mask are True, slice to 512, otherwise slice to 0
+    text_len = 512 if is_all_true else 0
+    
+    # Perform the data-dependent slice
+    hidden_states = hidden_states[:, :text_len]
+    return hidden_states
+
+# Test Case 1: Mask where all elements are True
+# Expected: Slice length is 512
+mask_all_true = torch.ones((1, 512), dtype=torch.bool).to(device)
+hidden = torch.randn((1, 512, 4096)).to(device)
+
+try:
+    result = fn(mask_all_true, hidden)
+    assert result.shape == (1, 512, 3072), f"Test Case 1 Failed: Expected shape (1, 512, 3072), got {result.shape}"
+    print("Test Case 1 (All True) passed.")
+except Exception as e:
+    print(f"Test Case 1 (All True) failed with error: {e}")
+
+# Test Case 2: Mask where not all elements are True (similar to original bug)
+# Expected: Slice length is 0
+mask_partial = (torch.arange(512) < 8).unsqueeze(0).to(device)
+
+try:
+    result = fn(mask_partial, hidden)
+    assert result.shape == (1, 0, 3072), f"Test Case 2 Failed: Expected shape (1, 0, 3072), got {result.shape}"
+    print("Test Case 2 (Partial) passed.")
+except Exception as e:
+    print(f"Test Case 2 (Partial) failed with error: {e}")
+```
