@@ -1,0 +1,42 @@
+import torch
+import tensorflow as tf
+
+# The API under test: Enable eager execution.
+# This switches TensorFlow from graph construction (default in TF 1.x) to immediate execution.
+tf.compat.v1.enable_eager_execution()
+
+def func():
+    # Attempt to use GPU if available to match the context of the original PyTorch bug
+    devices = tf.config.list_physical_devices('GPU')
+    device_name = "/GPU:0" if devices else "/CPU:0"
+    
+    with tf.device(device_name):
+        a = tf.constant([1.0, -2.0])
+        # Perform a check similar to torch.all(a > 0)
+        result = tf.reduce_all(a > 0)
+        
+        # In eager mode, .numpy() forces evaluation and returns the value immediately.
+        # The original PyTorch bug was that the assertion was missed because 
+        # synchronization was removed. Here we verify that eager mode catches the error.
+        assert result.numpy(), "should throw"
+        
+        # In TensorFlow eager execution, operations are synchronous by default.
+        # There is no equivalent to torch.cuda.synchronize() that needs to be preserved
+        # to catch errors, as execution is already immediate.
+        print("should not run")
+
+def test_fn():
+    try:
+        func()
+    except AssertionError as e:
+        if "should throw" in str(e):
+            print("SUCCESS: Exception caught correctly in eager mode.")
+        else:
+            raise
+    else:
+        # If we reach here, the print statement ran, meaning the exception was missed.
+        # This would mimic the failure mode described in the PyTorch bug report.
+        raise AssertionError("FAILURE: Exception was not caught, 'should not run' was printed.")
+
+if __name__ == "__main__":
+    test_fn()

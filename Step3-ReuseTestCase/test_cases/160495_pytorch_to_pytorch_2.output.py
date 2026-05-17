@@ -1,0 +1,34 @@
+import torch
+from torch._inductor import config
+
+# Reproduce the configuration from the original bug report
+config.fallback_random = True
+torch.set_grad_enabled(False)
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def eager_fn(x, y):
+    # Using torch.sub via the - operator
+    return x - y
+
+@torch.compile()
+def fn(x, y):
+    # Using torch.sub via the - operator
+    return x - y
+
+# Setup inputs: complex64, one 1-dim tensor, one 0-dim empty tensor
+x = torch.randn(1, dtype=torch.complex64)
+y = torch.empty((), dtype=torch.complex64)
+
+# Test eager mode
+try:
+    eager_result = eager_fn(x, y)
+    print("eager success")
+except Exception as e:
+    print(f"eager failed: {e}")
+
+# Test compiled mode (inductor)
+try:
+    fn(x, y)
+    print("compiler success")
+except Exception as e:
+    print(f"compiler failed: {e}")

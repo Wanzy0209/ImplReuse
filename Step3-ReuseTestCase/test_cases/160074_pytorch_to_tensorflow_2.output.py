@@ -1,0 +1,70 @@
+import torch
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+def test_dtensor_copy_to_mesh_gqa_gradients():
+    """
+    Adapts the PyTorch FlexAttention GQA bug reproduction logic to TensorFlow.
+    
+    Original Bug Context:
+    - PyTorch torch.compile (inductor backend) failed to compile the backward pass
+      for FlexAttention with GQA (Grouped Query Attention) shapes on B200.
+    
+    Adaptation Logic:
+    - Replace torch.compile with tf.function (TensorFlow graph compilation).
+    - Replace FlexAttention with a simplified operation using the target API:
+      tf.experimental.dtensor.copy_to_mesh.
+    - Preserve the specific GQA tensor shapes (Q: 32 heads, K/V: 8 heads) and
+      bfloat16 dtype to test the API's handling of these characteristics.
+    - Verify gradient flow through the distributed operation.
+    """
+    
+    # Setup a local mesh for DTensor
+    # Note: The original bug occurred on CUDA, but we use CPU here for 
+    # general testability of the API logic.
+    mesh = dtensor.create_mesh([("batch", 1)], devices=["CPU:0"])
+    
+    # Define a replicated layout. 
+    # The original bug involved compilation, so we ensure the layout is defined
+    # before the compiled function.
+    layout = dtensor.Layout([dtensor.UNSHARDED], mesh)
+
+    # Use tf.function to mimic the 'torch.compile' aspect (graph compilation)
+    @tf.function
+    def compiled_step(q, k, v):
+        # The API Under Test: copy_to_mesh
+        # This copies the regular tensors onto the DTensor mesh with the specified layout.
+        q_dt = dtensor.copy_to_mesh(q, layout)
+        k_dt = dtensor.copy_to_mesh(k, layout)
+        v_dt = dtensor.copy_to_mesh(v, layout)
+
+        # Perform a computation to trigger the graph execution and gradient flow.
+        # We use a simple operation that accepts the GQA shapes (32 vs 8 heads)
+        # to ensure the DTensors are handled correctly without implementing
+        # the full FlexAttention algorithm which doesn't exist 1:1 in TF.
+        result = q_dt + k_dt + v_dt
+        return tf.reduce_sum(result)
+
+    # Reproduce the specific tensor shapes and dtype from the bug report
+    # Batch=2, Seq=4096, Dim=128
+    # Q Heads=32, K/V Heads=8 (GQA configuration)
+    q = tf.random.normal([2, 32, 4096, 128], dtype=tf.bfloat16)
+    k = tf.random.normal([2, 8, 4096, 128], dtype=tf.bfloat16)
+    v = tf.random.normal([2, 8, 4096, 128], dtype=tf.bfloat16)
+
+    # Verify gradients flow through the copy_to_mesh operation
+    # Equivalent to y.backward(torch.randn_like(y)) in the original bug
+    with tf.GradientTape() as tape:
+        tape.watch([q, k, v])
+        loss = compiled_step(q, k, v)
+
+    grads = tape.gradient(loss, [q, k, v])
+
+    # Assertions to verify the test ran successfully and gradients were computed
+    assert loss is not None
+    assert all(g is not None for g in grads), "Gradients should not be None for all inputs"
+    
+    print("Test passed: DTensor copy_to_mesh handles GQA-shaped tensors with gradients.")
+
+if __name__ == "__main__":
+    test_dtensor_copy_to_mesh_gqa_gradients()

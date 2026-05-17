@@ -1,0 +1,48 @@
+import torch
+from torch import nn
+
+def test_nested_tensor_narrow_backward():
+    """
+    Test case to verify that backward pass works correctly for 
+    torch.nested.narrow with jagged layout followed by contiguous().values().
+    
+    This is a regression test for the NotImplementedError raised in 
+    NestedGetValuesBackward0.
+    """
+    # Setup the module and input data
+    module = nn.Linear(8, 12)
+    padded = torch.rand(9, 8)
+    lengths = torch.as_tensor([5, 4])
+
+    # Enable anomaly detection to catch errors during the backward pass
+    # similar to the original bug report
+    with torch.autograd.set_detect_anomaly(True):
+        # Forward pass through the linear layer
+        out = module(padded)
+        
+        # Perform the nested tensor operations that triggered the bug
+        # 1. Narrow the tensor to a jagged layout
+        # 2. Make it contiguous
+        # 3. Get the underlying values
+        nopad = torch.nested.narrow(
+            out, dim=1, start=0, length=lengths, layout=torch.jagged
+        ).contiguous().values()
+        
+        # Perform a reduction and backward pass
+        # The bug originally occurred here with:
+        # NotImplementedError: aten::_is_any_true.default
+        loss = nopad.sum()
+        loss.backward()
+
+    # Assertions to verify the backward pass completed successfully
+    # and gradients were computed for the module parameters
+    assert module.weight.grad is not None, "Gradients for weights should not be None"
+    assert module.bias.grad is not None, "Gradients for bias should not be None"
+    
+    # Verify gradients are finite (no NaN or Inf)
+    assert torch.isfinite(module.weight.grad).all(), "Weights gradients contain NaN or Inf"
+    assert torch.isfinite(module.bias.grad).all(), "Bias gradients contain NaN or Inf"
+
+if __name__ == "__main__":
+    test_nested_tensor_narrow_backward()
+    print("Test passed successfully.")

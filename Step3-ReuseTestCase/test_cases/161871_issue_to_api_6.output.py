@@ -1,0 +1,26 @@
+import torch
+import tensorflow as tf
+
+# Test case generated based on Issue ID 161871
+# Original Bug: Floating point exception in torch.Tensor.mvlgamma_
+# Similar API: tf.test.is_built_with_xla
+
+def test_is_built_with_xla_stability():
+    """
+    Reproduces the 'execution and verification' pattern of the original bug report.
+    The original bug involved calling a function with specific inputs to check for crashes.
+    Here we call the similar API to ensure it executes without error and returns the expected type.
+    """
+    # Setup: In the original, a tensor was created. Here we just ensure the environment is ready.
+    # Execution: Call the API.
+    # Note: is_built_with_xla takes no arguments, unlike mvlgamma_.
+    xla_available = tf.test.is_built_with_xla()
+
+    # Verification: The original code crashed. We verify this API returns a valid boolean.
+    assert isinstance(xla_available, bool), \
+        f"Expected tf.test.is_built_with_xla to return a bool, got {type(xla_available)}"
+
+    print(f"Test passed. XLA available: {xla_available}")
+
+if __name__ == "__main__":
+    test_is_built_with_xla_stability()

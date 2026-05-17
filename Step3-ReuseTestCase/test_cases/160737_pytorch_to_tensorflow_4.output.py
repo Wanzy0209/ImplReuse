@@ -1,0 +1,15 @@
+import tensorflow as tf
+
+def test_vdot():
+    # Create a multi-dimensional tensor (analogous to 'x' in the original bug)
+    a = tf.ones([2, 3])
+    # Create a zero-dimensional (scalar) tensor (analogous to 'index' in the original bug)
+    b = tf.constant(1)
+
+    try:
+        output = tf.experimental.numpy.vdot(a, b)
+        print(f"vdot test succeeds. output: {output}")
+    except Exception as e:
+        print(f"vdot test fails: {e}")
+
+test_vdot()

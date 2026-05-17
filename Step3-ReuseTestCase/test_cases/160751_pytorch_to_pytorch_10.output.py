@@ -1,0 +1,42 @@
+import torch
+import torch.distributed as dist
+import tempfile
+import os
+
+def test_fn():
+    # Initialize distributed environment for a single process
+    # This allows testing gather_object without multiprocessing complexity
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store_file = os.path.join(tmpdir, "store")
+        store = dist.FileStore(store_file, 1)
+        dist.init_process_group(
+            backend="gloo", 
+            store=store, 
+            rank=0, 
+            world_size=1
+        )
+
+        def func():
+            # Perform some tensor operation
+            a = torch.tensor([1.0, -2.0])
+            result = torch.all(a > 0)
+            
+            # Adaptation: Replace torch.cuda.synchronize() with torch.distributed.gather_object
+            # We gather the result object to verify the call is not optimized away
+            obj_to_gather = result.item()
+            gather_list = [None]
+            dist.gather_object(obj_to_gather, gather_list, dst=0)
+            
+            # Verify the gather happened
+            assert gather_list[0] == False, "Gathered result should be False"
+            print("Test passed: gather_object executed inside compiled function")
+
+        torch._dynamo.reset()
+        # Use aot_eager to match the bug report's backend
+        f_c = torch.compile(func, backend="aot_eager")
+        f_c()
+
+        dist.destroy_process_group()
+
+if __name__ == "__main__":
+    test_fn()

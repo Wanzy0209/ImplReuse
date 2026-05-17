@@ -1,0 +1,98 @@
+import unittest
+import torch
+import torch._dynamo as dynamo
+import torch._inductor.config as inductor_config
+
+# This test case is generated based on Issue ID: 161878
+# It targets the performance regression in torch._inductor related to 
+# AMP static shape C++ wrapper.
+#
+# The test leverages the code pattern from the similar API 
+# (tf.compat.v1.summary.all_v2_summary_ops) which explicitly checks 
+# the execution context (eager vs graph) before proceeding. 
+# Here, we adapt this pattern to check the Inductor configuration 
+# (cpp_wrapper enabled vs disabled) to ensure the regression scenario is active.
+
+def get_inductor_wrapper_context():
+    """
+    Mimics the pattern of tf.compat.v1.summary.all_v2_summary_ops.
+    
+    Original TF logic:
+        if context.executing_eagerly():
+            return None
+        return ops.get_collection(...)
+    
+    Adapted PyTorch logic:
+        Check if the specific regression configuration (cpp_wrapper) is active.
+        If not, return None (indicating the test scenario is not met).
+        Otherwise, return the configuration state.
+    """
+    # In the original bug, the regression occurred with the cpp wrapper enabled.
+    # We check this state explicitly, similar to checking eager execution in TF.
+    if not inductor_config.cpp_wrapper:
+        return None
+    
+    # Return a mock "collection" or state indicating the wrapper is active
+    return {"cpp_wrapper": True, "mode": "static_shape"}
+
+class TestInductorAmpCppWrapper(unittest.TestCase):
+    def setUp(self):
+        # Ensure we are testing on CPU as per the bug report title
+        self.device = torch.device("cpu")
+        
+    def test_amp_static_shape_performance_path(self):
+        """
+        Tests the AMP static shape path with the C++ wrapper enabled.
+        This reproduces the environment of Issue 161878.
+        """
+        # 1. Leverage the similar API pattern to verify context
+        context_state = get_inductor_wrapper_context()
+        
+        # If the context is not met (e.g. wrapper disabled), we skip or adapt.
+        # For this regression test, we force the config to ensure the path is taken.
+        if context_state is None:
+            inductor_config.cpp_wrapper = True
+            context_state = get_inductor_wrapper_context()
+            
+        self.assertIsNotNone(context_state, "Failed to enable cpp wrapper context")
+
+        # 2. Define a simple model (mimicking a part of BERT structure)
+        # Using a simple Linear stack to represent the workload without external dependencies.
+        class SimpleModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear1 = torch.nn.Linear(128, 128)
+                self.linear2 = torch.nn.Linear(128, 128)
+
+            def forward(self, x):
+                return self.linear2(torch.relu(self.linear1(x)))
+
+        model = SimpleModel().to(self.device)
+        
+        # 3. Setup AMP (Autocast) - crucial for the bug report
+        # The bug specifically mentions "AMP static shape"
+        
+        # 4. Compile with Inductor
+        # We use a fixed batch size to encourage static shapes
+        batch_size = 2
+        example_input = torch.randn(batch_size, 128, device=self.device)
+        
+        # Enable compilation
+        compiled_model = torch.compile(model, mode="reduce-overhead")
+        
+        # 5. Run the benchmark step
+        # We use autocast to trigger the AMP path
+        with torch.cpu.amp.autocast(enabled=True):
+            output = compiled_model(example_input)
+            loss = output.sum()
+        
+        # 6. Assertions
+        # Verify the output is valid (sanity check for the regression)
+        self.assertEqual(output.shape, torch.Size([batch_size, 128]))
+        self.assertFalse(torch.isnan(output).any(), "Output contained NaNs")
+        
+        # Verify the context state was utilized
+        self.assertTrue(context_state["cpp_wrapper"])
+
+if __name__ == "__main__":
+    unittest.main()

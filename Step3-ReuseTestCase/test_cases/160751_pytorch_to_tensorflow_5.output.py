@@ -1,0 +1,54 @@
+import torch
+import tensorflow as tf
+
+# Disable eager execution as QueueRunners are designed for graph mode
+tf.compat.v1.disable_eager_execution()
+
+def test_add_queue_runner():
+    """
+    Adapted test case for tf.compat.v1.train.add_queue_runner.
+    
+    Original Logic:
+    1. Setup operations (tensor creation).
+    2. Perform an action (compile/add runner).
+    3. Verify behavior (assertion/synchronization).
+    
+    Adapted Logic:
+    1. Setup graph operations (queue and enqueue op).
+    2. Add the QueueRunner using the target API.
+    3. Verify the runner is in the collection and executes correctly.
+    """
+    with tf.compat.v1.Session() as sess:
+        # Create a simple FIFO queue and an enqueue operation
+        # This mimics the tensor setup in the original PyTorch code
+        q = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.float32])
+        enqueue_op = q.enqueue([1.0])
+        
+        # Create a QueueRunner
+        qr = tf.compat.v1.train.QueueRunner(q, [enqueue_op])
+        
+        # Call the API under test: add_queue_runner
+        # This corresponds to the torch.compile step in the original
+        tf.compat.v1.train.add_queue_runner(qr)
+        
+        # Verify that the QueueRunner was successfully added to the collection
+        # This corresponds to the 'assert result' check in the original
+        collection = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+        assert qr in collection, "QueueRunner was not added to the collection"
+        
+        # Start the queue runners
+        # This corresponds to the execution phase (f_c())
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+        
+        # Attempt to dequeue to ensure the runner is active and synchronized
+        # This corresponds to the torch.cuda.synchronize() and print check
+        result = sess.run(q.dequeue())
+        assert result == 1.0, "Queue did not return the expected value"
+        
+        # Clean up
+        coord.request_stop()
+        coord.join(threads)
+
+if __name__ == "__main__":
+    test_add_queue_runner()

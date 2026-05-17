@@ -1,0 +1,50 @@
+import torch
+
+def test_torch_cummin_gradient_behavior():
+    """
+    Test the gradient behavior of torch.cummin, which is similar to 
+    torch.min(input, dim=...) in that it returns indices and gradients 
+    follow the indices (first occurrence wins) rather than being evenly distributed.
+    """
+    
+    # Case 1: All equal values (ties)
+    # torch.cummin keeps the first occurrence of the minimum value.
+    # Unlike torch.min (scalar reduction), cummin preserves the dimension,
+    # so gradients accumulate for the selected index across the sequence.
+    a = torch.ones([5], requires_grad=True)
+    values, indices = torch.cummin(a, dim=0)
+    
+    # Since all values are 1.0, the output values are [1, 1, 1, 1, 1]
+    # The indices will be [0, 0, 0, 0, 0] because the first element is the minimum.
+    # We backpropagate a gradient of 1.0 for each output element.
+    values.backward(torch.ones_like(values))
+    
+    # Expected: The first element (index 0) receives the gradient from all 5 positions.
+    # Result: [5, 0, 0, 0, 0]
+    expected_grad_ones = torch.tensor([5., 0., 0., 0., 0.])
+    assert torch.allclose(a.grad, expected_grad_ones), \
+        f"Expected gradient {expected_grad_ones}, but got {a.grad}"
+    
+    # Case 2: Mixed values to verify general indexing behavior
+    # Input: [2, 1, 1, 0, 0]
+    # Cummin Values: [2, 1, 1, 0, 0]
+    # Cummin Indices: [0, 1, 1, 3, 3]
+    # Gradient flow:
+    # - Output 0 (val 2) comes from Input 0
+    # - Output 1 (val 1) comes from Input 1
+    # - Output 2 (val 1) comes from Input 1
+    # - Output 3 (val 0) comes from Input 3
+    # - Output 4 (val 0) comes from Input 3
+    # Expected Gradient: [1, 2, 0, 2, 0]
+    b = torch.tensor([2., 1., 1., 0., 0.], requires_grad=True)
+    values_b, indices_b = torch.cummin(b, dim=0)
+    values_b.backward(torch.ones_like(values_b))
+    
+    expected_grad_mixed = torch.tensor([1., 2., 0., 2., 0.])
+    assert torch.allclose(b.grad, expected_grad_mixed), \
+        f"Expected gradient {expected_grad_mixed}, but got {b.grad}"
+
+    print("All torch.cummin gradient tests passed.")
+
+if __name__ == "__main__":
+    test_torch_cummin_gradient_behavior()

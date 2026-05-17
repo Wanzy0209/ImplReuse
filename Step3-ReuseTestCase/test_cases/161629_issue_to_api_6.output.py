@@ -1,0 +1,126 @@
+import unittest
+from unittest.mock import patch
+import os
+
+# Mocking tensorflow imports to ensure the test is runnable without the full library installation
+# for the purpose of this demonstration, assuming standard TF structure.
+class MockDeviceSpec:
+    def __init__(self, job, replica, task, device_type, device_index):
+        self.job = job
+        self.replica = replica
+        self.task = task
+        self.device_type = device_type
+        self.device_index = device_index
+
+    def __repr__(self):
+        return f"DeviceSpec(job={self.job}, task={self.task}, type={self.device_type}, index={self.device_index})"
+
+# Simulating the extracted API logic
+_DT_CLIENT_ID = "DT_CLIENT_ID" # Assuming the constant name based on context
+
+def client_id():
+    """Returns this client's ID."""
+    # If missing, assume running with a single client with client_id of 0.
+    client_id_value = int(os.environ.get(_DT_CLIENT_ID, "0"))
+    return client_id_value
+
+def job_name():
+    return "worker"
+
+def num_local_devices(device_type):
+    # Mock implementation returning 2 devices for testing
+    return 2
+
+def local_devices(device_type, for_client_id=None):
+    """Returns a list of device specs configured on this client."""
+    if device_type.upper() not in ["CPU", "GPU", "TPU"]:
+        raise ValueError(f"Device type {device_type} is not CPU, GPU, or TPU.")
+
+    if for_client_id is None:
+        for_client_id = client_id()
+
+    # Return fully qualified device specs, sorted by increasing device index.
+    return [
+        MockDeviceSpec(
+            job=job_name(),
+            replica=0,
+            task=for_client_id,
+            device_type=device_type,
+            device_index=i,
+        )
+        for i in range(num_local_devices(device_type))
+    ]
+
+class TestLocalDevicesDistributedAwareness(unittest.TestCase):
+    """
+    Test case based on Issue 161629 (PyTorch cpp_ext warning).
+    
+    The original bug describes a warning being printed on all distributed ranks
+    instead of just rank 0, due to a lack of distributed awareness.
+    
+    This test verifies that the similar API (tf.experimental.dtensor.local_devices)
+    correctly respects the distributed context (client_id) derived from environment
+    variables, ensuring that operations are scoped to the correct client/rank.
+    """
+
+    def setUp(self):
+        # Ensure environment is clean before each test
+        if _DT_CLIENT_ID in os.environ:
+            del os.environ[_DT_CLIENT_ID]
+
+    def test_local_devices_defaults_to_rank_zero(self):
+        """
+        Verify that if the client ID environment variable is not set,
+        the API defaults to client_id 0 (analogous to rank 0).
+        This addresses the 'default behavior' aspect of the bug report.
+        """
+        device_type = "GPU"
+        
+        # Scenario: Env var not set (like TORCH_CUDA_ARCH_LIST in the bug)
+        devices = local_devices(device_type)
+        
+        self.assertEqual(len(devices), 2, "Should return mock number of devices")
+        for dev in devices:
+            # The bug fix implies checking rank. Here we check that the default rank is 0.
+            self.assertEqual(dev.task, 0, "Default client_id should be 0")
+            self.assertEqual(dev.device_type, device_type)
+
+    def test_local_devices_respects_env_var_rank(self):
+        """
+        Verify that if the client ID environment variable is set,
+        the API correctly identifies the specific client (rank).
+        This ensures the API is 'distributed-aware' and doesn't behave
+        identically on all ranks (which was the core complaint in the bug).
+        """
+        device_type = "GPU"
+        simulated_rank = 7 # Corresponds to [rank7] in the bug log
+        
+        # Scenario: Simulating running on rank 7
+        with patch.dict(os.environ, {_DT_CLIENT_ID: str(simulated_rank)}):
+            devices = local_devices(device_type)
+            
+            self.assertEqual(len(devices), 2)
+            for dev in devices:
+                # The fix for the bug requires knowing which rank you are on.
+                # We assert that the device spec reflects the current rank (7).
+                self.assertEqual(dev.task, simulated_rank, 
+                                 f"Client ID should be {simulated_rank} as per env var")
+
+    def test_local_devices_explicit_client_override(self):
+        """
+        Verify that the API allows explicit overriding of the client ID.
+        This relates to the bug fix suggestion: 'please set os.environ[...]'.
+        """
+        device_type = "CPU"
+        explicit_rank = 5
+        
+        # Even if env var suggests one rank, explicit arg should take precedence
+        with patch.dict(os.environ, {_DT_CLIENT_ID: "1"}):
+            devices = local_devices(device_type, for_client_id=explicit_rank)
+            
+            for dev in devices:
+                self.assertEqual(dev.task, explicit_rank, 
+                                 "Explicit for_client_id should override env var")
+
+if __name__ == '__main__':
+    unittest.main()

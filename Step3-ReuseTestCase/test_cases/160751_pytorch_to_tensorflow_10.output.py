@@ -1,0 +1,54 @@
+import torch
+import tensorflow as tf
+
+# Disable eager execution to use the v1 graph-based API properly
+tf.compat.v1.disable_eager_execution()
+
+def test_fn():
+    # Reset the default graph to mimic torch._dynamo.reset()
+    tf.compat.v1.reset_default_graph()
+
+    with tf.compat.v1.Session() as sess:
+        # Mimic the tensor creation and logic
+        # range_input_producer produces integers from 0 to limit-1.
+        # We set limit=2, so it produces 0, 1.
+        # We want to assert the value is > 0, so the first value (0) should fail.
+        producer = tf.compat.v1.train.range_input_producer(limit=2, num_epochs=1, shuffle=False)
+        val = producer.dequeue()
+
+        # Mimic the assertion: assert result, "should throw"
+        # In TensorFlow graph mode, we use tf.Assert to check conditions at runtime.
+        # This acts as the node that should stop execution if the condition is false.
+        assert_op = tf.Assert(val > 0, ["should throw"])
+
+        # Mimic the print statement: print("should not run")
+        # We use tf.print to ensure this is part of the graph execution, not just graph construction.
+        print_op = tf.print("should not run")
+
+        # Use control_dependencies to ensure the print op only runs if the assertion passes
+        with tf.control_dependencies([assert_op]):
+            output = tf.identity(print_op)
+
+        # Initialize local variables (required for num_epochs in range_input_producer)
+        sess.run(tf.compat.v1.local_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        # Start queue runners to feed the data
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+        try:
+            # Run the graph (mimics f_c())
+            # This should fail on the first dequeue (val=0) because 0 > 0 is False.
+            # If the assertion is ignored (similar to the sync removal bug), the print would execute.
+            sess.run(output)
+            print("Test failed: Exception was not caught, print statement executed.")
+        except tf.errors.InvalidArgumentError as e:
+            # tf.Assert raises InvalidArgumentError when the condition is False
+            print(f"Caught expected exception: {e}")
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_fn()

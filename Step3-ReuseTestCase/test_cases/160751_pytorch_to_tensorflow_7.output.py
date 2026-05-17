@@ -1,0 +1,34 @@
+import torch
+import tensorflow as tf
+
+def func():
+    # Use the similar API: tf.keras.backend.name_scope
+    with tf.keras.backend.name_scope("test_scope"):
+        # Adapt logic: create tensor and check condition
+        # Note: TensorFlow manages synchronization implicitly, so explicit sync is not needed/available like in PyTorch.
+        a = tf.constant([1.0, -2.0])
+        result = tf.reduce_all(a > 0)
+        
+        # Adapt assertion: Check the tensor value
+        # We use .numpy() to evaluate the tensor and perform a Python assertion,
+        # mirroring the original code's intent to stop execution on failure.
+        assert result.numpy(), "should throw"
+        
+        # This should not run if the assertion works correctly
+        print("should not run")
+
+def test_fn():
+    try:
+        # In TensorFlow, to simulate a compiled/graph environment similar to torch.compile,
+        # we often use tf.function. However, the specific API requested is name_scope.
+        # We call the function directly to test the behavior within the scope.
+        func()
+    except AssertionError as e:
+        print(f"Caught expected exception: {e}")
+        return
+    
+    # If we reach here, the test failed (exception was missed)
+    raise AssertionError("Test failed: Exception was not caught, print statement executed.")
+
+if __name__ == "__main__":
+    test_fn()

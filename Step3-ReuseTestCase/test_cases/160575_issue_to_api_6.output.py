@@ -1,0 +1,37 @@
+import torch
+import tensorflow as tf
+from tf.distribute.experimental import CommunicationImplementation
+
+def test_communication_implementation_capabilities():
+    """
+    Test case derived from PyTorch Issue #160575.
+    
+    Original Issue Logic:
+    The user ran torch.cuda.get_arch_list() to verify if 'sm_52' (Maxwell) 
+    was included in the supported CUDA capabilities. The output confirmed 
+    it was missing, resulting in a UserWarning.
+    
+    This test adapts that logic to the TensorFlow API by checking the 
+    CommunicationImplementation enum to verify which communication options 
+    are defined and supported.
+    """
+    
+    # Retrieve the list of supported communication implementations.
+    # This is analogous to calling torch.cuda.get_arch_list().
+    supported_implementations = [impl.value for impl in CommunicationImplementation]
+
+    # In the original issue, the user verified that 'sm_52' was NOT in the list.
+    # We perform a similar check here for a hypothetical unsupported capability.
+    unsupported_capability = "sm_52"
+    assert unsupported_capability not in supported_implementations, \
+        f"Unexpected capability '{unsupported_capability}' found in supported implementations."
+
+    # The original issue output showed a list of supported capabilities (sm_61, sm_70, etc.).
+    # We verify that the expected standard implementations are present in the TF API.
+    expected_implementations = ["AUTO", "RING", "NCCL"]
+    for impl in expected_implementations:
+        assert impl in supported_implementations, \
+            f"Expected implementation '{impl}' not found in supported list: {supported_implementations}"
+
+if __name__ == "__main__":
+    test_communication_implementation_capabilities()

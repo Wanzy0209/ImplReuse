@@ -1,0 +1,83 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def get_communication_ops(tensor, peer_rank, group, tag_start, op_type):
+    """
+    Helper to generate a list of P2POp, mimicking the pattern of collecting 
+    operations/variables seen in tf.compat.v1.global_variables_initializer.
+    """
+    ops = []
+    # Splitting the tensor into two views to reproduce the bug scenario
+    # View 1: First half of columns
+    view1 = tensor[:, :tensor.shape[1]//2]
+    # View 2: Second half of columns
+    view2 = tensor[:, tensor.shape[1]//2:]
+    
+    ops.append(dist.P2POp(op_type, view1, peer_rank, group, tag_start))
+    ops.append(dist.P2POp(op_type, view2, peer_rank, group, tag_start + 1))
+    return ops
+
+def test_batch_isend_irecv_views(rank, world_size):
+    setup(rank, world_size)
+    
+    batch_size = 4
+    total_columns = 8
+    tag = 0
+    
+    if rank == 0:
+        # Sender rank
+        # Create a random tensor
+        local_tensor = torch.randn(batch_size, total_columns)
+        
+        # Generate send operations using views
+        # This mimics collecting a list of ops similar to global_variables_initializer
+        send_ops = get_communication_ops(local_tensor, 1, dist.group.WORLD, tag, dist.isend)
+        
+        # Batch send operations
+        reqs = dist.batch_isend_irecv(send_ops)
+        
+        # Wait for completion
+        for req in reqs:
+            req.wait()
+            
+        print(f"Rank {rank} sent data successfully.")
+        
+    elif rank == 1:
+        # Receiver rank
+        # Initialize a zero tensor to receive data
+        local_tensor_dst = torch.zeros(batch_size, total_columns)
+        
+        # Generate receive operations using views
+        recv_ops = get_communication_ops(local_tensor_dst, 0, dist.group.WORLD, tag, dist.irecv)
+        
+        # Batch receive operations
+        reqs = dist.batch_isend_irecv(recv_ops)
+        
+        # Wait for completion
+        for req in reqs:
+            req.wait()
+            
+        # Verification logic would go here in a real test framework
+        # For this snippet, we just print the shape to show execution
+        print(f"Rank {rank} received data with shape {local_tensor_dst.shape}")
+        
+        # In a full test, we would compare local_tensor_dst with the sender's tensor
+        # to check for the data inconsistency bug.
+        # e.g., assert torch.allclose(receiver_tensor, sender_tensor)
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_batch_isend_irecv_views, args=(world_size,), nprocs=world_size, join=True)

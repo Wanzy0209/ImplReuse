@@ -1,0 +1,102 @@
+Issue ID: 165749
+Title: Backward pass failure fornn.Conv2dwithweight_normandtorch.compile
+Bug Description:
+### 🐛 Describe the bug
+
+I encountered a failure when training a convolutional model with weight normalization and `torch.compile`.
+Here is the minimal reproducer:
+
+```py
+import torch
+from torch import nn
+from torch.nn.utils.parametrizations import weight_norm
+from torch.optim import SGD
+
+if __name__ == "__main__":
+    d = 65
+    x = torch.randn((1, 2, 32, 32)).cuda()
+    model = torch.compile(weight_norm(nn.Conv2d(2, d, 2)).train().cuda())
+    opt = SGD(model.parameters())
+    for _ in range(1000):
+        model(x).mean().backward()
+        opt.step()
+        opt.zero_grad()
+```
+
+It fails with: `torch._inductor.exc.InductorError: RuntimeError: saved_v must be contiguous`, which seems to be raised during the backward pass: https://github.com/pytorch/pytorch/blob/5d4da26ed067d2d70102f30967f1b09f8fb7018a/aten/src/ATen/native/cuda/WeightNorm.cu#L437
+
+This error is not raised if I remove `torch.compile` or if `d <= 64`.
+I also can't reproduce this behavior with either `nn.Linear` or `nn.Conv1d` instead of `nn.Conv2d`. 
+
+### Error logs
+
+Traceback (most recent call last):
+  File "/home/mpoli/bug.py", line 12, in <module>
+    model(x).mean().backward()
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/mpoli/.venv/lib/python3.13/site-packages/torch/_tensor.py", line 627, in backward
+    torch.autograd.backward(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        self, gradient, retain_graph, create_graph, inputs=inputs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.train.string_input_producer
+Similarity score: 0.9932727217674255
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.train.string_input_producer
+
+# --- tensorflow.python.training.input.string_input_producer ---
+def string_input_producer(string_tensor,
+                          num_epochs=None,
+                          shuffle=True,
+                          seed=None,
+                          capacity=32,
+                          shared_name=None,
+                          name=None,
+                          cancel_op=None):
+  """Output strings (e.g. filenames) to a queue for an input pipeline.
+
+  Note: if `num_epochs` is not `None`, this function creates local counter
+  `epochs`. Use `local_variables_initializer()` to initialize local variables.
+
+  Args:
+    string_tensor: A 1-D string tensor with the strings to produce.
+    num_epochs: An integer (optional). If specified, `string_input_producer`
+      produces each string from `string_tensor` `num_epochs` times before
+      generating an `OutOfRange` error. If not specified,
+      `string_input_producer` can cycle through the strings in `string_tensor`
+      an unlimited number of times.
+    shuffle: Boolean. If true, the strings are randomly shuffled within each
+      epoch.
+    seed: An integer (opt
+...
+
+Original Test Case:
+import torch
+from torch import nn
+from torch.nn.utils.parametrizations import weight_norm
+from torch.optim import SGD
+
+if __name__ == "__main__":
+    d = 65
+    x = torch.randn((1, 2, 32, 32)).cuda()
+    model = torch.compile(weight_norm(nn.Conv2d(2, d, 2)).train().cuda())
+    opt = SGD(model.parameters())
+    for _ in range(1000):
+        model(x).mean().backward()
+        opt.step()
+        opt.zero_grad()
+
+The API tf.compat.v1.train.string_input_producer is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

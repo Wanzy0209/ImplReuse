@@ -1,0 +1,71 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_multiply_no_nan_gradient():
+    """
+    Adapted test case to verify gradient behavior of tf.compat.v1.math.multiply_no_nan.
+    The original PyTorch issue highlighted inconsistent gradient distribution for torch.min.
+    Here, we verify the gradient flow for multiply_no_nan, specifically when the 'no_nan' 
+    condition (y=0) is triggered, which is the API's specific edge case.
+    """
+    
+    print("--- Test Case 1: Normal Multiplication (y != 0) ---")
+    # Setup inputs
+    x = tf.constant([2.0, 3.0, 4.0])
+    y = tf.constant([1.0, 1.0, 1.0])
+    
+    with tf.GradientTape(persistent=True) as tape:
+        tape.watch(x)
+        tape.watch(y)
+        # Perform operation
+        result = tf.compat.v1.math.multiply_no_nan(x, y)
+        # Reduce to scalar to mimic the scalar output of torch.min() in the original bug
+        loss = tf.reduce_sum(result)
+
+    # Compute gradients
+    grads_x = tape.gradient(loss, x)
+    grads_y = tape.gradient(loss, y)
+    
+    print(f"Input x: {x.numpy()}")
+    print(f"Input y: {y.numpy()}")
+    print(f"Result: {result.numpy()}")
+    print(f"Grad x: {grads_x.numpy()}") # Expected: [1.0, 1.0, 1.0] (dy)
+    print(f"Grad y: {grads_y.numpy()}") # Expected: [2.0, 3.0, 4.0] (dx)
+    
+    # Assertions for normal case
+    assert np.allclose(grads_x.numpy(), [1.0, 1.0, 1.0])
+    assert np.allclose(grads_y.numpy(), [2.0, 3.0, 4.0])
+
+    print("\n--- Test Case 2: No-Nan Condition (y == 0) ---")
+    # Setup inputs where y is 0
+    x = tf.constant([2.0, 3.0, 4.0])
+    y = tf.constant([0.0, 0.0, 0.0])
+
+    with tf.GradientTape(persistent=True) as tape:
+        tape.watch(x)
+        tape.watch(y)
+        # Perform operation: x * 0 -> 0 (even if x was NaN/Inf)
+        result = tf.compat.v1.math.multiply_no_nan(x, y)
+        loss = tf.reduce_sum(result)
+
+    # Compute gradients
+    grads_x = tape.gradient(loss, x)
+    grads_y = tape.gradient(loss, y)
+
+    print(f"Input x: {x.numpy()}")
+    print(f"Input y: {y.numpy()}")
+    print(f"Result: {result.numpy()}") # Expected: [0.0, 0.0, 0.0]
+    print(f"Grad x: {grads_x.numpy()}") # Expected: [0.0, 0.0, 0.0] (since y=0)
+    # Note: Gradient w.r.t y behavior depends on implementation. 
+    # Standard math implies grad is x, but 'no_nan' might imply 0 to avoid issues.
+    print(f"Grad y: {grads_y.numpy()}") 
+    
+    # Assertions for the no_nan case
+    # The output must be zero
+    assert np.allclose(result.numpy(), [0.0, 0.0, 0.0])
+    # Gradient w.r.t x should be 0 because y is 0
+    assert np.allclose(grads_x.numpy(), [0.0, 0.0, 0.0])
+
+if __name__ == "__main__":
+    test_multiply_no_nan_gradient()

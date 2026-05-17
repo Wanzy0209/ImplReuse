@@ -1,0 +1,32 @@
+import torch
+
+def test_cummax_gradient():
+    """
+    Test the gradient behavior of torch.cummax when there are ties.
+    Similar to torch.min(input, dim=...), cummax should assign gradients
+    to the specific indices (first occurrence) rather than distributing them.
+    """
+    # Setup: Create a tensor with all equal values to test tie-breaking
+    a = torch.ones([5]).cuda()
+    a.requires_grad = True
+
+    # Operation: torch.cummax
+    # cummax returns a named tuple (values, indices).
+    # Since all values are equal, it keeps the index of the first occurrence (0).
+    values, indices = torch.cummax(a, dim=0)
+
+    # Backward: Sum the values to get a scalar loss to backpropagate from
+    values.sum().backward()
+
+    # Assertion:
+    # The gradient flows to the indices selected by cummax.
+    # Since all 5 output elements point to index 0, index 0 accumulates a gradient of 5.0.
+    # The other indices receive 0.0.
+    expected_grad = torch.tensor([5., 0., 0., 0., 0.], device='cuda:0')
+    
+    print("Gradient:", a.grad)
+    assert torch.allclose(a.grad, expected_grad), f"Expected {expected_grad}, got {a.grad}"
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_cummax_gradient()

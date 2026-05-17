@@ -1,0 +1,30 @@
+import torch
+
+def func():
+    # Create a tensor on CUDA to ensure the operation runs on GPU
+    a = torch.tensor([1.0, 2.0, 3.0, 4.0], device="cuda")
+    
+    # Use the similar API: torch.std
+    # This replaces torch.all(a > 0) from the original issue reproduction
+    result = torch.std(a)
+    
+    # Perform a check to ensure the computation is part of the graph
+    # (Analogous to the assert in the original issue)
+    if result > 0:
+        # The critical call: torch.cuda.synchronize()
+        # The bug report indicates this is removed in aot_eager mode
+        torch.cuda.synchronize()
+        print("Synchronized after torch.std")
+    else:
+        print("Standard deviation was not positive")
+
+def test_fn():
+    torch._dynamo.reset()
+    # Compile with the specific backend mentioned in the bug report
+    f_c = torch.compile(func, backend="aot_eager")
+    f_c()
+
+if __name__ == "__main__":
+    # To verify the bug, run with TORCH_LOGS="graph_code,aot_graphs"
+    # and check if synchronize is present in the graph logs.
+    test_fn()

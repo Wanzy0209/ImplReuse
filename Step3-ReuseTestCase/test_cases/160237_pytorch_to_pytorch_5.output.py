@@ -1,0 +1,65 @@
+import torch
+import torch.nn as nn
+import unittest
+
+class TestMSELossMPS(unittest.TestCase):
+    """
+    Test case for torch.nn.MSELoss on the MPS (Mac Metal) device.
+    This test is derived from a bug report where grid_sampler_3d failed on MPS.
+    We verify that the similar API, MSELoss, functions correctly on the same backend.
+    """
+
+    def test_mseloss_mps_device(self):
+        # Skip if MPS is not available (e.g., running on non-Mac hardware)
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS device is not available.")
+
+        # Create random input and target tensors on the MPS device
+        # Using shapes similar to typical deep learning batches
+        input_tensor = torch.randn(10, 5, device='mps')
+        target_tensor = torch.randn(10, 5, device='mps')
+
+        # Initialize the MSELoss
+        criterion = nn.MSELoss()
+
+        # Compute the loss
+        loss = criterion(input_tensor, target_tensor)
+
+        # Verify the loss is computed and resides on the MPS device
+        self.assertIsInstance(loss, torch.Tensor)
+        self.assertEqual(loss.device.type, 'mps')
+        
+        # Verify the loss is a scalar (0-dim tensor) by default
+        self.assertEqual(loss.dim(), 0)
+        
+        # Verify the loss is a valid number (not NaN or Inf)
+        self.assertFalse(torch.isnan(loss))
+        self.assertFalse(torch.isinf(loss))
+
+    def test_mseloss_mps_vs_cpu_consistency(self):
+        """
+        Verify that MSELoss on MPS produces numerically similar results to CPU.
+        """
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS device is not available.")
+
+        # Create tensors
+        input_data = torch.randn(4, 3, 20, 20)
+        target_data = torch.randn(4, 3, 20, 20)
+
+        # Compute on MPS
+        input_mps = input_data.to('mps')
+        target_mps = target_data.to('mps')
+        criterion_mps = nn.MSELoss()
+        loss_mps = criterion_mps(input_mps, target_mps)
+
+        # Compute on CPU
+        criterion_cpu = nn.MSELoss()
+        loss_cpu = criterion_cpu(input_data, target_data)
+
+        # Compare results (moving MPS result back to CPU for comparison)
+        # We allow a small tolerance for floating point differences between devices
+        self.assertTrue(torch.allclose(loss_mps.cpu(), loss_cpu, atol=1e-5))
+
+if __name__ == '__main__':
+    unittest.main()

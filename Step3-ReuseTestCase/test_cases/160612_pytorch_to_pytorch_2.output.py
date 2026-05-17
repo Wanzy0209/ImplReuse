@@ -1,0 +1,22 @@
+import torch
+
+# Prepare a list of tensors with the same dimensionality but different sizes
+# This is the typical use case for torch.nested.nested_tensor
+tensor_list = [
+    torch.randn(2, 3),
+    torch.randn(4, 3),
+    torch.randn(1, 3)
+]
+
+# Call the similar API
+nt = torch.nested.nested_tensor(tensor_list)
+
+# Verify the result is a nested tensor
+assert isinstance(nt, torch.Tensor)
+assert nt.is_nested
+
+# Verify basic properties
+assert nt.dim() == 2
+assert nt.size(0) == 3  # Number of tensors in the list
+
+print(nt)

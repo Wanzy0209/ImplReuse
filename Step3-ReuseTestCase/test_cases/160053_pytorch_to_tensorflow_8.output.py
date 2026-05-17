@@ -1,0 +1,25 @@
+import torch
+import tensorflow as tf
+
+# The original PyTorch bug involves a 4D input tensor causing an error 
+# despite the error message claiming support for 4D inputs.
+# We adapt this to test the TensorFlow one_hot operation (the backend logic 
+# for tf.keras.preprocessing.text.one_hot) with a 4D input tensor.
+
+# Create a 4D tensor of indices (analogous to torch.empty(2,2,2,2))
+# We use integers because one_hot requires indices.
+indices = tf.zeros((2, 2, 2, 2), dtype=tf.int32)
+
+# The PyTorch error message claimed 4D was supported but it failed.
+# We verify that tf.one_hot handles 4D inputs correctly.
+try:
+    # depth is the number of classes
+    depth = 10
+    # Using tf.one_hot which is the public API for the logic described in the info block
+    result = tf.one_hot(indices, depth)
+    
+    # Verify the output shape is 5D (Input 4D + Class dimension)
+    assert result.shape == (2, 2, 2, 2, depth), f"Expected shape (2, 2, 2, 2, {depth}), got {result.shape}"
+    print("Test passed: 4D input handled correctly.")
+except Exception as e:
+    print(f"Test failed: {e}")

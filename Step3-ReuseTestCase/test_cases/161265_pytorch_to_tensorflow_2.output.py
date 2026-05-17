@@ -1,0 +1,25 @@
+import torch
+import tensorflow as tf
+
+# Adapted test case for tf.keras.backend.random_normal
+# Original issue: torch.ones fails to fill memory correctly for >4GB tensors on MacOS MPS.
+# This test creates a >4GB tensor using float16 to match the memory footprint 
+# of the original int8 test case (approx 4.29 GB).
+
+# Shape: (1, (1 << 31) + 5) elements
+# Dtype: float16 (2 bytes per element)
+# Total Memory: ~4.29 GB
+shape = (1, (1 << 31) + 5)
+
+# Create the large tensor filled with random values
+a = tf.keras.backend.random_normal(shape, dtype='float16')
+
+# Access the tail elements to verify initialization
+# In the PyTorch bug, these were 0 instead of the fill value.
+# Here we check if they are non-zero (random values).
+print(a[0, -2])
+print(a[:, -2])
+
+# Assert that the tail is not zero (indicating successful fill)
+# Note: For a normal distribution, P(x=0) is extremely low.
+assert a[0, -2] != 0.0, "Tail value is zero, potential memory initialization failure."

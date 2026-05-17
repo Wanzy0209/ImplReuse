@@ -1,0 +1,46 @@
+import torch
+import tensorflow as tf
+
+# Disable eager execution to simulate the graph/compiled environment
+# where serialization might strip dynamic attributes, similar to torch.compile.
+tf.compat.v1.disable_eager_execution()
+
+# Define a subclass of QueueRunner to mimic MyNamedTupleSubclass
+class MyQueueRunner(tf.compat.v1.train.QueueRunner):
+    pass
+
+def test_queue_runner_dynamic_attributes():
+    with tf.compat.v1.Graph().as_default():
+        # Setup a minimal queue and enqueue operation required for QueueRunner
+        queue = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.float32])
+        enqueue_op = queue.enqueue([1.0])
+
+        # Instantiate the subclass
+        my_runner = MyQueueRunner(queue=queue, enqueue_ops=[enqueue_op])
+
+        # Add dynamic attribute (Core logic from the bug report)
+        my_runner.extra_info = "test_value"
+
+        # Call the API under test
+        # This is analogous to the compiled function call in the PyTorch bug
+        tf.compat.v1.train.add_queue_runner(my_runner)
+
+        # Verify persistence on the original object
+        print("\nTesting QueueRunner with dynamic attributes:")
+        try:
+            print(f"Original object attribute: {my_runner.extra_info}")
+        except AttributeError as e:
+            print(f"FAIL: Original object lost attribute - {e}")
+
+        # Verify persistence on the object retrieved from the collection
+        # This simulates the object being processed/stored by the framework
+        runners = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+        retrieved_runner = runners[-1]
+
+        try:
+            print(f"Retrieved object attribute: {retrieved_runner.extra_info}")
+        except AttributeError as e:
+            print(f"FAIL: Retrieved object lost attribute - {e}")
+
+if __name__ == "__main__":
+    test_queue_runner_dynamic_attributes()

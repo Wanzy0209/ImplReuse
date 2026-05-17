@@ -1,0 +1,34 @@
+import torch
+import tensorflow as tf
+
+# Define the function using the target API: tf.keras.backend.dropout
+# Note: The original PyTorch function took two inputs (real, imag) for complex construction.
+# tf.keras.backend.dropout takes one input (x) and a rate.
+# We adapt the function signature to fit the target API's requirements.
+def f(x: tf.Tensor) -> tf.Tensor:
+    # The API definition indicates seed must be specified
+    return tf.keras.backend.dropout(x, rate=0.5, seed=42)
+
+# Compile the function using tf.function (TensorFlow's equivalent to torch.compile)
+# jit_compile=True is used to mimic the strict graph compilation of fullgraph=True
+compiled = tf.function(f, jit_compile=True)
+
+B, F, T = 1, 641, 39
+
+# Create source tensor with shape (B, F, T)
+x_src = tf.random.normal((B, F, T))
+
+# First call with original shape to trace/compile the graph
+_ = compiled(x_src)
+
+# Create mismatched tensor with shape (B, T, F) via permutation
+x_mismatch = tf.transpose(x_src, [0, 2, 1])
+
+# Second call with mismatched shape
+# In the PyTorch bug, this causes an AssertionError.
+# Here we test if tf.keras.backend.dropout handles the shape change gracefully or crashes.
+try:
+    _ = compiled(x_mismatch)
+    print("Test passed: No crash on shape mismatch.")
+except Exception as e:
+    print(f"Test failed with error: {e}")

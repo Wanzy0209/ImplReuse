@@ -1,0 +1,45 @@
+import torch
+
+def test_gammaincc_edge_cases():
+    """
+    Test case for torch.special.gammaincc adapted from the concept of 
+    handling negative values in the constant_pad_nd bug report.
+    
+    The original bug highlighted inconsistent behavior with negative padding values.
+    For torch.special.gammaincc, the documentation specifies behavior for negative inputs:
+    "If both are zero or either is negative then out_i=nan".
+    This test verifies that gammaincc handles these negative/zero edge cases gracefully.
+    """
+    
+    # Case 1: Negative 'input' tensor
+    # Corresponds to testing negative values in the original bug
+    input_tensor = torch.tensor([-1.0, 2.0, 3.0])
+    other_tensor = torch.tensor([1.0, 2.0, 3.0])
+    result = torch.special.gammaincc(input_tensor, other_tensor)
+    
+    # The first element should be NaN because input is negative
+    assert torch.isnan(result[0]), "Expected NaN for negative input"
+    # Subsequent elements should be valid numbers
+    assert not torch.isnan(result[1]), "Expected valid result for positive input"
+    assert not torch.isnan(result[2]), "Expected valid result for positive input"
+
+    # Case 2: Negative 'other' tensor
+    input_tensor = torch.tensor([1.0, 2.0, 3.0])
+    other_tensor = torch.tensor([-1.0, 2.0, 3.0])
+    result = torch.special.gammaincc(input_tensor, other_tensor)
+    
+    # The first element should be NaN because other is negative
+    assert torch.isnan(result[0]), "Expected NaN for negative other"
+
+    # Case 3: Both inputs are zero
+    # Corresponds to boundary condition checks in the original bug
+    input_tensor = torch.tensor([0.0])
+    other_tensor = torch.tensor([0.0])
+    result = torch.special.gammaincc(input_tensor, other_tensor)
+    
+    assert torch.isnan(result[0]), "Expected NaN when both inputs are zero"
+
+    print("gammaincc edge case tests passed.")
+
+if __name__ == "__main__":
+    test_gammaincc_edge_cases()

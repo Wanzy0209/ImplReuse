@@ -1,0 +1,41 @@
+import tensorflow as tf
+import numpy as np
+
+# Set seed for reproducibility
+tf.random.set_seed(0)
+
+# Input tensor shape (4, 6, 7) matching the original bug report
+# PyTorch's randn generates standard normal distribution, similar to tf.random.normal
+x = tf.random.normal((4, 6, 7))
+
+# Map AvgPool2d parameters to strided_slice parameters
+# AvgPool2d stride=[4, 9] corresponds to spatial strides.
+# strided_slice strides apply to all dimensions. Batch dim stride is 1.
+strides = [1, 4, 9]
+
+# Begin and End indices
+begin = [0, 0, 0]
+end = [4, 6, 7]
+
+# Execute strided_slice
+# We use end_mask=0 (default) to strictly respect bounds.
+# Note: While AvgPool2d with ceil_mode=True handles edge cases differently,
+# with stride=9 and width=7, the output size is 1 in both cases.
+out_tf = tf.strided_slice(x, begin, end, strides)
+
+# Print output to verify behavior
+print("TensorFlow Output:")
+print(out_tf)
+
+# Verify shape matches expected calculation based on strides
+# Dim 0: 4 elements (0, 1, 2, 3)
+# Dim 1: 6 elements, stride 4 -> indices 0, 4 -> size 2
+# Dim 2: 7 elements, stride 9 -> index 0 -> size 1
+expected_shape = tf.TensorShape([4, 2, 1])
+assert out_tf.shape == expected_shape, f"Shape mismatch: {out_tf.shape} vs {expected_shape}"
+
+# Verify that the output is not all zeros (sanity check similar to the original bug report)
+if tf.reduce_all(out_tf == 0.0):
+    print("Output is all zeros!")
+else:
+    print("Output contains non-zero values.")

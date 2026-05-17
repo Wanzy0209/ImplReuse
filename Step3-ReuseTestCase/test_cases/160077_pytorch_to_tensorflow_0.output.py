@@ -1,0 +1,51 @@
+import torch
+import tensorflow as tf
+
+def f(x):
+    """
+    Target function using the similar API: tf.compat.v1.nn.dropout
+    This replaces the original torch.split logic.
+    """
+    # Note: The extracted info for this API requires a seed.
+    return tf.compat.v1.nn.dropout(x, rate=0.5, seed=42)
+
+# Determine device to use (GPU if available, otherwise CPU)
+device_name = "/GPU:0" if tf.config.list_physical_devices('GPU') else "/CPU:0"
+
+print(f"Running test on device: {device_name}")
+
+with tf.device(device_name):
+    # Create input tensor
+    xs = tf.random.normal([2, 2])
+
+    # 1. Test Eager Execution (Equivalent to PyTorch eager mode)
+    print("Testing Eager Execution...")
+    try:
+        result_eager = f(xs)
+        # Basic assertion to ensure execution happened
+        assert result_eager.shape == (2, 2), "Eager execution shape mismatch"
+        print("Eager execution successful.")
+    except Exception as e:
+        print(f"Eager execution failed: {e}")
+
+    # 2. Test Compiled/Traced Execution (Equivalent to torch.compile)
+    # tf.function is the TensorFlow equivalent to torch.compile
+    print("Testing Compiled Execution (tf.function)...")
+    try:
+        compiled_f = tf.function(f)
+        result_compiled = compiled_f(xs)
+        # Basic assertion to ensure execution happened
+        assert result_compiled.shape == (2, 2), "Compiled execution shape mismatch"
+        print("Compiled execution successful.")
+    except Exception as e:
+        print(f"Compiled execution failed: {e}")
+
+# Outside of device context, verify it still works (as per original test structure)
+print("Testing outside of device context...")
+try:
+    xs_cpu = tf.random.normal([2, 2])
+    result_outside = tf.function(f)(xs_cpu)
+    assert result_outside.shape == (2, 2)
+    print("Execution outside device context successful.")
+except Exception as e:
+    print(f"Execution outside device context failed: {e}")

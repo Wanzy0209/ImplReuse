@@ -1,0 +1,40 @@
+import torch
+import torch.distributed as dist
+import os
+
+def main():
+    """
+    Test case for NCCL initialization on large-scale clusters (e.g., NVL72).
+    This script is intended to be launched with a distributed launcher like torchrun.
+    """
+    # Retrieve environment variables set by the launcher
+    rank = int(os.environ.get("RANK", 0))
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+
+    # Set the device for the current process based on local_rank
+    torch.cuda.set_device(local_rank)
+
+    # Initialize the process group using the NCCL backend.
+    # The bug report indicates a segmentation fault occurs here on NVL72 
+    # when using more than 10 trays (40 GPUs).
+    dist.init_process_group(
+        backend='nccl',
+        device_id=local_rank
+    )
+
+    # Assertions to verify successful initialization if no crash occurs
+    assert dist.is_initialized(), "Process group failed to initialize."
+    assert dist.get_rank() == rank, f"Rank mismatch: expected {rank}, got {dist.get_rank()}"
+    assert dist.get_world_size() == world_size, f"World size mismatch: expected {world_size}, got {dist.get_world_size()}"
+
+    # Barrier to ensure all processes have initialized before proceeding
+    dist.barrier()
+
+    print(f"Rank {rank}/{world_size} initialized successfully on device {local_rank}.")
+
+    # Clean up the process group
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

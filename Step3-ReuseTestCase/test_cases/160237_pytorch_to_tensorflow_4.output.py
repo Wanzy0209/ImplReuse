@@ -1,0 +1,73 @@
+import tensorflow as tf
+import numpy as np
+
+def test_extract_image_patches():
+    """
+    Test case adapted from the PyTorch 'aten::grid_sampler_3d' issue.
+    
+    The original bug involved a NotImplementedError for the grid_sample operator 
+    on the MPS device when processing 3D features in a warping network.
+    
+    This test verifies the behavior of the similar TensorFlow API 
+    `tf.compat.v1.image.extract_image_patches`. While this API operates on 4D 
+    tensors (Batch, Height, Width, Channels) rather than 5D (Batch, Channel, Depth, Height, Width),
+    it serves a similar purpose in spatial manipulation and feature extraction.
+    """
+    
+    # Setup input tensor mimicking a batch of feature maps/images
+    # Shape: [Batch, Height, Width, Channels]
+    batch_size = 1
+    height = 32
+    width = 32
+    channels = 64
+    
+    # Create a random tensor to simulate image data
+    # Using float32 as it is the standard type for such operations
+    images = tf.random.normal((batch_size, height, width, channels), dtype=tf.float32)
+    
+    # Define parameters for patch extraction
+    # These parameters control the spatial sampling window, analogous to the grid in grid_sample
+    kernel_size = [1, 5, 5, 1]   # Size of the sliding window (patch)
+    strides = [1, 1, 1, 1]       # Stride of the sliding window
+    rates = [1, 1, 1, 1]         # Dilation rate (equivalent to spacing in grid sampling)
+    padding = 'VALID'            # Padding method
+    
+    try:
+        # Execute the similar API
+        # This extracts patches from the input images
+        patches = tf.compat.v1.image.extract_image_patches(
+            images=images,
+            ksizes=kernel_size,
+            strides=strides,
+            rates=rates,
+            padding=padding
+        )
+        
+        # Verify the operation executed without NotImplementedError (the original bug)
+        assert patches is not None, "Output tensor should not be None"
+        
+        # Verify output shape
+        # Output shape calculation: [Batch, (H-kh)/s+1, (W-kw)/s+1, kh*kw*C]
+        expected_h = (height - kernel_size[1]) // strides[1] + 1
+        expected_w = (width - kernel_size[2]) // strides[2] + 1
+        expected_c = kernel_size[1] * kernel_size[2] * channels
+        
+        expected_shape = (batch_size, expected_h, expected_w, expected_c)
+        
+        assert patches.shape == expected_shape, \
+            f"Shape mismatch. Expected {expected_shape}, got {patches.shape}"
+            
+        print("Test Passed: tf.compat.v1.image.extract_image_patches executed successfully.")
+        print(f"Input shape: {images.shape}")
+        print(f"Output shape: {patches.shape}")
+
+    except NotImplementedError as e:
+        # Replicating the error check from the original bug report
+        print(f"Test Failed: NotImplementedError encountered - {e}")
+        raise
+    except Exception as e:
+        print(f"Test Failed with unexpected error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_extract_image_patches()

@@ -1,0 +1,90 @@
+import torch
+import tensorflow as tf
+import numpy as np
+import unittest
+
+class TestQueueRunnerBfloat16(unittest.TestCase):
+    def test_queue_runner_bfloat16_correctness(self):
+        """
+        Adapted test case for tf.compat.v1.train.add_queue_runner.
+        Preserves the bfloat16 correctness logic from the original PyTorch issue.
+        """
+        # Disable eager execution as QueueRunners are graph-mode specific
+        tf.compat.v1.disable_eager_execution()
+
+        # Setup parameters mimicking the original issue context
+        batch_size = 1
+        seq_len = 1000
+        vocab_size = 128000  # Approximate vocab size for Llama-3.2
+
+        # Generate random input data (mimicking input_ids)
+        # Using int64 as per the original script, but we will cast to bfloat16 
+        # to test the specific dtype mentioned in the bug report.
+        np.random.seed(42)
+        input_ids_np = np.random.randint(
+            low=0, 
+            high=vocab_size, 
+            size=(batch_size, seq_len), 
+            dtype=np.int64
+        )
+
+        # Define the graph
+        with tf.compat.v1.Session() as sess:
+            # Cast to bfloat16 to test the specific accuracy/correctness context
+            # Note: In TF1 graph mode, we define the flow of data.
+            input_tensor = tf.constant(input_ids_np, dtype=tf.bfloat16)
+            
+            # Create a FIFOQueue to hold the data
+            # Using bfloat16 as the dtype to match the bug report's sensitivity
+            queue = tf.compat.v1.queue.FIFOQueue(
+                capacity=5, 
+                dtypes=[tf.bfloat16], 
+                shapes=[(batch_size, seq_len)]
+            )
+            
+            # Enqueue operation
+            enqueue_op = queue.enqueue(input_tensor)
+            
+            # Create a QueueRunner
+            # This manages multiple threads enqueueing data
+            qr = tf.compat.v1.train.QueueRunner(queue, [enqueue_op] * 2)
+            
+            # API Under Test: tf.compat.v1.train.add_queue_runner
+            # This adds the runner to the graph collection
+            tf.compat.v1.train.add_queue_runner(qr)
+            
+            # Dequeue operation to retrieve data
+            dequeue_op = queue.dequeue()
+            
+            # Initialize variables
+            sess.run(tf.compat.v1.global_variables_initializer())
+            
+            # Coordinator for managing threads
+            coord = tf.compat.v1.train.Coordinator()
+            
+            # Start the queue runners
+            threads = tf.compat.v1.train.start_queue_runners(coord=coord)
+            
+            try:
+                # Run the operation (mimicking the model forward pass)
+                # We verify that the data coming out of the queue matches the input
+                result = sess.run(dequeue_op)
+                
+                # Assertion: Verify correctness (mimicking torch.allclose)
+                # We cast back to float for comparison as numpy doesn't support bfloat16 natively in all versions
+                expected = input_ids_np.astype(np.float16)
+                actual = result.astype(np.float16)
+                
+                # Check if the data passed through the queue runner is correct
+                self.assertTrue(
+                    np.allclose(actual, expected, atol=0.1), 
+                    "Data mismatch after passing through queue runner with bfloat16"
+                )
+                
+            finally:
+                # Stop the threads
+                coord.request_stop()
+                coord.join(threads)
+
+if __name__ == "__main__":
+    unittest.main()

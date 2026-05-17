@@ -1,0 +1,29 @@
+import torch
+
+def test_torch_max_gradient_behavior():
+    # Test Case 1: torch.max -> reduce over all dimensions
+    # Expected: Gradients are evenly distributed among equal values (similar to torch.amax)
+    a = torch.ones([5]).cuda()
+    a.requires_grad = True
+    max_val = torch.max(a)
+    max_val.backward()
+    
+    # Since all 5 elements are equal (1.0), the gradient should be 1/5 = 0.2 for each
+    expected_grad_1 = torch.tensor([0.2000, 0.2000, 0.2000, 0.2000, 0.2000], device='cuda:0')
+    assert torch.allclose(a.grad, expected_grad_1), f"Test 1 Failed: Expected {expected_grad_1}, got {a.grad}"
+
+    # Test Case 2: torch.max(input, dim=...) -> reduce over specified dimension
+    # Expected: Gradient is assigned to the first occurrence (indexing behavior)
+    a = torch.ones([5]).cuda()
+    a.requires_grad = True
+    max_val = torch.max(a, dim=0)
+    max_val.values.backward()
+    
+    # Gradient should be 1.0 for the first element, 0.0 for the rest
+    expected_grad_2 = torch.tensor([1., 0., 0., 0., 0.], device='cuda:0')
+    assert torch.equal(a.grad, expected_grad_2), f"Test 2 Failed: Expected {expected_grad_2}, got {a.grad}"
+
+    print("All torch.max gradient tests passed.")
+
+if __name__ == "__main__":
+    test_torch_max_gradient_behavior()

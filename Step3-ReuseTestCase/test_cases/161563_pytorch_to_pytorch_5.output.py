@@ -1,0 +1,67 @@
+import torch
+import torch.nn as nn
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+def test_dataparallel_gemma():
+    """
+    Test case for torch.nn.DataParallel based on the scenario 
+    described in Issue #161563.
+    
+    The original issue reported an AssertionError with torch.export.export
+    on the 'google/gemma-3-270m-it' model. This test verifies if the 
+    similar API, torch.nn.DataParallel, handles the same model and inputs
+    without raising the same error.
+    """
+    
+    # Setup from the original bug report
+    tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-270m-it")
+    model = AutoModelForCausalLM.from_pretrained("google/gemma-3-270m-it")
+
+    messages = [
+        {"role": "user", "content": "Who are you?"},
+    ]
+
+    inputs = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+    )
+
+    # torch.nn.DataParallel is primarily designed for CUDA devices.
+    # We check for availability to ensure the test is runnable.
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        model = model.to(device)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        
+        example_inputs = (inputs["input_ids"], inputs["attention_mask"])
+
+        # Adaptation: Replace torch.export.export with torch.nn.DataParallel
+        # Original: ep = torch.export.export(model, example_inputs)
+        dp_model = nn.DataParallel(model)
+
+        # Run the forward pass to verify functionality
+        try:
+            output = dp_model(*example_inputs)
+            
+            # Basic assertion to ensure the model ran and produced output
+            assert output is not None
+            assert hasattr(output, 'logits')
+            print("Test Passed: torch.nn.DataParallel executed successfully with gemma-3-270m-it.")
+            
+        except AssertionError as e:
+            # Catching the specific error mentioned in the bug report to see if it propagates
+            if "Current active mode" in str(e):
+                print(f"Test Failed: Encountered the 'Current active mode' error: {e}")
+            else:
+                raise
+        except Exception as e:
+            print(f"Test Failed with unexpected error: {e}")
+            raise
+    else:
+        print("Test Skipped: CUDA not available. torch.nn.DataParallel requires CUDA.")
+
+if __name__ == "__main__":
+    test_dataparallel_gemma()

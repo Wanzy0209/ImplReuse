@@ -1,0 +1,74 @@
+import tensorflow as tf
+
+def test_extract_image_patches_behavior():
+    """
+    Adapted test case based on PyTorch Issue 160237.
+    
+    The original issue involves a NotImplementedError for 'aten::grid_sampler_3d' 
+    on the MPS device when processing feature maps in a warping network.
+    
+    This test verifies the behavior of the similar TensorFlow API 
+    `tf.compat.v1.extract_image_patches` to ensure spatial sampling operations
+    (which caused the crash in PyTorch) are handled correctly here.
+    """
+    
+    # 1. Setup Input Data
+    # Simulating the feature maps (feature_3d) mentioned in the PyTorch stack trace.
+    # Note: PyTorch grid_sample_3d uses 5D tensors (N, C, D, H, W), but 
+    # tf.compat.v1.extract_image_patches operates on 4D tensors (N, H, W, C).
+    # We adapt to the 4D constraint of the target API.
+    batch_size = 1
+    height = 32
+    width = 32
+    channels = 64
+    
+    # Create a tensor on the available device (CPU or GPU)
+    # In the original bug, the device context (MPS) caused the failure.
+    # Here we verify the operation runs on the current TensorFlow backend.
+    input_tensor = tf.random.normal((batch_size, height, width, channels), dtype=tf.float32)
+    
+    print(f"Input tensor shape: {input_tensor.shape}")
+
+    # 2. Define Spatial Sampling Parameters
+    # These parameters mimic the dense motion/warping logic found in the 
+    # 'warping_network.py' of the original stack trace.
+    kernel_size = [1, 3, 3, 1]   # 3x3 patches
+    strides = [1, 1, 1, 1]       # Stride 1 for dense sampling
+    rates = [1, 1, 1, 1]         # No dilation
+    padding = 'SAME'             # Preserve spatial dimensions
+
+    # 3. Execute the Operation
+    try:
+        # This corresponds to the spatial transformation step that failed in PyTorch.
+        patches = tf.compat.v1.extract_image_patches(
+            images=input_tensor,
+            ksizes=kernel_size,
+            strides=strides,
+            rates=rates,
+            padding=padding
+        )
+        
+        # 4. Verification
+        # Verify the operation executed without NotImplementedError
+        assert patches is not None, "Output tensor is None"
+        
+        # Verify output shape
+        # With 'SAME' padding, H and W remain unchanged. Depth becomes K_h * K_w * C
+        expected_depth = 3 * 3 * channels
+        expected_shape = (batch_size, height, width, expected_depth)
+        
+        assert patches.shape == expected_shape, \
+            f"Shape mismatch: expected {expected_shape}, got {patches.shape}"
+            
+        print(f"Output tensor shape: {patches.shape}")
+        print("Test passed: extract_image_patches executed successfully.")
+
+    except NotImplementedError as e:
+        print(f"Test failed with NotImplementedError: {e}")
+        raise
+    except Exception as e:
+        print(f"Test failed with unexpected error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_extract_image_patches_behavior()

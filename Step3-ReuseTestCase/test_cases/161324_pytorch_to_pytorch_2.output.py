@@ -1,0 +1,72 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_recv_with_2d_views(rank, world_size):
+    """
+    Test case to verify data consistency when using torch.distributed.recv
+    with 2D tensor views. Adapted from the batch_isend_irecv bug report.
+    """
+    # Initialize process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    batch_size = 4
+    total_columns = 10
+    # Define offsets to create two non-contiguous views (slices)
+    # Slice 1: columns 0 to 4
+    # Slice 2: columns 6 to 10
+    split_offsets = [0, 4, 6, 10]
+    tag1, tag2 = 10, 20
+
+    if rank == 0:
+        # Sender rank
+        torch.manual_seed(0)
+        local_tensor = torch.randn(batch_size, total_columns)
+        
+        # Create views
+        dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+        dst_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+
+        # Send operations
+        # Note: We use standard isend here. The bug report focuses on the receiver 
+        # behavior with views, so we adapt the receiver to use the synchronous recv.
+        dist.isend(dst_t1, dst=1, tag=tag1)
+        dist.isend(dst_t2, dst=1, tag=tag2)
+        
+        # Wait for sends to complete to ensure process doesn't exit too early
+        # In a real scenario, we might use Work objects, but a barrier suffices for testing
+        dist.barrier()
+
+    elif rank == 1:
+        # Receiver rank
+        local_tensor_dst = torch.zeros(batch_size, total_columns)
+        
+        # Create views matching the sender's slices
+        receiving_tensor_view1 = local_tensor_dst[:, split_offsets[0]:split_offsets[1]]
+        receiving_tensor_view2 = local_tensor_dst[:, split_offsets[2]:split_offsets[3]]
+
+        # Adaptation: Use torch.distributed.recv (synchronous) instead of batch_isend_irecv
+        # This tests if the data corruption issue exists in the synchronous API as well.
+        dist.recv(receiving_tensor_view1, src=0, tag=tag1)
+        dist.recv(receiving_tensor_view2, src=0, tag=tag2)
+
+        # Verification
+        torch.manual_seed(0)
+        expected_tensor = torch.randn(batch_size, total_columns)
+        expected_view1 = expected_tensor[:, split_offsets[0]:split_offsets[1]]
+        expected_view2 = expected_tensor[:, split_offsets[2]:split_offsets[3]]
+
+        # Check for data consistency
+        assert torch.allclose(receiving_tensor_view1, expected_view1), \
+            f"Data mismatch in view 1. Expected {expected_view1}, got {receiving_tensor_view1}"
+        assert torch.allclose(receiving_tensor_view2, expected_view2), \
+            f"Data mismatch in view 2. Expected {expected_view2}, got {receiving_tensor_view2}"
+            
+        print(f"Rank {rank}: Test passed. Data in views is consistent.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_recv_with_2d_views, args=(world_size,), nprocs=world_size, join=True)

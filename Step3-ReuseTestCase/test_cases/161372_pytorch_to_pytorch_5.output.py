@@ -1,0 +1,38 @@
+import torch
+
+def test_torch_any_compile_dynamic_shapes():
+    """
+    Test case for torch.any inside torch.compile.
+    Based on Issue 161372 regarding dynamic shape handling (size mismatch 77 vs 78).
+    """
+    # Define a function using torch.any
+    def func(x):
+        # torch.any is the API under test here
+        return torch.any(x > 0.5)
+
+    # Compile the function
+    compiled_func = torch.compile(func)
+
+    # Create inputs with sizes that triggered the bug in the original report (77 and 78)
+    # We use a batch dimension to make it slightly more realistic
+    input_77 = torch.randn(2, 77)
+    input_78 = torch.randn(2, 78)
+
+    # Execute with the first size
+    res_77 = compiled_func(input_77)
+
+    # Execute with the second size (dynamic shape change)
+    # In the bug report, this caused a recompilation limit error or size mismatch
+    res_78 = compiled_func(input_78)
+
+    # Verify correctness against eager mode
+    expected_77 = func(input_77)
+    expected_78 = func(input_78)
+
+    assert torch.equal(res_77, expected_77), "Mismatch for size 77"
+    assert torch.equal(res_78, expected_78), "Mismatch for size 78"
+
+    print("Test passed: torch.any handles dynamic shapes correctly in torch.compile.")
+
+if __name__ == "__main__":
+    test_torch_any_compile_dynamic_shapes()

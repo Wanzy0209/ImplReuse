@@ -1,0 +1,71 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_reduce_with_privateuse1(rank, world_size):
+    setup(rank, world_size)
+    
+    # Define a function that uses torch.distributed.reduce
+    def func_to_compile(x):
+        # dist.reduce is a collective operation
+        dist.reduce(x, dst=0)
+        return x
+
+    # Compile the function
+    # The bug report indicates issues with meta tensors appearing on PrivateUse1 during compilation
+    try:
+        compiled_func = torch.compile(func_to_compile)
+    except RuntimeError as e:
+        if "meta" in str(e) and "PrivateUse1" in str(e):
+            print(f"Rank {rank}: Bug reproduced during compilation - {e}")
+        else:
+            print(f"Rank {rank}: Compilation error (unrelated to bug) - {e}")
+        cleanup()
+        return
+
+    # Create a tensor on PrivateUse1
+    # Note: This requires PrivateUse1 to be registered. 
+    # If not registered in the environment, this test might fail at tensor creation.
+    try:
+        # We use a dummy tensor size
+        tensor = torch.randn(2, 2, device='privateuse1')
+    except RuntimeError as e:
+        print(f"Rank {rank}: Could not create PrivateUse1 tensor (device might not be registered) - {e}")
+        cleanup()
+        return
+
+    # Run the compiled function
+    try:
+        compiled_func(tensor)
+        print(f"Rank {rank}: Execution successful (or passed tracing without meta-tensor error).")
+    except RuntimeError as e:
+        # We expect a runtime error because PrivateUse1 typically doesn't have a distributed backend implementation
+        # We want to ensure this is NOT the specific "meta" tensor error from the bug report
+        if "storage is not on the custom PrivateUse1 device. Got: meta" in str(e):
+            print(f"Rank {rank}: Bug reproduced during execution - {e}")
+        else:
+            # Expected failure: Backend not supported or similar
+            print(f"Rank {rank}: Expected runtime error (no backend) - {e}")
+
+    cleanup()
+
+if __name__ == "__main__":
+    # Check if PrivateUse1 is available/registered to avoid immediate crash
+    # This is a basic check; actual registration depends on the build/environment
+    try:
+        torch.randn(1, device='privateuse1')
+    except RuntimeError:
+        print("PrivateUse1 device not registered. Skipping test.")
+    else:
+        world_size = 2
+        mp.spawn(test_reduce_with_privateuse1, args=(world_size,), nprocs=world_size, join=True)

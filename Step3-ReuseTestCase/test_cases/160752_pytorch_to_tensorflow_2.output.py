@@ -1,0 +1,64 @@
+import torch
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+# Setup for DTensor
+# Note: DTensor requires a mesh. We create a simple single-device mesh for this test.
+try:
+    # Attempt to use available CPUs or GPUs
+    devices = tf.config.list_physical_devices()
+    if not devices:
+        raise RuntimeError("No physical devices found")
+    
+    # Create a mesh. For a minimal repro, we use a batch dimension on the first device.
+    mesh = dtensor.create_mesh([("batch", 1)], devices=devices)
+except Exception as e:
+    print(f"Mesh creation skipped (environment dependent): {e}")
+    # Fallback for environments where DTensor mesh creation might fail without specific config
+    # We define a dummy mesh to allow syntax checking, though execution might fail.
+    class DummyMesh:
+        def __init__(self): pass
+    mesh = DummyMesh()
+
+layout = dtensor.Layout([dtensor.UNSHARDED], mesh)
+
+MAX = 3
+BATCH = 37
+
+def func(x, idxs):
+    # Original PyTorch logic: x.square() * torch.nn.functional.one_hot(idxs, MAX)
+    # TensorFlow equivalent: tf.square(x) * tf.one_hot(idxs, MAX)
+    val = tf.square(x) * tf.one_hot(idxs, MAX, dtype=x.dtype)
+    
+    # Use the target API: copy_to_mesh
+    # This corresponds to the "compilation/optimization" step in the sense of 
+    # preparing the tensor for the distributed execution context.
+    return dtensor.copy_to_mesh(val, layout)
+
+# Original PyTorch logic: torch.compile(jacfunc, dynamic=True)
+# TensorFlow equivalent: @tf.function (which handles dynamic shapes via re-tracing)
+@tf.function
+def run_func(x, idxs):
+    # Original PyTorch logic: torch.func.jacfwd(func, argnums=(0,))(x, idxs)
+    # TensorFlow equivalent: Compute gradients using GradientTape.
+    # While jacfwd is forward-mode AD, GradientTape is the standard way to test
+    # functional API stability in TF graphs.
+    with tf.GradientTape() as tape:
+        tape.watch(x)
+        y = func(x, idxs)
+        # We sum the output to compute a scalar gradient, mimicking the sensitivity of jacfwd
+        loss = tf.reduce_sum(y)
+    return tape.gradient(loss, x)
+
+# Inputs
+idxs = tf.random.uniform((BATCH,), maxval=MAX, dtype=tf.int64)
+x = tf.random.uniform((BATCH, MAX), dtype=tf.float64)
+
+# Test Execution
+# The original bug was a crash/failure. We wrap in try-except to verify behavior.
+try:
+    # Run the compiled (tf.function) version
+    out = run_func(x, idxs)
+    print("Test Passed. Output shape:", out.shape if out is not None else None)
+except Exception as e:
+    print(f"Test Failed with error: {e}")

@@ -1,0 +1,59 @@
+import torch
+import tensorflow as tf
+
+def test_name_scope_with_compilation():
+    """
+    Adapted test case based on PyTorch Issue 160909.
+    
+    Original Bug: torch.compile with PrivateUse1 device passes 'meta' tensors 
+    to custom ops, causing a RuntimeError.
+    
+    Adaptation: Verify that tf.name_scope (the similar API) handles operations
+    correctly when used within a compiled context (tf.function), ensuring that
+    symbolic tensors (equivalent to meta/fake tensors) do not cause dispatch
+    or runtime errors.
+    """
+    
+    # Define a model function decorated with tf.function to simulate compilation
+    @tf.function
+    def compiled_model(data):
+        # Use the similar API: tf.name_scope
+        # This creates a context for operations, similar to how a backend might scope ops.
+        with tf.name_scope("custom_backend_scope"):
+            # Simulate the operation that failed in the PyTorch bug (repeat_interleave)
+            # In TensorFlow, the equivalent is tf.repeat.
+            # We also place it on a specific device to mimic the 'PrivateUse1' constraint.
+            with tf.device("/CPU:0"):
+                return tf.repeat(data, repeats=2, axis=1)
+
+    # Create input data matching the dimensions in the bug report: (1, 8, 3, 128)
+    data = tf.ones((1, 8, 3, 128))
+
+    try:
+        # Run the compiled model
+        # In PyTorch, the error occurred during the tracing/compilation phase
+        # when meta tensors were passed to the device op.
+        result = compiled_model(data)
+        
+        # Verify the result shape to ensure the op executed correctly
+        # repeat on axis 1 with 2 repeats changes dim 1 from 8 to 16
+        expected_shape = (1, 16, 3, 128)
+        assert result.shape == expected_shape, \
+            f"Shape mismatch: expected {expected_shape}, got {result.shape}"
+            
+        print("Test Passed: tf.name_scope handled symbolic tensors in graph mode without crashing.")
+        
+    except RuntimeError as e:
+        # Check if we hit a similar error regarding device/storage mismatch
+        error_msg = str(e)
+        if "device" in error_msg.lower() or "storage" in error_msg.lower():
+            print(f"Bug Reproduced (RuntimeError): {e}")
+        else:
+            print(f"Unexpected RuntimeError: {e}")
+            raise
+    except Exception as e:
+        print(f"Test Failed with unexpected exception: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_name_scope_with_compilation()

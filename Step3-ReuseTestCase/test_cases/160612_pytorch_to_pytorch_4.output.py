@@ -1,0 +1,24 @@
+import torch
+import torch.nn as nn
+import torch.nn.utils.prune as prune
+import torch.random
+
+# Test torch.random.manual_seed by verifying reproducibility of random pruning
+# Set the seed to ensure reproducibility
+torch.random.manual_seed(42)
+
+# Create a module and apply random pruning
+m1 = nn.Linear(5, 7)
+prune.random_unstructured(m1, name="weight", amount=0.2)
+mask1 = m1.weight_mask.clone()
+
+# Reset the seed to the same value
+torch.random.manual_seed(42)
+
+# Create another module and apply random pruning
+m2 = nn.Linear(5, 7)
+prune.random_unstructured(m2, name="weight", amount=0.2)
+mask2 = m2.weight_mask
+
+# Verify that the pruning masks are identical
+assert torch.equal(mask1, mask2), "torch.random.manual_seed did not produce reproducible results"

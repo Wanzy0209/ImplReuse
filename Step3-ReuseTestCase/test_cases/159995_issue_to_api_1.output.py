@@ -1,0 +1,145 @@
+import torch
+import os
+import tempfile
+from torch.utils.cpp_extension import load
+from torch.testing import assert_close
+
+# Define the CUDA kernel source code inline for self-containment
+cuda_source = """
+#include <torch/extension.h>
+#include <cuda_runtime.h>
+
+__global__ void add_one_kernel(const float* x, float* y, int size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        y[idx] = x[idx] + 1.0f;
+    }
+}
+
+__global__ void add_two_kernel(const float* x, float* y, int size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        y[idx] = x[idx] + 2.0f;
+    }
+}
+
+torch::Tensor add_one(torch::Tensor x) {
+    auto y = torch::empty_like(x);
+    int size = x.numel();
+    add_one_kernel<<<(size + 255) / 256, 256>>>(x.data_ptr<float>(), y.data_ptr<float>(), size);
+    return y;
+}
+
+torch::Tensor add_two(torch::Tensor x) {
+    auto y = torch::empty_like(x);
+    int size = x.numel();
+    add_two_kernel<<<(size + 255) / 256, 256>>>(x.data_ptr<float>(), y.data_ptr<float>(), size);
+    return y;
+}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("add_one", &add_one);
+    m.def("add_two", &add_two);
+}
+"""
+
+def setup_custom_ops():
+    """
+    Loads the custom CUDA extension and defines the torch library ops.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_path = os.path.join(tmpdir, "op.cu")
+        with open(source_path, "w") as f:
+            f.write(cuda_source)
+        
+        # Load the custom extension
+        op = load(
+            name="add_extension", 
+            sources=[source_path], 
+            verbose=True,
+            extra_cuda_cflags=["-O2"]
+        )
+
+        # Define the custom ops
+        torch.library.define("myops::add_one", "(Tensor x) -> Tensor")
+        torch.library.define("myops::add_two", "(Tensor x) -> Tensor")
+        
+        # Implement the ops for CUDA
+        torch.library.impl("myops::add_one", "CUDA", op.add_one)
+        torch.library.impl("myops::add_two", "CUDA", op.add_two)
+        
+        # Register fake implementations for meta tensor
+        @torch.library.register_fake("myops::add_one")
+        def _(x): return torch.empty_like(x)
+        
+        @torch.library.register_fake("myops::add_two")
+        def _(x): return torch.empty_like(x)
+
+def compile_and_execute_cond_model(model, args, dynamic_shapes, package_path):
+    """
+    Compiles and packages the model using AOTInductor, then loads and executes it.
+    This function mirrors the structure of the similar API 'serialize' by taking
+    the model definition, processing it (export/compile), and returning the result.
+    """
+    # 1. Export the model
+    exported = torch.export.export(model, args, dynamic_shapes=dynamic_shapes)
+    
+    # 2. Compile and Package
+    torch._inductor.aoti_compile_and_package(exported, package_path=package_path)
+    
+    # 3. Load and Execute
+    aoti_model = torch._inductor.aoti_load_package(package_path)
+    result = aoti_model(*args)
+    
+    return result
+
+def test_aoti_cond_with_custom_cuda_kernels():
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    setup_custom_ops()
+
+    class M(torch.nn.Module):
+        def forward(self, x):
+            # Use torch.cond to switch between custom CUDA kernels
+            return torch.cond(
+                x.shape[0] < 5, 
+                torch.ops.myops.add_one, 
+                torch.ops.myops.add_two, 
+                (x,)
+            )
+
+    model = M().cuda()
+
+    # Define dynamic shapes for export
+    dynamic_shapes = {"x": {0: torch.export.Dim("batch", min=1, max=128)}}
+    
+    # Create a temporary path for the package
+    with tempfile.TemporaryDirectory() as tmpdir:
+        package_path = os.path.join(tmpdir, "model.pt2")
+        
+        # Initial input for export (batch size 3, triggers add_one in eager)
+        export_args = (torch.zeros(3, device="cuda"),)
+        
+        # Run the compile and execute flow
+        # We test with a batch size of 6, which triggers add_two (the other branch)
+        # This verifies that the conditional logic and custom kernels are packaged correctly.
+        test_args = (torch.ones(6, device="cuda"),)
+        
+        result = compile_and_execute_cond_model(
+            model, 
+            export_args, 
+            dynamic_shapes, 
+            package_path
+        )
+        
+        # Since we passed ones(6) and shape[0] is 6 (>= 5), add_two is called.
+        # Expected result: 1.0 + 2.0 = 3.0
+        expected = torch.ones(6, device="cuda") + 2.0
+        
+        assert_close(result, expected)
+        print("Test passed! AOTI compiled model with torch.cond and custom CUDA kernels executed correctly.")
+
+if __name__ == "__main__":
+    test_aoti_cond_with_custom_cuda_kernels()

@@ -1,0 +1,24 @@
+import torch
+
+def test_quantized_stack():
+    # Create quantized tensors
+    quant_input1 = torch.quantize_per_tensor(torch.tensor([1.0, 2.0, 3.0]), scale=1.0, zero_point=0, dtype=torch.quint8)
+    quant_input2 = torch.quantize_per_tensor(torch.tensor([4.0, 5.0, 6.0]), scale=1.0, zero_point=0, dtype=torch.quint8)
+    
+    # Attempt to stack the quantized tensors along a new dimension
+    # This verifies if torch.stack is implemented for the QuantizedCPU backend
+    try:
+        out_tensor = torch.stack([quant_input1, quant_input2], dim=0)
+        
+        print("Quantized input 1:", quant_input1)
+        print("Quantized input 2:", quant_input2)
+        print("Stacked output tensor:", out_tensor)
+        
+        # Basic assertion to check shape if successful
+        assert out_tensor.shape == torch.Size([2, 3]), "Output shape mismatch"
+        
+    except NotImplementedError as e:
+        print(f"NotImplementedError encountered: {e}")
+
+if __name__ == "__main__":
+    test_quantized_stack()

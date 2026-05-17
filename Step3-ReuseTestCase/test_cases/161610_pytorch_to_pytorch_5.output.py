@@ -1,0 +1,31 @@
+import torch
+from typing import NamedTuple
+
+class MyNamedTuple(NamedTuple):
+    first: torch.Tensor
+    second: torch.Tensor
+
+class MyNamedTupleSubclass(MyNamedTuple):
+    pass
+
+# Adapted function to use the similar API: torch.any
+def fn_any(tup: MyNamedTuple) -> bool:
+    # torch.any expects a Tensor input. We stack the tensors from the NamedTuple
+    # to create a single tensor to check if any elements are non-zero.
+    stacked_tensor = torch.stack(list(tup))
+    return torch.any(stacked_tensor)
+
+print("\nTesting torch.any with eager execution:")
+extended_tup = MyNamedTupleSubclass(first=torch.tensor([2.0]), second=torch.tensor(1.0))
+result_eager = fn_any(extended_tup)
+print(f"Eager torch.any result: {result_eager}")
+
+print("\nTesting torch.any with torch.compile (eager backend):")
+# Adapted call site: compiling the function that uses torch.any
+result_compiled = torch.compile(fn_any, backend="eager")(extended_tup)
+print(f"Compiled torch.any result: {result_compiled}")
+
+# Assertions to verify behavior
+assert result_eager == True, "Expected True because tensors contain non-zero values"
+assert result_compiled == True, "Compiled result should also be True"
+assert result_eager == result_compiled, "Eager and compiled results should match"

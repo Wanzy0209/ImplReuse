@@ -1,0 +1,61 @@
+import tensorflow as tf
+
+def test_zeros_like_ragged_tensor():
+    """
+    Adapted test case for Issue 161812.
+    Original PyTorch bug: Crash in jagged tensor stack/cat along dimension 0.
+    Similar API: tf.raw_ops.ZerosLike
+    
+    This test verifies if tf.raw_ops.ZerosLike handles RaggedTensors 
+    (TensorFlow equivalent of PyTorch jagged tensors) correctly without crashing.
+    """
+    # 1. Construct a RaggedTensor equivalent to the PyTorch nested tensor
+    # PyTorch: th.nested.nested_tensor([th.ones(3, 2, 3), th.ones(4, 2, 3)], layout=th.jagged)
+    # This creates a structure with 2 rows, where the first row has 3 elements (shape 2x3) 
+    # and the second row has 4 elements (shape 2x3).
+    
+    # Flatten the inner dimensions to create the values tensor
+    # Total rows = 3 + 4 = 7. Shape of each row = (2, 3).
+    values = tf.ones((7, 2, 3), dtype=tf.float32)
+    
+    # Define the row splits for the ragged dimension (dimension 0)
+    row_splits = tf.constant([0, 3, 7], dtype=tf.int64)
+    
+    # Create the RaggedTensor
+    x = tf.RaggedTensor.from_row_splits(values, row_splits)
+    
+    print(f"Input RaggedTensor:\n{x}\n")
+
+    # 2. Apply the similar API: tf.raw_ops.ZerosLike
+    # The original bug involved a crash when performing an operation on the jagged tensor.
+    # We test if ZerosLike handles this structure.
+    try:
+        result = tf.raw_ops.ZerosLike(x=x)
+        print(f"Result of tf.raw_ops.ZerosLike:\n{result}\n")
+        
+        # 3. Verify behavior
+        # Check that the result maintains the RaggedTensor structure
+        assert isinstance(result, tf.RaggedTensor), "Result should be a RaggedTensor"
+        
+        # Check that the shape matches the input
+        assert result.shape == x.shape, f"Shape mismatch: {result.shape} vs {x.shape}"
+        
+        # Check that the values are actually zeros
+        # We convert to list to verify the content easily
+        result_list = result.to_list()
+        
+        # Construct the expected list of zeros
+        # 3 rows of [[0,0,0], [0,0,0]] followed by 4 rows of [[0,0,0], [0,0,0]]
+        expected_row = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+        expected_list = [expected_row] * 3 + [expected_row] * 4
+        
+        assert result_list == expected_list, f"Value mismatch: {result_list} vs {expected_list}"
+        
+        print("Test Passed: tf.raw_ops.ZerosLike handled the RaggedTensor correctly.")
+        
+    except Exception as e:
+        print(f"Test Failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_zeros_like_ragged_tensor()

@@ -1,0 +1,48 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def foo(x):
+    # Using tf.name_scope as the similar API context.
+    # While tf.name_scope is for graph organization and not compilation like torch.compile,
+    # we use it here to wrap the operations as requested.
+    with tf.name_scope("uint8_neg_add_scope"):
+        c = tf.constant(7, dtype=tf.uint8)
+        
+        # Replicate the operations from the original bug report:
+        # 1. c + x
+        # 2. torch.neg(c) -> tf.negative(c)
+        # 3. torch.neg(c) + x
+        return c + x, tf.negative(c), tf.negative(c) + x
+
+# Reproduce the specific input from the PyTorch bug report
+# PyTorch: torch.manual_seed(0); x = torch.randn(2, 2, dtype=torch.float32)
+# Result: tensor([[ 1.5410, -0.2934], [-2.1788,  0.5684]])
+x = tf.constant([[1.5410, -0.2934], [-2.1788, 0.5684]], dtype=tf.float32)
+
+print(f"input: {x}")
+
+# Execute the function
+res = foo(x)
+
+# Expected results based on the "correct" (eager) behavior in the bug report.
+# Note: In uint8, -7 wraps to 249.
+# res[0]: tensor([[8.5410, 6.7066], [4.8212, 7.5684]])
+# res[1]: 249
+# res[2]: tensor([[250.5410, 248.7066], [246.8212, 249.5684]])
+
+print(f"res[0]: {res[0]}")
+print(f"res[1]: {res[1]}")
+print(f"res[2]: {res[2]}")
+
+# Assertions to verify the behavior matches the expected logic
+# (i.e., unsigned integer wrapping arithmetic)
+expected_res0 = [[8.5410, 6.7066], [4.8212, 7.5684]]
+expected_res1 = 249
+expected_res2 = [[250.5410, 248.7066], [246.8212, 249.5684]]
+
+np.testing.assert_allclose(res[0].numpy(), expected_res0, rtol=1e-4)
+assert res[1].numpy() == expected_res1, f"Expected {expected_res1}, got {res[1].numpy()}"
+np.testing.assert_allclose(res[2].numpy(), expected_res2, rtol=1e-4)
+
+print("Test passed: TensorFlow arithmetic logic matches expected wrapping behavior.")

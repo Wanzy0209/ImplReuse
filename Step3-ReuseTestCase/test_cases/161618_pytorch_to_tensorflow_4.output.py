@@ -1,0 +1,75 @@
+import tensorflow as tf
+import numpy as np
+
+def test_string_input_producer_large_scale():
+    """
+    Adapted test case for tf.compat.v1.train.string_input_producer.
+    
+    Original Context: The PyTorch test case (Issue 161618) was designed to stress-test
+    the Inductor compiler with Triton backend using large tensor dimensions (m=20120).
+    
+    Adaptation Strategy: Since tf.compat.v1.train.string_input_producer is a data input
+    pipeline API rather than a matrix multiplication compiler, we adapt the test by
+    preserving the 'large scale' aspect (m=20120) and the 'configuration' aspect.
+    We verify that the TensorFlow queue can handle the large input volume and
+    configuration parameters without crashing, analogous to the stability check
+    in the original bug report.
+    """
+    
+    # Preserve the scale from the original bug report (m=20120)
+    m = 20120
+    
+    # Create a large 1-D string tensor to mimic the large input tensors in the original script
+    # Using dummy filenames to represent the data stream
+    string_data = [f"input_file_{i}.dat" for i in range(m)]
+    string_tensor = tf.convert_to_tensor(string_data, dtype=tf.string)
+
+    # Mimic the configuration block (inductor_config.patch)
+    # Original: max_autotune=True, max_autotune_gemm_backends="TRITON"
+    # Adaptation: We enable shuffling (complexity) and set a specific capacity to test the queue logic.
+    with tf.compat.v1.Session() as sess:
+        # Configure the producer with specific parameters
+        queue = tf.compat.v1.train.string_input_producer(
+            string_tensor,
+            num_epochs=1,          # Run through the data once
+            shuffle=True,          # Mimic the 'autotune' complexity/variation
+            capacity=m + 100,      # Ensure capacity handles the large input size
+            name="test_string_queue"
+        )
+
+        # Define the dequeue operation to execute the pipeline
+        # This corresponds to the 'compiled(a, mat1, mat2)' execution step
+        dequeue_op = queue.dequeue()
+
+        # Initialization required for num_epochs and queue runners
+        init_local = tf.compat.v1.local_variables_initializer()
+        init_global = tf.compat.v1.global_variables_initializer()
+        
+        sess.run([init_global, init_local])
+
+        # Start the queue runners (mimics the compilation/execution launch)
+        coord = tf.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+        try:
+            # Verify the pipeline works by dequeuing a few items
+            # We don't dequeue all 20120 to keep the test minimal, but enough to prove stability.
+            results = []
+            for _ in range(5):
+                result = sess.run(dequeue_op)
+                results.append(result)
+                # Basic assertion to ensure data is valid
+                assert isinstance(result, bytes), "Expected string output"
+                assert b"input_file_" in result, "Unexpected data format"
+            
+            print("Test passed: Successfully dequeued items from large-scale string_input_producer.")
+            
+        except Exception as e:
+            raise e
+        finally:
+            # Clean up
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_string_input_producer_large_scale()

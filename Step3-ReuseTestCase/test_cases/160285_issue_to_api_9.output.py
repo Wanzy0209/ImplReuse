@@ -1,0 +1,65 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the distributed environment
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_masked_select_gradient_correctness(rank, world_size):
+    """
+    Test case to verify that gradients are not doubled when using 
+    torch.masked_select in a distributed environment, similar to the 
+    Expert Parallel MoE gradient issue.
+    """
+    setup(rank, world_size)
+    
+    # Create a parameter tensor that requires gradients
+    # We initialize it differently per rank to ensure independence
+    param = torch.ones(4, 4, requires_grad=True) * (rank + 1)
+    
+    # Create a mask to simulate MoE routing (selecting specific tokens)
+    # Using a fixed seed for reproducibility
+    torch.manual_seed(42 + rank)
+    mask = torch.randint(0, 2, (4, 4), dtype=torch.bool)
+    
+    # Use torch.masked_select to perform the selection operation
+    # This mimics the token routing in MoE layers
+    selected_tokens = torch.masked_select(param, mask)
+    
+    # Compute a simple loss (sum of selected tokens)
+    loss = selected_tokens.sum()
+    
+    # Perform backward pass
+    loss.backward()
+    
+    # Expected gradient: 1.0 where mask is True, 0.0 otherwise
+    # In the reported bug (Issue 160285), gradients were doubled (2.0) with EP=2.
+    # We assert that the gradient is exactly 1.0, ensuring no doubling occurs.
+    expected_grad = mask.float()
+    
+    # Verify the gradient values
+    # We use allclose to handle potential floating point inaccuracies
+    is_correct = torch.allclose(param.grad, expected_grad, atol=1e-5)
+    
+    if not is_correct:
+        print(f"Rank {rank} FAILED: Gradient mismatch.")
+        print(f"Expected:\n{expected_grad}")
+        print(f"Got:\n{param.grad}")
+        # If the bug existed here, param.grad would be 2.0 where mask is True
+        assert False, "Gradients are incorrect (potentially doubled)"
+    else:
+        print(f"Rank {rank} PASSED: Gradients are correct (not doubled).")
+            
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Run the test with 2 processes to simulate the EP=2 scenario
+    mp.spawn(test_masked_select_gradient_correctness, args=(world_size,), nprocs=world_size, join=True)

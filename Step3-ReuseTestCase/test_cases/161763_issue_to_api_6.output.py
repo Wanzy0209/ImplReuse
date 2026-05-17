@@ -1,0 +1,56 @@
+import torch
+import unittest
+
+class TestUintNegAddCompile(unittest.TestCase):
+    """
+    Test case for Issue 161763: neg+add computation including uint tensor is incorrect under inductor.
+    
+    The bug manifests when torch.compile is used on a function involving:
+    1. A uint8 tensor constant.
+    2. Negation of that uint8 tensor.
+    3. Addition of the negated result to a float32 tensor.
+    
+    Expected behavior (Eager):
+    - c = tensor(7, dtype=torch.uint8)
+    - neg(c) = 249 (uint8 overflow/wrap-around)
+    - neg(c) + x = 249 + x (promoted to float)
+    
+    Buggy behavior (Inductor/Compiled):
+    - c is cast to float before negation.
+    - neg(c) = -7.0
+    - neg(c) + x = -7.0 + x
+    """
+
+    def test_uint_neg_add_with_compile(self):
+        def foo(x):
+            c = torch.tensor(7, dtype=torch.uint8)
+            return c + x, torch.neg(c), torch.neg(c) + x
+
+        torch.manual_seed(0)
+        x = torch.randn(2, 2, dtype=torch.float32)
+
+        # Run eager mode
+        res_eager = foo(x)
+
+        # Run compiled mode
+        # Note: torch.compile might trigger different backends, but the issue specifically mentions inductor.
+        # We use the default compilation which typically uses inductor.
+        compiled_foo = torch.compile(foo)
+        res_compiled = compiled_foo(x)
+
+        # Assert result 0: c + x (This usually works)
+        torch.testing.assert_close(res_eager[0], res_compiled[0], rtol=1e-5, atol=1e-5)
+
+        # Assert result 1: torch.neg(c)
+        # Eager: 249 (uint8 wrap)
+        # Buggy Compile: -7 (float cast)
+        torch.testing.assert_close(res_eager[1], res_compiled[1])
+
+        # Assert result 2: torch.neg(c) + x
+        # This is the primary failure case in the bug report.
+        # Eager: 249 + x
+        # Buggy Compile: -7 + x
+        torch.testing.assert_close(res_eager[2], res_compiled[2], rtol=1e-5, atol=1e-5)
+
+if __name__ == "__main__":
+    unittest.main()

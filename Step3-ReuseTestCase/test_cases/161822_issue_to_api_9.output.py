@@ -1,0 +1,43 @@
+import torch
+import tensorflow as tf
+import time
+
+def test_get_strategy_cpu_overhead():
+    """
+    Test case to measure CPU overhead of tf.distribute.get_strategy,
+    adapted from the torch.matmul CPU overhead benchmark.
+    """
+    warmup = 128
+    iters = 16384
+
+    # Setup: Initialize a strategy and enter its scope.
+    # This ensures the strategy stack is populated, mimicking the
+    # setup required to test the API's performance in a typical context.
+    strategy = tf.distribute.MirroredStrategy()
+
+    with strategy.scope():
+        # Warmup phase to mitigate cold-start effects
+        for _ in range(warmup):
+            tf.distribute.get_strategy()
+
+        # Benchmarking phase
+        # Note: Unlike CUDA kernels, get_strategy is a synchronous Python API call,
+        # so explicit device synchronization is not required.
+        t0 = time.perf_counter()
+        for _ in range(iters):
+            tf.distribute.get_strategy()
+        t1 = time.perf_counter()
+
+        # Calculate average time per call in microseconds
+        avg_time_us = 1e6 * (t1 - t0) / iters
+        print(f"Average time per call: {avg_time_us} us")
+
+        # Assertion to detect performance regressions.
+        # The threshold is set generously to avoid environment-specific flakiness
+        # while ensuring the API remains lightweight.
+        assert avg_time_us < 100.0, (
+            f"tf.distribute.get_strategy has high CPU overhead: {avg_time_us} us"
+        )
+
+if __name__ == "__main__":
+    test_get_strategy_cpu_overhead()

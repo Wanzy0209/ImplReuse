@@ -1,0 +1,23 @@
+import torch
+
+print(torch.__version__)
+
+tensor1 = torch.randint(
+    low=-100,
+    high=100,
+    size=(9, 3, 7),
+    dtype=torch.int16
+)
+tensor2 = torch.randint(
+    low=0,
+    high=2,
+    size=(1, 6, 4, 8),
+    dtype=torch.bool
+)
+
+# Malformed input structure from the original bug report
+input = [[[], 154691921484029491302139942063978250367, ()], {}, [tensor1, tensor2], {}]
+
+# Testing torch.nn.MultiLabelMarginLoss with the same malformed inputs
+r1 = torch.nn.MultiLabelMarginLoss(*input[0], **input[1])
+r2 = r1(*input[2], **input[3])

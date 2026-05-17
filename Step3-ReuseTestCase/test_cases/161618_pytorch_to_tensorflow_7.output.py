@@ -1,0 +1,40 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Adapted from PyTorch test case for Issue 161618
+# Original API: torch.compile (with inductor_config.patch)
+# Similar API: tf.keras.backend.name_scope
+
+def test_name_scope_addmm():
+    # Dimensions from the original bug report
+    m = 20120
+    k = 1536
+    n = 512
+
+    # Create tensors mimicking torch.randn(...).cuda()
+    # Note: TensorFlow uses float32 by default for random ops, matching torch.randn
+    a = tf.random.normal((m, n), dtype=tf.float32)
+    mat1 = tf.random.normal((m, k), dtype=tf.float32)
+    mat2 = tf.random.normal((k, n), dtype=tf.float32)
+
+    # The original test uses a context manager (inductor_config.patch) to configure
+    # the compilation environment. Here we use the similar API: name_scope.
+    # We also use tf.function to simulate the 'compilation' aspect of torch.compile.
+    
+    with tf.keras.backend.name_scope("addmm_scope"):
+        @tf.function
+        def compiled_addmm(a, mat1, mat2):
+            # torch.addmm(a, mat1, mat2) is equivalent to a + mat1 @ mat2
+            return tf.add(a, tf.matmul(mat1, mat2))
+
+        # Execute the operation
+        result = compiled_addmm(a, mat1, mat2)
+
+    # Verify the output shape matches expectations
+    assert result.shape == (m, n), f"Expected shape {(m, n)}, but got {result.shape}"
+    
+    print("Test passed: Operation executed successfully within name_scope.")
+
+if __name__ == "__main__":
+    test_name_scope_addmm()

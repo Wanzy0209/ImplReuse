@@ -1,0 +1,77 @@
+import torch
+import tensorflow as tf
+from tensorflow.experimental import dtensor
+import os
+
+# Ensure logs are visible (similar to TORCH_LOGS in the original issue)
+tf.get_logger().setLevel('INFO')
+
+def setup_virtual_devices():
+    """Setup virtual devices to allow DTensor mesh creation on a single machine."""
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        try:
+            # Create 2 virtual GPUs
+            tf.config.set_logical_device_configuration(
+                gpus[0],
+                [tf.config.LogicalDeviceConfiguration(memory_limit=1024) for _ in range(2)])
+            return tf.config.list_logical_devices('GPU')
+        except RuntimeError:
+            pass
+    
+    # Fallback to CPU virtual devices
+    cpus = tf.config.list_physical_devices('CPU')
+    if cpus:
+        try:
+            tf.config.set_logical_device_configuration(
+                cpus[0],
+                [tf.config.LogicalDeviceConfiguration() for _ in range(2)])
+            return tf.config.list_logical_devices('CPU')
+        except RuntimeError:
+            pass
+            
+    return []
+
+def test_copy_to_mesh_dynamic_slice():
+    devices = setup_virtual_devices()
+    
+    if len(devices) < 2:
+        print("Skipping test: Could not configure enough virtual devices for DTensor mesh.")
+        return
+
+    # Create a DTensor mesh
+    mesh = dtensor.create_mesh([("x", len(devices))], devices=devices)
+
+    # Define a replicated layout
+    layout = dtensor.Layout([dtensor.UNSHARDED], mesh)
+
+    # The function to be compiled/traced
+    # Analogous to the PyTorch function 'f' wrapped in torch.compile
+    @tf.function
+    def f(x):
+        # Equivalent of x.nonzero() in PyTorch
+        # tf.where returns indices of non-zero elements. 
+        # The first dimension of the result is dynamic (unknown at compile time).
+        nz = tf.where(x > 0)
+        
+        # The problematic operation from the bug report: 
+        # Slicing a tensor with an unbacked/dynamic size
+        sliced_nz = nz[:-1]
+
+        # The target API: copy_to_mesh
+        # We attempt to copy the sliced dynamic tensor to the mesh
+        return dtensor.copy_to_mesh(sliced_nz, layout)
+
+    # Input tensor
+    x = tf.random.uniform((3, 4), minval=-1, maxval=1)
+
+    try:
+        print("Running test case...")
+        out = f(x)
+        print("Test passed. Output shape:", out.shape)
+        print("Output:", out)
+    except Exception as e:
+        print(f"Error encountered: {type(e).__name__}: {e}")
+
+if __name__ == "__main__":
+    test_copy_to_mesh_dynamic_slice()

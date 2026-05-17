@@ -1,0 +1,71 @@
+import tensorflow as tf
+import numpy as np
+
+def test_control_dependencies_with_tensor_slices():
+    """
+    Test case adapted from PyTorch distributed issue #161324.
+    
+    The original issue involves data inconsistencies when using batch_isend_irecv 
+    with 2D tensor views. This test adapts the logic to TensorFlow, using 
+    tf.control_dependencies to batch operations on tensor slices (views) to 
+    ensure data consistency is maintained.
+    """
+    
+    # Setup parameters mimicking the original issue
+    batch_size = 4
+    total_columns = 10
+    # Define split offsets for slicing the 2D tensor
+    split_offsets = [0, 5, 5, 10] 
+    
+    # Initialize source tensor (simulating Rank 0 sender data)
+    # Using random values to ensure data isn't accidentally zero
+    source_tensor = tf.random.uniform((batch_size, total_columns), minval=0, maxval=100, dtype=tf.float32)
+    
+    # Initialize destination tensor (simulating Rank 1 receiver buffer)
+    dest_tensor = tf.Variable(tf.zeros((batch_size, total_columns), dtype=tf.float32))
+
+    # Define the operations to be batched
+    # In PyTorch: dist.P2POp(dist.isend/irecv, tensor_view, ...)
+    # In TF: We simulate the data transfer/update operation on the slice
+    
+    # Slice 1 operation
+    slice_1_data = source_tensor[:, split_offsets[0]:split_offsets[1]]
+    update_op_1 = dest_tensor[:, split_offsets[0]:split_offsets[1]].assign(slice_1_data)
+    
+    # Slice 2 operation
+    slice_2_data = source_tensor[:, split_offsets[2]:split_offsets[3]]
+    update_op_2 = dest_tensor[:, split_offsets[2]:split_offsets[3]].assign(slice_2_data)
+
+    # Use tf.control_dependencies to batch these operations
+    # This mirrors the usage of dist.batch_isend_irecv([op1, op2])
+    with tf.control_dependencies([update_op_1, update_op_2]):
+        # Ensure the result is only read after the batched ops complete
+        final_result = tf.identity(dest_tensor)
+
+    # Execute the graph
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        
+        # Run the batched operations
+        result_val = sess.run(final_result)
+        source_val = sess.run(source_tensor)
+        
+        # Assertions to verify data consistency
+        # Check Slice 1
+        np.testing.assert_array_equal(
+            result_val[:, split_offsets[0]:split_offsets[1]], 
+            source_val[:, split_offsets[0]:split_offsets[1]],
+            err_msg="Data inconsistency found in the first tensor slice"
+        )
+        
+        # Check Slice 2
+        np.testing.assert_array_equal(
+            result_val[:, split_offsets[2]:split_offsets[3]], 
+            source_val[:, split_offsets[2]:split_offsets[3]],
+            err_msg="Data inconsistency found in the second tensor slice"
+        )
+        
+        print("Test Passed: Data consistency maintained with tf.control_dependencies on 2D tensor slices.")
+
+if __name__ == "__main__":
+    test_control_dependencies_with_tensor_slices()

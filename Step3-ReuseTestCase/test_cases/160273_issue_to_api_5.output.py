@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_concatenate_gradient_behavior():
+    """
+    Test case for tf.keras.backend.concatenate gradient behavior.
+    This test mirrors the structure of the torch.min issue, specifically
+    checking how gradients flow when an operation is performed along a
+    specified axis.
+    """
+    # Setup inputs similar to the original torch.min test case
+    # Using ones to match the input data pattern
+    a = tf.ones([5], dtype=tf.float32)
+    b = tf.ones([5], dtype=tf.float32)
+
+    # Use GradientTape to track operations for backpropagation
+    with tf.GradientTape(persistent=True) as tape:
+        tape.watch(a)
+        tape.watch(b)
+
+        # Perform concatenation along a specific axis (axis=0)
+        # This mirrors the 'torch.min(input, dim=...)' call in the original issue
+        # where the behavior depends on the dimension argument.
+        concat_val = tf.keras.backend.concatenate([a, b], axis=0)
+
+        # Create a scalar loss to backpropagate (sum of values)
+        # This is analogous to calling .backward() on the result in PyTorch
+        loss = tf.reduce_sum(concat_val)
+
+    # Compute gradients
+    grads_a = tape.gradient(loss, a)
+    grads_b = tape.gradient(loss, b)
+
+    # Assertions
+    # For concatenation, gradients should flow back to the original tensors directly.
+    # Since we summed the result (which is 10 ones), the gradient of the sum w.r.t inputs is 1.
+    expected_grad = np.ones(5)
+    
+    assert np.allclose(grads_a.numpy(), expected_grad), \
+        f"Gradient for tensor a incorrect. Expected {expected_grad}, got {grads_a.numpy()}"
+    assert np.allclose(grads_b.numpy(), expected_grad), \
+        f"Gradient for tensor b incorrect. Expected {expected_grad}, got {grads_b.numpy()}"
+
+if __name__ == "__main__":
+    test_concatenate_gradient_behavior()
+    print("Test passed.")

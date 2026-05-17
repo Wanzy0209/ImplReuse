@@ -1,0 +1,34 @@
+import torch
+
+# Adapted test case for torch.fmin based on Issue 161265
+# The original bug reported that torch.full (used by torch.ones) fails to correctly
+# initialize memory buffers larger than 4GB on MacOS MPS.
+# This test verifies if torch.fmin operates correctly on tensors exceeding 4GB.
+
+# We create tensors on CPU first to ensure valid input data, bypassing the
+# potentially buggy torch.full initialization on MPS.
+# Using float32 (4 bytes per element).
+# Shape (2, (1 << 29) + 5) results in (2^30 + 10) elements.
+# Total size = (2^30 + 10) * 4 bytes = 2^32 + 40 bytes (> 4GB).
+shape = (2, (1 << 29) + 5)
+
+# Create inputs: a is filled with 1.0, b is filled with 2.0
+a_cpu = torch.ones(shape, dtype=torch.float32)
+b_cpu = torch.full(shape, 2.0, dtype=torch.float32)
+
+# Move tensors to MPS device
+a = a_cpu.to('mps')
+b = b_cpu.to('mps')
+
+# Perform torch.fmin
+# Expected result is 1.0 everywhere (min of 1.0 and 2.0)
+c = torch.fmin(a, b)
+
+# Check values at the tail of the tensor (indices beyond the 4GB boundary)
+# The original bug report checked index -2.
+print(c[1, -2])
+print(c[:, -2])
+
+# Assertions to verify correctness
+assert c[1, -2] == 1.0, f"Expected 1.0 at [1, -2], got {c[1, -2]}"
+assert torch.all(c[:, -2] == 1.0), f"Expected all 1.0 in slice [:, -2], got {c[:, -2]}"

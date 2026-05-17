@@ -1,0 +1,53 @@
+import torch
+import tensorflow as tf
+from tensorflow.experimental import dtensor
+
+# Mimic the setup from the original PyTorch test case
+tf.random.set_seed(0)
+
+# Setup a mesh. 
+# Note: DTensor requires a mesh. We use a single CPU device mesh to ensure 
+# the test is runnable in a standard environment without a multi-GPU cluster.
+physical_devices = tf.config.list_physical_devices('CPU')
+if not physical_devices:
+    # If no CPU is found (rare), try GPU
+    physical_devices = tf.config.list_physical_devices('GPU')
+
+if not physical_devices:
+    raise RuntimeError("No physical devices found to run the test.")
+
+mesh = dtensor.Mesh(['x'], physical_devices)
+
+# Define a layout. 
+# The original test used specific kernel/stride parameters. 
+# For `pack`, the equivalent configuration is the Layout and the input tensor shape.
+# We use the same shape (4, 6, 7) as the original test.
+layout = dtensor.Layout.replicated(mesh, rank=3)
+
+# Create input data (mimicking torch.randn(4, 6, 7))
+# We need a list of local tensors to pack. 
+# With a replicated layout on a single-device mesh, we provide one tensor.
+local_tensor = tf.random.normal((4, 6, 7))
+
+# Perform the operation: pack
+# This corresponds to `model(x)` in the original test.
+try:
+    dtensor_result = dtensor.pack([local_tensor], layout)
+    
+    # Verify the result.
+    # The original test compared CPU vs MPS outputs. 
+    # For `pack`, the semantic equivalent is verifying the round-trip invariant:
+    # unpack(pack(tensors)) == tensors
+    unpacked_components = dtensor.unpack(dtensor_result)
+    
+    # Check if the unpacked tensor matches the original local tensor
+    # This corresponds to `torch.allclose(out_cpu, out_mps.cpu())`
+    if not tf.reduce_all(tf.equal(unpacked_components[0], local_tensor)):
+        print("Output does not match!")
+        print("Original:", local_tensor)
+        print("Unpacked:", unpacked_components[0])
+    else:
+        print("Test passed: Pack/Unpack invariant holds.")
+
+except Exception as e:
+    print(f"Test failed with exception: {e}")

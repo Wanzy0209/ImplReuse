@@ -1,0 +1,28 @@
+import tensorflow as tf
+
+# Create a dataset to scan over
+dataset = tf.data.Dataset.range(5)
+
+# Define the initial state for the scan
+initial_state = tf.constant(0, dtype=tf.int64)
+
+# Define the scan function
+# Args:
+#   state: The current state (accumulator)
+#   element: The current element from the dataset
+# Returns:
+#   new_state: The updated state
+#   output: The output to yield for this step
+def scan_func(state, element):
+    new_state = state + element
+    return new_state, new_state
+
+# Apply the scan transformation
+# tf.compat.v1.scan returns a function that transforms the dataset
+scanned_dataset = dataset.apply(tf.compat.v1.scan(initial_state=initial_state, scan_func=scan_func))
+
+# Verify the results
+# Expected output: [0, 1, 3, 6, 10] (Cumulative sum)
+results = list(scanned_dataset.as_numpy_iterator())
+assert results == [0, 1, 3, 6, 10], f"Expected [0, 1, 3, 6, 10], got {results}"
+print("Test passed. Results:", results)

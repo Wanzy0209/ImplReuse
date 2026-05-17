@@ -1,0 +1,52 @@
+import torch
+import tensorflow as tf
+import traceback
+
+def test_clip_by_norm_negative_params():
+    """
+    Adapted test case based on PyTorch Issue 161014.
+    
+    Original Bug: constant_pad_nd behaves inconsistently with negative padding.
+    - Case 1: padding=[-1, -2] works (results in size 0).
+    - Case 2: padding=[-1, -2, 1, 1] fails (RuntimeError).
+    
+    Adaptation for tf.clip_by_norm:
+    We test the behavior of the API when provided with a negative 'clip_norm' 
+    (analogous to negative padding), checking for consistency or errors.
+    """
+    
+    input_tensor = tf.ones([5, 3])
+    
+    print("--- Test Case 1: Negative clip_norm (Analogous to negative padding) ---")
+    try:
+        # PyTorch equivalent: torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2])
+        # Here we use a negative clip_norm to test boundary conditions.
+        result = tf.clip_by_norm(input_tensor, -1.0)
+        print(f"Success. Shape: {result.shape}")
+        print(f"Result sample:\n{result.numpy()}")
+    except Exception as e:
+        print(f"Exception caught: {type(e).__name__}: {e}")
+        # traceback.print_exc()
+
+    print("\n--- Test Case 2: Negative clip_norm with specific axes ---")
+    try:
+        # PyTorch equivalent: torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 1, 1])
+        # Testing if adding specific axes changes the behavior with negative clip_norm.
+        result = tf.clip_by_norm(input_tensor, -1.0, axes=[0])
+        print(f"Success. Shape: {result.shape}")
+        print(f"Result sample:\n{result.numpy()}")
+    except Exception as e:
+        print(f"Exception caught: {type(e).__name__}: {e}")
+        # traceback.print_exc()
+
+    print("\n--- Test Case 3: Zero clip_norm (Boundary condition) ---")
+    try:
+        # Testing the boundary of 0, which is often related to negative value issues in normalization.
+        result = tf.clip_by_norm(input_tensor, 0.0)
+        print(f"Success. Shape: {result.shape}")
+        print(f"Result sample:\n{result.numpy()}")
+    except Exception as e:
+        print(f"Exception caught: {type(e).__name__}: {e}")
+
+if __name__ == "__main__":
+    test_clip_by_norm_negative_params()

@@ -1,0 +1,34 @@
+import torch
+import tensorflow as tf
+
+# Set seed for reproducibility
+tf.random.set_seed(0)
+
+# Define input tensor x
+x = tf.random.normal((2, 2), dtype=tf.float32)
+print(f"input: {x}")
+
+# Use the similar API: tf.keras.name_scope
+# This context manager groups operations, providing a namespace for the created ops.
+with tf.keras.name_scope("uint_neg_add_scope"):
+    c = tf.constant(7, dtype=tf.uint8)
+
+    # Operation 1: c + x
+    # TensorFlow handles type promotion (uint8 + float32 -> float32)
+    res0 = c + x
+
+    # Operation 2: neg(c)
+    # PyTorch's torch.neg on uint8 performs modular arithmetic (wrapping 7 -> 249).
+    # TensorFlow's tf.negative does not support uint8 directly and requires casting.
+    # We cast to float32 to perform the negation, resulting in -7.0.
+    # Note: This behavior matches the *buggy* output of the PyTorch compiled version,
+    # as TF treats the value as a signed number rather than wrapping.
+    c_float = tf.cast(c, tf.float32)
+    res1 = tf.negative(c_float)
+
+    # Operation 3: neg(c) + x
+    res2 = res1 + x
+
+print(f"res[0]: {res0}")
+print(f"res[1]: {res1}")
+print(f"res[2]: {res2}")

@@ -1,0 +1,73 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_banded_triangular_solve_batched():
+    """
+    Test case for tf.linalg.banded_triangular_solve inspired by 
+    PyTorch Issue 161878 (Performance regression in batched linear algebra ops).
+    
+    The original issue involved a performance regression in BERT_pytorch (batch_size=2)
+    related to AMP static shape C++ wrappers. This test validates the similar 
+    TensorFlow API to ensure correct handling of batched inputs and shape broadcasting,
+    which are the core structural similarities identified.
+    """
+    # Reproduce the batched context from the bug report (batch_size=2)
+    batch_size = 2
+    matrix_size = 4
+    num_bands = 2
+    rhs_cols = 1
+
+    # Define banded matrices
+    # Shape: [batch_size, num_bands, matrix_size]
+    # We construct a lower triangular banded matrix
+    bands_data = np.array([
+        [[4.0, 3.0, 2.0, 1.0],  # Main diagonal (k=0)
+         [1.0, 1.0, 1.0, 1.0]], # First subdiagonal (k=-1)
+        [[5.0, 4.0, 3.0, 2.0],  # Main diagonal
+         [2.0, 2.0, 2.0, 2.0]]  # First subdiagonal
+    ], dtype=np.float32)
+
+    bands = tf.constant(bands_data)
+
+    # Define Right Hand Side (RHS)
+    # Shape: [batch_size, matrix_size, rhs_cols]
+    rhs_data = np.array([
+        [[1.0], [1.0], [1.0], [1.0]],
+        [[2.0], [2.0], [2.0], [2.0]]
+    ], dtype=np.float32)
+
+    rhs = tf.constant(rhs_data)
+
+    # Execute the similar API
+    # This mimics the linear algebra operations performed in BERT layers
+    result = tf.linalg.banded_triangular_solve(bands, rhs, lower=True)
+
+    # Verification: Convert banded to dense and solve using standard numpy solver
+    # to ensure the wrapper logic is correct.
+    def banded_to_dense(b, n):
+        dense = np.zeros((n, n), dtype=np.float32)
+        # Main diagonal
+        for i in range(n):
+            dense[i, i] = b[0, i]
+        # Subdiagonal
+        for i in range(n - 1):
+            dense[i + 1, i] = b[1, i]
+        return dense
+
+    # Check Batch 0
+    dense_0 = banded_to_dense(bands_data[0], matrix_size)
+    expected_0 = np.linalg.solve(dense_0, rhs_data[0].reshape(matrix_size, rhs_cols))
+    np.testing.assert_allclose(result[0].numpy(), expected_0, rtol=1e-5, 
+                               err_msg="Batch 0 calculation mismatch")
+
+    # Check Batch 1
+    dense_1 = banded_to_dense(bands_data[1], matrix_size)
+    expected_1 = np.linalg.solve(dense_1, rhs_data[1].reshape(matrix_size, rhs_cols))
+    np.testing.assert_allclose(result[1].numpy(), expected_1, rtol=1e-5, 
+                               err_msg="Batch 1 calculation mismatch")
+
+    print("Test passed: Batched banded triangular solve logic verified.")
+
+if __name__ == "__main__":
+    test_banded_triangular_solve_batched()

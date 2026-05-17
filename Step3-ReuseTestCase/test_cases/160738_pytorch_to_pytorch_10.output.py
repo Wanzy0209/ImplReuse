@@ -1,0 +1,18 @@
+import torch
+
+def test_ones(device):
+    # Adaptation: Test creating a zero-dimensional tensor using torch.ones.
+    # The original bug highlights issues with zero-dimensional tensors on MPS.
+    # This test verifies that torch.ones can successfully create a zero-dimensional tensor.
+    try:
+        # Passing an empty tuple creates a zero-dimensional tensor
+        output = torch.ones((), device=device)
+        # Verify properties of the zero-dimensional tensor
+        assert output.ndim == 0, "Output should be zero-dimensional"
+        assert output.item() == 1.0, "Output value should be 1.0"
+        print(f"ones test succeeds for device: {device}. output: {output}")
+    except Exception as e:
+        print(f"ones test fails for device: {device}: {e}")
+
+test_ones(device="cpu")
+test_ones(device="mps")

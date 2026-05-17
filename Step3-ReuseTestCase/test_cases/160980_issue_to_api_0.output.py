@@ -1,0 +1,39 @@
+import tensorflow as tf
+import numpy as np
+
+def test_sparse_categorical_crossentropy():
+    """
+    Test case for tf.keras.losses.SparseCategoricalCrossentropy.
+    
+    This test is derived from the usage pattern provided in the Similar API information.
+    While the original issue (160980) relates to a build/linker error with NVSHMEM 
+    in PyTorch (undefined references), this test verifies the correct runtime 
+    execution of the semantically similar API in TensorFlow to ensure proper 
+    handling of label and prediction inputs.
+    """
+    # Setup data based on the API documentation example
+    y_true = [1, 2]
+    y_pred = [[0.05, 0.95, 0], [0.1, 0.8, 0.1]]
+
+    # Initialize the loss function
+    # Using 'auto' reduction (default) which corresponds to 'sum_over_batch_size'
+    scce = tf.keras.losses.SparseCategoricalCrossentropy()
+
+    # Compute the loss
+    loss = scce(y_true, y_pred)
+
+    # Expected value from the documentation snippet
+    expected_loss = 1.177
+
+    # Assert that the computed loss matches the expected value
+    # We use a tolerance (atol) because of floating point arithmetic
+    assert np.isclose(loss.numpy(), expected_loss, atol=1e-3), \
+        f"Expected loss to be close to {expected_loss}, but got {loss.numpy()}"
+
+    # Additional verification: Ensure the function handles the computation 
+    # without raising undefined reference errors or runtime exceptions, 
+    # contrasting with the linker failure in the original PyTorch issue.
+    print(f"Test passed. Computed loss: {loss.numpy()}")
+
+if __name__ == "__main__":
+    test_sparse_categorical_crossentropy()

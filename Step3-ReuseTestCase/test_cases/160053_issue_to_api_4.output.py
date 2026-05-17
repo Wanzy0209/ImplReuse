@@ -1,0 +1,51 @@
+import torch
+import torch.nn.functional as F
+
+def test_pad_circular_dimensions_consistency():
+    """
+    Test case based on Issue 160053.
+    
+    The error message for torch.nn.functional.pad with mode="circular" states:
+    "Only 2D, 3D, 4D, 5D padding with non-constant padding are supported for now"
+    
+    This test verifies that the implementation actually supports these dimensions,
+    similar to how tf.keras.backend.set_floatx validates inputs against a specific set
+    of allowed types.
+    """
+    
+    # Define the set of dimensions claimed to be supported by the error message
+    # This mirrors the set validation logic found in tf.keras.backend.set_floatx
+    supported_dimensions = {2, 3, 4, 5}
+    
+    pad_width = (1, 1)
+    mode = "circular"
+
+    for dim in supported_dimensions:
+        # Create a tensor of the current dimension
+        # Shape: (2, 2, ..., 2)
+        input_tensor = torch.empty([2] * dim)
+        
+        try:
+            # Attempt the padding operation
+            output_tensor = F.pad(input_tensor, pad_width, mode=mode)
+            
+            # Verify the output shape is correct (last dimension increased by pad width)
+            expected_shape = list(input_tensor.shape)
+            expected_shape[-1] += pad_width[0] + pad_width[1]
+            
+            assert output_tensor.shape == torch.Size(expected_shape), \
+                f"Output shape mismatch for {dim}D input."
+                
+            print(f"Test passed for {dim}D input.")
+            
+        except NotImplementedError as e:
+            # This block catches the bug described in the issue:
+            # The error message claims support, but the code raises an error.
+            raise AssertionError(
+                f"Bug Detected: The error message claims support for {dim}D inputs, "
+                f"but the operation failed with NotImplementedError.\n"
+                f"Original Error: {e}"
+            )
+
+if __name__ == "__main__":
+    test_pad_circular_dimensions_consistency()

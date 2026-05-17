@@ -1,0 +1,10 @@
+import torch
+import torch.nn as nn
+import unittest
+
+class TestTorchExportDepthwiseConv(unittest.TestCase):
+    """
+    Test case for torch.export.export involving depthwise convolution operations.
+    This relates to Issue 161563 where exporting gemma-3-270m-it failed with 
+    "Current active mode not registered". The similarity to 
+    tf.compat.v1.nn.depthwise_conv2d

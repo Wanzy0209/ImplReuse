@@ -1,0 +1,57 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_batch_scatter_update_negative_indices():
+    """
+    Adapted test case based on PyTorch issue 161014.
+    Original PyTorch test: torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2])
+    
+    The original bug involves negative padding values (-1, -2) applied to a tensor of shape [5, 3].
+    In TensorFlow, batch_scatter_update uses indices to update values. We adapt the test by using
+    negative indices (-1, -2) to verify if the API handles them consistently or throws errors
+    similar to the PyTorch inconsistency.
+    """
+    # Disable eager execution for compat.v1 APIs
+    tf.compat.v1.disable_eager_execution()
+
+    # Create a variable with shape [5, 3] matching the PyTorch input
+    var = tf.Variable(np.ones([5, 3], dtype=np.float32))
+
+    # Define indices using the negative values from the PyTorch padding list [-1, -2]
+    # We attempt to update the last two columns (indices -1 and -2) of the first row
+    indices = tf.constant([[0, -1], [0, -2]], dtype=tf.int32)
+    
+    # Define updates to apply at those indices
+    updates = tf.constant([[5.0], [6.0]], dtype=tf.float32)
+
+    # Execute the operation
+    # In PyTorch, negative padding can result in zero-sized dimensions or errors.
+    # Here we check if batch_scatter_update handles negative indices gracefully.
+    try:
+        with tf.compat.v1.Session() as sess:
+            sess.run(tf.compat.v1.initialize_all_variables())
+            
+            # Run the scatter update
+            result_op = tf.compat.v1.batch_scatter_update(var, indices, updates)
+            result = sess.run(result_op)
+            
+            print("Test passed. Operation executed successfully.")
+            print("Result shape:", result.shape)
+            
+            # Verify the shape remains consistent (unlike PyTorch padding which might shrink it)
+            assert result.shape == (5, 3), f"Expected shape (5, 3), got {result.shape}"
+            
+            # Verify the values were updated correctly at the negative indices
+            # index [0, -1] should be 5.0, index [0, -2] should be 6.0
+            assert result[0, -1] == 5.0, f"Expected 5.0 at [0, -1], got {result[0, -1]}"
+            assert result[0, -2] == 6.0, f"Expected 6.0 at [0, -2], got {result[0, -2]}"
+            
+            print("Assertions passed. Negative indices handled correctly.")
+
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_batch_scatter_update_negative_indices()

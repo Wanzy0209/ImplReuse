@@ -1,0 +1,60 @@
+import tensorflow as tf
+import numpy as np
+
+def test_cropping1d_with_ragged_tensor():
+    """
+    Adapts the PyTorch jagged tensor test case to TensorFlow.
+    
+    Original PyTorch Logic:
+    - Creates a jagged/nested tensor from a list of tensors with different 
+      lengths in the first dimension (3 vs 4).
+    - Attempts to concatenate them (which failed in the bug report).
+    
+    Adapted TensorFlow Logic:
+    - Creates a RaggedTensor (TF equivalent of jagged tensor) with similar 
+      structure (Batch=2, Time=3/4, Features=2).
+    - Applies tf.keras.layers.Cropping1D (the similar API) to verify 
+      behavior with ragged/jagged data.
+    """
+    
+    # 1. Prepare Data
+    # PyTorch: th.nested.nested_tensor([th.ones(3, 2, 3), th.ones(4, 2, 3)], layout=th.jagged)
+    # Adaptation: Cropping1D expects 3D input (Batch, Time, Features).
+    # We use (3, 2) and (4, 2) to represent the jagged time dimension and features.
+    data = [np.ones((3, 2)), np.ones((4, 2))]
+    x = tf.ragged.constant(data)
+    
+    print(f"Input RaggedTensor:\n{x}\n")
+
+    # 2. Instantiate Similar API
+    # Cropping1D crops along the time dimension (axis 1).
+    # We crop 1 unit from the beginning and 1 from the end.
+    layer = tf.keras.layers.Cropping1D(cropping=1)
+
+    # 3. Execute Operation
+    try:
+        # Apply the layer
+        y = layer(x)
+        
+        print(f"Output RaggedTensor:\n{y}\n")
+
+        # 4. Verify Behavior
+        # Row 0: Length 3 -> Crop 1 (start) + 1 (end) -> Expected Length 1
+        # Row 1: Length 4 -> Crop 1 (start) + 1 (end) -> Expected Length 2
+        
+        assert y.shape[0] == 2, "Batch dimension should remain 2"
+        assert y[0].shape[0] == 1, f"Row 0 expected length 1, got {y[0].shape[0]}"
+        assert y[1].shape[0] == 2, f"Row 1 expected length 2, got {y[1].shape[0]}"
+        
+        # Check values (should remain ones)
+        assert np.all(y[0].numpy() == 1.0), "Values in row 0 should be 1.0"
+        assert np.all(y[1].numpy() == 1.0), "Values in row 1 should be 1.0"
+
+        print("Test Passed: Cropping1D successfully handled the RaggedTensor.")
+
+    except Exception as e:
+        print(f"Test Failed with Exception: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_cropping1d_with_ragged_tensor()

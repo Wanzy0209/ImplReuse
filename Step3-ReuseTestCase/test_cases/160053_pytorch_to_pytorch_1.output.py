@@ -1,0 +1,18 @@
+import torch
+import torch.nn.functional as F
+
+# Adapted test case for torch.nn.functional.conv1d
+# The original issue involved a 4D input (2,2,2,2) with mode="circular".
+# conv1d expects 3D input (Batch, Channels, Length), so we adapt the input shape.
+input_tensor = torch.randn(2, 2, 2)
+# Define weight for conv1d (OutChannels, InChannels, KernelSize)
+weight = torch.randn(2, 2, 1)
+
+# Test the similar API (conv1d) with the same padding mode ('circular')
+# Padding=1 corresponds to the (1,1) padding in the original pad call.
+# This verifies that circular padding works correctly in the convolution context.
+output = F.conv1d(input_tensor, weight, padding=1, padding_mode='circular')
+
+# Assertion to verify execution and output shape
+# Input length 2 + padding 2 (1 on each side) = 4. Kernel size 1. Output length 4.
+assert output.shape == (2, 2, 4)

@@ -1,0 +1,37 @@
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import os
+
+def main():
+    # Setup from the bug report
+    gpu_id = int(os.environ["LOCAL_RANK"])
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+
+    # Initialize process group
+    # Note: Using standard init_method='env://' for runnability, 
+    # assuming environment variables (MASTER_ADDR, WORLD_SIZE, etc.) are set.
+    dist.init_process_group(backend='nccl', init_method='env://')
+    dist.barrier()
+
+    # Adaptation: Test torch.nn.functional.cross_entropy
+    # Create dummy tensors on the current device
+    batch_size = 4
+    num_classes = 10
+    input_tensor = torch.randn(batch_size, num_classes).cuda(gpu_id)
+    target_tensor = torch.randint(0, num_classes, (batch_size,)).cuda(gpu_id)
+
+    # Call the similar API
+    loss = F.cross_entropy(input_tensor, target_tensor)
+
+    # Assertion to verify execution
+    assert not torch.isnan(loss), "Loss is NaN"
+    
+    if dist.get_rank() == 0:
+        print(f"Cross entropy test passed. Loss: {loss.item()}")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,43 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_recv_object_list(rank, world_size):
+    """
+    Test case for torch.distributed.recv_object_list.
+    Adapted from the data context of the original bug report (Issue 160752).
+    """
+    # Initialize distributed process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Data setup from the original bug report
+    MAX = 3
+    BATCH = 37
+    idxs = torch.randint(MAX, (BATCH,), dtype=torch.int64)
+    x = torch.rand((BATCH, MAX), dtype=torch.float64)
+
+    # Prepare objects to send (mimicking the inputs from the original issue)
+    objects_to_send = [x, idxs, "metadata"]
+
+    if rank == 0:
+        # Sender: Send the list of objects to rank 1
+        dist.send_object_list(objects_to_send, dst=1)
+    elif rank == 1:
+        # Receiver: Adapted call site using torch.distributed.recv_object_list
+        recv_list = [None] * len(objects_to_send)
+        dist.recv_object_list(recv_list, src=0)
+
+        # Assertions to verify correctness
+        assert torch.equal(recv_list[0], x), "Tensor x mismatch"
+        assert torch.equal(recv_list[1], idxs), "Tensor idxs mismatch"
+        assert recv_list[2] == "metadata", "String metadata mismatch"
+        print(f"Rank {rank}: Test passed. recv_object_list successfully received objects.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_recv_object_list, args=(world_size,), nprocs=world_size, join=True)

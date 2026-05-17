@@ -1,0 +1,42 @@
+import torch
+import tensorflow as tf
+
+def f(x):
+    # Using the similar API: tf.keras.random.dropout
+    # Note: The extracted API info indicates that a seed is required for graph/DTensor contexts.
+    return tf.keras.random.dropout(x, rate=0.5, seed=42)
+
+# Analogous to torch.compile
+compiled_f = tf.function(f)
+
+# Analogous to with torch.device("cuda"):
+# Using /CPU:0 for general compatibility, but the logic mirrors the device context usage.
+with tf.device("/CPU:0"):
+    # Create input tensor
+    x = tf.random.normal((2, 2))
+
+    # Eager execution (analogous to "Eager works")
+    try:
+        result_eager = f(x)
+        print("Eager execution successful.")
+        # Verify shape is preserved
+        assert result_eager.shape == x.shape, "Eager execution output shape mismatch"
+    except Exception as e:
+        print(f"Eager execution failed: {e}")
+
+    # Compiled execution (analogous to "This fails...")
+    try:
+        result_compiled = compiled_f(x)
+        print("Compiled execution successful.")
+        # Verify shape is preserved
+        assert result_compiled.shape == x.shape, "Compiled execution output shape mismatch"
+    except Exception as e:
+        print(f"Compiled execution failed: {e}")
+
+# Outside of device context, this works (implied verification)
+try:
+    result_outside = compiled_f(tf.random.normal((2, 2)))
+    print("Execution outside device context successful.")
+    assert result_outside.shape == (2, 2), "Outside context output shape mismatch"
+except Exception as e:
+    print(f"Execution outside device context failed: {e}")

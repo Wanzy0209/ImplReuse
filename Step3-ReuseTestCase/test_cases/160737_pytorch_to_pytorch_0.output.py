@@ -1,0 +1,51 @@
+import torch
+
+def test_index_select_scalar_index():
+    """
+    Test that index_select handles a scalar (0-dimensional) index tensor correctly.
+    This addresses the issue where MPS throws an error for scalar indices.
+    """
+    # Create a 2x3 tensor
+    x = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    
+    # Create a scalar index (0-dimensional tensor)
+    index = torch.tensor(1)
+
+    # --- Test on CPU (Reference Behavior) ---
+    x_cpu = x.to("cpu")
+    index_cpu = index.to("cpu")
+    
+    # Expected behavior: select the row at index 1
+    # Result should be shape [1, 3]
+    output_cpu = torch.index_select(x_cpu, dim=0, index=index_cpu)
+    expected_output = x_cpu[1:2]
+    
+    assert output_cpu.shape == torch.Size([1, 3]), \
+        f"CPU Test Failed: Expected shape [1, 3], got {output_cpu.shape}"
+    assert torch.equal(output_cpu, expected_output), \
+        "CPU Test Failed: Output values do not match expected selection."
+
+    # --- Test on MPS (Bug Fix Verification) ---
+    if torch.backends.mps.is_available():
+        x_mps = x.to("mps")
+        index_mps = index.to("mps")
+        
+        try:
+            # This call previously failed on MPS with:
+            # "Dimension specified as -1 but tensor has no dimensions"
+            output_mps = torch.index_select(x_mps, dim=0, index=index_mps)
+            
+            assert output_mps.shape == torch.Size([1, 3]), \
+                f"MPS Test Failed: Expected shape [1, 3], got {output_mps.shape}"
+            assert torch.equal(output_mps.cpu(), expected_output), \
+                "MPS Test Failed: Output values do not match expected selection."
+            
+            print("index_select with scalar index test passed on MPS.")
+        except Exception as e:
+            print(f"MPS Test Failed with exception: {e}")
+            raise
+    else:
+        print("MPS device not available. Skipping MPS test.")
+
+if __name__ == "__main__":
+    test_index_select_scalar_index()

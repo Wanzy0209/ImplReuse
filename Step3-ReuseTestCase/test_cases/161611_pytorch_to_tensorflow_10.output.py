@@ -1,0 +1,60 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_conjugate_redundancy_and_ineffectiveness():
+    """
+    Adapted test case for tf.experimental.numpy.conjugate based on the 
+    PyTorch bug report (Issue 161611) regarding redundant dtype conversion 
+    and ineffective operations.
+    """
+    
+    # Setup: Create a tensor with a specific dtype (mimicking torch.zeros(..., dtype=query.dtype))
+    # We test with float32 (real numbers) first
+    query_dtype = tf.float32
+    x_real = tf.zeros((3, 3), dtype=query_dtype)
+    
+    # Action: Call conjugate
+    # In the PyTorch bug, .to() was called redundantly on a tensor that already had the target dtype.
+    # Here we check if conjugate performs a redundant dtype conversion.
+    y_real = tf.experimental.numpy.conjugate(x_real)
+    
+    # Verification 1: Check for redundant dtype conversion
+    # The bug was that .to() was called even though dtype was already correct.
+    # We verify conjugate doesn't unnecessarily change dtype for real numbers.
+    assert y_real.dtype == x_real.dtype, (
+        f"Expected dtype {x_real.dtype}, but got {y_real.dtype}. "
+        "Redundant dtype conversion check failed."
+    )
+    
+    # Verification 2: Check for ineffective operation (mimicking unassigned .to() call)
+    # The PyTorch bug had `attn_bias.to(...)` without assignment, which did nothing to the original tensor.
+    # We verify that calling conjugate without assignment leaves the original tensor unchanged.
+    x_var = tf.Variable([[1.0, 2.0], [3.0, 4.0]], dtype=tf.float32)
+    original_val = x_var.numpy().copy()
+    
+    # Call without assignment (ineffective)
+    tf.experimental.numpy.conjugate(x_var)
+    
+    assert np.array_equal(x_var.numpy(), original_val), (
+        "Original tensor changed despite unassigned operation call. "
+        "This mimics the ineffective .to() call in the original bug."
+    )
+    
+    # Additional check: Complex numbers (where conjugate actually does something mathematically)
+    # We ensure that even though values change, the dtype handling remains consistent (no redundant conversion).
+    x_complex = tf.constant([[1.0+2.0j, 2.0+3.0j]], dtype=tf.complex64)
+    y_complex = tf.experimental.numpy.conjugate(x_complex)
+    
+    # Even for complex numbers, dtype should remain the same (no redundant conversion)
+    assert y_complex.dtype == x_complex.dtype, (
+        f"Expected dtype {x_complex.dtype}, but got {y_complex.dtype}."
+    )
+    # But values should change (conjugate works)
+    assert not np.array_equal(y_complex.numpy(), x_complex.numpy()), (
+        "Complex conjugate should change values."
+    )
+
+if __name__ == "__main__":
+    test_conjugate_redundancy_and_ineffectiveness()
+    print("Test passed.")

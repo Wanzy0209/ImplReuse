@@ -1,0 +1,27 @@
+import torch
+import tensorflow as tf
+
+# Enable eager execution using the similar API
+# This switches TensorFlow to immediate execution mode, analogous to 
+# the configuration context in the PyTorch example, though it changes 
+# the execution model rather than enabling compilation.
+tf.compat.v1.enable_eager_execution()
+
+def f(x):
+    # tf.where(x != 0) is the TensorFlow equivalent of torch.nonzero()
+    # It returns a tensor of indices where the condition is True.
+    # The size of the first dimension is dynamic (depends on the data in x).
+    nz = tf.where(x != 0)
+    
+    # Slice the tensor with dynamic size
+    return nz[:-1]
+
+# Create a random tensor similar to torch.randn(3, 4)
+x = tf.random.normal((3, 4))
+
+# Execute the function
+out = f(x)
+
+# Verify the output is a tensor and print it
+print("Output shape:", out.shape)
+print("Output:", out)

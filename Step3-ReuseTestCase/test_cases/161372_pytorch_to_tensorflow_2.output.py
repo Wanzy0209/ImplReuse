@@ -1,0 +1,66 @@
+import torch
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+def test_copy_to_mesh_dynamic_sequence_length():
+    """
+    Adapted test case based on PyTorch Issue 161372.
+    
+    The original bug involved torch.compile failing when tensor shapes changed 
+    dynamically (specifically sequence length 77 -> 78), causing a recompilation 
+    limit error due to size mismatches in a cache.
+    
+    This test verifies that tf.experimental.dtensor.copy_to_mesh handles 
+    dynamic shape changes (specifically the sequence length dimension) 
+    gracefully without raising errors or layout mismatches.
+    """
+    
+    # Setup: Create a mesh using available CPU devices
+    # Note: In a real environment, this might use GPUs, but CPU is safer for portability.
+    devices = tf.config.list_physical_devices('CPU')
+    if not devices:
+        # Fallback if no physical devices are listed (common in some test environments)
+        devices = [tf.DeviceSpec(device_type="CPU", device_index=0)]
+        
+    mesh = dtensor.create_mesh([("x", len(devices))], devices=devices)
+
+    # Define a replicated layout. 
+    # While sharded layouts are possible, a replicated layout ensures that the 
+    # test focuses on the API's ability to handle the shape change itself, 
+    # rather than sharding constraints (e.g., dimension size divisibility).
+    layout = dtensor.Layout.replicated(mesh, rank=3)
+
+    # The specific sequence lengths from the PyTorch bug report that triggered the failure
+    sequence_lengths = [77, 78]
+    batch_size = 1
+    hidden_dim = 128
+
+    print(f"Testing copy_to_mesh with dynamic sequence lengths: {sequence_lengths}")
+
+    for seq_len in sequence_lengths:
+        # Create a tensor mimicking an LLM activation or cache tensor
+        # Shape: (Batch, Sequence, Hidden)
+        tensor = tf.random.normal((batch_size, seq_len, hidden_dim))
+        
+        try:
+            # Attempt to copy the tensor to the mesh with the defined layout
+            # This is the TensorFlow equivalent operation to the one failing in PyTorch
+            dtensor_result = dtensor.copy_to_mesh(tensor, layout)
+            
+            # Verify the shape is preserved correctly after the operation
+            assert dtensor_result.shape == tensor.shape, (
+                f"Shape mismatch after copy_to_mesh. "
+                f"Expected {tensor.shape}, got {dtensor_result.shape}"
+            )
+            
+            print(f"  [SUCCESS] Sequence length {seq_len}: Shape {dtensor_result.shape} handled correctly.")
+            
+        except Exception as e:
+            # If the API fails to handle the shape change (similar to the PyTorch regression),
+            # this will catch the error.
+            print(f"  [FAILURE] Sequence length {seq_len}: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_copy_to_mesh_dynamic_sequence_length()
+    print("Test completed successfully.")

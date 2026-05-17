@@ -1,0 +1,41 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Set seeds for reproducibility
+tf.random.set_seed(0)
+np.random.seed(0)
+
+def foo(inputs):
+    # Call the target API: tf.ragged.cross_hashed
+    # Note: This API generates hashed feature crosses, which is semantically 
+    # different from interpolation, but we adapt the test structure 
+    # (Eager vs Compiled consistency) to this API.
+    cross_hashed = tf.ragged.cross_hashed(
+        inputs,
+        num_buckets=100,
+        hash_key=None
+    )
+    return cross_hashed
+
+# Compile the function using tf.function (TensorFlow equivalent of torch.compile)
+cfoo = tf.function(foo)
+
+# Generate random inputs adapted for the target API.
+# The original test used float64 uniform noise for interpolation.
+# cross_hashed requires rank=2 tensors (often strings or integers).
+# We generate random integer tensors to fit the API's requirements.
+x1 = np.random.randint(0, 100, size=(10, 5))
+x2 = np.random.randint(0, 100, size=(10, 5))
+inputs = [tf.constant(x1), tf.constant(x2)]
+
+# Execute in eager mode
+eager_res = foo(inputs)
+
+# Execute in compiled (graph) mode
+compile_res = cfoo(inputs)
+
+# Verify consistency between eager and compiled results
+# Using assert_equal which handles RaggedTensors appropriately
+tf.debugging.assert_equal(eager_res, compile_res)
+print("Test passed: Eager and compiled results are consistent.")

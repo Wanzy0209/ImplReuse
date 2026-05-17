@@ -1,0 +1,109 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_batch_isend_irecv_2d_views(rank, world_size):
+    """
+    Test case to reproduce data inconsistencies when using batch_isend_irecv 
+    with 2D tensor views.
+    
+    The bug occurs when transferring data from two 2D tensors on one rank 
+    into a single 2D tensor on another rank using views.
+    """
+    # Initialize process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Configuration
+    batch_size = 8
+    total_columns = 16
+    # Define offsets for two non-contiguous slices
+    # Slice 1: columns 0 to 4
+    # Slice 2: columns 8 to 12
+    # This mimics the split_offsets logic from the bug report
+    split_offsets = [0, 4, 8, 12]
+    
+    # Set seed for reproducibility to verify data consistency
+    torch.manual_seed(42)
+
+    if rank == 0:
+        # --- Sender Rank ---
+        # Create a random tensor
+        local_tensor = torch.randn(batch_size, total_columns)
+        
+        # Create views (slices) of the tensor
+        # These views represent the data to be sent
+        dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+        dst_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+        
+        # Define P2P operations
+        send_op1 = dist.P2POp(dist.isend, dst_t1, 1, dist.group.WORLD, tag=0)
+        send_op2 = dist.P2POp(dist.isend, dst_t2, 1, dist.group.WORLD, tag=1)
+        
+        # Batch send operations
+        reqs = dist.batch_isend_irecv([send_op1, send_op2])
+        
+        # Wait for completion
+        for req in reqs:
+            req.wait()
+            
+        print(f"Rank {rank} sent data successfully.")
+
+    elif rank == 1:
+        # --- Receiver Rank ---
+        # Create a zero tensor to receive data into
+        local_tensor_dst = torch.zeros(batch_size, total_columns)
+        
+        # Create views (slices) of the destination tensor
+        # These views represent where data will be received
+        receiving_tensor_view1 = local_tensor_dst[:, split_offsets[0]:split_offsets[1]]
+        receiving_tensor_view2 = local_tensor_dst[:, split_offsets[2]:split_offsets[3]]
+        
+        # Define P2P operations
+        receive_op1 = dist.P2POp(dist.irecv, receiving_tensor_view1, 0, dist.group.WORLD, tag=0)
+        receive_op2 = dist.P2POp(dist.irecv, receiving_tensor_view2, 0, dist.group.WORLD, tag=1)
+        
+        # Batch receive operations
+        reqs = dist.batch_isend_irecv([receive_op1, receive_op2])
+        
+        # Wait for completion
+        for req in reqs:
+            req.wait()
+            
+        # --- Verification ---
+        # Regenerate the expected tensor using the same seed
+        torch.manual_seed(42)
+        expected_tensor = torch.randn(batch_size, total_columns)
+        
+        # Extract the expected slices
+        expected_slice1 = expected_tensor[:, split_offsets[0]:split_offsets[1]]
+        expected_slice2 = expected_tensor[:, split_offsets[2]:split_offsets[3]]
+        
+        # Check if the received data matches the expected data
+        # The bug manifests as data inconsistency here
+        match1 = torch.allclose(receiving_tensor_view1, expected_slice1)
+        match2 = torch.allclose(receiving_tensor_view2, expected_slice2)
+        
+        if not match1:
+            print(f"Rank {rank} ERROR: Data mismatch in view 1")
+            print(f"Expected:\n{expected_slice1}")
+            print(f"Got:\n{receiving_tensor_view1}")
+        elif not match2:
+            print(f"Rank {rank} ERROR: Data mismatch in view 2")
+            print(f"Expected:\n{expected_slice2}")
+            print(f"Got:\n{receiving_tensor_view2}")
+        else:
+            print(f"Rank {rank} verification successful: Data is consistent.")
+            
+        # Assert to fail the test if bug is present
+        assert match1, "Data inconsistency detected in receiving_tensor_view1"
+        assert match2, "Data inconsistency detected in receiving_tensor_view2"
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use 'spawn' to launch processes for multi-rank testing
+    mp.spawn(test_batch_isend_irecv_2d_views, args=(world_size,), nprocs=world_size, join=True)

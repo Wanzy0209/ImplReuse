@@ -1,0 +1,58 @@
+import torch
+import tensorflow.compat.v1 as tf
+
+# Disable eager execution to use graph mode, which is required for 
+# tf.compat.v1.train.QueueRunner and related APIs.
+tf.disable_v2_behavior()
+
+def test_add_queue_runner_with_dynamic_shapes():
+    """
+    Adapts the PyTorch test case (slicing a tensor with unbacked/dynamic sizes)
+    to the TensorFlow API tf.compat.v1.train.add_queue_runner.
+    
+    The original PyTorch issue involved:
+    1. Creating a tensor with dynamic shape (nonzero).
+    2. Slicing it.
+    3. Compiling it (torch.compile).
+    
+    This TensorFlow test case:
+    1. Creates a tensor with dynamic shape (tf.where/nonzero).
+    2. Slices it.
+    3. Adds it to a QueueRunner (graph construction utility).
+    """
+    with tf.Graph().as_default():
+        # Input tensor
+        x = tf.placeholder(tf.float32, shape=[3, 4], name="input_tensor")
+
+        # Replicate the core logic from the PyTorch bug:
+        # 1. Get indices of non-zero elements (results in a dynamic/unbacked size)
+        #    tf.where is the TF equivalent of torch.nonzero for boolean masks.
+        nz = tf.where(tf.not_equal(x, 0))
+        
+        # 2. Slice the result (the operation that caused the hard error in PyTorch)
+        sliced_nz = nz[:-1]
+
+        # Setup a queue to handle the dynamic tensor.
+        # The shape [None, 2] indicates the first dimension is dynamic (unbacked).
+        queue = tf.FIFOQueue(capacity=10, dtypes=[tf.int64], shapes=[None, 2])
+        enqueue_op = queue.enqueue(sliced_nz)
+
+        # Create a QueueRunner
+        qr = tf.train.QueueRunner(queue, [enqueue_op])
+
+        # Call the API under test: add_queue_runner
+        # This adds the QueueRunner to the graph's collection.
+        try:
+            tf.compat.v1.train.add_queue_runner(qr)
+        except Exception as e:
+            print(f"API call failed with error: {e}")
+            raise
+
+        # Verify that the runner was successfully added to the collection
+        collection = tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS)
+        assert qr in collection, "QueueRunner was not added to the collection correctly."
+
+        print("Test passed: tf.compat.v1.train.add_queue_runner handled dynamic shape operations.")
+
+if __name__ == "__main__":
+    test_add_queue_runner_with_dynamic_shapes()

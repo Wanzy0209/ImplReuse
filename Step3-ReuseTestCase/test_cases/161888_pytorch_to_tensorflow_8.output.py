@@ -1,0 +1,37 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+print("TensorFlow Version:", tf.__version__)
+
+# Recreate the tensors from the PyTorch bug report
+# PyTorch: tensor1 = torch.randint(low=-100, high=100, size=(9, 3, 7), dtype=torch.int16)
+# TensorFlow equivalent:
+tensor1 = tf.random.uniform((9, 3, 7), minval=-100, maxval=100, dtype=tf.int16)
+
+# PyTorch: tensor2 = torch.randint(low=0, high=2, size=(1, 6, 4, 8), dtype=torch.bool)
+# TensorFlow equivalent:
+tensor2 = tf.random.uniform((1, 6, 4, 8), minval=0, maxval=2, dtype=tf.bool)
+
+# Extract the weird arguments from the PyTorch bug report
+# input[0] = [[], 154691921484029491302139942063978250367, ()]
+huge_int = 154691921484029491302139942063978250367
+empty_list = []
+
+# Adapt the test case to tf.math.approx_max_k
+# The original bug involved passing invalid types (int16, bool) and values (huge int, empty list)
+# to the API. We map these to the corresponding parameters in the TensorFlow API.
+# operand -> tensor1 (int16, expects float)
+# k -> huge_int (massive number)
+# reduction_dimension -> empty_list (expects int)
+
+try:
+    # Note: tf.math.approx_max_k is a stateless function, so we combine the "init" and "call" weirdness.
+    result = tf.math.approx_max_k(
+        operand=tensor1,
+        k=huge_int,
+        reduction_dimension=empty_list
+    )
+    print("Result:", result)
+except Exception as e:
+    print(f"Caught exception: {type(e).__name__}: {e}")

@@ -1,0 +1,92 @@
+import torch
+import tensorflow as tf
+import numpy as np
+import sys
+
+def test_batch_parallel_dynamic_shapes():
+    """
+    Adapted test case for tf.compat.v1.tpu.batch_parallel based on 
+    PyTorch Issue 161372 (torch.compile regression with dynamic shapes).
+    
+    Original Bug: torch.compile failed when input shapes changed (e.g., 77 -> 78)
+    due to hitting recompilation limits or cache size mismatches.
+    
+    This test verifies if the TensorFlow TPU batch parallel API handles
+    dynamic input shapes (specifically sequence length) without crashing,
+    or if it encounters similar shape mismatch/compilation issues.
+    """
+    
+    print("Testing tf.compat.v1.tpu.batch_parallel with dynamic shapes...")
+
+    # Attempt to resolve TPU. If not available, we cannot run the actual test,
+    # but we provide the code structure that would trigger the issue on hardware.
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        print("TPU initialized.")
+    except (ValueError, tf.errors.NotFoundError) as e:
+        print(f"TPU not found (expected in non-TPU environments). Error: {e}")
+        print("Skipping execution as TPU is required for batch_parallel.")
+        return
+
+    # Define a computation that mimics a layer in an LLM (e.g., a MatMul)
+    # This is analogous to the 'forward' function in the PyTorch bug report.
+    def model_step(x):
+        # Simulating a simple linear layer operation
+        # x shape: [batch, seq_len, hidden]
+        return tf.matmul(x, x, transpose_b=True)
+
+    # Prepare inputs with varying sequence lengths.
+    # PyTorch Bug: tensor 'cache.cache[0][0]' size mismatch at index 2. expected 77, actual 78
+    batch_size = 8
+    hidden_dim = 64
+    num_shards = 2
+    
+    # Ensure batch_size is divisible by num_shards for batch_parallel
+    assert batch_size % num_shards == 0
+
+    # Input 1: Sequence length 77
+    input_77 = tf.random.normal((batch_size, 77, hidden_dim))
+    
+    # Input 2: Sequence length 78 (The trigger for the regression)
+    input_78 = tf.random.normal((batch_size, 78, hidden_dim))
+
+    try:
+        # Run 1: Sequence length 77
+        print("Running batch_parallel with sequence length 77...")
+        # batch_parallel expects a list of inputs
+        out_77 = tf.compat.v1.tpu.batch_parallel(
+            model_step,
+            inputs=[[input_77]],
+            num_shards=num_shards
+        )
+        # Force execution to ensure compilation happens
+        _ = out_77.numpy()
+        print("Success with sequence length 77.")
+
+        # Run 2: Sequence length 78
+        # In the PyTorch bug, this change caused a recompilation limit error or cache mismatch.
+        print("Running batch_parallel with sequence length 78...")
+        out_78 = tf.compat.v1.tpu.batch_parallel(
+            model_step,
+            inputs=[[input_78]],
+            num_shards=num_shards
+        )
+        _ = out_78.numpy()
+        print("Success with sequence length 78.")
+
+        # If we reach here, the TF API handled the dynamic shape change gracefully
+        # (unlike the reported regression in PyTorch 2.8.0).
+        print("Test Passed: Dynamic shapes handled correctly.")
+
+    except tf.errors.InvalidArgumentError as e:
+        # This would be the TensorFlow equivalent of a shape mismatch error
+        print(f"Test Failed: Shape mismatch error encountered.\n{e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Test Failed: Unexpected error.\n{e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    test_batch_parallel_dynamic_shapes()

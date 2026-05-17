@@ -1,0 +1,59 @@
+import unittest
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+class TestTorchExportGemma(unittest.TestCase):
+    """
+    Test case for Issue #161563: 
+    [export] "Current active mode not registered" when exporting vmap
+    
+    This test verifies that torch.export.export can successfully handle
+    models that utilize vmap or complex dispatch modes internally, 
+    specifically the google/gemma-3-270m-it model.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.model_id = "google/gemma-3-270m-it"
+        try:
+            cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
+            cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
+        except Exception as e:
+            cls.skipTest(f"Skipping test as model/tokenizer could not be loaded: {e}")
+
+    def test_export_gemma_model(self):
+        """
+        Reproduces the logic from the bug report to ensure the export succeeds.
+        The pattern mirrors passing a callable (model) to a higher-order function (export),
+        similar to how tf.nn.with_space_to_batch accepts an operation 'op'.
+        """
+        messages = [
+            {"role": "user", "content": "Who are you?"},
+        ]
+
+        inputs = self.tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        ).to(self.model.device)
+
+        example_inputs = (inputs["input_ids"], inputs["attention_mask"])
+
+        # This call previously raised:
+        # AssertionError: Current active mode <torch.fx.experimental.proxy_tensor.ProxyTorchDispatchMode ...> not registered
+        try:
+            ep = torch.export.export(self.model, example_inputs)
+        except AssertionError as e:
+            if "Current active mode" in str(e):
+                self.fail(f"Bug reproduced: {e}")
+            else:
+                raise
+
+        # Verify the export produced a valid ExportedProgram
+        self.assertIsNotNone(ep)
+        self.assertIsInstance(ep, torch.export.ExportedProgram)
+
+if __name__ == "__main__":
+    unittest.main()

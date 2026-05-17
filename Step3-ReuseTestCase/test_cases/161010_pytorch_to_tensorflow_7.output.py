@@ -1,0 +1,50 @@
+import torch
+import tensorflow as tf
+from tensorflow.keras import backend as K
+
+# Adapted test case for tf.keras.backend.name_scope
+# Original bug: torch.compile doesn't preserve stride with clone(memory_format=torch.preserve_format)
+# Adaptation: Verify that name_scope does not interfere with tensor structure preservation (shape/layout)
+
+# Setup input
+A = tf.random.uniform((5, 5))
+
+def f(A, count):
+    # Perform linear algebra operations similar to the PyTorch code
+    Q, R = tf.linalg.qr(A)
+    rhs = tf.ones((Q.shape[0], 1), dtype=A.dtype)
+    
+    # PyTorch: torch.linalg.solve_triangular(R, Q.T @ rhs, upper=True)
+    # TensorFlow: tf.linalg.triangular_solve(R, tf.linalg.matmul(Q, rhs, transpose_a=True), lower=False)
+    a = tf.linalg.triangular_solve(
+        R, 
+        tf.linalg.matmul(Q, rhs, transpose_a=True), 
+        lower=False
+    )
+    
+    # Check preservation logic
+    # PyTorch checks: a.stride() == a.clone(memory_format=torch.preserve_format).stride()
+    # TensorFlow equivalent: Check if shape is preserved through identity (clone)
+    # Note: TF tensors are immutable, so tf.identity is the closest to clone.
+    # We check shape as the structural equivalent to stride.
+    if a.shape == tf.identity(a).shape:
+        return count + 1
+    return count
+
+# Run without name_scope (Eager)
+res1 = f(A, tf.zeros(1, dtype=tf.int32))
+print("Result without name_scope:", res1)
+
+# Run with name_scope
+# The original bug was triggered by torch.compile. Here we test the similar API context.
+with K.name_scope("preserve_format_test"):
+    res2 = f(A, tf.zeros(1, dtype=tf.int32))
+
+print("Result with name_scope:", res2)
+
+# Assertion to ensure behavior is consistent
+# In the original bug, res1 and res2 differed. Here we expect them to be the same.
+if res1 != res2:
+    print("FAIL: Results differ inside name_scope")
+else:
+    print("PASS: Results are consistent")

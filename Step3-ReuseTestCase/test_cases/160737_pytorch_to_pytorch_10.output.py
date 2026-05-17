@@ -1,0 +1,18 @@
+import torch
+
+def test_cholesky_solve(device):
+    # Adaptation: Using scalar (zero-dimensional) tensors to test dimension handling,
+    # similar to the index_select bug report.
+    # Note: cholesky_solve requires inputs to have at least 2 dimensions according to its definition.
+    # This test checks if the backend handles the invalid input gracefully or crashes.
+    b = torch.tensor(1.0, device=device)
+    A = torch.tensor(1.0, device=device)
+    
+    try:
+        output = torch.cholesky_solve(b, A)
+        print(f"cholesky_solve test succeeds for device: {device}. output shape: {output.shape}")
+    except Exception as e:
+        print(f"cholesky_solve test fails for device: {device}: {e}")
+
+test_cholesky_solve(device="cpu")
+test_cholesky_solve(device="mps")

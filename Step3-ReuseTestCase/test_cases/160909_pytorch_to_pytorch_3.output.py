@@ -1,0 +1,42 @@
+import torch
+from torch.library import Library, impl_abstract
+
+def test_impl_abstract_meta_device():
+    """
+    Test that torch.library.impl_abstract correctly handles meta tensors.
+    
+    This addresses the scenario in Issue 160909 where torch.compile generates
+    meta tensors, and custom backends (like PrivateUse1) need to handle them
+    correctly via abstract implementations (fake kernels).
+    """
+    # Define a custom library and operator to simulate a custom backend op
+    lib = Library("test_custom_backend", "DEF")
+    lib.define("custom_op(Tensor x) -> Tensor")
+
+    # Register the abstract implementation (fake impl) for the operator.
+    # This is the API under test: torch.library.impl_abstract.
+    # It defines how the operator behaves when given FakeTensors (meta tensors).
+    @impl_abstract("test_custom_backend::custom_op")
+    def custom_op_abstract(x):
+        # In the context of the bug, this logic runs during tracing/compilation.
+        # It must only use metadata (shape, dtype) and not access data.
+        # We simply return a tensor with the same shape and dtype as input.
+        return torch.empty_like(x)
+
+    # Create a meta tensor. This simulates the state of tensors during
+    # the tracing phase of torch.compile mentioned in the bug report.
+    meta_input = torch.empty(2, 3, device="meta")
+
+    # Call the custom operator on the meta tensor.
+    # If the abstract implementation is missing or incorrect, this would
+    # raise a RuntimeError similar to the one in the bug report.
+    result = torch.ops.test_custom_backend.custom_op(meta_input)
+
+    # Assertions to verify correct behavior
+    assert result.device.type == "meta", "Result should remain on meta device"
+    assert result.shape == (2, 3), "Shape inference should match input"
+    assert result.dtype == meta_input.dtype, "Dtype inference should match input"
+
+if __name__ == "__main__":
+    test_impl_abstract_meta_device()
+    print("Test passed.")

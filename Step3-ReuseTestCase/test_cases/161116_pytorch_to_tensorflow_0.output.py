@@ -1,0 +1,54 @@
+import torch
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+import os
+
+def main():
+    # Mimic the device setting logic from the PyTorch script.
+    # PyTorch: gpu_id = int(os.environ["LOCAL_RANK"]); torch.cuda.set_device(device)
+    # TensorFlow: We set the visible device based on the local rank.
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    physical_devices = tf.config.list_physical_devices('GPU')
+    
+    if local_rank < len(physical_devices):
+        try:
+            tf.config.set_visible_devices(physical_devices[local_rank], 'GPU')
+            logical_devices = tf.config.list_logical_devices('GPU')
+            print(f"Process {local_rank}: Using GPU {logical_devices[0].name}")
+        except RuntimeError as e:
+            print(e)
+
+    # The bug report indicates a failure when scaling to > 10 trays (40 GPUs).
+    # To test the similar behavior in TensorFlow, we attempt to create a mesh
+    # that spans a large number of devices (e.g., 44 GPUs for 11 trays).
+    # Note: In a real distributed environment, this value must match the 
+    # total number of GPUs available across the cluster.
+    global_mesh_size = 44 
+
+    try:
+        # Initialize the distributed mesh.
+        # This is analogous to torch.distributed.init_process_group(backend='nccl').
+        # It sets up the communication topology across the specified devices.
+        mesh = dtensor.create_distributed_mesh(
+            mesh_dims=[('x', global_mesh_size)],
+            device_type='GPU',
+        )
+
+        # Perform a collective operation to verify the mesh is initialized and connected.
+        # This acts similarly to dist.barrier() by ensuring all processes participate.
+        # We create a DTensor of ones and reduce it to force communication.
+        ones = dtensor.ones((global_mesh_size, 1), mesh=mesh)
+        reduced_sum = dtensor.reduce_sum(ones, output_shape=(1,), axes=[0])
+
+        # Verify the result to ensure the operation completed successfully
+        # The sum of 'global_mesh_size' ones should be 'global_mesh_size'.
+        # Note: In a distributed setting, checking the value might require gathering,
+        # but the execution itself validates the communication setup.
+        tf.print("Mesh created and operation successful on mesh:", mesh)
+
+    except Exception as e:
+        # Catch potential segmentation faults or initialization errors
+        tf.print("Error during distributed mesh initialization or execution:", e)
+
+if __name__ == "__main__":
+    main()

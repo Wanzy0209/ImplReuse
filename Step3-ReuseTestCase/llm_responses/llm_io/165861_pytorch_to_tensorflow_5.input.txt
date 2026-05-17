@@ -1,0 +1,113 @@
+Issue ID: 165861
+Title: Reflect padding: CUDA errror when one of the batch dimensions is larger than uint16 max value (2**16)
+Bug Description:
+### 🐛 Describe the bug
+
+Reflect padding breaks when one of the batch dimensions is larger than uint16 max value (2**16).
+The total memory footprint is not important, as when the tensor holds more numbers, but all but last dimension is within the uint16 range everything is fine. 
+
+Other padding modes behave fine, the problem is only with the reflection one.
+
+## why is this important?
+`torch.stft` only accepts 2D tensors (B, L), requiring flattening of higher dimensions into the batch dimension. This commonly produces batch sizes > 65536 for large batches or multi-dimensional audio/signal data.
+
+## reproduce
+```python
+import torch
+import torch.nn.functional as F
+
+# these break cuda
+x = torch.rand(2**16, 2, device="cuda")
+# x = torch.rand(1, 2**16, 2, device="cuda")
+# x = torch.rand(2**16, 1, 2, device="cuda")
+
+# these are fine even if the total number of samples is more than 2**16, but not along a single dimension
+# x = torch.rand(2**16 - 1, 200, device="cuda")     # everything ok
+# x = torch.rand(8, 2**16 - 1, 200, device="cuda")  # everything ok
+# x = torch.rand(2**16 - 1, 8, 200, device="cuda")  # everything ok
+
+# x = torch.rand(2, 2**18, device="cuda") # everything ok
+
+F.pad(x, (1, 1), mode="constant")
+print("constant pad ok")
+F.pad(x, (1, 1), mode="circular")
+print("circular pad ok")
+F.pad(x, (1, 1), mode="replicate")
+print("replicate pad ok")
+
+F.pad(x, (1, 1), mode="reflect")
+print("this won't print")
+```
+
+output (error message):
+```
+
+Original API Under Test: torch.nn.functional.pad
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.clip_by_norm
+Similarity score: 0.9920307397842407
+
+Similar API information:
+# Extracted call chain for tf.clip_by_norm
+
+# --- tensorflow.python.ops.clip_ops.clip_by_norm ---
+def clip_by_norm(t, clip_norm, axes=None, name=None):
+  """Clips tensor values to a maximum L2-norm.
+
+  Given a tensor `t`, and a maximum clip value `clip_norm`, this operation
+  normalizes `t` so that its L2-norm is less than or equal to `clip_norm`,
+  along the dimensions given in `axes`. Specifically, in the default case
+  where all dimensions are used for calculation, if the L2-norm of `t` is
+  already less than or equal to `clip_norm`, then `t` is not modified. If
+  the L2-norm is greater than `clip_norm`, then this operation returns a
+  tensor of the same type and shape as `t` with its values set to:
+
+  `t * clip_norm / l2norm(t)`
+
+  In this case, the L2-norm of the output tensor is `clip_norm`.
+
+  As another example, if `t` is a matrix and `axes == [1]`, then each row
+  of the output will have L2-norm less than or equal to `clip_norm`. If
+  `axes == [0]` instead, each column of the output will be clipped.
+
+  Code example:
+
+  >>> some_nums = tf.constant([[1, 2, 3, 4, 5]], dtype=tf.float32)
+  >>> tf.clip_by_norm(some_nums, 2.0).numpy()
+  array([[0.26967996, 0.5393599 , 0.80903983,
+...
+
+Original Test Case:
+import torch
+import torch.nn.functional as F
+
+# these break cuda
+x = torch.rand(2**16, 2, device="cuda")
+# x = torch.rand(1, 2**16, 2, device="cuda")
+# x = torch.rand(2**16, 1, 2, device="cuda")
+
+# these are fine even if the total number of samples is more than 2**16, but not along a single dimension
+# x = torch.rand(2**16 - 1, 200, device="cuda")     # everything ok
+# x = torch.rand(8, 2**16 - 1, 200, device="cuda")  # everything ok
+# x = torch.rand(2**16 - 1, 8, 200, device="cuda")  # everything ok
+
+# x = torch.rand(2, 2**18, device="cuda") # everything ok
+
+F.pad(x, (1, 1), mode="constant")
+print("constant pad ok")
+F.pad(x, (1, 1), mode="circular")
+print("circular pad ok")
+F.pad(x, (1, 1), mode="replicate")
+print("replicate pad ok")
+
+F.pad(x, (1, 1), mode="reflect")
+print("this won't print")
+
+The API tf.clip_by_norm is identified as cross-library similar to the original PyTorch API torch.nn.functional.pad.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

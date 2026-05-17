@@ -1,0 +1,94 @@
+import unittest
+import os
+import logging
+import torch
+from torch.utils.cpp_extension import _get_cuda_arch_flags
+from unittest.mock import patch, MagicMock
+
+class TestCppExtensionDistributedWarning(unittest.TestCase):
+    """
+    Test case for Issue 161629: Verifies that the TORCH_CUDA_ARCH_LIST warning
+    is rank-aware and logs at the correct level.
+    
+    This test leverages the environment variable checking pattern similar to
+    tf.compat.v1.test.get_temp_dir to control the test conditions.
+    """
+
+    def setUp(self):
+        # Save original environment variable state
+        self.orig_arch_list = os.environ.get('TORCH_CUDA_ARCH_LIST')
+        # Ensure the environment variable is unset to trigger the warning logic
+        if 'TORCH_CUDA_ARCH_LIST' in os.environ:
+            del os.environ['TORCH_CUDA_ARCH_LIST']
+
+    def tearDown(self):
+        # Restore original environment variable state
+        if self.orig_arch_list is not None:
+            os.environ['TORCH_CUDA_ARCH_LIST'] = self.orig_arch_list
+        elif 'TORCH_CUDA_ARCH_LIST' in os.environ:
+            del os.environ['TORCH_CUDA_ARCH_LIST']
+
+    @patch('torch.utils.cpp_extension.torch.distributed.is_available', return_value=True)
+    @patch('torch.utils.cpp_extension.torch.distributed.is_initialized', return_value=True)
+    @patch('torch.cuda.get_device_properties')
+    def test_warning_logs_on_rank_zero_only(self, mock_get_device_props, mock_is_init, mock_is_avail):
+        """
+        Verifies that the warning message is printed only on rank 0 and contains
+        the correct information about the architectures being set.
+        """
+        # Mock GPU properties to simulate visible cards (e.g., Arch 9.0)
+        mock_prop = MagicMock()
+        mock_prop.major = 9
+        mock_prop.minor = 0
+        mock_get_device_properties.return_value = mock_prop
+
+        # Test on Rank 0: Should log the message
+        with patch('torch.utils.cpp_extension.torch.distributed.get_rank', return_value=0):
+            with self.assertLogs('torch.utils.cpp_extension', level='INFO') as cm:
+                # Trigger the logic that generates the warning
+                _get_cuda_arch_flags()
+
+                # Verify the improved message content
+                logs = '\n'.join(cm.output)
+                self.assertIn("setting TORCH_CUDA_ARCH_LIST", logs)
+                self.assertIn("9.0", logs)
+                self.assertIn("since TORCH_CUDA_ARCH_LIST hasn't been set", logs)
+
+        # Test on Rank 7: Should NOT log the message
+        with patch('torch.utils.cpp_extension.torch.distributed.get_rank', return_value=7):
+            # We capture DEBUG level to ensure no message is emitted at any level
+            with self.assertLogs('torch.utils.cpp_extension', level='DEBUG') as cm:
+                _get_cuda_arch_flags()
+
+                # Filter logs to ensure the specific warning is absent
+                arch_logs = [msg for msg in cm.output if "TORCH_CUDA_ARCH_LIST" in msg]
+                self.assertEqual(len(arch_logs), 0, 
+                                 "Warning should not appear on non-zero ranks (e.g., rank 7)")
+
+    @patch('torch.cuda.get_device_properties')
+    def test_no_warning_when_env_var_is_set(self, mock_get_device_props):
+        """
+        Verifies that if TORCH_CUDA_ARCH_LIST is already set (similar to how 
+        tf.compat.v1.test.get_temp_dir checks TEST_TMPDIR), no warning is printed.
+        """
+        # Set the environment variable
+        os.environ['TORCH_CUDA_ARCH_LIST'] = "8.0"
+        
+        mock_prop = MagicMock()
+        mock_prop.major = 9
+        mock_prop.minor = 0
+        mock_get_device_properties.return_value = mock_prop
+
+        # Even on Rank 0, no warning should appear if env var is set
+        with patch('torch.utils.cpp_extension.torch.distributed.is_available', return_value=True):
+            with patch('torch.utils.cpp_extension.torch.distributed.is_initialized', return_value=True):
+                with patch('torch.utils.cpp_extension.torch.distributed.get_rank', return_value=0):
+                    with self.assertLogs('torch.utils.cpp_extension', level='DEBUG') as cm:
+                        _get_cuda_arch_flags()
+                        
+                        arch_logs = [msg for msg in cm.output if "TORCH_CUDA_ARCH_LIST" in msg]
+                        self.assertEqual(len(arch_logs), 0, 
+                                         "Warning should not appear if TORCH_CUDA_ARCH_LIST is set")
+
+if __name__ == '__main__':
+    unittest.main()

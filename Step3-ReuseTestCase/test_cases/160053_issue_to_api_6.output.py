@@ -1,0 +1,45 @@
+import torch
+import torch.nn.functional as F
+import pytest
+
+def test_pad_circular_support_for_4d_and_5d():
+    """
+    Test case for Issue 160053: torch.Pad(mode="circular") doesn't work for 4D or 5D input despite error msg.
+    
+    The error message "Only 2D, 3D, 4D, 5D padding with non-constant padding are supported for now"
+    implies that 4D and 5D inputs should work. This test verifies that they do.
+    """
+    
+    # Padding specification (left, right) for the last dimension
+    pad_width = (1, 1)
+
+    # Test 2D Input
+    input_2d = torch.empty(2, 2)
+    # Should not raise NotImplementedError
+    output_2d = F.pad(input_2d, pad_width, mode="circular")
+    assert output_2d.shape == (2, 4)
+
+    # Test 3D Input
+    input_3d = torch.empty(2, 2, 2)
+    output_3d = F.pad(input_3d, pad_width, mode="circular")
+    assert output_3d.shape == (2, 2, 4)
+
+    # Test 4D Input (Specific case from the bug report)
+    input_4d = torch.empty(2, 2, 2, 2)
+    try:
+        output_4d = F.pad(input_4d, pad_width, mode="circular")
+        assert output_4d.shape == (2, 2, 2, 4)
+    except NotImplementedError as e:
+        pytest.fail(f"F.pad failed for 4D input with mode='circular': {e}")
+
+    # Test 5D Input
+    input_5d = torch.empty(2, 2, 2, 2, 2)
+    try:
+        output_5d = F.pad(input_5d, pad_width, mode="circular")
+        assert output_5d.shape == (2, 2, 2, 2, 4)
+    except NotImplementedError as e:
+        pytest.fail(f"F.pad failed for 5D input with mode='circular': {e}")
+
+if __name__ == "__main__":
+    test_pad_circular_support_for_4d_and_5d()
+    print("Test passed.")

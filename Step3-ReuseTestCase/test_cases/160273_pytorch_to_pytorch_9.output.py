@@ -1,0 +1,29 @@
+import torch
+
+# Test gradient behavior for torch.cholesky_solve
+# Setup: A is a lower triangular Cholesky factor
+A = torch.tensor([[1., 0., 0.],
+                  [1., 1., 0.],
+                  [1., 1., 1.]])
+
+# Input tensor B
+B = torch.ones([3, 2])
+B.requires_grad = True
+
+# Call cholesky_solve
+# Solves A X = B for X
+X = torch.cholesky_solve(B, A, upper=False)
+
+# Backward pass
+X.sum().backward()
+
+# Verify gradient exists and has expected values
+# Since cholesky_solve is linear, the gradient w.r.t B is (A^{-1})^T
+# For the specific A used, A^{-1} is [[1, 0, 0], [-1, 1, 0], [0, -1, 1]]
+# (A^{-1})^T is [[1, -1, 0], [0, 1, -1], [0, 0, 1]]
+# Summing the columns (due to summing X) gives [1, 0, 0]
+# Expected B.grad is [[1, 1], [0, 0], [0, 0]]
+expected_grad = torch.tensor([[1., 1.], [0., 0.], [0., 0.]])
+
+print("B.grad:", B.grad)
+assert torch.allclose(B.grad, expected_grad), f"Expected {expected_grad}, but got {B.grad}"

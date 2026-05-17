@@ -1,0 +1,44 @@
+import torch
+import tensorflow as tf
+
+def test_dropout_in_tf_function_device_context():
+    """
+    Adapted test case based on PyTorch Issue 160077.
+    Verifies that tf.keras.backend.dropout works correctly inside tf.function
+    (analogous to torch.compile) while under a tf.device context.
+    """
+    
+    # Define the function using the similar API
+    def f(x):
+        # tf.keras.backend.dropout requires a seed for deterministic behavior in graph mode
+        return tf.keras.backend.dropout(x, rate=0.5, seed=42)
+
+    # Compile the function (equivalent to torch.compile)
+    compiled_f = tf.function(f)
+
+    # Run inside a device context (equivalent to torch.device context)
+    # Using CPU to ensure the test runs on all machines without GPU requirement
+    with tf.device("/CPU:0"):
+        # Create tensor inside context
+        x = tf.random.normal([2, 2])
+
+        # Eager execution (equivalent to "Eager works" in the bug report)
+        eager_result = f(x)
+        assert eager_result.shape == (2, 2), "Eager execution failed"
+
+        # Compiled execution (equivalent to torch.compile)
+        # This verifies that the API works correctly when traced/compiled
+        # inside a device context, analogous to the PyTorch bug scenario.
+        try:
+            compiled_result = compiled_f(x)
+            # Basic assertion to ensure execution and shape preservation
+            assert compiled_result.shape == x.shape, "Compiled execution failed"
+            print("Test passed: tf.keras.backend.dropout works in tf.function under device context.")
+        except AttributeError as e:
+            # Catching the specific type of error seen in the PyTorch bug
+            # (module '...' has no attribute '...')
+            print(f"Test failed with AttributeError: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_dropout_in_tf_function_device_context()

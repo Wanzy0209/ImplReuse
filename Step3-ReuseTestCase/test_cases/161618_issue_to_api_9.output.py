@@ -1,0 +1,40 @@
+import torch
+import tensorflow as tf
+
+# This test case translates the logic of the PyTorch Inductor bug (Issue 161618)
+# to TensorFlow. The original bug involves compiling a matrix multiplication 
+# operation (torch.addmm) with specific tensor shapes and dtypes.
+# Here, we use TensorFlow's tf.function (JIT compilation) to mirror the 
+# torch.compile behavior and verify the operation executes correctly.
+
+def test_tensorflow_addmm_equivalent():
+    # Define dimensions from the original bug report
+    m = 20120
+    k = 1536
+    n = 512
+
+    # Initialize tensors (mimicking torch.randn(...).cuda())
+    # We use tf.random.normal to generate random float32 tensors.
+    a = tf.random.normal((m, n), dtype=tf.float32)
+    mat1 = tf.random.normal((m, k), dtype=tf.float32)
+    mat2 = tf.random.normal((k, n), dtype=tf.float32)
+
+    # Define the operation: torch.addmm(a, mat1, mat2) is equivalent to mat1 @ mat2 + a
+    # We use @tf.function(jit_compile=True) to mimic torch.compile (Inductor)
+    # which attempts to optimize the graph similar to the reported issue.
+    @tf.function(jit_compile=True)
+    def addmm_op(a, mat1, mat2):
+        return tf.add(tf.matmul(mat1, mat2), a)
+
+    # Execute the compiled function
+    # This mirrors the 'compiled(a, mat1, mat2)' call in the original bug.
+    result = addmm_op(a, mat1, mat2)
+
+    # Assertions to verify the operation completed successfully and output shape is correct
+    assert result.shape == (m, n), f"Expected shape ({m}, {n}), but got {result.shape}"
+    assert result.dtype == tf.float32, f"Expected dtype float32, but got {result.dtype}"
+
+    print("TensorFlow test case passed successfully.")
+
+if __name__ == "__main__":
+    test_tensorflow_addmm_equivalent()

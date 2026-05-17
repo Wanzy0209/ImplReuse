@@ -1,0 +1,64 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import torch._inductor.config as config
+import os
+
+# Configure Inductor to use cpp_wrapper, which is the condition for the bug
+config.cpp_wrapper = True
+# Enable logging to inspect generated code if necessary
+torch._logging.set_logs(output_code=True)
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the distributed process group
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Define a function that uses torch.distributed.reduce
+    # The 'dst' argument is a non-tensor (int), which is the subject of the bug
+    def dist_reduce_op(x, dst_rank):
+        torch.distributed.reduce(x, dst_rank)
+        return x
+
+    # Compile the function with torch.compile
+    compiled_reduce = torch.compile(dist_reduce_op)
+
+    # Profile the execution to check for redundant H2D/D2H memcpy
+    with torch.profiler.profile(
+        with_stack=True,
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ],
+        on_trace_ready=torch.profiler.tensorboard_trace_handler("./log_dist"),
+    ) as prof:
+        with torch.device("cuda"):
+            for i in range(10):
+                # Create tensor on CUDA
+                x = torch.randn(10, 10).cuda()
+                # Call the compiled function.
+                # The '0' is a non-tensor argument. Under the bug, this would trigger
+                # torch.tensor(0) -> .cuda() -> .item() inside the cpp_wrapper.
+                compiled_reduce(x, 0)
+
+    print(f"Rank {rank} finished profiling.")
+    # In a real regression test, assertions would check the profiler trace
+    # for the absence of redundant memcpy operations for scalar arguments.
+    
+    cleanup()
+
+if __name__ == "__main__":
+    # Check for CUDA availability
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+    else:
+        world_size = 2
+        # Spawn processes for distributed testing
+        mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

@@ -1,0 +1,57 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_reshape_gradient_behavior():
+    """
+    Test case to verify gradient behavior of tf.reshape, inspired by the 
+    gradient verification pattern in the torch.min issue (Issue ID: 160273).
+    
+    The original issue highlights how gradients are distributed (or not) 
+    during reduction operations. This test verifies that gradients flow 
+    correctly through a reshape operation, ensuring values are preserved 
+    and mapped back to the original tensor shape without unexpected 
+    distribution or loss.
+    """
+    # Setup: Create a tensor similar to the torch example (ones)
+    # Original: a = torch.ones([5]).cuda()
+    a = tf.ones([5], dtype=tf.float32)
+
+    # Enable gradients
+    # Original: a.requires_grad=True
+    with tf.GradientTape() as tape:
+        tape.watch(a)
+
+        # Operation: Reshape the tensor
+        # Original: min_val = torch.min(a)
+        # Similar API: tf.reshape (changing shape from [5] to [1, 5])
+        reshaped_val = tf.reshape(a, [1, 5])
+
+        # Compute a scalar loss to trigger backpropagation
+        # Original: min_val.backward() (min_val is a scalar)
+        # Here we sum the result to get a scalar loss.
+        loss = tf.reduce_sum(reshaped_val)
+
+    # Backpropagate
+    # Original: a.grad
+    grads = tape.gradient(loss, a)
+
+    # Assertions
+    # 1. Check that the gradient shape matches the input tensor shape
+    #    (Reshape gradients must map back to the original shape).
+    assert grads.shape == a.shape, f"Gradient shape mismatch: expected {a.shape}, got {grads.shape}"
+
+    # 2. Check gradient values.
+    #    In the torch.min issue, gradients were distributed (0.2) or indexed (1.0).
+    #    For reshape, the gradient should be 1-to-1 (preserved).
+    #    Since input is ones and loss is sum, gradient should be ones.
+    expected_grad = tf.ones([5], dtype=tf.float32)
+    
+    # Use numpy for assertion clarity
+    assert np.allclose(grads.numpy(), expected_grad.numpy()), \
+        f"Gradient values mismatch: expected {expected_grad.numpy()}, got {grads.numpy()}"
+
+    print("Test passed: tf.reshape gradient behavior is correct.")
+
+if __name__ == "__main__":
+    test_reshape_gradient_behavior()

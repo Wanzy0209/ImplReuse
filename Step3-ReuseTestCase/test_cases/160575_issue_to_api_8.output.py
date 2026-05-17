@@ -1,0 +1,38 @@
+import torch
+import warnings
+
+def test_maxwell_kernel_support():
+    """
+    Test case to verify the absence of Maxwell (sm_52) support 
+    in PyTorch 2.8.0+cu126 builds as reported in Issue 160575.
+    
+    This test checks the list of supported CUDA architectures to ensure
+    that deprecated architectures like sm_52 are correctly excluded,
+    while newer architectures are included.
+    """
+    # Capture warnings to observe any deprecation or capability warnings
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        
+        # Reproduce the logic: Get the list of supported architectures
+        arch_list = torch.cuda.get_arch_list()
+        
+        # The bug report indicates that sm_52 (Maxwell) is not supported
+        # and the minimum capability is 6.1 (sm_61).
+        # We assert that sm_52 is NOT in the list.
+        assert 'sm_52' not in arch_list, \
+            f"sm_52 (Maxwell) should not be in arch_list for this build. Found: {arch_list}"
+        
+        # Verify the minimum supported architecture mentioned in the warning (sm_61)
+        assert 'sm_61' in arch_list, \
+            f"sm_61 (Pascal) should be the minimum supported arch. Found: {arch_list}"
+        
+        # Verify other architectures mentioned in the bug report warning are present
+        expected_archs = ['sm_70', 'sm_75', 'sm_80', 'sm_86', 'sm_90']
+        for arch in expected_archs:
+            assert arch in arch_list, \
+                f"{arch} should be supported. Found: {arch_list}"
+
+if __name__ == "__main__":
+    test_maxwell_kernel_support()
+    print("Test passed: sm_52 is correctly excluded from supported architectures.")

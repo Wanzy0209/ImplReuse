@@ -1,0 +1,26 @@
+import tensorflow as tf
+from typing import NamedTuple
+
+class MyNamedTuple(NamedTuple):
+    first: tf.Tensor
+    second: tf.Tensor
+
+class MyNamedTupleSubclass(MyNamedTuple):
+    pass
+
+def fn(tup: MyNamedTuple) -> tf.Tensor:
+    extra_info = tf.constant(4.0)
+    tup.extra_info = extra_info  # Add dynamic attribute
+    return tup
+
+print("\nTesting NamedTuple with __setattr__:")
+extended_tup = MyNamedTupleSubclass(first=tf.constant([2.0]), second=tf.constant(1.0))
+setattr_result = fn(extended_tup)
+print(f"NamedTuple __setattr__ result: {setattr_result.extra_info}")
+
+print("\nTesting NamedTuple with __setattr__ inside name_scope:")
+extended_tup = MyNamedTupleSubclass(first=tf.constant([2.0]), second=tf.constant(1.0))
+# Using skip_on_eager=False to ensure the scope logic is active, similar to the eager backend test
+with tf.keras.backend.name_scope("dynamic_test", skip_on_eager=False):
+    setattr_result = fn(extended_tup)
+print(f"NamedTuple __setattr__ result: {setattr_result.extra_info}")

@@ -1,0 +1,49 @@
+import torch
+import torch.nn as nn
+
+def test_upsampling_bilinear2d_on_mps():
+    """
+    Test case for torch.nn.UpsamplingBilinear2d on the MPS device.
+    This test is derived from the context of Issue 160237, which highlights
+    issues with spatial transformation operators (specifically grid_sampler_3d)
+    on the Mac Metal (MPS) backend.
+    """
+    # Check if MPS is available, as the bug report is specific to Mac Metal
+    if not torch.backends.mps.is_available():
+        print("MPS device is not available. Skipping test.")
+        return
+
+    device = torch.device("mps")
+
+    # Create a dummy input tensor: Batch=1, Channels=3, Height=10, Width=10
+    # This mimics a small feature map typical in image processing pipelines
+    input_tensor = torch.randn(1, 3, 10, 10, device=device)
+
+    # Initialize the UpsamplingBilinear2d layer
+    # We use a scale_factor of 2 to double the spatial dimensions
+    upsample_layer = nn.UpsamplingBilinear2d(scale_factor=2).to(device)
+
+    try:
+        # Execute the operation
+        output_tensor = upsample_layer(input_tensor)
+
+        # Verify the output shape
+        # Input (10, 10) -> Output (20, 20)
+        expected_shape = (1, 3, 20, 20)
+        assert output_tensor.shape == expected_shape, \
+            f"Shape mismatch. Expected {expected_shape}, got {output_tensor.shape}"
+
+        # Verify the output device is still MPS
+        assert output_tensor.device == device, \
+            f"Device mismatch. Expected {device}, got {output_tensor.device}"
+
+        print("Test Passed: torch.nn.UpsamplingBilinear2d works correctly on MPS device.")
+
+    except NotImplementedError as e:
+        # Catch the specific error type mentioned in the original bug report
+        # if it happens to affect this similar API
+        print(f"Test Failed: NotImplementedError encountered - {e}")
+        raise
+
+if __name__ == "__main__":
+    test_upsampling_bilinear2d_on_mps()

@@ -1,0 +1,75 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_erosion2d_similar_to_grid_sample():
+    """
+    Adapted test case based on Issue ID: 160237 (aten::grid_sampler_3d).
+    
+    The original issue reported a NotImplementedError for torch.nn.functional.grid_sample
+    on the MPS device. This test verifies the functionality of the similar TensorFlow API
+    (tf.compat.v1.nn.erosion2d) on available hardware.
+    
+    While grid_sample performs interpolation and erosion2d performs morphological erosion,
+    both are spatial operations acting on 4D/5D tensors. This test adapts the input structure
+    (Batch, Height, Width, Channels) to verify the TensorFlow equivalent executes without
+    raising a NotImplementedError.
+    """
+    
+    # Ensure eager execution is active for TF 2.x behavior
+    if not tf.executing_eagerly():
+        tf.compat.v1.enable_eager_execution()
+
+    # Adapt dimensions from the original 3D context (N, C, D, H, W) to 2D (N, H, W, C)
+    # The original bug involved feature maps in a warping module.
+    batch_size = 1
+    height = 64
+    width = 64
+    channels = 3
+
+    # Create input tensor simulating image features
+    # Using float32 to match typical precision in such operations
+    input_data = np.random.rand(batch_size, height, width, channels).astype(np.float32)
+    value = tf.constant(input_data)
+
+    # Create a structuring element (kernel) for erosion
+    # Kernel shape: [kernel_height, kernel_width, depth]
+    kernel_size = 3
+    kernel_data = np.ones((kernel_size, kernel_size, channels), dtype=np.float32)
+    kernel = tf.constant(kernel_data)
+
+    # Define strides and rates
+    strides = [1, 1, 1, 1]  # [batch, height, width, channels]
+    rates = [1, 1, 1, 1]    # Atrous rates, typically 1 for standard erosion
+    padding = 'SAME'        # Preserves spatial dimensions
+
+    try:
+        # Execute the operation
+        # This corresponds to the spatial processing step in the original bug report
+        output = tf.compat.v1.nn.erosion2d(
+            value=value,
+            kernel=kernel,
+            strides=strides,
+            rates=rates,
+            padding=padding,
+            name='erosion_op'
+        )
+
+        # Verify output shape matches expectations (preserving H and W due to 'SAME' padding)
+        expected_shape = (batch_size, height, width, channels)
+        assert output.shape == expected_shape, \
+            f"Shape mismatch: expected {expected_shape}, got {output.shape}"
+
+        # Verify the operation ran successfully (checking for the specific error from the bug report)
+        print("Test Passed: tf.compat.v1.nn.erosion2d executed successfully on the current device.")
+
+    except NotImplementedError as e:
+        # Replicating the error type from the original PyTorch bug report
+        print(f"Test Failed: NotImplementedError encountered - {e}")
+        raise
+    except Exception as e:
+        print(f"Test Failed: Unexpected error - {e}")
+        raise
+
+if __name__ == "__main__":
+    test_tf_erosion2d_similar_to_grid_sample()

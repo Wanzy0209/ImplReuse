@@ -1,0 +1,102 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Enable V2 behavior but allow compat.v1 usage
+tf.compat.v1.enable_eager_execution()
+
+def test_gqa_compilation_with_name_scope():
+    """
+    Adapts the PyTorch FlexAttention GQA compilation test to TensorFlow.
+    
+    Original Bug: FlexAttention backward compilation failure with GQA on NVIDIA B200.
+    Original API: torch.compile (PyTorch)
+    Target API: tf.compat.v1.name_scope (TensorFlow)
+    
+    This test verifies that a Grouped Query Attention (GQA) computation,
+    defined within a tf.compat.v1.name_scope and compiled via XLA (tf.function),
+    executes forward and backward passes successfully.
+    """
+
+    # Define a basic GQA (Grouped Query Attention) implementation
+    # to mimic the behavior of torch.nn.attention.flex_attention with enable_gqa=True
+    def gqa_attention(q, k, v):
+        # q: [batch, num_heads_q, seq_len, head_dim]
+        # k, v: [batch, num_heads_kv, seq_len, head_dim]
+        
+        batch_size, num_heads_q, seq_len, head_dim = q.shape
+        _, num_heads_kv, _, _ = k.shape
+        
+        # GQA logic: Repeat K and V to match the number of Q heads
+        # This simulates the multi-query/grouped-query behavior
+        repeats = num_heads_q // num_heads_kv
+        k_repeated = tf.repeat(k, repeats=repeats, axis=1)
+        v_repeated = tf.repeat(v, repeats=repeats, axis=1)
+        
+        # Scaled Dot-Product Attention
+        # Matmul: Q * K^T
+        attn_scores = tf.matmul(q, k_repeated, transpose_b=True)
+        
+        # Scale
+        attn_scores = attn_scores / tf.math.sqrt(tf.cast(head_dim, tf.float32))
+        
+        # Softmax
+        attn_weights = tf.nn.softmax(attn_scores, axis=-1)
+        
+        # Matmul: Weights * V
+        output = tf.matmul(attn_weights, v_repeated)
+        return output
+
+    # Use the target API: tf.compat.v1.name_scope
+    # This wraps the graph definition, similar to how torch.compile wraps the function logic
+    with tf.compat.v1.name_scope("gqa_compilation_test"):
+        
+        # Define inputs matching the original reproducer shape
+        # Original: q=[2, 32, 4096, 128], k=[2, 8, 4096, 128], v=[2, 8, 4096, 128]
+        batch_size = 2
+        num_heads_q = 32
+        num_heads_kv = 8
+        seq_len = 4096
+        head_dim = 128
+        
+        # Use bfloat16 as in the original bug report
+        dtype = tf.bfloat16
+
+        # Initialize variables with requires_grad=True equivalent
+        q = tf.Variable(tf.random.normal([batch_size, num_heads_q, seq_len, head_dim], dtype=dtype))
+        k = tf.Variable(tf.random.normal([batch_size, num_heads_kv, seq_len, head_dim], dtype=dtype))
+        v = tf.Variable(tf.random.normal([batch_size, num_heads_kv, seq_len, head_dim], dtype=dtype))
+
+        # Mimic torch.compile(..., backend="inductor") using tf.function with XLA
+        # This forces compilation, which is where the original bug occurred
+        @tf.function(jit_compile=True)
+        def compiled_attention(q, k, v):
+            return gqa_attention(q, k, v)
+
+        # Forward Pass
+        print("Running forward pass...")
+        y = compiled_attention(q, k, v)
+        
+        # Backward Pass (Gradient Calculation)
+        # Mimics y.backward(torch.randn_like(y))
+        print("Running backward pass...")
+        with tf.GradientTape() as tape:
+            # Re-run forward inside tape to record operations
+            y = compiled_attention(q, k, v)
+            # Create a loss equivalent to summing against random weights (or just the output itself)
+            # to ensure gradients flow.
+            loss = tf.reduce_sum(y * tf.random.normal(y.shape, dtype=dtype))
+
+        # Calculate gradients
+        grads = tape.gradient(loss, [q, k, v])
+
+        # Assertions to verify behavior
+        assert y is not None, "Forward pass output is None"
+        assert grads[0] is not None, "Gradient for Q is None"
+        assert grads[1] is not None, "Gradient for K is None"
+        assert grads[2] is not None, "Gradient for V is None"
+        
+        print("Test Passed: GQA forward and backward compilation succeeded within name_scope.")
+
+if __name__ == "__main__":
+    test_gqa_compilation_with_name_scope()

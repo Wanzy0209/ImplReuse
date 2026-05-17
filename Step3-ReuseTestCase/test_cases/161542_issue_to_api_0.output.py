@@ -1,0 +1,45 @@
+import torch
+import tensorflow as tf
+
+# Setup variables similar to the original bug report
+keys = range(10)
+allowed = [0, 1, 2, 3]
+
+# Define the function using the similar API (tf.compat.v1.resource_loader.readahead_file_path)
+# We use tf.function to mimic the torch.compile context from the original issue.
+@tf.function
+def fn(x):
+    # Perform an operation
+    x = x + 1
+    
+    # Use the similar API: tf.compat.v1.resource_loader.readahead_file_path
+    # This replaces the torch._dynamo.graph_break() call in the sequence of operations.
+    # We pass a dummy path to satisfy the API requirements.
+    _ = tf.compat.v1.resource_loader.readahead_file_path("/tmp/dummy_path")
+
+    # The problematic logic from the bug report:
+    # List comprehension creating a local variable 'key'
+    key = [k for k in keys if k in allowed]
+
+    # Inner function using 'nonlocal key'
+    def inner():
+        nonlocal key
+        return key
+
+    # Return result combining the tensor and the list element
+    # Note: We cast key[0] to a tensor to ensure compatibility with x in TF operations
+    return x + tf.cast(inner()[0], dtype=tf.float32)
+
+# Execute the test case
+# This checks if TensorFlow's graph compilation (tf.function) handles the 
+# local/cell variable scoping correctly when the similar API is used,
+# analogous to the failure mode in PyTorch Dynamo.
+try:
+    result = fn(tf.ones(3))
+    # Assertion to verify the logic executed correctly
+    assert result.shape == (3,)
+    assert tf.reduce_all(result == tf.constant([2.0, 2.0, 2.0])).numpy()
+    print("Test passed: TensorFlow handled the scoping and API usage correctly.")
+except Exception as e:
+    print(f"Test failed with error: {e}")
+    raise

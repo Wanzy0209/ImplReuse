@@ -1,0 +1,43 @@
+import torch
+import tensorflow as tf
+from typing import NamedTuple
+
+# Define the NamedTuple structure from the bug report
+class MyNamedTuple(NamedTuple):
+    first: tf.Tensor
+    second: tf.Tensor
+
+class MyNamedTupleSubclass(MyNamedTuple):
+    pass
+
+# Define a Module similar to the pattern in the similar API snippet (UseMultiplex)
+class DynamicAttributeModule(tf.Module):
+    @tf.function
+    def fn(self, tup: MyNamedTuple) -> MyNamedTuple:
+        extra_info = tf.constant(4.0)
+        # Add dynamic attribute (logic from the bug report)
+        tup.extra_info = extra_info
+        return tup
+
+def test_namedtuple_dynamic_attribute():
+    print("\nTesting NamedTuple with dynamic attribute in tf.function:")
+    
+    # Create the input object
+    extended_tup = MyNamedTupleSubclass(first=tf.constant([2.0]), second=tf.constant(1.0))
+    
+    module = DynamicAttributeModule()
+    
+    # Call the function (tf.function acts as the compiler/tracer here, analogous to torch.compile)
+    try:
+        setattr_result = module.fn(extended_tup)
+        # Check if the attribute exists
+        if hasattr(setattr_result, 'extra_info'):
+            print(f"NamedTuple __setattr__ result: {setattr_result.extra_info}")
+        else:
+            print("Attribute 'extra_info' missing (similar to PyTorch bug)")
+    except AttributeError as e:
+        # TensorFlow may raise an error because Structs are immutable in graph mode
+        print(f"AttributeError raised: {e}")
+
+if __name__ == "__main__":
+    test_namedtuple_dynamic_attribute()

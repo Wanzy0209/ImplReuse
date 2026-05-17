@@ -1,0 +1,75 @@
+import torch
+import tensorflow as tf
+
+def test_neg_add_uint_tensor():
+    """
+    Adapts the PyTorch test case for neg+add computation with uint tensors 
+    to the TensorFlow environment, utilizing tf.compat.v1.train.add_queue_runner
+    as requested.
+    
+    Note: TensorFlow's graph mode (required for queue runners) handles type 
+    promotion for uint8 negation differently than PyTorch (TF casts to int32 
+    resulting in -7, whereas PyTorch wraps to 249). This test verifies the 
+    execution flow within the graph context.
+    """
+    # Disable eager execution to use tf.compat.v1.train.add_queue_runner
+    tf.compat.v1.disable_eager_execution()
+
+    with tf.compat.v1.Session() as sess:
+        # --- Setup for tf.compat.v1.train.add_queue_runner ---
+        # We create a dummy queue and runner to satisfy the API usage requirement.
+        # This API is used to manage queue-based input pipelines in TF 1.x.
+        q = tf.compat.v1.queue.FIFOQueue(capacity=10, dtypes=[tf.float32])
+        enqueue_op = q.enqueue([1.0])
+        qr = tf.compat.v1.train.QueueRunner(q, [enqueue_op] * 2)
+        
+        # This is the specific API call requested to be tested/verified
+        tf.compat.v1.train.add_queue_runner(qr)
+        
+        # --- Core Bug Reproduction Logic (Adapted to TF) ---
+        # PyTorch: c = torch.tensor(7, dtype=torch.uint8)
+        c = tf.constant(7, dtype=tf.uint8)
+        
+        # PyTorch: x = torch.randn(2, 2, dtype=torch.float32)
+        # Setting seed for reproducibility
+        tf.random.set_seed(0)
+        x = tf.random.normal([2, 2], dtype=tf.float32)
+        
+        # PyTorch: c + x
+        res0 = c + x
+        
+        # PyTorch: torch.neg(c)
+        # In TF, negating a uint8 typically casts to int32 (-7), unlike PyTorch's wrapping (249).
+        res1 = tf.negative(c)
+        
+        # PyTorch: torch.neg(c) + x
+        res2 = tf.negative(c) + x
+        
+        # --- Execution ---
+        # Initialize variables and start queue runners
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+        
+        try:
+            # Run the operations
+            x_val, res0_val, res1_val, res2_val = sess.run([x, res0, res1, res2])
+            
+            print(f"input x: {x_val}")
+            print(f"res[0] (c+x): {res0_val}")
+            print(f"res[1] (neg(c)): {res1_val}")
+            print(f"res[2] (neg(c)+x): {res2_val}")
+            
+            # Basic assertions to ensure the graph executed correctly
+            assert res0_val.shape == (2, 2), "Shape mismatch for res[0]"
+            assert res2_val.shape == (2, 2), "Shape mismatch for res[2]"
+            
+            # Verify the queue runner collection is populated
+            runners = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+            assert len(runners) > 0, "Queue runner was not added to the collection"
+            
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_neg_add_uint_tensor()

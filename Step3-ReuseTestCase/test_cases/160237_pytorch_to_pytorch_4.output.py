@@ -1,0 +1,47 @@
+import torch
+import torch.nn.functional as F
+
+def test_pad_on_mps():
+    """
+    Test case for torch.nn.functional.pad on the MPS device.
+    This test is derived from a bug report where grid_sampler_3d failed on MPS.
+    We verify if the similar API, pad, functions correctly on the same device.
+    """
+    # Check if MPS is available, as the original bug was specific to Mac Metal
+    if not torch.backends.mps.is_available():
+        print("MPS device is not available. Skipping test.")
+        return
+
+    # Create a dummy input tensor on the MPS device.
+    # The original bug involved 3D operations (grid_sampler_3d), so we use a 5D tensor
+    # (Batch, Channel, Depth, Height, Width) to simulate a similar data context.
+    input_tensor = torch.randn(1, 3, 10, 20, 20).to('mps')
+
+    # Define padding for the last 3 dimensions (Depth, Height, Width).
+    # Format: (padding_left, padding_right, padding_top, padding_bottom, padding_front, padding_back)
+    padding = [1, 1, 1, 1, 1, 1]
+
+    try:
+        # Call the similar API: torch.nn.functional.pad
+        # Replacing the original failing call to grid_sample with pad
+        output = F.pad(input_tensor, padding, mode='constant', value=0)
+
+        # Verify the output is on the correct device
+        assert output.device.type == 'mps', f"Expected output on MPS, got {output.device}"
+
+        # Verify the output shape is correct (Original shape + padding)
+        # Input: (1, 3, 10, 20, 20) -> Output: (1, 3, 12, 22, 22)
+        expected_shape = (1, 3, 12, 22, 22)
+        assert output.shape == expected_shape, f"Expected shape {expected_shape}, got {output.shape}"
+
+        print("Test passed: torch.nn.functional.pad works on MPS device.")
+
+    except NotImplementedError as e:
+        print(f"Test failed with NotImplementedError: {e}")
+        raise
+    except Exception as e:
+        print(f"Test failed with unexpected error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_pad_on_mps()

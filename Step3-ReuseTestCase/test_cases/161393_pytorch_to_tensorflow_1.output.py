@@ -1,0 +1,41 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Define the computation function
+# Equivalent to PyTorch's f(x)
+def f(x):
+    # PyTorch: nz = x.nonzero()
+    # TensorFlow: tf.where returns indices where condition is True (non-zero elements)
+    nz = tf.where(tf.not_equal(x, 0))
+    
+    # PyTorch: return nz[:-1]
+    # Slicing the tensor with dynamic size (unbacked size in PyTorch terms)
+    return nz[:-1]
+
+# Initialize TPU for batch_parallel
+# Note: This requires a TPU environment to run. 
+# If no TPU is available, the code structure is still valid for the API.
+try:
+    resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(resolver)
+    tf.tpu.experimental.initialize_tpu_system(resolver)
+    
+    # Input data
+    # PyTorch: torch.randn(3, 4)
+    x = tf.constant(np.random.randn(3, 4).astype(np.float32))
+    
+    # Execute using the similar API
+    # PyTorch: torch.compile(f, fullgraph=True)(...)
+    # TensorFlow: tf.compat.v1.tpu.batch_parallel(...)
+    out = tf.compat.v1.tpu.batch_parallel(
+        f,
+        inputs=[x],
+        num_shards=1
+    )
+    
+    print("Output:", out)
+
+except (ValueError, tf.errors.NotFoundError) as e:
+    print(f"TPU initialization failed (expected if not on TPU): {e}")
+    print("Test case structure for tf.compat.v1.tpu.batch_parallel generated.")

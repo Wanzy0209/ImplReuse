@@ -1,0 +1,48 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_cumsum_gradient_behavior():
+    """
+    Test case adapted from the torch.min gradient issue (Issue ID: 160273).
+    
+    The original issue highlights inconsistent gradient behavior in torch.min 
+    depending on whether a dimension is specified. This test verifies the 
+    gradient behavior of tf.experimental.numpy.cumsum across different 
+    axis arguments to ensure consistency and correctness.
+    """
+    
+    # Case 1: Cumsum along default axis (axis=0)
+    # We use a 1D tensor similar to the original issue's first example
+    x = tf.ones([5], dtype=tf.float32)
+    with tf.GradientTape() as tape:
+        tape.watch(x)
+        # To mimic the scalar output of torch.min() for the backward pass,
+        # we sum the result of the cumsum operation.
+        y = tf.experimental.numpy.cumsum(x, axis=0)
+        loss = tf.reduce_sum(y)
+    
+    grad = tape.gradient(loss, x)
+    # For cumsum, the gradient of sum(output) w.r.t input is [N, N-1, ..., 1]
+    # because x[0] contributes to N outputs, x[1] to N-1, etc.
+    expected_grad = tf.constant([5., 4., 3., 2., 1.])
+    assert np.allclose(grad.numpy(), expected_grad.numpy()), \
+        f"Gradient mismatch for axis=0. Expected {expected_grad.numpy()}, got {grad.numpy()}"
+
+    # Case 2: Cumsum along a specified axis (axis=1)
+    # We use a 2D tensor to test behavior similar to torch.min(input, dim=...)
+    x2 = tf.ones([2, 3], dtype=tf.float32)
+    with tf.GradientTape() as tape:
+        tape.watch(x2)
+        y2 = tf.experimental.numpy.cumsum(x2, axis=1)
+        loss2 = tf.reduce_sum(y2)
+    
+    grad2 = tape.gradient(loss2, x2)
+    # For each row of length 3, the gradient pattern is [3, 2, 1]
+    expected_grad2 = tf.constant([[3., 2., 1.], [3., 2., 1.]])
+    assert np.allclose(grad2.numpy(), expected_grad2.numpy()), \
+        f"Gradient mismatch for axis=1. Expected {expected_grad2.numpy()}, got {grad2.numpy()}"
+
+if __name__ == "__main__":
+    test_tf_cumsum_gradient_behavior()
+    print("Test passed.")

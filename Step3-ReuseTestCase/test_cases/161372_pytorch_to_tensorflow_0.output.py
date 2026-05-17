@@ -1,0 +1,82 @@
+import torch
+import tensorflow as tf
+
+def test_tpu_rewrite_dynamic_shapes():
+    """
+    Adapts the torch.compile regression test (Issue 161372) to tf.compat.v1.tpu.rewrite.
+    
+    Original Bug Context:
+    - torch.compile in PyTorch 2.8.0 failed with a recompile limit error.
+    - Reason: tensor size mismatch at index 2 (expected 77, actual 78).
+    - This implies the compiler struggled with dynamic sequence lengths in an LLM.
+    
+    Test Logic:
+    - Define a computation function (mimicking an LLM layer).
+    - Initialize TPU context (required for tf.compat.v1.tpu.rewrite).
+    - Execute the compiled function with inputs of sequence length 77.
+    - Execute the compiled function with inputs of sequence length 78.
+    - Verify if the API handles the shape change gracefully or triggers errors/recompilation issues.
+    """
+    
+    # Check for TPU availability to ensure the test is runnable in valid environments
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        strategy = tf.distribute.TPUStrategy(resolver)
+    except (ValueError, tf.errors.NotFoundError) as e:
+        print(f"Skipping test: TPU not available or initialization failed. Error: {e}")
+        return
+
+    # Define a computation that mimics a simple LLM forward pass
+    # The function takes a list of inputs, similar to the structure implied by the PyTorch bug
+    def llm_computation(inputs):
+        # inputs[0] is expected to be [batch, seq_len, hidden]
+        x = inputs[0]
+        
+        # Simulate a linear layer operation
+        # In a real scenario, weights would be defined outside, but for rewrite testing
+        # we can use simple ops that depend on tensor shapes.
+        # Using tf.matmul to ensure the graph compilation is non-trivial.
+        
+        # Create a dummy weight matrix based on the input's hidden dimension
+        # Note: In XLA/TPU, dynamic shapes can be tricky. 
+        hidden_dim = tf.shape(x)[-1]
+        w = tf.ones([hidden_dim, hidden_dim])
+        
+        # Perform operation
+        output = tf.matmul(x, w)
+        return output
+
+    with strategy.scope():
+        batch_size = 1
+        hidden_dim = 128
+        
+        # Recreate the specific scenario from the bug report:
+        # "tensor 'cache.cache[0][0]' size mismatch at index 2. expected 77, actual 78"
+        # Index 2 usually corresponds to the sequence length in [Batch, Seq, Hidden].
+        
+        # Input 1: Sequence length 77
+        input_tensor_77 = tf.random.normal([batch_size, 77, hidden_dim])
+        
+        # Input 2: Sequence length 78
+        input_tensor_78 = tf.random.normal([batch_size, 78, hidden_dim])
+
+        print("Attempting to compile and run with sequence length 77...")
+        try:
+            # tf.compat.v1.tpu.rewrite compiles and executes the computation
+            result_77 = tf.compat.v1.tpu.rewrite(llm_computation, [input_tensor_77])
+            print(f"Success with seq_len 77. Output shape: {result_77.shape}")
+        except Exception as e:
+            print(f"Failed with seq_len 77: {e}")
+
+        print("Attempting to compile and run with sequence length 78...")
+        try:
+            # This call tests the dynamic shape handling that caused the regression in PyTorch
+            result_78 = tf.compat.v1.tpu.rewrite(llm_computation, [input_tensor_78])
+            print(f"Success with seq_len 78. Output shape: {result_78.shape}")
+        except Exception as e:
+            print(f"Failed with seq_len 78: {e}")
+
+if __name__ == "__main__":
+    test_tpu_rewrite_dynamic_shapes()

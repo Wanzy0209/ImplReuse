@@ -1,0 +1,30 @@
+import torch
+import tensorflow as tf
+
+# Adapt the logic of passing an extremely large integer value to a parameter.
+# Original bug: torch.nn.LazyConv1d with padding=9223372036854775803
+# Target API: tf.compat.v1.tpu.CrossShardOptimizer
+# Mapping: The 'group_assignment' parameter expects a 2D list of int32s. 
+# Passing a value larger than int32 max (similar to the padding overflow) 
+# tests the API's robustness against extreme integer inputs.
+
+extreme_value = 9223372036854775803
+
+# Create a standard optimizer to be wrapped
+base_optimizer = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=0.01)
+
+try:
+    # Attempt to instantiate CrossShardOptimizer with the extreme value
+    # injected into the group_assignment parameter.
+    tpu_optimizer = tf.compat.v1.tpu.CrossShardOptimizer(
+        opt=base_optimizer,
+        group_assignment=[[extreme_value]]
+    )
+    
+    # If the API handles the value gracefully, it might raise a ValueError 
+    # or truncate it. If it mimics the PyTorch bug, it might crash.
+    print("CrossShardOptimizer instantiated successfully.")
+
+except Exception as e:
+    # Output the error to verify behavior (e.g., clean error vs crash)
+    print(f"Exception caught during instantiation: {type(e).__name__}: {e}")

@@ -1,0 +1,69 @@
+import os
+import tensorflow as tf
+import numpy as np
+
+def test_csv_logger_append_behavior():
+    """
+    Adapted test case for tf.keras.callbacks.CSVLogger based on the 
+    PyTorch jagged tensor stack/cat bug (Issue 161812).
+    
+    The original bug involved concatenating/stacking tensors along dimension 0.
+    In the context of CSVLogger, this maps to appending new log entries (rows)
+    to an existing file, which is the equivalent of concatenating data along
+    the first dimension.
+    """
+    
+    # Setup dummy data and model
+    filename = 'test_log.csv'
+    # Clean up if file exists from previous runs
+    if os.path.exists(filename):
+        os.remove(filename)
+
+    x_train = np.random.random((10, 2))
+    y_train = np.random.randint(2, size=(10, 1))
+    
+    model = tf.keras.models.Sequential([
+        tf.keras.layers.Dense(1, activation='sigmoid')
+    ])
+    model.compile(optimizer='adam', loss='binary_crossentropy')
+
+    # 1. Initial logging (mimicking the first tensor)
+    # The PyTorch bug occurred when relying on default arguments (dim=0).
+    # CSVLogger has defaults for separator and append.
+    csv_logger = tf.keras.callbacks.CSVLogger(filename)
+    
+    try:
+        model.fit(x_train, y_train, epochs=1, callbacks=[csv_logger], verbose=0)
+    except Exception as e:
+        print(f"Failed during initial logging: {e}")
+        raise
+
+    # 2. Appending data (mimicking th.cat([x, x]) or stacking)
+    # This corresponds to concatenating results along the time/epoch dimension.
+    csv_logger_append = tf.keras.callbacks.CSVLogger(filename, append=True)
+    
+    try:
+        model.fit(x_train, y_train, epochs=1, callbacks=[csv_logger_append], verbose=0)
+    except Exception as e:
+        print(f"Failed during append operation: {e}")
+        raise
+
+    # 3. Verification
+    # Check if the file was created and data was appended correctly
+    assert os.path.exists(filename), "Log file was not created"
+    
+    with open(filename, 'r') as f:
+        content = f.read()
+        lines = content.strip().split('\n')
+        
+        # Expect: Header + Epoch 1 data + Epoch 2 data
+        # The PyTorch bug resulted in a crash, so we verify no crash occurred here.
+        assert len(lines) >= 3, f"Expected at least 3 lines (header + 2 epochs), got {len(lines)}"
+        print("CSV Logger test passed. Data appended successfully.")
+
+    # Cleanup
+    if os.path.exists(filename):
+        os.remove(filename)
+
+if __name__ == "__main__":
+    test_csv_logger_append_behavior()

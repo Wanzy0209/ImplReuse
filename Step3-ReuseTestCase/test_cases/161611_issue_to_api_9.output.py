@@ -1,0 +1,106 @@
+import torch
+import pytest
+
+def test_redundant_dtype_conversion_zeros():
+    """
+    Test that demonstrates the bug: redundant .to() call without assignment
+    is ineffective and doesn't change the tensor dtype.
+    
+    This mirrors the original bug in scaled_dot_product_attention docstring
+    where attn_bias.to(query.dtype) was redundant and ineffective.
+    """
+    # Create a tensor with specific dtype
+    query = torch.randn(4, 4, dtype=torch.float32)
+    L, S = 4, 4
+    
+    # Create attn_bias with the same dtype as query
+    attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+    original_dtype = attn_bias.dtype
+    
+    # Perform in-place operation (like masked_fill_)
+    temp_mask = torch.tril(torch.ones(L, S)).bool()
+    attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+    
+    # This is the redundant line from the bug - .to() without assignment
+    # This does NOT change attn_bias in place
+    attn_bias.to(torch.float64)  # Redundant! Result not assigned
+    
+    # Verify dtype hasn't changed (demonstrating the bug)
+    assert attn_bias.dtype == original_dtype, "dtype should not change without assignment"
+    assert attn_bias.dtype == torch.float32, "dtype should remain float32"
+    
+    # Correct way: assign the result
+    attn_bias_converted = attn_bias.to(torch.float64)
+    assert attn_bias_converted.dtype == torch.float64, "assigned result should have new dtype"
+    assert attn_bias.dtype == torch.float32, "original tensor unchanged"
+
+
+def test_redundant_dtype_conversion_log():
+    """
+    Test adapted for torch.log API showing similar redundant operation pattern.
+    
+    The similarity is based on operation chaining and understanding that
+    operations without assignment don't modify the original tensor.
+    """
+    # Create a tensor with specific dtype
+    a = torch.randn(4, 4, dtype=torch.float32)
+    original_dtype = a.dtype
+    
+    # Perform operation (similar to the log pattern from similar API)
+    result = (3 * a).log()
+    
+    # Redundant .to() call without assignment - ineffective
+    result.to(torch.float64)  # Does nothing, result not assigned
+    
+    # Verify dtype hasn't changed
+    assert result.dtype == original_dtype, "dtype should not change without assignment"
+    assert result.dtype == torch.float32, "dtype should remain float32"
+    
+    # Correct way: assign the result
+    result_converted = result.to(torch.float64)
+    assert result_converted.dtype == torch.float64, "assigned result should have new dtype"
+    assert result.dtype == torch.float32, "original tensor unchanged"
+
+
+def test_inplace_vs_out_of_place_operations():
+    """
+    Test demonstrating the difference between in-place operations
+    and operations that return new tensors.
+    """
+    # Test with torch.zeros (original bug context)
+    x = torch.zeros(3, 3, dtype=torch.float32)
+    x_id = id(x)
+    
+    # In-place operation
+    x.fill_(1.0)
+    assert id(x) == x_id, "in-place operation should not change object identity"
+    assert x.dtype == torch.float32, "in-place operation preserves dtype"
+    
+    # Out-of-place operation without assignment
+    x.to(torch.float64)  # Ineffective
+    assert x.dtype == torch.float32, "unassigned .to() doesn't change dtype"
+    
+    # Out-of-place operation with assignment
+    x = x.to(torch.float64)
+    assert x.dtype == torch.float64, "assigned .to() changes dtype"
+    assert id(x) != x_id, "new tensor created"
+    
+    # Test with torch.log (similar API context)
+    y = torch.randn(3, 3, dtype=torch.float32)
+    y_id = id(y)
+    
+    # Log operation returns new tensor
+    log_result = y.log()
+    assert id(log_result) != y_id, "log creates new tensor"
+    assert y.dtype == torch.float32, "original tensor unchanged"
+    
+    # Redundant conversion without assignment
+    log_result.to(torch.float64)
+    assert log_result.dtype == torch.float32, "unassigned .to() doesn't change dtype"
+
+
+if __name__ == "__main__":
+    test_redundant_dtype_conversion_zeros()
+    test_redundant_dtype_conversion_log()
+    test_inplace_vs_out_of_place_operations()
+    print("All tests passed!")

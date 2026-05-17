@@ -1,0 +1,73 @@
+```python
+import tensorflow as tf
+from tensorflow.errors import AbortedError
+
+# Define the compute function (equivalent to torch.nn.functional.linear)
+def compute(x, w):
+    return tf.linalg.matmul(x, w)
+
+# Define the nop function with a check (equivalent to torch._check)
+def nop(x, w):
+    # In TensorFlow, assertions are ops that execute at runtime.
+    # This mimics the torch._check(x.shape[0] == 0) logic.
+    tf.debugging.assert_equal(tf.shape(x)[0], 0, message="Check failed: x.shape[0] != 0")
+    return tf.zeros_like(x)
+
+# Define the chunked compute logic using tf.cond (equivalent to torch.cond)
+def chunked_compute(x, w):
+    sz = tf.shape(x)[0]
+    
+    # Helper to handle dynamic slicing within tf.cond
+    def get_slice(start, end):
+        return x[start:end]
+
+    # Using tf.cond to mimic the control flow
+    out0 = tf.cond(sz > 0, 
+                   lambda: compute(get_slice(0, 2), w), 
+                   lambda: nop(get_slice(0, 2), w))
+    out1 = tf.cond(sz > 2, 
+                   lambda: compute(get_slice(2, 4), w), 
+                   lambda: nop(get_slice(2, 4), w))
+    out2 = tf.cond(sz > 4, 
+                   lambda: compute(get_slice(4, 6), w), 
+                   lambda: nop(get_slice(4, 6), w))
+    out3 = tf.cond(sz > 6, 
+                   lambda: compute(get_slice(6, 8), w), 
+                   lambda: nop(get_slice(6, 8), w))
+    
+    return tf.concat([out0, out1, out2, out3], axis=0)
+
+# Define the Model class
+class Model(tf.Module):
+    def __init__(self):
+        super().__init__()
+        self.w = tf.Variable(tf.random.normal((16, 16)), name='w')
+
+    # Use tf.function to capture the graph (similar to _dynamo_graph_capture_for_export)
+    @tf.function
+    def __call__(self, x):
+        return chunked_compute(x, self.w)
+
+# Test execution
+if __name__ == "__main__":
+    # Setup inputs
+    x = tf.random.normal((4, 16))
+    model = Model()
+
+    try:
+        # Execute the captured graph
+        # With x shape (4, 16), sz=4. 
+        # out0 (sz>0): compute([0:2])
+        # out1 (sz>2): compute([2:4])
+        # out2 (sz>4): nop([4:6]) -> Assertion fails because shape is [2, 16], not 0.
+        mod = model(x)
+        print("Execution successful (unexpected).")
+    except AbortedError as e:
+        # Leveraging the similar API: Catching AbortedError to handle graph execution failures
+        print(f"Caught AbortedError: {e}")
+    except tf.errors.InvalidArgumentError as e:
+        # This is the specific error raised by tf.debugging.assert_equal
+        print(f"Caught InvalidArgumentError (Assertion failed): {e}")
+    except Exception as e:
+        print(f"Caught unexpected exception: {type(e).__name__}: {e}")
+```

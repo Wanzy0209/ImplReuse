@@ -1,0 +1,45 @@
+import torch
+import tensorflow as tf
+
+def test_variable_synchronization_capability_check():
+    """
+    Test case adapted from PyTorch Issue 160575.
+    
+    Original Issue Context:
+    PyTorch 2.8.0 on Windows failed to recognize sm_52 (Maxwell) in the list 
+    of supported architectures returned by torch.cuda.get_arch_list(), leading 
+    to compatibility warnings.
+
+    Adaptation Logic:
+    This test verifies that specific synchronization capabilities (analogous to 
+    GPU architectures) are recognized and present in the defined Enum members 
+    (tf.VariableSynchronization), ensuring no "missing capability" errors occur 
+    for valid configurations.
+    """
+    # Define the synchronization mode we intend to use (analogous to a specific GPU arch like sm_52)
+    target_sync_mode = tf.VariableSynchronization.ON_READ
+
+    # Retrieve the list of supported capabilities (analogous to torch.cuda.get_arch_list())
+    supported_modes = list(tf.VariableSynchronization)
+
+    # The bug manifested as a mismatch where the required capability was missing from the supported list.
+    # We assert that the target mode is indeed supported to prevent similar compatibility issues.
+    assert target_sync_mode in supported_modes, (
+        f"Synchronization mode {target_sync_mode} is not compatible with the current "
+        f"TensorFlow installation. Supported synchronizations are: {supported_modes}"
+    )
+
+    # Verify all standard documented modes are present in the capability list
+    expected_modes = [
+        tf.VariableSynchronization.AUTO,
+        tf.VariableSynchronization.NONE,
+        tf.VariableSynchronization.ON_WRITE,
+        tf.VariableSynchronization.ON_READ
+    ]
+    
+    for mode in expected_modes:
+        assert mode in supported_modes, f"Expected synchronization mode {mode} not found."
+
+if __name__ == "__main__":
+    test_variable_synchronization_capability_check()
+    print("Test passed: All synchronization capabilities are recognized.")

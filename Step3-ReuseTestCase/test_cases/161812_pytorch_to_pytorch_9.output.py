@@ -1,0 +1,16 @@
+import torch as th
+
+# Setup: Create a jagged nested tensor similar to the bug report
+x = th.nested.nested_tensor([th.ones(3, 2, 3), th.ones(4, 2, 3)], layout=th.jagged)
+
+# Setup: Create an index tensor compatible with the jagged structure
+# torch.gather requires the index to have the same shape as the input and be of type long.
+index = th.nested.nested_tensor([th.zeros(3, 2, 3, dtype=th.long), th.zeros(4, 2, 3, dtype=th.long)], layout=th.jagged)
+
+# Test: Call the similar API (torch.gather) based on the provided code snippet
+# The provided code snippet matches the signature of torch.gather(x, dim, index)
+try:
+    result = th.gather(x, dim=0, index=index)
+    print("Test passed.")
+except Exception as e:
+    print(f"Test failed with error: {e}")

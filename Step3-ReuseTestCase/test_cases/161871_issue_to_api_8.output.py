@@ -1,0 +1,43 @@
+import torch
+import tensorflow as tf
+
+# Test case for tf.keras.activations.serialize
+# This test case adapts the argument unpacking pattern observed in the
+# torch.Tensor.mvlgamma_ bug report (Issue ID: 161871).
+# The original bug involved calling a function with *args and **kwargs
+# derived from a list/dict structure. We preserve this logic here.
+
+print("TensorFlow version:", tf.__version__)
+
+# Mimic the input preparation logic:
+# Original: tensor = torch.randint(low=0, high=10, size=(5,), dtype=torch.int64)
+# Here we use a list of activation functions to represent the "data" to be processed.
+activations = [
+    tf.keras.activations.relu,
+    tf.keras.activations.sigmoid,
+    tf.keras.activations.softmax,
+    tf.keras.activations.tanh,
+    tf.keras.activations.linear
+]
+
+# Iterate over the activations similar to how the tensor elements are processed
+for activation in activations:
+    # Mimic the input structure: [[args], {kwargs}]
+    # Original: input = [[tensor, 1024], {}]
+    # Adapted: We pass the activation function. Note that serialize takes only one argument,
+    # so we omit the second integer argument found in the original bug to match the target API signature.
+    input_args = [activation]
+    input_kwargs = {}
+
+    # Mimic the call pattern: torch.Tensor.mvlgamma_(*input[0], **input[1])
+    # We use the unpacking syntax to call the similar API.
+    try:
+        result = tf.keras.activations.serialize(*input_args, **input_kwargs)
+        print(f"Serialized {activation.__name__}: {result}")
+        # Basic assertion to ensure the API returns the expected type (string)
+        assert isinstance(result, str), f"Expected string result for {activation.__name__}, got {type(result)}"
+    except Exception as e:
+        print(f"Error during serialization of {activation.__name__}: {e}")
+        raise
+
+print("Test completed successfully.")

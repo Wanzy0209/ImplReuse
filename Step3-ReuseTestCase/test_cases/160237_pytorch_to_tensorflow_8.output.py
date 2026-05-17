@@ -1,0 +1,70 @@
+import tensorflow as tf
+import numpy as np
+
+def test_parse_example():
+    """
+    Test case for tf.compat.v1.parse_example.
+    
+    This test is adapted from a PyTorch bug report regarding 'aten::grid_sampler_3d' 
+    not being implemented for the MPS device. The core logic involves verifying 
+    that the operator executes correctly on the available hardware context.
+    
+    For tf.compat.v1.parse_example, which is a data parsing operation typically 
+    bound to the CPU, we verify that the operation parses serialized examples 
+    into the expected tensor dictionaries without raising implementation errors.
+    """
+    
+    # Disable eager execution to use tf.compat.v1.Session as implied by the API name
+    tf.compat.v1.disable_eager_execution()
+
+    # 1. Setup: Create dummy serialized data (mimicking input tensors)
+    # We create a batch of 2 serialized Example protos.
+    raw_data = [
+        tf.train.Example(features=tf.train.Features(feature={
+            'image_data': tf.train.Feature(float_list=tf.train.FloatList(value=[1.0, 2.0, 3.0])),
+            'label': tf.train.Feature(int64_list=tf.train.Int64List(value=[10])),
+        })).SerializeToString(),
+        tf.train.Example(features=tf.train.Features(feature={
+            'image_data': tf.train.Feature(float_list=tf.train.FloatList(value=[4.0, 5.0, 6.0])),
+            'label': tf.train.Feature(int64_list=tf.train.Int64List(value=[20])),
+        })).SerializeToString()
+    ]
+
+    # 2. Configuration: Define the expected features (mimicking grid/mode arguments)
+    feature_spec = {
+        'image_data': tf.io.VarLenFeature(tf.float32),
+        'label': tf.io.FixedLenFeature([], tf.int64, default_value=0),
+    }
+
+    # 3. Execution: Call the API
+    # The original bug involved a NotImplementedError on a specific device (MPS).
+    # parse_example is generally a CPU operation. We explicitly place it on CPU
+    # to ensure stability and verify implementation availability.
+    with tf.compat.v1.Session() as sess:
+        with tf.device("/CPU:0"):
+            serialized_input = tf.constant(raw_data, dtype=tf.string)
+            
+            # This is the API under test
+            parsed_output = tf.compat.v1.parse_example(serialized_input, feature_spec)
+            
+            # Run the graph
+            result = sess.run(parsed_output)
+
+    # 4. Verification: Assert outputs match expectations
+    assert 'image_data' in result, "Missing 'image_data' in output"
+    assert 'label' in result, "Missing 'label' in output"
+
+    # Check parsed values
+    # VarLenFeature returns a SparseTensorValue (indices, values, shape)
+    expected_image_values = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], dtype=np.float32)
+    assert np.array_equal(result['image_data'].values, expected_image_values), \
+        f"Image data mismatch. Expected {expected_image_values}, got {result['image_data'].values}"
+    
+    expected_labels = np.array([10, 20], dtype=np.int64)
+    assert np.array_equal(result['label'], expected_labels), \
+        f"Label mismatch. Expected {expected_labels}, got {result['label']}"
+
+    print("Test passed: tf.compat.v1.parse_example executed successfully on CPU.")
+
+if __name__ == "__main__":
+    test_parse_example()

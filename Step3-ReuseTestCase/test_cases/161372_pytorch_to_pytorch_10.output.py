@@ -1,0 +1,66 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Define a function that uses torch.distributed.gather_object
+    # We will compile this function to test for regressions similar to the original issue
+    def gather_wrapper(tensor_input):
+        # Prepare the output list only on the destination rank (rank 0)
+        if rank == 0:
+            output_list = [None] * world_size
+        else:
+            output_list = None
+        
+        # Call the similar API
+        dist.gather_object(tensor_input, output_list, dst=0)
+        
+        return output_list
+
+    # Compile the wrapper using torch.compile
+    # This mirrors the original bug report where torch.compile was involved
+    compiled_gather = torch.compile(gather_wrapper)
+
+    # Test Case 1: Input tensor with size 77 (mimicking the 'expected 77' in the bug report)
+    tensor_77 = torch.randn(1, 77)
+    result_77 = compiled_gather(tensor_77)
+    
+    if rank == 0:
+        # Verify that the gathered object matches the input shape
+        assert result_77 is not None
+        assert len(result_77) == world_size
+        # Check the shape of the gathered tensor from rank 0
+        assert result_77[0].shape == (1, 77), f"Expected shape (1, 77), got {result_77[0].shape}"
+        print(f"Rank {rank}: Test 1 passed (Size 77).")
+
+    # Test Case 2: Input tensor with size 78 (mimicking the 'actual 78' in the bug report)
+    # This change in dynamic shape might trigger recompilation or errors if the regression exists
+    tensor_78 = torch.randn(1, 78)
+    result_78 = compiled_gather(tensor_78)
+
+    if rank == 0:
+        # Verify that the gathered object matches the new input shape
+        assert result_78 is not None
+        assert len(result_78) == world_size
+        # Check the shape of the gathered tensor from rank 0
+        assert result_78[0].shape == (1, 78), f"Expected shape (1, 78), got {result_78[0].shape}"
+        print(f"Rank {rank}: Test 2 passed (Size 78).")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Start multiprocessing for distributed simulation
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

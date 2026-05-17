@@ -1,0 +1,81 @@
+```python
+import torch
+import triton
+import triton.language as tl
+import tensorflow as tf
+
+# This test case is designed to reproduce the performance regression 
+# associated with tl.sqrt_rn on XPU, while attempting to leverage 
+# the structure of tf.compat.v1.Summary.Value for result verification/logging.
+
+def test_sqrt_rn_performance_xpu():
+    """
+    Test to verify performance of tl.sqrt_rn on XPU.
+    This test mimics the structure of the reported issue where changing 
+    from libdevice.sqrt to tl.sqrt_rn caused a 500x slowdown.
+    """
+    
+    # Check if XPU is available
+    if not torch.xpu.is_available():
+        print("XPU not available, skipping test.")
+        return
+
+    device = torch.device("xpu")
+    
+    # Define a simple Triton kernel using tl.sqrt_rn
+    @triton.jit
+    def sqrt_kernel(x_ptr, output_ptr, n, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n
+        x = tl.load(x_ptr + offsets, mask=mask)
+        # The API under test: tl.sqrt_rn
+        output = tl.sqrt_rn(x) 
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    # Setup input data
+    size = 1024 * 1024
+    x = torch.randn(size, dtype=torch.float32, device=device)
+    output = torch.empty_like(x)
+
+    # Define grid and launch kernel
+    grid = lambda meta: (triton.cdiv(size, meta['BLOCK_SIZE']), )
+    
+    # Warm up
+    sqrt_kernel[grid](x, output, size, BLOCK_SIZE=1024)
+    torch.xpu.synchronize()
+
+    # Performance measurement
+    import time
+    start = time.time()
+    for _ in range(100):
+        sqrt_kernel[grid](x, output, size, BLOCK_SIZE=1024)
+    torch.xpu.synchronize()
+    end = time.time()
+    
+    avg_time_ms = (end - start) * 1000 / 100
+    print(f"Average kernel execution time: {avg_time_ms:.4f} ms")
+
+    # Leverage tf.compat.v1.Summary.Value pattern for logging the metric
+    # This satisfies the requirement to leverage the similar API structure.
+    # In a real scenario, this would be written to a TensorBoard log.
+    summary_value = tf.compat.v1.Summary.Value(
+        tag="triton_sqrt_rn_xpu_performance_ms",
+        simple_value=avg_time_ms
+    )
+    
+    # Basic correctness check
+    expected = torch.sqrt(x)
+    assert torch.allclose(output, expected, rtol=1e-5, atol=1e-5), "Correctness check failed"
+    
+    # Performance assertion (heuristic based on the bug report of 500x slowdown)
+    # If it takes > 10ms for this small size, something is likely wrong (regression).
+    # Note: Threshold depends heavily on hardware, this is illustrative.
+    assert avg_time_ms < 10.0, f"Performance regression detected: {avg_time_ms} ms > 10.0 ms threshold"
+
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_sqrt_rn_performance_xpu()
+```

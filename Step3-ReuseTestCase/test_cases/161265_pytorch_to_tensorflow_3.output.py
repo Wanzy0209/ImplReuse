@@ -1,0 +1,50 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_large_tensor_conversion():
+    """
+    Adapted test case for Issue 161265: [MPS] On MacOS-26 torch.full fails for 4+Gb tensors.
+    
+    This test verifies if tf.compat.v1.convert_to_tensor can handle large tensors (>4GB)
+    without data corruption, similar to the reported issue with torch.ones/torch.full.
+    """
+    
+    # Check for GPU availability (MPS on macOS maps to /GPU:0 in TensorFlow)
+    gpus = tf.config.list_physical_devices('GPU')
+    device_name = '/GPU:0' if gpus else '/CPU:0'
+    
+    print(f"Running test on device: {device_name}")
+
+    with tf.device(device_name):
+        # Define shape to exceed 4GB: 2 * (2^31 + 5) bytes
+        # PyTorch used int8, so we use np.int8 (1 byte per element)
+        shape = (2, (1 << 31) + 5)
+        
+        print(f"Allocating numpy array of shape {shape} (approx 4GB+). This may take a moment...")
+        
+        # Create a large numpy array filled with ones
+        # Note: This requires sufficient system RAM to hold the array before conversion
+        np_array = np.ones(shape, dtype=np.int8)
+        
+        # Convert to TensorFlow tensor using the specified API
+        # This tests the data integrity during the conversion/copy process
+        tensor = tf.compat.v1.convert_to_tensor(np_array)
+        
+        # Verify specific indices as in the original bug report
+        # Original bug: a[1, -2] returned 0 instead of 1
+        val_single = tensor[1, -2]
+        val_slice = tensor[:, -2]
+        
+        print(f"Value at [1, -2]: {val_single.numpy()}")
+        print(f"Values at [:, -2]: {val_slice.numpy()}")
+        
+        # Assertions to check for the corruption bug
+        # The bug in PyTorch resulted in 0 instead of 1 for large tensors
+        assert val_single.numpy() == 1, f"Expected 1, got {val_single.numpy()}. Data corruption detected."
+        assert np.all(val_slice.numpy() == 1), f"Expected [1, 1], got {val_slice.numpy()}. Data corruption detected."
+        
+        print("Test passed: Large tensor conversion handled correctly.")
+
+if __name__ == "__main__":
+    test_large_tensor_conversion()

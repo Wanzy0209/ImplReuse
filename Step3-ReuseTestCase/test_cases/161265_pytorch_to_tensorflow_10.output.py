@@ -1,0 +1,57 @@
+import torch
+import tensorflow as tf
+import os
+import tempfile
+
+# Disable eager execution to use Session-based logic required by match_filenames_once
+tf.compat.v1.disable_eager_execution()
+
+def test_match_filenames_once_large():
+    """
+    Adapted test case for tf.io.match_filenames_once based on PyTorch torch.full issue.
+    
+    Original Issue: torch.full fails to correctly fill tensors larger than 4GB on MPS,
+    specifically leaving elements at the end of the buffer (tail) uninitialized (0).
+    
+    Adaptation: This test verifies that match_filenames_once correctly handles a large
+    number of files (simulating a large buffer) and does not truncate or miss files
+    at the end of the list.
+    """
+    # Create a temporary directory to simulate a large dataset
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create a large number of files to stress the internal buffer handling
+        # (Adapting the "4+Gb tensor" logic to "large file list")
+        num_files = 5000
+        for i in range(num_files):
+            open(os.path.join(tmpdir, f"file_{i}.txt"), 'w').close()
+
+        pattern = os.path.join(tmpdir, "*.txt")
+
+        # Call the API
+        # This creates a Variable initialized with the list of matching files
+        filenames_var = tf.io.match_filenames_once(pattern)
+
+        with tf.compat.v1.Session() as sess:
+            # Initialize the variable
+            sess.run(tf.compat.v1.variables_initializer([filenames_var]))
+            result = sess.run(filenames_var)
+
+            # Verify the total count
+            assert len(result) == num_files, \
+                f"Expected {num_files} files, but got {len(result)}"
+
+            # Verify specific "tail" indices to check for buffer truncation/corruption
+            # Mirroring the PyTorch check: a[1, -2] and a[:, -2]
+            # We check the last file and the second to last file
+            expected_last = os.path.join(tmpdir, f"file_{num_files - 1}.txt")
+            expected_second_last = os.path.join(tmpdir, f"file_{num_files - 2}.txt")
+
+            assert result[-1] == expected_last, \
+                f"Last file mismatch: {result[-1]} != {expected_last}"
+            assert result[-2] == expected_second_last, \
+                f"Second to last file mismatch: {result[-2]} != {expected_second_last}"
+
+            print("Test passed: Large file list handled correctly.")
+
+if __name__ == "__main__":
+    test_match_filenames_once_large()

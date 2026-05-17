@@ -1,0 +1,31 @@
+import torch
+import torch.nn as nn
+
+# The original bug report involves tensors of shape [5, 3] and results in [5, 0]
+# due to negative padding. We test MSELoss with these specific shapes to ensure
+# it handles the edge cases gracefully.
+
+def test_mseloss_with_edge_case_shapes():
+    # Case 1: Normal shape [5, 3] from the bug report
+    input_1 = torch.ones([5, 3])
+    target_1 = torch.ones([5, 3])
+    
+    loss_fn = nn.MSELoss()
+    output_1 = loss_fn(input_1, target_1)
+    
+    # Assert the loss is 0 for identical tensors
+    assert torch.isclose(output_1, torch.tensor(0.0))
+    
+    # Case 2: Edge case shape [5, 0] (result of the padding operation in the bug)
+    # This tests if MSELoss handles tensors with zero dimensions correctly
+    input_2 = torch.ones([5, 0])
+    target_2 = torch.ones([5, 0])
+    
+    output_2 = loss_fn(input_2, target_2)
+    
+    # Assert the loss is 0 for identical empty tensors
+    assert torch.isclose(output_2, torch.tensor(0.0))
+
+if __name__ == "__main__":
+    test_mseloss_with_edge_case_shapes()
+    print("Test passed.")

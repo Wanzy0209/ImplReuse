@@ -1,0 +1,33 @@
+import tensorflow as tf
+
+# Enable eager execution as requested by the similar API
+tf.compat.v1.enable_eager_execution()
+
+def foo(x):
+    # Create a uint8 tensor similar to the PyTorch code
+    c = tf.constant(7, dtype=tf.uint8)
+    
+    # Perform the operations: addition, negation, and negation + addition
+    # Note: TensorFlow's type promotion for negation of uint8 typically casts to int32,
+    # whereas PyTorch eager might wrap around. This test verifies TF's behavior.
+    return c + x, tf.negative(c), tf.negative(c) + x
+
+# Set seed for reproducibility
+tf.random.set_seed(0)
+
+# Create input tensor
+x = tf.random.normal((2, 2), dtype=tf.float32)
+
+print(f"input: {x}")
+
+# Execute the function
+res = foo(x)
+
+print(f"res[0] (c+x): {res[0]}")
+print(f"res[1] (neg(c)): {res[1]}")
+print(f"res[2] (neg(c)+x): {res[2]}")
+
+# Basic assertion to ensure operations run without error
+assert res[0].shape == (2, 2)
+assert res[1].dtype == tf.int32 # TF promotes uint8 negation to int32
+assert res[2].shape == (2, 2)

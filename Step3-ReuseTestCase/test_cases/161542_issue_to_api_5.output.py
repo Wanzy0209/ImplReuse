@@ -1,0 +1,47 @@
+import torch
+import unittest
+
+class TestDynamoCodegenWithSimilarAPI(unittest.TestCase):
+    def test_local_cell_name_collision(self):
+        """
+        Test case for Issue 161542: Codegen error when Python code has local and cell with same name.
+        This test leverages torch.backends.cpu.get_cpu_capability to influence the control flow,
+        preserving the original bug reproduction logic involving variable name collision.
+        """
+        
+        # Setup data
+        keys = range(10)
+        
+        # Use the similar API to determine the allowed keys dynamically
+        # This integrates torch.backends.cpu.get_cpu_capability into the test logic
+        cpu_cap = torch.backends.cpu.get_cpu_capability()
+        allowed = [0, 1, 2, 3] if cpu_cap == "DEFAULT" else [4, 5, 6, 7]
+
+        def fn(x):
+            x = x + 1
+            
+            # The graph break is essential to trigger the specific bytecode path in the bug report
+            torch._dynamo.graph_break()
+            
+            # The problematic pattern: 'key' is assigned via list comprehension (local),
+            # but 'nonlocal key' in the inner function forces it to be a cell variable.
+            # Dynamo's bytecode transformation fails to handle this name collision correctly.
+            key = [key for key in keys if key in allowed]
+
+            def inner():
+                nonlocal key
+
+            return x + key[0]
+
+        # Execute the compiled function
+        # If the bug is present, this will raise torch._dynamo.exc.InternalTorchDynamoError
+        # If the bug is fixed, it should execute successfully.
+        try:
+            result = torch.compile(fn, backend="eager")(torch.ones(3))
+            # Basic assertion to verify execution
+            self.assertIsNotNone(result)
+        except Exception as e:
+            self.fail(f"torch.compile failed with InternalTorchDynamoError: {e}")
+
+if __name__ == "__main__":
+    unittest.main()

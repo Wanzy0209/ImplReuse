@@ -1,0 +1,18 @@
+import tensorflow as tf
+
+def test_triu():
+    # Create a 2D tensor (analogous to x in the PyTorch test)
+    m = tf.ones([2, 3])
+    
+    # Create a scalar tensor (0-dimensional) for the offset k
+    # This mimics the scalar index tensor in the PyTorch bug report
+    k = tf.constant(1)
+    
+    try:
+        output = tf.keras.ops.triu(m, k=k)
+        print(f"triu test succeeds. output shape: {output.shape}")
+    except Exception as e:
+        print(f"triu test fails: {e}")
+
+if __name__ == "__main__":
+    test_triu()

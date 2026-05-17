@@ -1,0 +1,53 @@
+import torch
+import unittest
+
+class TestMPSAvgPool2dConsistency(unittest.TestCase):
+    """
+    Test case to verify the consistency of torch.nn.AvgPool2d outputs
+    between CPU and MPS backends, specifically addressing the bug
+    where divisor_override and ceil_mode produce incorrect results on MPS.
+    """
+
+    def test_avgpool2d_mps_cpu_divisor_override(self):
+        # Skip test if MPS is not available
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS backend is not available")
+
+        # Set seed for reproducibility as per the bug report
+        torch.manual_seed(0)
+
+        # Initialize the model with the specific parameters that triggered the bug
+        # kernel_size=[1, 6], stride=[4, 9], ceil_mode=True, divisor_override=3
+        model = torch.nn.AvgPool2d(
+            kernel_size=[1, 6], 
+            stride=[4, 9], 
+            ceil_mode=True, 
+            divisor_override=3
+        )
+
+        # Create input tensor (Channels, Height, Width) matching the bug report
+        x = torch.randn(4, 6, 7)
+
+        # Compute output on CPU
+        out_cpu = model(x)
+
+        # Compute output on MPS
+        x_mps = x.to("mps")
+        out_mps = model(x_mps)
+
+        # Check if outputs match within a reasonable tolerance
+        # The bug report shows specific values becoming 0.0 on MPS (e.g., -0.1559 -> 0.0000)
+        # We use atol=1e-2 and rtol=1e-2 as specified in the original issue
+        match = torch.allclose(out_cpu, out_mps.cpu(), atol=1e-2, rtol=1e-2)
+
+        if not match:
+            # Print details for debugging if the test fails
+            print("Output does not match!")
+            print("CPU Output:\n", out_cpu)
+            print("MPS Output:\n", out_mps.cpu())
+
+        self.assertTrue(match, 
+            f"MPS and CPU outputs do not match.\nCPU:\n{out_cpu}\nMPS:\n{out_mps.cpu()}")
+
+if __name__ == '__main__':
+    unittest.main()

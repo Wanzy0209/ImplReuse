@@ -1,0 +1,53 @@
+import torch
+import torch.onnx
+import io
+
+def test_onnx_export_with_none_output():
+    """
+    Test case for Issue #160150: ONNX Exporter crashes when fx node output includes None.
+    
+    This test reproduces the scenario where a model returns a tuple containing None.
+    It leverages torch.backends.cuda.is_built to determine the appropriate device 
+    for the test execution.
+    """
+    
+    # Define a model that mimics the bug scenario: returning a tuple with None
+    class ModelWithNoneOutput(torch.nn.Module):
+        def forward(self, x):
+            # Reproduce logic: return (output, image_tokens_masks) where image_tokens_masks is None
+            return (x, None)
+
+    # Leverage the similar API: torch.backends.cuda.is_built
+    # We reuse this API to check for CUDA availability and set the device accordingly.
+    if torch.backends.cuda.is_built():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+
+    model = ModelWithNoneOutput().to(device)
+    dummy_input = torch.randn(1, 10, device=device)
+
+    # Prepare an in-memory buffer for the ONNX export
+    onnx_buffer = io.BytesIO()
+
+    # The bug occurs here: the exporter crashes when encountering None in the output tuple.
+    # We expect this to succeed (or handle the None gracefully) in a fixed version.
+    try:
+        torch.onnx.export(
+            model,
+            dummy_input,
+            onnx_buffer,
+            opset_version=17,  # Use a recent opset version
+            input_names=['input'],
+            output_names=['output', 'none_mask']
+        )
+        print("Export succeeded.")
+    except Exception as e:
+        print(f"Export failed (reproducing bug): {e}")
+        raise
+
+    # Basic assertion to ensure the buffer was populated
+    assert onnx_buffer.getvalue() != b"", "ONNX buffer should not be empty"
+
+if __name__ == "__main__":
+    test_onnx_export_with_none_output()

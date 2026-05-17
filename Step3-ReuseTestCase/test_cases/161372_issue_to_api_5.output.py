@@ -1,0 +1,83 @@
+import torch
+import torch.nn as nn
+import warnings
+
+def should_update_cache(cache_tensor, target_len):
+    """
+    Determines if the cache tensor needs to be updated based on the target length.
+    This mirrors the logic of tf.summary.should_record_summaries by checking
+    internal state (cache size) against a condition (target length).
+    """
+    return cache_tensor.shape[2] != target_len
+
+class CacheContainer:
+    """Mimics the nested cache structure mentioned in the bug report."""
+    def __init__(self):
+        # Initialize with a dummy tensor
+        self.cache = [[torch.zeros(1, 1, 1)]]
+
+class SimpleLLM(nn.Module):
+    """
+    A minimal model reproducing the LLM cache behavior that caused the regression.
+    """
+    def __init__(self):
+        super().__init__()
+        self.cache = CacheContainer()
+
+    def forward(self, x):
+        # Retrieve the current cache tensor
+        cache_tensor = self.cache.cache[0][0]
+        target_len = x.shape[1]
+
+        # Check if we need to update the cache (similar to checking if summaries should be recorded)
+        if should_update_cache(cache_tensor, target_len):
+            # Update the cache size. 
+            # In the bug report, this mutation caused 'size mismatch' errors in torch.compile
+            self.cache.cache[0][0] = torch.zeros(1, 1, target_len)
+            cache_tensor = self.cache.cache[0][0]
+
+        # Perform an operation involving the cache.
+        # The bug report trace shows torch.where being used.
+        mask = torch.ones_like(x, dtype=torch.bool)
+        # r = torch.where(mask, value, a)
+        return torch.where(mask, x, cache_tensor)
+
+def test_torch_compile_dynamic_cache_regression():
+    """
+    Test case for Issue 161372: torch.compile regression in 2.8.0.
+    
+    Verifies that torch.compile can handle models with dynamic tensor shapes
+    stored in nested container attributes without hitting the recompilation limit.
+    """
+    model = SimpleLLM()
+    
+    # Compile the model. 
+    # In the buggy version (2.8.0), this would fail with:
+    # "torch._dynamo hit config.recompile_limit (8)"
+    # "tensor 'cache.cache[0][0]' size mismatch at index 2. expected 77, actual 78"
+    compiled_model = torch.compile(model)
+    
+    # Ignore unrelated warnings from the environment (like record_context_cpp)
+    warnings.filterwarnings("ignore", message=".*record_context_cpp.*")
+
+    # 1. Run with sequence length 77
+    input_77 = torch.randn(1, 1, 77)
+    output_77 = compiled_model(input_77)
+    assert output_77.shape == (1, 1, 77), "Output shape mismatch for seq_len 77"
+
+    # 2. Run with sequence length 78
+    # This specific change triggered the size mismatch error in the bug report
+    input_78 = torch.randn(1, 1, 78)
+    output_78 = compiled_model(input_78)
+    assert output_78.shape == (1, 1, 78), "Output shape mismatch for seq_len 78"
+
+    # 3. Run with a few more increasing sizes to ensure we don't hit the recompile limit (default is 8)
+    for i in range(79, 85):
+        inp = torch.randn(1, 1, i)
+        out = compiled_model(inp)
+        assert out.shape == (1, 1, i), f"Output shape mismatch for seq_len {i}"
+
+    print("Test passed: torch.compile handled dynamic cache sizes correctly.")
+
+if __name__ == "__main__":
+    test_torch_compile_dynamic_cache_regression()

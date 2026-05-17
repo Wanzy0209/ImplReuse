@@ -1,0 +1,33 @@
+import tensorflow as tf
+import torch
+
+# This test case adapts the PyTorch regression logic to TensorFlow's DTensor API.
+# The original bug involves a runtime error during compilation/execution with specific tensor operations.
+# Here, we verify that `tf.experimental.dtensor.copy_to_mesh` handles tensor copying and layout correctly.
+
+def test_dtensor_copy_to_mesh_regression():
+    # Define a simple mesh for DTensor
+    mesh = tf.experimental.dtensor.Mesh(
+        ['x', 'y'],
+        [tf.config.experimental.get_visible_devices('GPU')[0]]  # Assuming GPU availability
+    )
+    
+    # Create a layout (replicated for simplicity)
+    layout = tf.experimental.dtensor.Layout.replicated(mesh, rank=2)
+    
+    # Create a regular TensorFlow tensor
+    tensor = tf.random.normal(shape=(4, 10), dtype=tf.float32)
+    
+    # Use copy_to_mesh to move the tensor to the DTensor device with the specified layout
+    try:
+        dtensor = tf.experimental.dtensor.copy_to_mesh(tensor, layout)
+        # Verify the shape and dtype are preserved
+        assert dtensor.shape == tensor.shape, f"Shape mismatch: {dtensor.shape} vs {tensor.shape}"
+        assert dtensor.dtype == tensor.dtype, f"Dtype mismatch: {dtensor.dtype} vs {tensor.dtype}"
+        print("Test passed: copy_to_mesh works as expected.")
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_dtensor_copy_to_mesh_regression()

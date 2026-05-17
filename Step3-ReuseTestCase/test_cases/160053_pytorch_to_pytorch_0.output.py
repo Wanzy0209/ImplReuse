@@ -1,0 +1,46 @@
+import torch
+import torch.nn.functional as F
+
+def test_pad_circular_high_dim():
+    """
+    Test case based on Issue 160053.
+    Verifies that torch.nn.functional.pad with mode='circular' works 
+    for 4D and 5D inputs, as implied by the error message.
+    """
+    
+    # Test Case 1: 4D input (from the original bug report)
+    # Input shape: (2, 2, 2, 2), Pad: (1, 1) on the last dimension
+    input_4d = torch.empty(2, 2, 2, 2)
+    try:
+        output_4d = F.pad(input_4d, (1, 1), mode="circular")
+        # Expected shape: (2, 2, 2, 2 + 1 + 1) = (2, 2, 2, 4)
+        assert output_4d.shape == (2, 2, 2, 4), f"4D Test Failed: Expected shape (2, 2, 2, 4), got {output_4d.shape}"
+    except NotImplementedError as e:
+        print(f"4D Test Failed with NotImplementedError: {e}")
+        raise
+
+    # Test Case 2: 5D input (mentioned in the issue title)
+    # Input shape: (2, 2, 2, 2, 2), Pad: (1, 1) on the last dimension
+    input_5d = torch.empty(2, 2, 2, 2, 2)
+    try:
+        output_5d = F.pad(input_5d, (1, 1), mode="circular")
+        # Expected shape: (2, 2, 2, 2, 2 + 1 + 1) = (2, 2, 2, 2, 4)
+        assert output_5d.shape == (2, 2, 2, 2, 4), f"5D Test Failed: Expected shape (2, 2, 2, 2, 4), got {output_5d.shape}"
+    except NotImplementedError as e:
+        print(f"5D Test Failed with NotImplementedError: {e}")
+        raise
+
+    # Test Case 3: 4D input padding last 2 dimensions
+    # Input shape: (2, 2, 2, 2), Pad: (1, 1, 1, 1) on the last two dimensions
+    try:
+        output_4d_2dim = F.pad(input_4d, (1, 1, 1, 1), mode="circular")
+        # Expected shape: (2, 2, 2+1+1, 2+1+1) = (2, 2, 4, 4)
+        assert output_4d_2dim.shape == (2, 2, 4, 4), f"4D (2-dim pad) Test Failed: Expected shape (2, 2, 4, 4), got {output_4d_2dim.shape}"
+    except NotImplementedError as e:
+        print(f"4D (2-dim pad) Test Failed with NotImplementedError: {e}")
+        raise
+
+    print("All circular padding tests for 4D and 5D inputs passed.")
+
+if __name__ == "__main__":
+    test_pad_circular_high_dim()

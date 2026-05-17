@@ -1,0 +1,58 @@
+import torch
+import triton
+import triton.language as tl
+from torch.library import wrap_triton
+
+# Replicate the configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+# Define a simple Triton kernel (element-wise addition)
+@triton.jit
+def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+# Wrap the Triton kernel to make it traceable
+wrapped_add = wrap_triton(add_kernel)
+
+# Define a custom op using the wrapped kernel
+def triton_add(x, y):
+    # Define grid
+    grid = lambda meta: (triton.cdiv(x.numel(), meta['BLOCK_SIZE']),)
+    # Allocate output
+    output = torch.empty_like(x)
+    # Call the wrapped kernel
+    wrapped_add(x, y, output, x.numel(), BLOCK_SIZE=1024, grid=grid)
+    return output
+
+# Register the custom op
+torch.library.define("test_ns::add", "(Tensor x, Tensor y) -> Tensor")
+torch.library.impl("test_ns::add", triton_add)
+
+# Test function mirroring the bug report's logic:
+# 1. Call an op (nonzero in bug, custom triton op here)
+# 2. Slice the result
+def f(x, y):
+    res = torch.ops.test_ns.add(x, y)
+    return res[:-1]
+
+# Execute test
+if __name__ == "__main__":
+    x = torch.randn(10)
+    y = torch.randn(10)
+    
+    # Compile with fullgraph=True as in the bug report
+    try:
+        out = torch.compile(f, fullgraph=True)(x, y)
+        print("Test Passed. Output shape:", out.shape)
+        assert out.shape == (9,)
+        assert torch.allclose(out, (x + y)[:-1])
+    except Exception as e:
+        print(f"Test Failed: {e}")

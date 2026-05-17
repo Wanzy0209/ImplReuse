@@ -1,0 +1,131 @@
+Issue ID: 165948
+Title: _dynamo_graph_capture_for_export cannot trace flex_attention with block_mask kwarg
+Bug Description:
+### 🐛 Describe the bug
+
+```python
+
+import torch
+
+from torch._dynamo.functional_export import _dynamo_graph_capture_for_export
+
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+
+class FlexAttentionModule(torch.nn.Module):
+    def __init__(self, head_dim=64):
+        super().__init__()
+        self.head_dim = head_dim
+
+    def forward(self, query, key, value, block_mask=None):
+        return flex_attention(query, key, value, block_mask=block_mask)
+
+flex_model = FlexAttentionModule(head_dim=64)
+
+batch_size = 2
+num_heads = 4
+seq_len = 128
+head_dim = 64
+
+query = torch.randn(batch_size, num_heads, seq_len, head_dim)
+key = torch.randn(batch_size, num_heads, seq_len, head_dim)
+value = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+def causal_mask(b, h, q_idx, kv_idx):
+    return q_idx >= kv_idx
+
+block_mask = create_block_mask(
+    causal_mask, batch_size, num_heads, seq_len, seq_len, device="cpu"
+)
+
+flex_inputs = (query, key, value)
+flex_kwargs = {"block_mask": block_mask}
+
+eager_out = flex_model(*flex_inputs, **flex_kwargs)
+
+Original API Under Test: torch._dynamo.functional_export._dynamo_graph_capture_for_export
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.nn.collapse_repeated
+Similarity score: 0.9891510009765625
+
+Similar API information:
+# Extracted call chain for tf.nn.collapse_repeated
+
+# --- tensorflow.python.ops.ctc_ops.collapse_repeated ---
+def collapse_repeated(labels, seq_length, name=None):
+  """Merge repeated labels into single labels.
+
+  Args:
+    labels: Tensor of shape [batch, max value in seq_length]
+    seq_length: Tensor of shape [batch], sequence length of each batch element.
+    name: A name for this `Op`. Defaults to "collapse_repeated_labels".
+
+  Returns:
+    A tuple `(collapsed_labels, new_seq_length)` where
+
+    collapsed_labels: Tensor of shape [batch, max_seq_length] with repeated
+    labels collapsed and padded to max_seq_length, eg:
+    `[[A, A, B, B, A], [A, B, C, D, E]] => [[A, B, A, 0, 0], [A, B, C, D, E]]`
+
+    new_seq_length: int tensor of shape [batch] with new sequence lengths.
+  """
+
+  with ops.name_scope(name, "collapse_repeated_labels", [labels, seq_length]):
+    labels = ops.convert_to_tensor(labels, name="labels")
+    seq_length = ops.convert_to_tensor(seq_length, name="seq_length")
+
+    # Mask labels that don't equal previous label.
+    label_mask = array_ops.concat([
+        array_ops.ones_like(labels[:, :1], dtypes.bool),
+        math_ops.not_equal(labels[:, 1:], labels[:, :-
+...
+
+Original Test Case:
+import torch
+
+from torch._dynamo.functional_export import _dynamo_graph_capture_for_export
+
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+
+class FlexAttentionModule(torch.nn.Module):
+    def __init__(self, head_dim=64):
+        super().__init__()
+        self.head_dim = head_dim
+
+    def forward(self, query, key, value, block_mask=None):
+        return flex_attention(query, key, value, block_mask=block_mask)
+
+flex_model = FlexAttentionModule(head_dim=64)
+
+batch_size = 2
+num_heads = 4
+seq_len = 128
+head_dim = 64
+
+query = torch.randn(batch_size, num_heads, seq_len, head_dim)
+key = torch.randn(batch_size, num_heads, seq_len, head_dim)
+value = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+def causal_mask(b, h, q_idx, kv_idx):
+    return q_idx >= kv_idx
+
+block_mask = create_block_mask(
+    causal_mask, batch_size, num_heads, seq_len, seq_len, device="cpu"
+)
+
+flex_inputs = (query, key, value)
+flex_kwargs = {"block_mask": block_mask}
+
+eager_out = flex_model(*flex_inputs, **flex_kwargs)
+
+with torch._dynamo.config.patch(install_free_tensors=True):
+    gm = _dynamo_graph_capture_for_export(flex_model)(*flex_inputs, **flex_kwargs)
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

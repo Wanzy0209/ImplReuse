@@ -1,0 +1,43 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_stack_dynamic_partitions_4d():
+    """
+    Adapted test case based on PyTorch Issue 160053.
+    Original issue: torch.nn.functional.pad(mode="circular") failed for 4D input 
+    despite the error message claiming support.
+    
+    This test verifies if the similar TensorFlow API (tf.ragged.stack_dynamic_partitions)
+    handles a 4D input tensor correctly.
+    """
+    # Create a 4D tensor similar to the PyTorch example: torch.empty(2,2,2,2)
+    data = tf.constant(np.arange(16).reshape(2, 2, 2, 2), dtype=tf.float32)
+
+    # Define partitions. 
+    # For stack_dynamic_partitions, partitions.shape must be a prefix of data.shape.
+    # Here we partition along the first dimension (size 2).
+    partitions = tf.constant([0, 1], dtype=tf.int32)
+    num_partitions = 2
+
+    try:
+        # Call the similar API
+        # Original: F.pad(a, (1,1), mode="circular")
+        # Adapted: tf.ragged.stack_dynamic_partitions(data, partitions, num_partitions)
+        result = tf.ragged.stack_dynamic_partitions(data, partitions, num_partitions)
+
+        # Verify the result is a RaggedTensor
+        assert isinstance(result, tf.RaggedTensor), "Expected output to be a RaggedTensor"
+        
+        # Verify the number of partitions matches
+        assert result.shape[0] == num_partitions, f"Expected {num_partitions} partitions, got {result.shape[0]}"
+        
+        print("Test passed: API handled 4D input correctly.")
+        print("Result:", result)
+
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_stack_dynamic_partitions_4d()

@@ -1,0 +1,29 @@
+import torch
+import tensorflow as tf
+
+# Define the computation function similar to the PyTorch example
+def f(x):
+    # Equivalent of x.nonzero() in PyTorch
+    # tf.nonzero returns the indices of non-zero elements.
+    # The size of the first dimension is data-dependent (dynamic/unbacked).
+    nz = tf.nonzero(x)
+    
+    # Slicing the tensor with the dynamic size
+    # This corresponds to the nz[:-1] operation in the original bug report.
+    return nz[:-1]
+
+# Create a random input tensor
+# torch.randn(3, 4) -> tf.random.uniform((3, 4)) or tf.random.normal((3, 4))
+x = tf.random.normal((3, 4))
+
+# Attempt to compile and run using the similar API
+# tf.compat.v1.tpu.rewrite is used to compile a computation for TPU (XLA).
+# Note: This API typically requires a TPU environment to execute fully.
+# We are testing the compilation behavior regarding dynamic shapes.
+try:
+    # The API signature indicates inputs is a List of Lists of Tensors
+    out = tf.compat.v1.tpu.rewrite(f, inputs=[[x]])
+    print("Output:", out)
+except Exception as e:
+    # Catching errors to report behavior if TPU is unavailable or compilation fails
+    print(f"Error encountered: {e}")

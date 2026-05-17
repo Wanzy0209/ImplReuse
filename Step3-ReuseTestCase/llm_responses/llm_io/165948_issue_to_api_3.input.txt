@@ -1,0 +1,129 @@
+Issue ID: 165948
+Title: _dynamo_graph_capture_for_export cannot trace flex_attention with block_mask kwarg
+Bug Description:
+### 🐛 Describe the bug
+
+```python
+
+import torch
+
+from torch._dynamo.functional_export import _dynamo_graph_capture_for_export
+
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+
+class FlexAttentionModule(torch.nn.Module):
+    def __init__(self, head_dim=64):
+        super().__init__()
+        self.head_dim = head_dim
+
+    def forward(self, query, key, value, block_mask=None):
+        return flex_attention(query, key, value, block_mask=block_mask)
+
+flex_model = FlexAttentionModule(head_dim=64)
+
+batch_size = 2
+num_heads = 4
+seq_len = 128
+head_dim = 64
+
+query = torch.randn(batch_size, num_heads, seq_len, head_dim)
+key = torch.randn(batch_size, num_heads, seq_len, head_dim)
+value = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+def causal_mask(b, h, q_idx, kv_idx):
+    return q_idx >= kv_idx
+
+block_mask = create_block_mask(
+    causal_mask, batch_size, num_heads, seq_len, seq_len, device="cpu"
+)
+
+flex_inputs = (query, key, value)
+flex_kwargs = {"block_mask": block_mask}
+
+eager_out = flex_model(*flex_inputs, **flex_kwargs)
+
+Original API Under Test: torch._dynamo.functional_export._dynamo_graph_capture_for_export
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.test
+Similarity score: 0.9900248646736145
+
+Similar API information:
+# Extracted call chain for tf.test
+
+# --- tensorflow.compiler.mlir.tensorflow.tests.tf_saved_model.hash_table_asset_v1.test ---
+def test():
+
+  vocabulary_file = write_vocabulary_file(['cat', 'is', 'on', 'the', 'mat'])
+  table_initializer = tf.lookup.TextFileInitializer(
+      vocabulary_file, tf.string, tf.lookup.TextFileIndex.WHOLE_LINE, tf.int64,
+      tf.lookup.TextFileIndex.LINE_NUMBER)
+  # Incur another bound_input on the asset, but with a different sym_name, i.e.,
+  # __tf_saved_model_asset1_tokens.txt vs. __tf_saved_model_asset0_tokens.txt.
+  table = tf.lookup.StaticVocabularyTable(table_initializer, num_oov_buckets=10)
+  vocab_file_tensor = tf.convert_to_tensor(
+      vocabulary_file, tf.string, name='asset_filepath')
+  tf.add_to_collection(tf.GraphKeys.ASSET_FILEPATHS, vocab_file_tensor)
+
+  x = tf.placeholder(tf.string, shape=(), name='input')
+  r = table.lookup(x)
+
+  tensor_info_x = tf.compat.v1.saved_model.utils.build_tensor_info(x)
+  tensor_info_r = tf.compat.v1.saved_model.utils.build_tensor_info(r)
+
+  return {
+      'key': (tf.compat.v1.saved_model.signature_def_utils.build_signature_def(
+          inputs={'x': tensor_info_x},
+          outputs={'r': tensor_info_r},
+.
+...
+
+Original Test Case:
+import torch
+
+from torch._dynamo.functional_export import _dynamo_graph_capture_for_export
+
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+
+class FlexAttentionModule(torch.nn.Module):
+    def __init__(self, head_dim=64):
+        super().__init__()
+        self.head_dim = head_dim
+
+    def forward(self, query, key, value, block_mask=None):
+        return flex_attention(query, key, value, block_mask=block_mask)
+
+flex_model = FlexAttentionModule(head_dim=64)
+
+batch_size = 2
+num_heads = 4
+seq_len = 128
+head_dim = 64
+
+query = torch.randn(batch_size, num_heads, seq_len, head_dim)
+key = torch.randn(batch_size, num_heads, seq_len, head_dim)
+value = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+def causal_mask(b, h, q_idx, kv_idx):
+    return q_idx >= kv_idx
+
+block_mask = create_block_mask(
+    causal_mask, batch_size, num_heads, seq_len, seq_len, device="cpu"
+)
+
+flex_inputs = (query, key, value)
+flex_kwargs = {"block_mask": block_mask}
+
+eager_out = flex_model(*flex_inputs, **flex_kwargs)
+
+with torch._dynamo.config.patch(install_free_tensors=True):
+    gm = _dynamo_graph_capture_for_export(flex_model)(*flex_inputs, **flex_kwargs)
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

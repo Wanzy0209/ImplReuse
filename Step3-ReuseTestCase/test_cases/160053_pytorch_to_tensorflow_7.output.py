@@ -1,0 +1,52 @@
+import torch
+import tensorflow as tf
+
+def test_one_hot_4d_input():
+    """
+    Adapted test case based on PyTorch Issue 160053.
+    Original Issue: torch.nn.functional.pad(mode="circular") fails on 4D input 
+    despite the error message claiming support for 4D.
+    
+    This test verifies if the similar API, tf.keras.ops.one_hot, correctly handles 
+    4D input tensors without throwing a misleading error.
+    """
+    # Original PyTorch setup: a = torch.empty(2,2,2,2)
+    # We create a 4D tensor of indices (int32) for one_hot encoding.
+    # Shape: (2, 2, 2, 2)
+    indices = tf.ones((2, 2, 2, 2), dtype=tf.int32)
+    
+    print(f"Input shape: {indices.shape}")
+
+    try:
+        # Original PyTorch call: F.pad(a, (1,1), mode="circular")
+        # Adapted call: tf.keras.ops.one_hot
+        # We expect the API to handle the 4D input and produce a 5D output.
+        result = tf.keras.ops.one_hot(indices, num_classes=3)
+        
+        print(f"Output shape: {result.shape}")
+        
+        # Verify the output shape is correct (Input 4D + Class dimension)
+        # Expected: (2, 2, 2, 2, 3)
+        assert result.shape == (2, 2, 2, 2, 3), \
+            f"Expected shape (2, 2, 2, 2, 3), but got {result.shape}"
+        
+        print("Test Passed: 4D input handled correctly by tf.keras.ops.one_hot.")
+        
+    except NotImplementedError as e:
+        # Replicating the logic of the original bug report:
+        # Check if the error message is misleading regarding supported dimensions.
+        error_msg = str(e)
+        print(f"NotImplementedError caught: {error_msg}")
+        
+        if "4D" in error_msg or "5D" in error_msg:
+            print("Potential Bug Detected: Error message implies support for these dimensions, but the operation failed.")
+        else:
+            print("Operation failed for 4D input.")
+        raise
+
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_one_hot_4d_input()

@@ -1,0 +1,65 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Test case for tf.tpu.experimental.embedding.Adam
+# Based on Issue 161618: Inductor fails on triton main branch
+# Mapping: PyTorch Inductor Config -> TensorFlow TPU Embedding Adam Config
+
+def test_tpu_adam_config_with_large_shapes():
+    """
+    This test case adapts the logic from the PyTorch Inductor bug report.
+    The original issue involved configuring the Inductor backend with specific 
+    parameters and running operations on large tensors (m=20120, k=1536, n=512).
+    
+    Here, we test the similar API (tf.tpu.experimental.embedding.Adam) by 
+    configuring it with specific hyperparameters and setting up embedding 
+    tables using the dimensions from the original bug report.
+    """
+    
+    # Dimensions from the original bug report
+    m = 20120
+    k = 1536
+    n = 512
+
+    # The Similar API: tf.tpu.experimental.embedding.Adam
+    # This corresponds to the configuration step in the original bug (inductor_config.patch).
+    # We configure the optimizer with specific parameters to ensure stability.
+    optimizer = tf.tpu.experimental.embedding.Adam(
+        learning_rate=0.001,
+        beta_1=0.9,
+        beta_2=0.999,
+        epsilon=1e-7,
+        name="adam_optimizer"
+    )
+
+    # Verify the configuration is instantiated correctly
+    # This mirrors the 'compiled = torch.compile(...)' step in the original script.
+    assert optimizer is not None
+    assert optimizer.learning_rate == 0.001
+    assert optimizer.beta_1 == 0.9
+    assert optimizer.beta_2 == 0.999
+    
+    # In the original bug, specific tensor shapes (m, k, n) were used to trigger the failure.
+    # We map these to embedding table configurations to test the API's handling of similar dimensions.
+    # m -> vocabulary_size, k -> dimension
+    table_config = tf.tpu.experimental.embedding.TableConfig(
+        vocabulary_size=m,
+        dimension=k,
+        initializer=tf.initializers.TruncatedNormal(stddev=1.0 / np.sqrt(k)),
+        name="embedding_table"
+    )
+    
+    # Define feature configuration
+    feature_config = tf.tpu.experimental.embedding.FeatureConfig(
+        table=table_config,
+        name="embedding_feature"
+    )
+
+    # Note: Full execution of the embedding layer requires a TPU runtime.
+    # This test validates the configuration logic and parameter handling,
+    # which is the direct equivalent of the 'inductor_config.patch' usage in the bug report.
+    print(f"Test passed: TPU Adam optimizer configured successfully with shapes m={m}, k={k}.")
+
+if __name__ == "__main__":
+    test_tpu_adam_config_with_large_shapes()

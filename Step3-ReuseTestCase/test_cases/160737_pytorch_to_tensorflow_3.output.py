@@ -1,0 +1,21 @@
+import torch
+import tensorflow as tf
+
+def test_tril():
+    # Adapted from torch.index_select test case
+    # Original logic: Pass a zero-dimensional tensor as an index/parameter argument
+    # to verify if the API handles it gracefully or crashes.
+    
+    x = tf.ones([2, 3])  # Input tensor
+    k = tf.constant(1)   # zero-dimensional tensor for the offset parameter
+    
+    try:
+        # In the original bug, index_select failed on MPS with a scalar index tensor.
+        # Here we test if tril handles a scalar tensor for the 'k' argument.
+        output = tf.keras.ops.tril(x, k=k)
+        print(f"tril test succeeds. output shape: {output.shape}")
+    except Exception as e:
+        print(f"tril test fails: {e}")
+
+if __name__ == "__main__":
+    test_tril()

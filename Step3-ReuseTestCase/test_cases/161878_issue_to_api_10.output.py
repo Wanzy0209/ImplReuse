@@ -1,0 +1,48 @@
+import tensorflow as tf
+import unittest
+
+class TestInCrossReplicaContext(unittest.TestCase):
+    """
+    Test case for tf.distribute.in_cross_replica_context.
+    
+    This test is derived from the logic of Issue #161878 (PyTorch Inductor performance regression),
+    which involved specific execution contexts (AMP, static shape, C++ wrapper) affecting performance.
+    
+    The similar API, tf.distribute.in_cross_replica_context, is responsible for identifying the 
+    current execution context (cross-replica vs replica). This test verifies that the context 
+    detection logic works correctly across different scopes, mirroring the need to ensure 
+    correct behavior in specific configurations in the original bug report.
+    """
+
+    def test_context_detection(self):
+        """
+        Tests that in_cross_replica_context correctly identifies the execution scope.
+        
+        This parallels the original bug's focus on how specific wrappers/configurations
+        (like 'AMP static shape cpp wrapper') define the execution mode.
+        """
+        # Default context (outside any strategy scope)
+        # In standard TF usage without a strategy, this is typically False or raises an error
+        # depending on version, but we focus on the strategy scope behavior here.
+        strategy = tf.distribute.MirroredStrategy()
+
+        # 1. Inside strategy.scope() -> Cross-replica context
+        # This corresponds to the "wrapper" or global configuration context in the original bug.
+        with strategy.scope():
+            self.assertTrue(
+                tf.distribute.in_cross_replica_context(),
+                "Expected to be in cross-replica context inside strategy.scope()"
+            )
+
+            # 2. Inside strategy.run() -> Replica context
+            # This corresponds to the actual execution/inference phase (like the BERT model run).
+            def replica_fn():
+                self.assertFalse(
+                    tf.distribute.in_cross_replica_context(),
+                    "Expected to be in replica context inside strategy.run()"
+                )
+
+            strategy.run(replica_fn)
+
+if __name__ == "__main__":
+    unittest.main()

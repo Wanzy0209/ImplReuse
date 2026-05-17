@@ -1,0 +1,35 @@
+import tensorflow as tf
+import numpy as np
+
+# Define dimensions from the original bug report
+batch, in_dim, out_dim = 128, 1024, 4096
+
+# Create inputs
+# Using float32 to match the original bug report's dtype
+x = tf.random.normal((batch, in_dim), dtype=tf.float32)
+w = tf.random.normal((out_dim, in_dim), dtype=tf.float32)
+
+# Perform the operation using TensorFlow's einsum
+# The original bug uses the equation "fd,bd->bf"
+out_tf = tf.einsum("fd,bd->bf", w, x)
+
+# Perform the operation using NumPy's einsum for reference
+out_np = np.einsum("fd,bd->bf", w.numpy(), x.numpy())
+
+# Check Shape
+print(f"TF Shape: {out_tf.shape}")
+print(f"NumPy Shape: {out_np.shape}")
+
+# Check Strides
+# The bug in PyTorch was that the output strides were transposed relative to the shape.
+# We verify that TF produces contiguous strides like NumPy.
+# Strides for (128, 4096) float32 should be (16384, 4) in bytes.
+tf_strides = out_tf.numpy().strides
+np_strides = out_np.strides
+
+print(f"TF Strides: {tf_strides}")
+print(f"NumPy Strides: {np_strides}")
+
+# Assertions
+assert out_tf.shape == (batch, out_dim), "Shape mismatch"
+assert tf_strides == np_strides, f"Strides mismatch: TF {tf_strides} vs NumPy {np_strides}"

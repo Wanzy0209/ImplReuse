@@ -1,0 +1,59 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_send_object_list(rank, world_size):
+    """
+    Test case for torch.distributed.send_object_list.
+    Adapted from the context of Issue 161372 which involved tensor size mismatches
+    (specifically sizes 77 and 78). This test verifies that a list containing
+    tensors of these dynamic sizes can be successfully sent and received.
+    """
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    
+    # Initialize process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    if rank == 0:
+        # Sender
+        # Create tensors with the specific sizes mentioned in the bug report
+        # to ensure the API handles these specific shapes correctly.
+        tensor_a = torch.randn(77)
+        tensor_b = torch.randn(78)
+        
+        # Include a standard Python object as well
+        metadata = {"seq_len": 77}
+        
+        object_list = [tensor_a, tensor_b, metadata]
+        
+        # Send the list to rank 1
+        dist.send_object_list(object_list, dst=1)
+        
+    elif rank == 1:
+        # Receiver
+        # Initialize a list of the correct size to receive data
+        object_list = [None, None, None]
+        
+        # Receive the list from rank 0
+        dist.recv_object_list(object_list, src=0)
+        
+        # Verify the received data
+        assert isinstance(object_list[0], torch.Tensor), "First element should be a tensor"
+        assert object_list[0].size(0) == 77, f"Expected size 77, got {object_list[0].size(0)}"
+        
+        assert isinstance(object_list[1], torch.Tensor), "Second element should be a tensor"
+        assert object_list[1].size(0) == 78, f"Expected size 78, got {object_list[1].size(0)}"
+        
+        assert isinstance(object_list[2], dict), "Third element should be a dict"
+        assert object_list[2]["seq_len"] == 77, "Metadata mismatch"
+        
+        print("Test passed: torch.distributed.send_object_list handled dynamic tensor sizes correctly.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use 'spawn' to start processes for distributed testing
+    mp.spawn(test_send_object_list, args=(world_size,), nprocs=world_size, join=True)

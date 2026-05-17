@@ -1,0 +1,22 @@
+import torch
+import tensorflow as tf
+
+def test_dropout():
+    # Adapted from torch.index_select test case.
+    # Original bug: index_select fails on MPS when 'index' is a 0-dimensional (scalar) tensor.
+    # Here we test if tf.keras.backend.dropout handles a 0-dimensional tensor for 'noise_shape',
+    # which is expected to be a 1D tensor representing the shape.
+    
+    x = tf.ones([2, 3])
+    # Create a zero-dimensional tensor (scalar) to mimic the original bug's input condition
+    noise_shape = tf.constant(1) 
+    rate = 0.5
+
+    try:
+        output = tf.keras.backend.dropout(x, rate, noise_shape=noise_shape, seed=1)
+        print(f"dropout test succeeds. output shape: {output.shape}")
+    except Exception as e:
+        print(f"dropout test fails: {e}")
+
+if __name__ == "__main__":
+    test_dropout()

@@ -1,0 +1,66 @@
+import tensorflow as tf
+import numpy as np
+
+def computation(x):
+    """
+    TensorFlow equivalent of the PyTorch function 'foo'.
+    Performs operations involving uint8 and float32 tensors.
+    """
+    # Create a uint8 tensor constant
+    c = tf.constant(7, dtype=tf.uint8)
+    
+    # Perform the operations:
+    # 1. Addition of uint8 and float32
+    # 2. Negation of uint8
+    # 3. Addition of negated uint8 and float32
+    return c + x, tf.negative(c), tf.negative(c) + x
+
+def run_test():
+    # Use the same input values as the PyTorch bug report for consistency
+    x_val = np.array([[ 1.5410, -0.2934], [-2.1788,  0.5684]], dtype=np.float32)
+    x = tf.constant(x_val, dtype=tf.float32)
+    
+    print(f"Input: {x_val}")
+
+    # Note: tf.compat.v1.tpu.rewrite requires a TPU environment to execute.
+    # This code attempts to initialize the TPU and run the computation.
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        
+        # Prepare inputs for rewrite: List of lists of tensors
+        inputs = [[x]]
+        
+        # Execute the rewrite
+        # The computation is compiled for TPU (XLA)
+        with tf.compat.v1.Session() as sess:
+            # rewrite returns the tensors defined in the computation function
+            out_tensors = tf.compat.v1.tpu.rewrite(computation, inputs=inputs)
+            
+            # Fetch results
+            results = sess.run(out_tensors)
+            
+            print(f"res[0] (c+x): {results[0]}")
+            print(f"res[1] (neg(c)): {results[1]}")
+            print(f"res[2] (neg(c)+x): {results[2]}")
+            
+            # Verification/Assertion logic
+            # In TensorFlow/XLA, negation of uint8 typically casts to int32 (-7).
+            # We expect the result to match the "buggy" PyTorch Inductor output 
+            # (which treated neg(uint8) as signed -7) rather than PyTorch eager (which wraps to 249).
+            
+            # Expected values based on signed negation (-7 + x)
+            expected_res_2 = np.array([[-5.4590, -7.2934], [-9.1788, -6.4316]], dtype=np.float32)
+            
+            # Assert that the TPU compiled result matches the signed negation behavior
+            assert np.allclose(results[2], expected_res_2, atol=1e-4), \
+                f"TF TPU behavior differs from expected signed negation. Got {results[2]}"
+            print("Assertion Passed: TF TPU behavior matches signed negation (similar to PyTorch Inductor bug).")
+
+    except (ValueError, tf.errors.NotFoundError) as e:
+        print(f"Skipping TPU execution (requires TPU runtime): {e}")
+        print("To run this test, ensure you are in a TPU environment (e.g., Colab TPU).")
+
+if __name__ == "__main__":
+    run_test()

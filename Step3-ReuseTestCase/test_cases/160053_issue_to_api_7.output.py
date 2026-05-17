@@ -1,0 +1,39 @@
+import torch
+import torch.nn.functional as F
+import sys
+
+def test_pad_circular_high_dimensions():
+    """
+    Test case for Issue 160053: torch.Pad(mode="circular") doesn't work for 4D or 5D input despite error msg.
+    
+    The error message claims: "Only 2D, 3D, 4D, 5D padding with non-constant padding are supported for now"
+    However, calling it on 4D or 5D inputs raises NotImplementedError.
+    
+    This test verifies that the functionality works as the error message suggests.
+    """
+    
+    # Test 4D input
+    # Original failing case: a = torch.empty(2,2,2,2); F.pad(a, (1,1), mode="circular")
+    try:
+        input_4d = torch.empty(2, 2, 2, 2)
+        output_4d = F.pad(input_4d, (1, 1), mode="circular")
+        # Verify shape calculation: (2, 2, 2, 2) padded by 1 on left and right of last dim -> (2, 2, 2, 4)
+        assert output_4d.shape == (2, 2, 2, 4), f"Expected shape (2, 2, 2, 4) for 4D input, got {output_4d.shape}"
+        print("4D circular padding test passed.")
+    except NotImplementedError as e:
+        print(f"FAILED: 4D circular padding raised NotImplementedError: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Test 5D input
+    try:
+        input_5d = torch.empty(2, 2, 2, 2, 2)
+        output_5d = F.pad(input_5d, (1, 1), mode="circular")
+        # Verify shape calculation: (2, 2, 2, 2, 2) padded by 1 on left and right of last dim -> (2, 2, 2, 2, 4)
+        assert output_5d.shape == (2, 2, 2, 2, 4), f"Expected shape (2, 2, 2, 2, 4) for 5D input, got {output_5d.shape}"
+        print("5D circular padding test passed.")
+    except NotImplementedError as e:
+        print(f"FAILED: 5D circular padding raised NotImplementedError: {e}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    test_pad_circular_high_dimensions()

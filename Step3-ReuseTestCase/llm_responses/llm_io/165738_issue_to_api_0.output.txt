@@ -1,0 +1,73 @@
+```python
+import tensorflow as tf
+import time
+import sys
+
+def test_my_fact_performance():
+    """
+    Test case adapted from Issue 165738 (Performance regression in tl.sqrt_rn).
+    
+    This test verifies that the similar API, tf.compat.v1.user_ops.my_fact,
+    does not exhibit similar performance degradation issues. It mimics the
+    original reproduction logic by setting up the environment and measuring
+    execution time over multiple iterations.
+    """
+    
+    # Setup device context (mimicking the XPU/GPU setup in the original issue)
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        # Restrict memory growth to avoid OOM on shared systems
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            device_name = '/GPU:0'
+        except RuntimeError as e:
+            print(f"GPU configuration error: {e}")
+            device_name = '/CPU:0'
+    else:
+        device_name = '/CPU:0'
+
+    print(f"Running test on device: {device_name}")
+
+    with tf.device(device_name):
+        # Access the target API
+        # Note: tf.compat.v1.user_ops.my_fact is a custom op wrapper.
+        # This test assumes the environment has the necessary user_ops registered.
+        try:
+            my_fact_op = tf.compat.v1.user_ops.my_fact
+        except AttributeError:
+            print("Skipping test: tf.compat.v1.user_ops.my_fact is not available in this environment.")
+            return
+
+        # Warmup run to initialize any lazy resources (similar to kernel compilation)
+        try:
+            _ = my_fact_op()
+        except Exception as e:
+            print(f"Error during warmup execution: {e}")
+            return
+
+        # Performance measurement
+        # The original issue reported a 500x slowdown. We run multiple iterations
+        # to check if the operation completes in a reasonable time.
+        iterations = 1000
+        start_time = time.time()
+        
+        for _ in range(iterations):
+            result = my_fact_op()
+            
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+
+        print(f"Execution time for {iterations} iterations: {elapsed_time:.6f} seconds")
+
+        # Assertion to detect performance regressions.
+        # While we don't have the exact baseline for 'my_fact', a simple operation
+        # taking > 1 second for 1000 calls indicates a potential issue similar to the bug report.
+        assert elapsed_time < 1.0, (
+            f"Performance regression detected: {iterations} iterations took {elapsed_time:.4f}s. "
+            "This may indicate a similar issue to the tl.sqrt_rn slowdown."
+        )
+
+if __name__ == "__main__":
+    test_my_fact_performance()
+```

@@ -1,0 +1,142 @@
+Issue ID: 165854
+Title: New flex flash path breaks w/ dynamic buffers
+Bug Description:
+```Py
+import torch
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask, noop_mask
+
+
+def run_with_head_count(compiled_fa, H, device, dtype):
+    """Run flex attention with a specific head count, creating a captured buffer sized by H."""
+    B, S, D = 2, 256, 64
+
+    # Create captured buffer that depends on dynamic H
+    head_scale = torch.randn(H, device=device, dtype=dtype, requires_grad=True)
+
+    def score_mod(score, batch, head, token_q, token_kv):
+        return score * head_scale[head]
+
+    print(f"  Running with H={H}, head_scale.shape={head_scale.shape}")
+
+    # Run multiple iterations with the same head_scale
+    for i in range(5):
+        q = torch.randn(B, H, S, D, device=device, dtype=dtype, requires_grad=True)
+        k = torch.randn_like(q, requires_grad=True)
+        v = torch.randn_like(q, requires_grad=True)
+
+        block_mask = create_block_mask(noop_mask, B, 1, S, S, device=device)
+
+        outputs = compiled_fa(q, k, v, score_mod=score_mod, block_mask=block_mask)
+        loss = outputs.sum()
+        loss.backward()
+
+    print(f"  ✓ Completed {i+1} iterations")
+
+
+def main():
+    device = "cuda"
+    dtype = torch.float16
+    torch.manual_seed(0)
+
+    # Test with different head counts - this makes H a dynamic dimension
+    # and the captured buffer (head_scale) changes size with H
+    head_counts = [4, 8, 4, 16, 4]
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.enable_eager_execution
+Similarity score: 0.9934076070785522
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.enable_eager_execution
+
+# --- tensorflow.python.framework.ops.enable_eager_execution ---
+def enable_eager_execution(config=None, device_policy=None,
+                           execution_mode=None) -> None:
+  """Enables eager execution for the lifetime of this program.
+
+  Eager execution provides an imperative interface to TensorFlow. With eager
+  execution enabled, TensorFlow functions execute operations immediately (as
+  opposed to adding to a graph to be executed later in a `tf.compat.v1.Session`)
+  and
+  return concrete values (as opposed to symbolic references to a node in a
+  computational graph).
+
+  For example:
+
+  ```python
+  tf.compat.v1.enable_eager_execution()
+
+  # After eager execution is enabled, operations are executed as they are
+  # defined and Tensor objects hold concrete values, which can be accessed as
+  # numpy.ndarray`s through the numpy() method.
+  assert tf.multiply(6, 7).numpy() == 42
+  ```
+
+  Eager execution cannot be enabled after TensorFlow APIs have been used to
+  create or execute graphs. It is typically recommended to invoke this function
+  at program startup and not in a library (as most libraries should be usabl
+...
+
+Original Test Case:
+import torch
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask, noop_mask
+
+
+def run_with_head_count(compiled_fa, H, device, dtype):
+    """Run flex attention with a specific head count, creating a captured buffer sized by H."""
+    B, S, D = 2, 256, 64
+
+    # Create captured buffer that depends on dynamic H
+    head_scale = torch.randn(H, device=device, dtype=dtype, requires_grad=True)
+
+    def score_mod(score, batch, head, token_q, token_kv):
+        return score * head_scale[head]
+
+    print(f"  Running with H={H}, head_scale.shape={head_scale.shape}")
+
+    # Run multiple iterations with the same head_scale
+    for i in range(5):
+        q = torch.randn(B, H, S, D, device=device, dtype=dtype, requires_grad=True)
+        k = torch.randn_like(q, requires_grad=True)
+        v = torch.randn_like(q, requires_grad=True)
+
+        block_mask = create_block_mask(noop_mask, B, 1, S, S, device=device)
+
+        outputs = compiled_fa(q, k, v, score_mod=score_mod, block_mask=block_mask)
+        loss = outputs.sum()
+        loss.backward()
+
+    print(f"  ✓ Completed {i+1} iterations")
+
+
+def main():
+    device = "cuda"
+    dtype = torch.float16
+    torch.manual_seed(0)
+
+    # Test with different head counts - this makes H a dynamic dimension
+    # and the captured buffer (head_scale) changes size with H
+    head_counts = [4, 8, 4, 16, 4]
+
+    compiled_fa = torch.compile(flex_attention, fullgraph=True, dynamic=True)
+
+    print(f"Running flex-attention with dynamic head counts on {device}, dtype={dtype}")
+    print(f"Testing head counts: {head_counts}\n")
+
+    for iteration, H in enumerate(head_counts, start=1):
+        print(f"Iteration {iteration}:")
+        run_with_head_count(compiled_fa, H, device, dtype)
+
+
+if __name__ == "__main__":
+    main()
+
+The API tf.compat.v1.enable_eager_execution is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

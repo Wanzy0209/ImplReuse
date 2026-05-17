@@ -1,0 +1,24 @@
+import torch
+import tensorflow as tf
+
+def test_quantized_dropout():
+    # Create a quantized tensor
+    # Mimicking torch.quantize_per_tensor behavior
+    float_input = tf.constant([1.0, 2.0, 3.0], dtype=tf.float32)
+    quant_input, _, _ = tf.quantization.quantize(
+        float_input, 
+        min_range=0.0, 
+        max_range=10.0, 
+        dtype=tf.quint8
+    )
+    
+    # Attempt to apply dropout to the quantized tensor
+    # This mimics the torch.zeros_like(quant_input) call which triggered the error
+    # We provide a seed as required by the similar API's implementation details
+    out_tensor = tf.compat.v1.nn.dropout(quant_input, rate=0.5, seed=42)
+    
+    print("Quantized input:", quant_input)
+    print("Output tensor:", out_tensor)
+
+if __name__ == "__main__":
+    test_quantized_dropout()

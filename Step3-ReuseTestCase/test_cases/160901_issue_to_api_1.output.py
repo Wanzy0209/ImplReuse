@@ -1,0 +1,48 @@
+import torch
+import torch._dynamo as dynamo
+
+# Define the custom autograd.Function from the bug report
+class MyFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        # Perform a matrix multiplication
+        return torch.matmul(x, (torch.ones_like(x) * 10).t())
+    
+    @staticmethod
+    def backward(ctx, grad_out):
+        # Identity backward for testing propagation
+        return grad_out
+
+# Define a function that utilizes the custom autograd Function
+def run_function(x):
+    return MyFn.apply(x)
+
+# Apply torch._dynamo.optimize to the function
+# This is the API context where the bug manifests (tracing autograd.Function)
+optimized_run = dynamo.optimize("eager")(run_function)
+
+def test_dynamo_autograd_requires_grad():
+    # Create an input tensor with requires_grad=True
+    # Using smaller dimensions for minimal test case
+    x = torch.randn(10, 10, requires_grad=True)
+    
+    # Execute the optimized function
+    output = optimized_run(x)
+    
+    # The bug describes "bad requires_grad propagation".
+    # We assert that the output correctly retains requires_grad.
+    assert output.requires_grad, (
+        "Output requires_grad was not propagated correctly. "
+        "This indicates the traced autograd.Function is broken."
+    )
+    
+    # Perform a backward pass to ensure the graph is intact
+    output.sum().backward()
+    
+    # Verify gradients were computed for the input
+    assert x.grad is not None, "Gradients were not computed for input."
+    assert x.grad.abs().sum() > 0, "Gradients are zero."
+
+if __name__ == "__main__":
+    test_dynamo_autograd_requires_grad()
+    print("Test passed.")

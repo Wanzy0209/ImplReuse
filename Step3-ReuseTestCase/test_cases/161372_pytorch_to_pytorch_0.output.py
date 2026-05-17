@@ -1,0 +1,62 @@
+import torch
+import torch.nn as nn
+import warnings
+
+class SimpleLLM(nn.Module):
+    """
+    A minimal model mimicking an LLM component to trigger the recompilation issue.
+    Includes a torch.where operation as seen in the stack trace of the bug report.
+    """
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(10, 10)
+
+    def forward(self, x):
+        # Simulate a mask operation (common in LLMs)
+        mask = torch.ones_like(x, dtype=torch.bool)
+        value = torch.zeros_like(x)
+        
+        # torch.where appeared in the user's stack trace
+        x = torch.where(mask, x, value)
+        
+        return self.linear(x)
+
+def test_torch_compile_regression():
+    """
+    Test case to reproduce the torch.compile regression in 2.8.0
+    where dynamic shapes cause hitting the recompile_limit.
+    """
+    model = SimpleLLM()
+    
+    # Compile with default settings. 
+    # In 2.8.0, this fails with "torch._dynamo hit config.recompile_limit"
+    # when input shapes change frequently (e.g., during generation).
+    compiled_model = torch.compile(model)
+
+    print("Starting test with varying sequence lengths...")
+    
+    try:
+        # Simulate an autoregressive generation loop where sequence length increases.
+        # The bug report mentions sizes 77 and 78, so we iterate around that range.
+        for seq_len in range(70, 85):
+            # Create input with changing sequence length (dim 1)
+            x = torch.randn(1, seq_len, 10)
+            
+            # This call triggers recompilation if the shape is new.
+            # After 8 recompilations (default limit), it should raise an error in 2.8.0.
+            output = compiled_model(x)
+            
+            # Verify output shape matches input shape
+            assert output.shape == x.shape, f"Shape mismatch: {output.shape} vs {x.shape}"
+            
+        print("Test passed: Model handled dynamic shapes without hitting recompile limit.")
+        
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        # Check if it's the specific recompilation error
+        if "recompile_limit" in str(e):
+            print("Reproduced the 'torch._dynamo hit config.recompile_limit' bug.")
+        raise
+
+if __name__ == "__main__":
+    test_torch_compile_regression()

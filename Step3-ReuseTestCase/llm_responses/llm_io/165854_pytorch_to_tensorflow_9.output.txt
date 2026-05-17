@@ -1,0 +1,83 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# We use tf.function to mimic the compilation behavior of torch.compile
+# and wrap the logic in tf.name_scope to test the specific API.
+@tf.function
+def flex_attention_tf(q, k, v, score_mod):
+    """
+    TensorFlow equivalent of the flex_attention call.
+    Uses tf.name_scope to organize the graph operations.
+    """
+    # The target API: tf.name_scope
+    with tf.name_scope("flex_attention"):
+        # Apply the score modification function
+        # In the original bug, the graph capture fails when the captured buffer
+        # (head_scale) changes size.
+        return score_mod(q, k, v)
+
+
+def run_with_head_count(compiled_fa, H, dtype):
+    """
+    Run flex attention with a specific head count, creating a captured buffer sized by H.
+    """
+    B, S, D = 2, 256, 64
+
+    # Create captured buffer that depends on dynamic H
+    # This mimics the 'head_scale' in the PyTorch bug.
+    head_scale = tf.random.normal([H], dtype=dtype)
+
+    def score_mod(q, k, v):
+        """
+        Closure capturing head_scale.
+        The shape of head_scale depends on H, which changes between calls.
+        """
+        # Reshape head_scale to broadcast with q: [B, H, S, D]
+        # head_scale is [H] -> reshape to [1, H, 1, 1]
+        scale_reshaped = tf.reshape(head_scale, [1, -1, 1, 1])
+        return q * scale_reshaped
+
+    print(f"  Running with H={H}, head_scale.shape={head_scale.shape}")
+
+    # Run multiple iterations with the same head_scale
+    for i in range(5):
+        q = tf.random.normal([B, H, S, D], dtype=dtype)
+        k = tf.random.normal([B, H, S, D], dtype=dtype)
+        v = tf.random.normal([B, H, S, D], dtype=dtype)
+
+        # Use GradientTape to mimic the backward pass in the original test
+        with tf.GradientTape() as tape:
+            tape.watch([q, k, v, head_scale])
+            # Call the compiled function
+            outputs = compiled_fa(q, k, v, score_mod=score_mod)
+            loss = tf.reduce_sum(outputs)
+
+        # Compute gradients
+        grads = tape.gradient(loss, [q, k, v, head_scale])
+        
+        # Basic assertion to ensure execution happened
+        assert grads[0] is not None
+
+    print(f"  ✓ Completed {i+1} iterations")
+
+
+def main():
+    dtype = tf.float16
+    tf.random.set_seed(0)
+
+    # Test with different head counts - this makes H a dynamic dimension
+    # and the captured buffer (head_scale) changes size with H
+    head_counts = [4, 8, 4, 16, 4]
+
+    print(f"Running flex-attention with dynamic head counts, dtype={dtype}")
+    print(f"Testing head counts: {head_counts}\n")
+
+    for iteration, H in enumerate(head_counts, start=1):
+        print(f"Iteration {iteration}:")
+        run_with_head_count(flex_attention_tf, H, dtype)
+
+
+if __name__ == "__main__":
+    main()
+```

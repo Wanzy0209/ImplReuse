@@ -1,0 +1,71 @@
+```python
+import torch
+from torch import nn
+from torch.nn.utils.parametrizations import weight_norm
+from torch.optim import SGD
+
+def test_compile_weight_norm_conv2d_large_channels():
+    """
+    Test case for Issue 165749:
+    Verifies that torch.compile works correctly with weight_norm on nn.Conv2d
+    when the number of output channels is greater than 64.
+    
+    The original bug raised: RuntimeError: saved_v must be contiguous
+    """
+    if not torch.cuda.is_available():
+        print("Skipping test: CUDA not available.")
+        return
+
+    # Bug specific parameters: d must be > 64 to trigger the specific inductor path
+    d = 65
+    x = torch.randn((1, 2, 32, 32)).cuda()
+    
+    # Setup model with weight_norm and torch.compile
+    # Note: weight_norm is applied to Conv2d
+    model = torch.compile(weight_norm(nn.Conv2d(2, d, 2)).train().cuda())
+    opt = SGD(model.parameters(), lr=0.01)
+
+    try:
+        # Run training loop
+        for _ in range(10):
+            output = model(x)
+            loss = output.mean()
+            loss.backward()
+            opt.step()
+            opt.zero_grad()
+        print("Test Passed: Backward pass successful for d=65.")
+    except RuntimeError as e:
+        if "saved_v must be contiguous" in str(e):
+            print(f"Test Failed: Bug reproduced - {e}")
+            raise
+        else:
+            raise
+
+def test_compile_weight_norm_conv2d_small_channels():
+    """
+    Control test case:
+    Verifies that torch.compile works correctly with weight_norm on nn.Conv2d
+    when the number of output channels is less than or equal to 64.
+    """
+    if not torch.cuda.is_available():
+        print("Skipping test: CUDA not available.")
+        return
+
+    d = 64
+    x = torch.randn((1, 2, 32, 32)).cuda()
+    
+    model = torch.compile(weight_norm(nn.Conv2d(2, d, 2)).train().cuda())
+    opt = SGD(model.parameters(), lr=0.01)
+
+    for _ in range(10):
+        output = model(x)
+        loss = output.mean()
+        loss.backward()
+        opt.step()
+        opt.zero_grad()
+    print("Test Passed: Backward pass successful for d=64.")
+
+if __name__ == "__main__":
+    test_compile_weight_norm_conv2d_large_channels()
+    test_compile_weight_norm_conv2d_small_channels()
+```

@@ -1,0 +1,96 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_batch_isend_irecv_with_views(rank, world_size):
+    setup(rank, world_size)
+
+    batch_size = 4
+    total_columns = 8
+    # Define offsets to create non-contiguous slices (views)
+    # Slice 1: columns 0 to 2
+    # Slice 2: columns 4 to 6 (skipping columns 2 to 4)
+    split_offsets = [0, 2, 4, 6]
+    tag1 = 0
+    tag2 = 1
+
+    if rank == 0:
+        # Sender rank
+        torch.manual_seed(42)
+        local_tensor = torch.randn(batch_size, total_columns)
+        
+        # Create views (slices) of the original tensor
+        dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+        dst_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+        
+        process_group = dist.group.WORLD
+        
+        # Prepare send operations
+        send_op1 = dist.P2POp(dist.isend, dst_t1, 1, process_group, tag1)
+        send_op2 = dist.P2POp(dist.isend, dst_t2, 1, process_group, tag2)
+        
+        # Batch send operations
+        reqs = dist.batch_isend_irecv([send_op1, send_op2])
+        
+        # Wait for completion
+        for req in reqs:
+            req.wait()
+            
+        print(f"Rank {rank} sent tensors with shapes {dst_t1.shape} and {dst_t2.shape}")
+
+    elif rank == 1:
+        # Receiver rank
+        local_tensor_dst = torch.zeros(batch_size, total_columns)
+        
+        # Create views (slices) of the destination tensor
+        receiving_tensor_view1 = local_tensor_dst[:, split_offsets[0]:split_offsets[1]]
+        receiving_tensor_view2 = local_tensor_dst[:, split_offsets[2]:split_offsets[3]]
+        
+        process_group = dist.group.WORLD
+        
+        # Prepare receive operations using torch.distributed.irecv
+        receive_op1 = dist.P2POp(dist.irecv, receiving_tensor_view1, 0, process_group, tag1)
+        receive_op2 = dist.P2POp(dist.irecv, receiving_tensor_view2, 0, process_group, tag2)
+        
+        # Batch receive operations
+        reqs = dist.batch_isend_irecv([receive_op1, receive_op2])
+        
+        # Wait for completion
+        for req in reqs:
+            req.wait()
+
+        # Verification: Generate the expected tensor
+        torch.manual_seed(42)
+        expected_tensor = torch.randn(batch_size, total_columns)
+
+        # Check if the data in the views matches the expected data
+        view1_match = torch.allclose(receiving_tensor_view1, expected_tensor[:, split_offsets[0]:split_offsets[1]])
+        view2_match = torch.allclose(receiving_tensor_view2, expected_tensor[:, split_offsets[2]:split_offsets[3]])
+
+        assert view1_match, "Data mismatch in receiving_tensor_view1"
+        assert view2_match, "Data mismatch in receiving_tensor_view2"
+        
+        print(f"Rank {rank} received data correctly. Test passed.")
+
+    cleanup()
+
+def main():
+    world_size = 2
+    # Spawn 2 processes
+    mp.spawn(test_batch_isend_irecv_with_views,
+             args=(world_size,),
+             nprocs=world_size,
+             join=True)
+
+if __name__ == "__main__":
+    main()

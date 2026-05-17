@@ -1,0 +1,65 @@
+import tensorflow as tf
+import numpy as np
+
+def test_tf_io_parse_example_with_3d_data():
+    """
+    Test case adapted for tf.io.parse_example based on the context of the original bug.
+    
+    The original bug (Issue 160237) involved 'aten::grid_sampler_3d' failing on the MPS 
+    device. This implies the application was processing 3D volumetric data (e.g., video 
+    clips or 3D medical images).
+    
+    This test verifies that the similar API, tf.io.parse_example, can correctly handle 
+    the parsing of serialized 3D tensor data, ensuring the data ingestion pipeline works 
+    for similar 3D use cases.
+    """
+    # Define dimensions mimicking a 3D data batch (Batch, Depth, Height, Width, Channels)
+    # This aligns with the input requirements of the original grid_sampler_3d context.
+    batch_size = 2
+    depth = 5
+    height = 10
+    width = 10
+    channels = 3
+
+    # Create random 3D data to simulate the input tensor
+    original_data = np.random.rand(batch_size, depth, height, width, channels).astype(np.float32)
+
+    # Define the feature specification for parsing
+    # We use FixedLenFeature to reconstruct the 3D tensor structure from the serialized proto.
+    feature_spec = {
+        'volume': tf.io.FixedLenFeature([depth, height, width, channels], tf.float32),
+        'label': tf.io.FixedLenFeature([], tf.int64)
+    }
+
+    # Serialize the data into Example protocol buffers
+    # This simulates the data loading phase before the operation is applied.
+    serialized_examples = []
+    for i in range(batch_size):
+        # Flatten the 3D volume for storage in the proto
+        feature = {
+            'volume': tf.train.Feature(float_list=tf.train.FloatList(value=original_data[i].flatten())),
+            'label': tf.train.Feature(int64_list=tf.train.Int64List(value=[i % 2]))
+        }
+        example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
+        serialized_examples.append(example_proto.SerializeToString())
+
+    # Call the target API: tf.io.parse_example
+    # This corresponds to the execution step where the original PyTorch code failed.
+    try:
+        parsed_output = tf.io.parse_example(serialized_examples, feature_spec)
+    except Exception as e:
+        print(f"API execution failed: {e}")
+        raise
+
+    # Verify the output to ensure the API behaves as expected
+    # 1. Check shape
+    assert parsed_output['volume'].shape == (batch_size, depth, height, width, channels), \
+        f"Shape mismatch. Expected {(batch_size, depth, height, width, channels)}, got {parsed_output['volume'].shape}"
+
+    # 2. Check data integrity
+    np.testing.assert_array_almost_equal(parsed_output['volume'].numpy(), original_data, decimal=5)
+
+    print("Test passed: tf.io.parse_example successfully handled 3D volumetric data.")
+
+if __name__ == "__main__":
+    test_tf_io_parse_example_with_3d_data()

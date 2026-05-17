@@ -1,0 +1,67 @@
+import torch
+import tensorflow as tf
+
+# The API tf.compat.v1.train.add_queue_runner requires graph mode (TF1 behavior)
+tf.compat.v1.disable_eager_execution()
+
+def f(count):
+    # Create a simple FIFO queue and a QueueRunner
+    # This mimics the tensor operations in the original PyTorch code
+    q = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.float32])
+    enqueue_op = q.enqueue([1.0])
+    qr = tf.compat.v1.train.QueueRunner(q, [enqueue_op])
+
+    # The API under test: add_queue_runner
+    # This is analogous to the clone operation in the original bug
+    tf.compat.v1.train.add_queue_runner(qr)
+
+    # Check the "state" preservation
+    # In PyTorch: checking if stride is preserved after clone
+    # Here: checking if the runner is preserved in the collection after add
+    collection = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+    if qr in collection:
+        return count + 1
+    return count
+
+# Initialize a count variable, mimicking torch.zeros(1)
+# Note: In TF1 graph mode, we often use tensors for state, but here we use python ints
+# to match the control flow logic of the original test case closely.
+initial_count = 0
+
+# Run 1: Standard execution (Graph construction phase in TF1)
+# This corresponds to the eager execution in PyTorch
+with tf.Graph().as_default():
+    res1 = f(initial_count)
+    print(f"Result 1 (Standard): {res1}")
+
+# Run 2: Wrapped in tf.function
+# This corresponds to torch.compile in PyTorch
+# We test if the behavior changes when traced/compiled
+@tf.function
+def compiled_f(count):
+    # Re-defining ops inside the function for tf.function tracing
+    q = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.float32])
+    enqueue_op = q.enqueue([1.0])
+    qr = tf.compat.v1.train.QueueRunner(q, [enqueue_op])
+    
+    tf.compat.v1.train.add_queue_runner(qr)
+    
+    collection = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+    if qr in collection:
+        return count + 1
+    return count
+
+with tf.Graph().as_default():
+    # Note: add_queue_runner is primarily for TF1 graph collections.
+    # Running it inside tf.function might behave differently or raise warnings,
+    # which is the core of what we are testing for (consistency).
+    try:
+        res2 = compiled_f(initial_count)
+        print(f"Result 2 (Compiled): {res2}")
+    except Exception as e:
+        print(f"Result 2 (Compiled): Error - {e}")
+
+# Assertion to check consistency
+# In the original bug, res1 != res2
+if 'res1' in locals() and 'res2' in locals() and isinstance(res2, int):
+    assert res1 == res2, f"Inconsistency detected: Standard={res1}, Compiled={res2}"

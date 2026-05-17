@@ -1,0 +1,36 @@
+import torch
+import tensorflow as tf
+
+def test_rmsprop_scalar_tensor():
+    """
+    Adapted test case for tf.keras.optimizers.RMSprop based on the 
+    torch.index_select scalar tensor bug.
+    
+    The original bug involves passing a 0-dimensional tensor (scalar) 
+    to an operation that expects an index. Here, we test if RMSprop 
+    can handle a 0-dimensional tensor as a parameter (learning rate), 
+    preserving the logic of testing API robustness against scalar inputs.
+    """
+    # Create a variable (analogous to the input tensor 'x' in the original test)
+    var = tf.Variable([[1.0, 2.0], [3.0, 4.0]])
+    
+    # Create a scalar (0-dimensional) tensor 
+    # (analogous to the 'index' tensor in the original test)
+    lr_scalar = tf.constant(0.01)
+    
+    try:
+        # Initialize RMSprop with the scalar tensor
+        optimizer = tf.keras.optimizers.RMSprop(learning_rate=lr_scalar)
+        
+        # Define a dummy gradient
+        grads = tf.constant([[0.1, 0.1], [0.1, 0.1]])
+        
+        # Apply gradients
+        optimizer.apply_gradients(zip([grads], [var]))
+        
+        print(f"RMSprop test succeeds with scalar tensor learning rate. Variable updated: {var.numpy()}")
+    except Exception as e:
+        print(f"RMSprop test fails with scalar tensor: {e}")
+
+if __name__ == "__main__":
+    test_rmsprop_scalar_tensor()

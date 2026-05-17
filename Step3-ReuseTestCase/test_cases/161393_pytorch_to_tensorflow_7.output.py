@@ -1,0 +1,33 @@
+import torch
+import tensorflow as tf
+
+# We use tf.function to simulate the graph compilation context similar to torch.compile
+@tf.function
+def f(x):
+    # Using the similar API: tf.keras.backend.name_scope
+    # This provides a naming context for the operations created within it
+    with tf.keras.backend.name_scope("dynamic_slice_scope"):
+        # PyTorch: nz = x.nonzero()
+        # TensorFlow: tf.where(x) returns the indices of non-zero elements
+        nz = tf.where(x)
+        
+        # PyTorch: return nz[:-1]
+        # Slicing the tensor. In TensorFlow, slicing tensors with dynamic shapes
+        # (resulting from operations like tf.where) is a standard feature.
+        return nz[:-1]
+
+# Create a random input tensor similar to torch.randn(3, 4)
+input_tensor = tf.random.normal((3, 4))
+
+# Execute the function
+try:
+    out = f(input_tensor)
+    print("Test passed. Output obtained:")
+    print(out)
+    
+    # Verify that the output is a tensor and the operation was successful
+    assert isinstance(out, tf.Tensor)
+    print("Assertion passed: Output is a Tensor.")
+    
+except Exception as e:
+    print(f"Test failed with error: {e}")

@@ -1,0 +1,46 @@
+import torch
+import tensorflow as tf
+
+def test_one_hot_zero_and_negative_depth():
+    """
+    Adapted test case based on PyTorch constant_pad_nd behavior with negative padding.
+    
+    Original PyTorch Logic:
+    - torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2]).shape -> torch.Size([5, 0])
+      (Negative padding resulting in a zero-sized dimension)
+      
+    - torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 1, 1]) -> RuntimeError
+      (Invalid negative padding configuration)
+
+    TensorFlow Adaptation:
+    - tf.one_hot creates a new dimension of size 'depth'.
+    - We test depth=0 (analogous to resulting in a zero-sized dimension).
+    - We test depth=-1 (analogous to invalid negative parameters).
+    """
+    
+    # Setup input analogous to the first dimension of the PyTorch input [5, 3]
+    indices = tf.constant([0, 1, 2, 3, 4])
+
+    # Case 1: Zero dimension (Analogous to padding resulting in size 0)
+    # PyTorch: Input [5, 3], Pad [-1, -2] -> Output [5, 0]
+    # TensorFlow: Input [5], Depth 0 -> Output [5, 0]
+    print("Testing tf.one_hot with depth=0...")
+    try:
+        result = tf.one_hot(indices, depth=0)
+        print(f"Success: Output shape is {result.shape}")
+        assert result.shape == (5, 0), f"Expected shape (5, 0), but got {result.shape}"
+    except Exception as e:
+        print(f"Failed: {e}")
+
+    # Case 2: Negative parameter (Analogous to invalid negative padding)
+    # PyTorch: Input [5, 3], Pad [-1, -2, 1, 1] -> RuntimeError
+    # TensorFlow: Input [5], Depth -1 -> Expected Error
+    print("\nTesting tf.one_hot with depth=-1...")
+    try:
+        result = tf.one_hot(indices, depth=-1)
+        print(f"Unexpected Success: Output shape is {result.shape}")
+    except Exception as e:
+        print(f"Caught expected error: {type(e).__name__}")
+
+if __name__ == "__main__":
+    test_one_hot_zero_and_negative_depth()

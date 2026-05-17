@@ -1,0 +1,71 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_keras_ops_full_2d_views():
+    """
+    Adapted from PyTorch Issue 161324.
+    
+    The original bug involves data inconsistencies when using batch_isend_irecv 
+    with 2D tensor views. Since tf.keras.ops.full is a tensor creation API 
+    (not a distributed communication API), this test verifies the data consistency 
+    of creating 2D tensors and slicing them (creating views) using tf.keras.ops.full.
+    
+    This ensures that the fundamental tensor operations used in the original 
+    bug's setup behave correctly in TensorFlow.
+    """
+    # Setup parameters mimicking the bug report
+    batch_size = 4
+    total_columns = 10
+    # Offsets defining the slices: [start1, end1, start2, end2]
+    split_offsets = [0, 3, 5, 10]
+
+    # --- Sender Side Simulation ---
+    # Create a 2D tensor using tf.keras.ops.full
+    # In PyTorch: local_tensor = torch.randn(batch_size, total_columns)
+    sender_fill_value = 1.0
+    local_tensor = tf.keras.ops.full((batch_size, total_columns), sender_fill_value)
+
+    # Create views (slices) of the tensor
+    # PyTorch: dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+    dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+    dst_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+
+    # --- Receiver Side Simulation ---
+    # Create a destination 2D tensor using tf.keras.ops.full
+    # In PyTorch: local_tensor_dst = torch.zeros(batch_size, total_columns)
+    receiver_fill_value = 0.0
+    local_tensor_dst = tf.keras.ops.full((batch_size, total_columns), receiver_fill_value)
+
+    # Create receiving views (slices)
+    # PyTorch: receiving_tensor_view1 = local_tensor_dst[:, tensor_col_offset1:end_col_offset1]
+    receiving_tensor_view1 = local_tensor_dst[:, split_offsets[0]:split_offsets[1]]
+    receiving_tensor_view2 = local_tensor_dst[:, split_offsets[2]:split_offsets[3]]
+
+    # --- Verification ---
+    
+    # 1. Verify Shapes
+    # Slice 1 should have width 3 (3 - 0)
+    assert dst_t1.shape == (batch_size, 3), f"Expected shape {(batch_size, 3)}, got {dst_t1.shape}"
+    assert receiving_tensor_view1.shape == (batch_size, 3)
+    
+    # Slice 2 should have width 5 (10 - 5)
+    assert dst_t2.shape == (batch_size, 5), f"Expected shape {(batch_size, 5)}, got {dst_t2.shape}"
+    assert receiving_tensor_view2.shape == (batch_size, 5)
+
+    # 2. Verify Data Consistency
+    # The original bug reported "inconsistent data" in the output.
+    # We verify that the slices contain the correct fill values.
+    
+    # Check sender slices contain 1.0
+    assert tf.reduce_all(tf.equal(dst_t1, sender_fill_value)).numpy(), "Sender view 1 data inconsistent"
+    assert tf.reduce_all(tf.equal(dst_t2, sender_fill_value)).numpy(), "Sender view 2 data inconsistent"
+
+    # Check receiver slices contain 0.0
+    assert tf.reduce_all(tf.equal(receiving_tensor_view1, receiver_fill_value)).numpy(), "Receiver view 1 data inconsistent"
+    assert tf.reduce_all(tf.equal(receiving_tensor_view2, receiver_fill_value)).numpy(), "Receiver view 2 data inconsistent"
+
+    print("Test Passed: tf.keras.ops.full maintains data consistency with 2D tensor views.")
+
+if __name__ == "__main__":
+    test_tf_keras_ops_full_2d_views()

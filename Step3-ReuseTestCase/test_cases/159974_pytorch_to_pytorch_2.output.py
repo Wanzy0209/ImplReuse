@@ -1,0 +1,20 @@
+import torch
+
+def prod_func(x):
+    # Using the similar API: torch.prod
+    return torch.prod(x)
+
+# Setup data on XPU as per the original bug report context
+x = torch.randn(128).to("xpu")
+
+# Test eager mode
+out = prod_func(x)
+print("eager mode passed")
+
+# Test compiled mode
+prod_func_compiled = torch.compile(prod_func)
+out = prod_func_compiled(x)
+print("torch.compile passed")
+
+# Verify results match (if no segfault occurs)
+assert torch.allclose(prod_func(x), out)

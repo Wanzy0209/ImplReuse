@@ -1,0 +1,41 @@
+import torch
+import torch.distributed as dist
+import torch.hub
+import os
+
+def main():
+    # Setup from the original bug report context
+    gpu_id = int(os.environ.get("LOCAL_RANK", "0"))
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+
+    # Initialize process group to maintain the distributed environment context
+    dist.init_process_group(backend='nccl', device_id=gpu_id)
+
+    # Adaptation: Test the similar API torch.hub.load_state_dict_from_url
+    # We use a standard URL for testing (ResNet18 weights) and map it to the specific device
+    url = 'https://download.pytorch.org/models/resnet18-f37072fd.pth'
+    
+    try:
+        state_dict = torch.hub.load_state_dict_from_url(
+            url,
+            map_location=device,
+            progress=False
+        )
+        
+        # Assertions to verify the API behavior
+        assert isinstance(state_dict, dict), "Loaded object should be a dictionary (state dict)"
+        assert len(state_dict) > 0, "State dict should not be empty"
+        
+        print(f"Rank {gpu_id}: Successfully loaded state dict from URL.")
+        
+    except Exception as e:
+        print(f"Rank {gpu_id}: Failed to load state dict - {e}")
+        raise
+
+    # Synchronize processes
+    dist.barrier()
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

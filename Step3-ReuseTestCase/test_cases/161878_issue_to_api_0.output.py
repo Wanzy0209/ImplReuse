@@ -1,0 +1,91 @@
+import torch
+import torch.nn as nn
+import torch._inductor
+
+# Reusing the pattern from tf.compat.v1.global_variables_initializer
+# to handle initialization logic based on execution context.
+def inductor_initializer(model):
+    """
+    Mimics tf.compat.v1.global_variables_initializer logic.
+    
+    In TF:
+        if context.executing_eagerly():
+            return control_flow_ops.no_op(...)
+        return variables_initializer(global_variables())
+            
+    In PyTorch (adapted for the bug context):
+        If in inference mode (or specific static context), skip heavy initialization.
+        Otherwise, perform standard initialization.
+    """
+    # Check if we are in a context where initialization should be skipped
+    # analogous to context.executing_eagerly() in TF.
+    if torch.is_inference_mode_enabled():
+        # Mimic control_flow_ops.no_op
+        return lambda: None
+    else:
+        # Mimic variables_initializer(global_variables())
+        def init_fn():
+            for p in model.parameters():
+                if p.requires_grad:
+                    nn.init.normal_(p)
+        return init_fn
+
+class SimpleBERT(nn.Module):
+    """
+    Minimal BERT-like structure to reproduce the bug scenario.
+    """
+    def __init__(self):
+        super().__init__()
+        self.embed = nn.Embedding(1000, 128)
+        self.encoder = nn.TransformerEncoderLayer(d_model=128, nhead=8)
+    
+    def forward(self, x):
+        x = self.embed(x)
+        return self.encoder(x)
+
+def test_inductor_amp_static_cpp_performance():
+    """
+    Test case for Issue 161878: Performance regression in Inductor.
+    
+    Preserves the original bug reproduction logic:
+    - Uses torch._inductor (via torch.compile)
+    - Simulates AMP (Automatic Mixed Precision)
+    - Uses static shape (batch_size=2)
+    
+    Leverages the similar API (tf.compat.v1.global_variables_initializer)
+    by implementing a conditional initialization wrapper that checks the
+    execution context before performing operations.
+    """
+    model = SimpleBERT()
+    
+    # Apply the initializer pattern
+    # In training mode, this should initialize weights
+    initializer = inductor_initializer(model)
+    initializer()
+    
+    # Simulate AMP (Automatic Mixed Precision) setup
+    # The bug report specifically mentions AMP performance.
+    model = model.to(torch.float16)
+    
+    # Compile with Inductor
+    # The bug report mentions 'cpp wrapper' and 'static shape'.
+    # We assume the fix involves the conditional logic checked above.
+    compiled_model = torch.compile(model, backend="inductor")
+    
+    # Run inference (static shape batch_size=2 as in bug report)
+    with torch.no_grad():
+        # In inference mode, the initializer should be a no-op if called again.
+        # This verifies the conditional logic path derived from the similar API.
+        inference_initializer = inductor_initializer(model)
+        inference_initializer() 
+        
+        # Static shape input
+        x = torch.randint(0, 1000, (2, 32)) 
+        output = compiled_model(x)
+        
+    # Basic assertion to ensure execution and correctness
+    assert output is not None
+    assert output.shape == (2, 32, 128)
+
+if __name__ == "__main__":
+    test_inductor_amp_static_cpp_performance()

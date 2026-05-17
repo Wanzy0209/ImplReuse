@@ -1,0 +1,104 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use tf.compat.v1.train.range_input_producer
+tf.compat.v1.disable_eager_execution()
+
+# Constants from the original bug report
+MAX = 3
+BATCH = 37
+
+def test_range_input_producer_with_jacobian():
+    """
+    Adapts the PyTorch test case to use tf.compat.v1.train.range_input_producer.
+    
+    Original Logic:
+    1. Generate random indices (idxs).
+    2. Define func(x, idxs) = x^2 * one_hot(idxs).
+    3. Compute Jacobian of func w.r.t x.
+    4. Compile and run.
+    
+    Adapted Logic:
+    1. Use tf.compat.v1.train.range_input_producer to generate indices (Target API).
+    2. Define the same func using TF ops.
+    3. Compute Jacobian using tf.gradients (TF V1 equivalent).
+    4. Run in a Session (TF V1 equivalent of compiled execution).
+    """
+    
+    # 1. Setup Input Data using the Target API
+    # range_input_producer produces integers from 0 to limit-1.
+    # We use shuffle=False to ensure deterministic behavior for the test, 
+    # though the original used random integers.
+    idxs_producer = tf.compat.v1.train.range_input_producer(
+        limit=MAX, 
+        shuffle=False, 
+        seed=42,
+        capacity=32
+    )
+    
+    # Batch the indices to match the shape (BATCH,) from the original code
+    batch_idxs = tf.compat.v1.train.batch(
+        [idxs_producer], 
+        batch_size=BATCH, 
+        capacity=32,
+        enqueue_many=False
+    )
+    
+    # Placeholder for x
+    x_ph = tf.compat.v1.placeholder(tf.float64, shape=(BATCH, MAX))
+
+    # 2. Define the function logic
+    # func(x, idxs) = x.square() * torch.nn.functional.one_hot(idxs, MAX)
+    def func(x, idxs):
+        return tf.square(x) * tf.one_hot(idxs, MAX, dtype=x.dtype)
+
+    # 3. Define Jacobian calculation
+    # torch.func.jacfwd computes the Jacobian of func w.r.t argnums=0 (x).
+    # In TF V1, we compute gradients for each output element.
+    
+    y = func(x_ph, batch_idxs)
+    
+    # Compute gradients for each element of the output tensor y
+    # y has shape (BATCH, MAX), x has shape (BATCH, MAX)
+    # The Jacobian will have shape (BATCH, MAX, BATCH, MAX)
+    jacobian_list = []
+    for i in range(BATCH):
+        for j in range(MAX):
+            # Compute gradient of y[i,j] with respect to x
+            grad = tf.gradients(y[i, j], x_ph)[0]
+            jacobian_list.append(grad)
+            
+    # Stack gradients to form the full Jacobian tensor
+    jacobian = tf.reshape(tf.stack(jacobian_list), [BATCH, MAX, BATCH, MAX])
+
+    # 4. Execution
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables and queues
+        sess.run(tf.compat.v1.global_variables_initializer())
+        sess.run(tf.compat.v1.local_variables_initializer())
+        
+        # Start queue runners to feed data from range_input_producer
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+        
+        try:
+            # Generate random x data
+            x_val = np.random.rand(BATCH, MAX).astype(np.float64)
+            
+            # Run the Jacobian calculation
+            # This corresponds to the "out = jacfunc(x, idxs)" line in the original
+            jacobian_val = sess.run(jacobian, feed_dict={x_ph: x_val})
+            
+            # Verify output shape
+            assert jacobian_val.shape == (BATCH, MAX, BATCH, MAX), \
+                f"Expected shape {(BATCH, MAX, BATCH, MAX)}, got {jacobian_val.shape}"
+            
+            print("Test passed. Jacobian computed successfully using range_input_producer.")
+            
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_range_input_producer_with_jacobian()

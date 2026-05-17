@@ -1,0 +1,28 @@
+import torch
+import torch.nn.functional as F
+
+def test_negative_padding_consistency():
+    # Test Case 1: Valid negative padding resulting in size 0 (Last dimension)
+    # Original: torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2])
+    input_tensor = torch.ones([5, 3])
+    output = F.pad(input_tensor, [-1, -2], mode='constant')
+    assert output.shape == torch.Size([5, 0]), f"Expected shape [5, 0], got {output.shape}"
+
+    # Test Case 2: Valid negative padding on multiple dimensions
+    # Original: torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, -1, -1])
+    output = F.pad(input_tensor, [-1, -2, -1, -1], mode='constant')
+    assert output.shape == torch.Size([3, 0]), f"Expected shape [3, 0], got {output.shape}"
+
+    # Test Case 3: Mixed padding (Negative on one dim, Positive on another)
+    # This is the specific case that triggers the bug in constant_pad_nd.
+    # Original: torch.ops.aten.constant_pad_nd.default(torch.ones([5, 3]), [-1, -2, 1, 1])
+    # Expected behavior: Should result in shape [7, 0] (5+1+1, 3-1-2) without error.
+    try:
+        output_mixed = F.pad(input_tensor, [-1, -2, 1, 1], mode='constant')
+        assert output_mixed.shape == torch.Size([7, 0]), f"Expected shape [7, 0], got {output_mixed.shape}"
+        print("Test Case 3 passed: Mixed padding handled correctly.")
+    except RuntimeError as e:
+        print(f"Test Case 3 failed: Bug reproduced in F.pad - {e}")
+
+if __name__ == "__main__":
+    test_negative_padding_consistency()

@@ -1,0 +1,43 @@
+import torch
+import tensorflow as tf
+
+def test_registered_schemes_compatibility():
+    """
+    Test case adapted from PyTorch Issue #160575.
+    
+    Original Bug Logic:
+    1. User has a GPU with capability 'sm_52'.
+    2. PyTorch provides a list of supported architectures via torch.cuda.get_arch_list().
+    3. The bug occurs because 'sm_52' is missing from that list, triggering a compatibility warning.
+    
+    Adapted Logic for TensorFlow:
+    1. We define a required filesystem scheme (e.g., 'file').
+    2. TensorFlow provides a list of registered schemes via tf.io.gfile.get_registered_schemes().
+    3. We verify that the required scheme exists in the list, ensuring compatibility.
+    """
+    
+    # Analogous to torch.cuda.get_arch_list()
+    # Returns the list of capabilities (schemes) supported by the current installation.
+    supported_schemes = tf.io.gfile.get_registered_schemes()
+    
+    # Analogous to the specific GPU architecture (e.g., sm_52) the user needs.
+    # We use 'file' as it is a standard, expected scheme in TensorFlow.
+    required_scheme = "file"
+    
+    # Verify the list is not empty and contains the required capability.
+    # In the original bug, this check failed (sm_52 was not in the list).
+    # Here we assert it passes for a standard scheme.
+    assert isinstance(supported_schemes, list), "Registered schemes should be a list."
+    
+    assert required_scheme in supported_schemes, (
+        f"Scheme '{required_scheme}' is not compatible with the current "
+        f"TensorFlow installation. The current TensorFlow install supports "
+        f"schemes: {supported_schemes}."
+    )
+    
+    # The empty string is always included for local paths per API documentation.
+    assert "" in supported_schemes, "Empty string scheme should be present for local filesystem paths."
+
+if __name__ == "__main__":
+    test_registered_schemes_compatibility()
+    print("Test passed: Required scheme is registered.")

@@ -1,0 +1,60 @@
+import torch
+import torch.nn.functional as F
+import unittest
+
+class TestConvTranspose2dCompileRegression(unittest.TestCase):
+    """
+    Test case to reproduce torch.compile regression with dynamic shapes
+    using torch.nn.functional.conv_transpose2d.
+    
+    Relates to Issue 161372: torch.compile regression in 2.8.0
+    The original issue involved a recompilation limit hit due to tensor size mismatches
+    (e.g., expected 77, actual 78) in an LLM context. This test adapts that logic
+    to the similar API (conv_transpose2d) by varying input spatial dimensions.
+    """
+
+    def test_dynamic_shapes_conv_transpose2d(self):
+        # Define a simple function using the similar API
+        def conv_transpose_fn(x, weight):
+            # Using stride and padding to ensure output size depends on input size
+            return F.conv_transpose2d(x, weight, stride=2, padding=1)
+
+        # Setup dummy weights
+        in_channels = 16
+        out_channels = 3
+        kernel_size = 3
+        weight = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+
+        # Compile the function
+        # In the bug report, torch.compile fails when inputs have varying shapes
+        # causing repeated recompilations until the limit is hit.
+        compiled_fn = torch.compile(conv_transpose_fn)
+
+        # Run with a sequence of different input sizes to simulate dynamic behavior
+        # (e.g., varying sequence lengths in an LLM or varying image sizes here)
+        input_sizes = [10, 11, 12, 13, 14]
+        
+        try:
+            for h in input_sizes:
+                # Create input with dynamic height/width
+                x = torch.randn(1, in_channels, h, h)
+                
+                # Execute compiled function
+                output = compiled_fn(x, weight)
+                
+                # Verify output shape calculation logic
+                # H_out = (H_in - 1) * stride - 2 * padding + dilation * (kernel_size - 1) + output_padding + 1
+                # With stride=2, padding=1, dilation=1, kernel=3, output_padding=0:
+                # H_out = (h - 1) * 2 - 2 + 2 + 1 = 2h - 1
+                expected_h = 2 * h - 1
+                self.assertEqual(output.shape[2], expected_h, 
+                                 f"Output shape mismatch for input size {h}")
+                
+            print("Test Passed: torch.compile handled dynamic shapes for conv_transpose2d successfully.")
+
+        except Exception as e:
+            # Catching potential recompilation errors or graph breaks similar to the issue
+            self.fail(f"torch.compile failed with dynamic shapes for conv_transpose2d: {e}")
+
+if __name__ == "__main__":
+    unittest.main()

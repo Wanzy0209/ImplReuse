@@ -1,0 +1,41 @@
+import torch
+import tensorflow as tf
+
+def foo(x):
+    # Using the similar API: tf.compat.v1.name_scope
+    # This context manager groups operations together, analogous to how torch.compile
+    # groups operations for optimization, though the semantic effect differs.
+    with tf.compat.v1.name_scope("uint_neg_add_scope"):
+        c = tf.constant(7, dtype=tf.uint8)
+        # Replicating the operations from the bug report:
+        # 1. c + x
+        # 2. neg(c)
+        # 3. neg(c) + x
+        return c + x, tf.negative(c), tf.negative(c) + x
+
+# Set seed for reproducibility
+tf.random.set_seed(0)
+x = tf.random.normal((2, 2), dtype=tf.float32)
+print(f"input: {x}")
+
+# Execute the function
+res = foo(x)
+
+# Print results to observe behavior
+# Note: In TensorFlow, tf.negative on uint8 typically promotes to int32 (-7),
+# whereas PyTorch eager mode wraps (249). PyTorch compiled (buggy) also promoted (-7).
+print(f"res[0]: {res[0]}")
+print(f"res[1]: {res[1]}")
+print(f"res[2]: {res[2]}")
+
+# Assertions to verify execution and basic properties
+assert res[0].shape == (2, 2), "Shape of res[0] should be (2, 2)"
+assert res[1].dtype in [tf.int32, tf.int64], "neg(uint8) in TF promotes to signed int"
+assert res[2].shape == (2, 2), "Shape of res[2] should be (2, 2)"
+
+# Verify the specific computation logic for TensorFlow
+# TF promotes uint8 negation to int32, so neg(7) is -7.
+# Therefore res[2] should be x - 7.
+expected_res_2 = x - 7
+# Check if the values match the expected TF behavior (promotion to signed int)
+assert tf.reduce_all(tf.equal(res[2], expected_res_2)).numpy(), "res[2] should equal x - 7 in TensorFlow"

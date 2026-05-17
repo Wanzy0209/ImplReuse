@@ -1,0 +1,75 @@
+import torch
+import unittest
+import sys
+
+class TestCdistCUDALinking(unittest.TestCase):
+    """
+    Test case for torch.cdist to verify CUDA kernel availability and linking.
+    
+    This test is derived from Issue 160980, which highlighted build/linking failures 
+    (undefined references) on specific CUDA architectures (SM_75) when using NVSHMEM. 
+    While torch.cdist is a different API, it relies on similar CUDA compilation and 
+    linking mechanisms. This test ensures that the necessary kernels for torch.cdist 
+    are present and executable on the current CUDA device, acting as a runtime 
+    verification for the build integrity.
+    """
+    
+    def setUp(self):
+        self.device = torch.device("cuda")
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is not available, skipping CUDA linking test")
+
+    def test_cdist_compute_modes(self):
+        """
+        Test torch.cdist with different compute modes to ensure various 
+        kernel implementations (matrix multiplication vs. pairwise) are linked correctly.
+        """
+        # Create tensors. Dimensions are chosen to be valid for all compute modes.
+        x1 = torch.randn(10, 5, device=self.device)
+        x2 = torch.randn(10, 5, device=self.device)
+
+        # Test 1: use_mm_for_euclid_dist
+        # This mode triggers the matrix multiplication kernel path.
+        try:
+            res_mm = torch.cdist(x1, x2, p=2.0, compute_mode='use_mm_for_euclid_dist')
+            self.assertFalse(torch.isnan(res_mm).any(), "NaN found in use_mm_for_euclid_dist result")
+        except RuntimeError as e:
+            self.fail(f"torch.cdist failed with compute_mode='use_mm_for_euclid_dist'. "
+                      f"This might indicate a missing kernel (linking issue). Error: {e}")
+
+        # Test 2: donot_use_mm_for_euclid_dist
+        # This mode triggers the pairwise distance kernel path.
+        try:
+            res_no_mm = torch.cdist(x1, x2, p=2.0, compute_mode='donot_use_mm_for_euclid_dist')
+            self.assertFalse(torch.isnan(res_no_mm).any(), "NaN found in donot_use_mm_for_euclid_dist result")
+        except RuntimeError as e:
+            self.fail(f"torch.cdist failed with compute_mode='donot_use_mm_for_euclid_dist'. "
+                      f"This might indicate a missing kernel (linking issue). Error: {e}")
+
+        # Test 3: use_mm_for_euclid_dist_if_necessary (default)
+        # This mode switches between implementations based on input size.
+        try:
+            res_default = torch.cdist(x1, x2, p=2.0)
+            self.assertFalse(torch.isnan(res_default).any(), "NaN found in default compute_mode result")
+        except RuntimeError as e:
+            self.fail(f"torch.cdist failed with default compute_mode. "
+                      f"This might indicate a missing kernel (linking issue). Error: {e}")
+
+    def test_cdist_p_norm_variations(self):
+        """
+        Test torch.cdist with different p-norm values to ensure specialized kernels are linked.
+        """
+        x1 = torch.randn(5, 3, device=self.device)
+        x2 = torch.randn(5, 3, device=self.device)
+
+        for p_val in [1.0, 2.0, float('inf')]:
+            with self.subTest(p=p_val):
+                try:
+                    res = torch.cdist(x1, x2, p=p_val)
+                    self.assertFalse(torch.isnan(res).any(), f"NaN found for p={p_val}")
+                except RuntimeError as e:
+                    self.fail(f"torch.cdist failed for p={p_val}. "
+                              f"This might indicate a missing kernel (linking issue). Error: {e}")
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,39 @@
+import torch
+import tensorflow as tf
+
+# Use tf.function to mimic the compilation aspect of torch.compile
+@tf.function
+def fn(encoder_attention_mask, encoder_hidden_states):
+    # Use the requested similar API: tf.keras.name_scope
+    with tf.keras.name_scope("data_dependent_slice"):
+        # encoder_hidden_states = encoder_hidden_states.new_zeros([1, 512, 3072])
+        # In TensorFlow, we create a zeros tensor. We assume float32 based on the context.
+        encoder_hidden_states = tf.zeros([1, 512, 3072], dtype=tf.float32)
+
+        # text_len = encoder_attention_mask.sum().item()
+        # In TensorFlow, reduce_sum returns a tensor. We cast to int32 for slicing.
+        text_len = tf.reduce_sum(encoder_attention_mask)
+        text_len = tf.cast(text_len, tf.int32)
+
+        # encoder_hidden_states = encoder_hidden_states[:, :text_len]
+        # Perform the data-dependent slice
+        encoder_hidden_states = encoder_hidden_states[:, :text_len]
+
+        return encoder_hidden_states
+
+# Setup inputs
+# mask = (torch.arange(512) < 8).unsqueeze(0).cuda()
+# Create a boolean mask, cast to int32 (0 or 1), and add batch dimension
+mask = tf.expand_dims(tf.cast(tf.range(512) < 8, dtype=tf.int32), axis=0)
+
+# hidden = torch.randn((1, 512, 4096)).cuda()
+hidden = tf.random.normal((1, 512, 4096))
+
+# Execute the function
+result = fn(mask, hidden)
+
+# Verify the result
+# The mask sum is 8, so the second dimension should be sliced to 8.
+# Expected shape: [1, 8, 3072]
+print("Result shape:", result.shape)
+assert result.shape == tf.TensorShape([1, 8, 3072]), f"Expected shape [1, 8, 3072], got {result.shape}"

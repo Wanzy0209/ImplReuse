@@ -1,0 +1,74 @@
+import torch
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+import numpy as np
+
+def test_triu_gradient_behavior():
+    """
+    Adapted test case to verify gradient behavior of tf.experimental.numpy.triu.
+    The original issue highlighted inconsistent gradient distributions in torch.min 
+    based on how the function was called. For triu, we verify that gradients 
+    correctly flow through the mask (upper triangle) and are zeroed out 
+    in the lower triangle across different configurations (k parameter).
+    """
+    
+    # Test Case 1: Default behavior (k=0)
+    # Gradients should be 1.0 on and above the diagonal, 0.0 below.
+    print("--- Test Case 1: triu(input, k=0) ---")
+    a = tf.ones([3, 3], dtype=tf.float32)
+    
+    with tf.GradientTape() as tape:
+        tape.watch(a)
+        # triu zeros out the lower triangle
+        result = tnp.triu(a)
+        loss = tf.reduce_sum(result)
+    
+    grads = tape.gradient(loss, a)
+    
+    # Expected: Upper triangle (including diagonal) gets gradient 1.0
+    # [[1, 1, 1],
+    #  [0, 1, 1],
+    #  [0, 0, 1]]
+    expected_grads_k0 = np.array([
+        [1., 1., 1.],
+        [0., 1., 1.],
+        [0., 0., 1.]
+    ])
+    
+    print("Input:\n", a.numpy())
+    print("Gradients:\n", grads.numpy())
+    assert np.allclose(grads.numpy(), expected_grads_k0), \
+        f"Gradient mismatch for k=0. Expected \n{expected_grads_k0}\n got \n{grads.numpy()}"
+    print("Assertion passed: Gradients correctly masked for k=0.\n")
+
+    # Test Case 2: Shifted behavior (k=1)
+    # Gradients should be 1.0 strictly above the diagonal, 0.0 on and below.
+    print("--- Test Case 2: triu(input, k=1) ---")
+    a = tf.ones([3, 3], dtype=tf.float32)
+    
+    with tf.GradientTape() as tape:
+        tape.watch(a)
+        # triu with k=1 zeros out diagonal and lower triangle
+        result = tnp.triu(a, k=1)
+        loss = tf.reduce_sum(result)
+    
+    grads = tape.gradient(loss, a)
+    
+    # Expected: Strictly upper triangle gets gradient 1.0
+    # [[0, 1, 1],
+    #  [0, 0, 1],
+    #  [0, 0, 0]]
+    expected_grads_k1 = np.array([
+        [0., 1., 1.],
+        [0., 0., 1.],
+        [0., 0., 0.]
+    ])
+    
+    print("Input:\n", a.numpy())
+    print("Gradients:\n", grads.numpy())
+    assert np.allclose(grads.numpy(), expected_grads_k1), \
+        f"Gradient mismatch for k=1. Expected \n{expected_grads_k1}\n got \n{grads.numpy()}"
+    print("Assertion passed: Gradients correctly masked for k=1.")
+
+if __name__ == "__main__":
+    test_triu_gradient_behavior()

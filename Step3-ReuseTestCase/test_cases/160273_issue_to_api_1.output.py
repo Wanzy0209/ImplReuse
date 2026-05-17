@@ -1,0 +1,49 @@
+import torch
+import tensorflow as tf
+
+def test_torch_min_gradient_behavior_with_cumsum_input():
+    """
+    Test case for Issue 160273: torch.min gradient behavior.
+    
+    This test verifies the discrepancy in gradient behavior for torch.min 
+    depending on whether it is called with a dimension argument or not.
+    
+    It leverages the similar API (tf.keras.backend.cumsum) to generate the 
+    input tensor, ensuring the test logic is preserved while reusing the 
+    candidate API for data preparation.
+    """
+    
+    # Leverage the similar API (tf.keras.backend.cumsum) to generate input data.
+    # We need a tensor with equal values to observe the gradient distribution behavior.
+    # cumsum([1, 0, 0, 0, 0]) results in [1, 1, 1, 1, 1], matching torch.ones([5]).
+    tf_input = tf.keras.backend.cumsum(tf.constant([1.0, 0.0, 0.0, 0.0, 0.0]))
+    
+    # Convert to PyTorch tensor and enable gradient calculation
+    # Note: Using .cuda() to match the original issue's environment, 
+    # though the behavior is consistent on CPU as well.
+    a = torch.from_numpy(tf_input.numpy()).cuda().requires_grad_(True)
+
+    # Case 1: torch.min -> reduce over all dimensions
+    # Expected: Gradients are evenly distributed (0.2 each) like amin
+    min_val = torch.min(a)
+    min_val.backward()
+    
+    expected_grad_global = torch.tensor([0.2, 0.2, 0.2, 0.2, 0.2], device='cuda:0')
+    assert torch.allclose(a.grad, expected_grad_global), \
+        f"Global min gradient mismatch. Expected {expected_grad_global}, got {a.grad}"
+
+    # Reset gradients for the next test case
+    a.grad = None
+
+    # Case 2: torch.min(input, dim=...) -> reduce over specified dimension
+    # Expected: Gradients are NOT evenly distributed (indexing-like, 1.0 at first index)
+    min_val_dim = torch.min(a, dim=0)
+    min_val_dim.values.backward()
+    
+    expected_grad_dim = torch.tensor([1., 0., 0., 0., 0.], device='cuda:0')
+    assert torch.allclose(a.grad, expected_grad_dim), \
+        f"Dim min gradient mismatch. Expected {expected_grad_dim}, got {a.grad}"
+
+if __name__ == "__main__":
+    test_torch_min_gradient_behavior_with_cumsum_input()
+    print("Test passed.")

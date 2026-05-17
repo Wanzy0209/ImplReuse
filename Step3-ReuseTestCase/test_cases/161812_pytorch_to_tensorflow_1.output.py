@@ -1,0 +1,44 @@
+import tensorflow as tf
+
+def test_log_every_n_with_tensor_inputs():
+    """
+    Adapted from PyTorch test case for Issue 161812.
+    Original: th.cat([x, x]) with jagged tensors.
+    Target: tf.compat.v1.logging.log_every_n
+    
+    This test verifies that tf.compat.v1.logging.log_every_n can handle
+    tensor inputs (specifically RaggedTensors to mimic the jagged structure)
+    without crashing, preserving the input logic of the original bug report.
+    """
+    
+    # Create a ragged tensor to mimic the PyTorch jagged tensor structure
+    # PyTorch: th.nested.nested_tensor([th.ones(3, 2, 3), th.ones(4, 2, 3)], layout=th.jagged)
+    # TensorFlow equivalent: tf.RaggedTensor with row lengths 3 and 4
+    # We use simple values for clarity, matching the 'ones' logic conceptually
+    x = tf.ragged.constant([
+        [[1, 1, 1], [1, 1, 1]],
+        [[1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1]]
+    ])
+
+    # The original bug involved passing a list of tensors [x, x].
+    # We adapt this to the target API by passing the tensors as *args.
+    # We verify the API's behavior (that it doesn't crash).
+    try:
+        # log_every_n(level, msg, n, *args)
+        # We pass x twice to mimic the [x, x] structure
+        tf.compat.v1.logging.log_every_n(
+            tf.compat.v1.logging.INFO,
+            "Logging tensors: %s, %s",
+            1,  # Log every 1 call to ensure execution
+            x,
+            x
+        )
+        # If we reach here, the API handled the tensor inputs without crashing
+        assert True
+    except Exception as e:
+        # If the API crashes similar to the PyTorch bug, this will catch it
+        raise AssertionError(f"tf.compat.v1.logging.log_every_n failed with tensor inputs: {e}")
+
+if __name__ == "__main__":
+    test_log_every_n_with_tensor_inputs()
+    print("Test case executed successfully.")
