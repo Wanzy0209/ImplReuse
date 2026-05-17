@@ -1,0 +1,60 @@
+```python
+import torch
+import torch._dynamo
+import torch.profiler.itt
+import unittest
+
+# Attempt to import the internal DebugMode used in the bug report
+# This is typically available in PyTorch development environments
+try:
+    from torch.testing._internal.debug_mode import DebugMode
+except ImportError:
+    # Fallback for environments where internal testing utils are not exposed
+    # We define a dummy or skip, but for the purpose of the test case generation
+    # we assume the context of the bug report (PyTorch dev).
+    DebugMode = None
+
+class TestDebugModeCompileInteraction(unittest.TestCase):
+    def test_compile_with_debug_mode_raises_error(self):
+        """
+        Test that torch.compile raises an error when used inside DebugMode,
+        instead of silently skipping compilation.
+        
+        This test leverages torch.profiler.itt.range_pop (and range_push) 
+        to instrument the test scope, reflecting the code similarity 
+        in context management and stack handling.
+        """
+        if DebugMode is None:
+            self.skipTest("torch.testing._internal.debug_mode.DebugMode not available")
+
+        # Leverage the similar API: range_push/pop
+        # We wrap the test logic in ITT ranges to demarcate the execution context,
+        # similar to how the bug involves checking the dispatch context stack.
+        torch.profiler.itt.range_push("test_debug_mode_compile_scope")
+
+        try:
+            def simple_model(x):
+                return x + 1
+
+            # The bug report indicates that DebugMode (a non-infra torch dispatch mode)
+            # causes torch.compile to silently skip.
+            # The expected fix behavior is to raise an error.
+            
+            with self.assertRaises(RuntimeError) as context:
+                with DebugMode():
+                    # Attempt to compile while DebugMode is active
+                    compiled_fn = torch.compile(simple_model)
+                    input_tensor = torch.randn(2)
+                    # This call should trigger the error regarding the dispatch mode
+                    compiled_fn(input_tensor)
+            
+            # Verify the error message relates to the dispatch mode issue
+            self.assertIn("non-infra torch dispatch mode", str(context.exception))
+
+        finally:
+            # Ensure we pop the range even if the test fails
+            torch.profiler.itt.range_pop()
+
+if __name__ == "__main__":
+    unittest.main()
+```

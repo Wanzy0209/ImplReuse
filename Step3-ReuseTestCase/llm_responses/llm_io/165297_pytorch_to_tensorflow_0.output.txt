@@ -1,0 +1,77 @@
+```python
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+def test_dtensor_pack_large_tensor():
+    """
+    Adapted test case for tf.experimental.dtensor.pack based on the 
+    PyTorch MaxPool2d channels_last + bfloat16 NaN bug.
+    
+    The original bug involved large tensors, bfloat16 dtype, and specific 
+    memory layouts causing NaNs. This test verifies that dtensor.pack 
+    handles large bfloat16 tensors correctly without introducing NaNs.
+    """
+    
+    # Check for devices (GPU/CPU) to create the mesh
+    # The original bug was CUDA-specific, but we test on available hardware.
+    gpu_devices = tf.config.list_physical_devices('GPU')
+    devices = gpu_devices if gpu_devices else tf.config.list_physical_devices('CPU')
+    
+    if not devices:
+        print("No devices available.")
+        return
+
+    # Dimensions from the original bug report
+    # PyTorch: N, C, H, W = 84, 64, 512, 960
+    # TensorFlow (NHWC default): N, H, W, C
+    N, H, W, C = 84, 512, 960, 64
+    
+    # Create a mesh. Using a single device mesh to mimic the single-device setup 
+    # of the original bug report.
+    mesh = dtensor.create_mesh([("x", 1)], devices=devices)
+
+    # Define a layout. 
+    # In the original bug, 'channels_last' (NHWC) was the problematic format.
+    # Here we define a replicated layout to ensure the data is packed across the mesh.
+    layout = dtensor.Layout([dtensor.UNSHARDED, dtensor.UNSHARDED, dtensor.UNSHARDED, dtensor.UNSHARDED], mesh)
+
+    print(f"Testing on device: {devices[0].device_type}")
+    print(f"Input shape (NHWC): ({N}, {H}, {W}, {C})")
+    print(f"Data type: bfloat16")
+
+    # Create large input tensor with bfloat16
+    # Using normal distribution to match the original test case
+    x = tf.random.normal((N, H, W, C), dtype=tf.bfloat16)
+
+    try:
+        # Pack the tensor into a DTensor
+        # This is the operation under test, analogous to the layout conversion + pooling in PyTorch
+        dtensor_x = dtensor.pack([x], layout)
+        
+        # Unpack to verify the content values
+        unpacked_components = dtensor.unpack(dtensor_x)
+        y = unpacked_components[0]
+
+        # Check for NaNs and Infs
+        has_nan = tf.reduce_any(tf.math.is_nan(y))
+        has_inf = tf.reduce_any(tf.math.is_inf(y))
+        
+        print(f"Output contains NaN? {has_nan.numpy()}")
+        print(f"Output contains Inf? {has_inf.numpy()}")
+        
+        # Stats
+        print(f"Stats: min={tf.reduce_min(y).numpy()}, max={tf.reduce_max(y).numpy()}")
+
+        # Assertions to verify correctness
+        assert not has_nan, "Detected NaNs in DTensor pack output!"
+        assert not has_inf, "Detected Infs in DTensor pack output!"
+        
+        print("Test passed: No NaNs or Infs detected.")
+
+    except Exception as e:
+        print(f"Test failed with exception: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_dtensor_pack_large_tensor()
+```

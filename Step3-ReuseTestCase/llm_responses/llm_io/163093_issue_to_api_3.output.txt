@@ -1,0 +1,52 @@
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+def test_reducelronplateau_preserves_lr_type():
+    """
+    Test that ReduceLROnPlateau preserves the type of the learning rate
+    when it is initialized as a tensor, preventing recompilation issues.
+    """
+    # Use torch.nn.Linear as the model, consistent with the similar API pattern
+    model = nn.Linear(10, 10)
+    
+    # Initialize optimizer with a tensor LR (the trigger for the bug)
+    initial_lr = torch.tensor(0.1)
+    optimizer = optim.Adam(model.parameters(), lr=initial_lr)
+    
+    # Verify initial LR is a tensor
+    assert isinstance(optimizer.param_groups[0]['lr'], torch.Tensor), \
+        "Initial LR should be a Tensor"
+
+    # Initialize scheduler
+    # patience=0 ensures reduction happens on the first step if metric doesn't improve
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 
+        factor=0.5, 
+        patience=0, 
+        min_lr=0.001
+    )
+
+    # Step 1: Metric improves (no reduction)
+    scheduler.step(1.0)
+    scheduler.step(0.5)
+    
+    # Step 2: Metric worsens (triggers reduction)
+    # This is where the bug occurs: _reduce_lr sets lr to float
+    scheduler.step(1.0)
+
+    # Check that the LR is still a tensor after reduction
+    current_lr = optimizer.param_groups[0]['lr']
+    assert isinstance(current_lr, torch.Tensor), \
+        f"LR type changed from Tensor to {type(current_lr)}. This triggers recompilation."
+    
+    # Check that the value was actually reduced
+    assert torch.allclose(current_lr, torch.tensor(0.05)), \
+        f"LR value should be 0.05, but got {current_lr}"
+
+    print("Test passed: ReduceLROnPlateau preserves Tensor LR type.")
+
+if __name__ == "__main__":
+    test_reducelronplateau_preserves_lr_type()
+```

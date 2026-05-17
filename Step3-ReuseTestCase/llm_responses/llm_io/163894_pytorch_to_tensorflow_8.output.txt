@@ -1,0 +1,100 @@
+```python
+import tensorflow as tf
+
+# Adapted test case for tf.compat.v1.assert_type
+# The original bug involved eager/compile divergence with torch.nonzero.
+# Here we test the similar API tf.compat.v1.assert_type in a similar
+# context (eager vs compiled graph execution) to ensure stability.
+
+def fuzzed_program(arg_0, sentinel):
+    # var_node_1 = arg_0
+    # size=(1, 2), dtype=int64
+    var_node_1 = arg_0
+
+    # var_node_5 = torch.full((1, 2), -66, dtype=torch.int32)
+    var_node_5 = tf.fill((1, 2), -66)
+    var_node_5 = tf.cast(var_node_5, tf.int32)
+
+    # var_node_6 = torch.full((1, 2), 77, dtype=torch.int64)
+    var_node_6 = tf.fill((1, 2), 77)
+    var_node_6 = tf.cast(var_node_6, tf.int64)
+
+    # var_node_4 = torch.ops.aten.add(var_node_5, var_node_6)
+    # PyTorch implicit casting: int32 + int64 -> int32 (based on original comment)
+    var_node_4 = tf.add(var_node_5, tf.cast(var_node_6, tf.int32))
+
+    # var_node_7 = torch.full((1, 2), -64, dtype=torch.int32)
+    var_node_7 = tf.fill((1, 2), -64)
+    var_node_7 = tf.cast(var_node_7, tf.int32)
+
+    # var_node_3 = torch.ops.aten.mul(var_node_4, var_node_7)
+    var_node_3 = tf.multiply(var_node_4, var_node_7)
+
+    # var_node_9 = torch.full((3, 4), False, dtype=torch.bool)
+    var_node_9 = tf.fill((3, 4), False)
+    var_node_9 = tf.cast(var_node_9, tf.bool)
+
+    # --- TARGET API USAGE ---
+    # Original: var_node_8 = torch.nonzero(var_node_9)
+    # Adaptation: Use tf.compat.v1.assert_type to verify the type of var_node_9.
+    # This mimics the "operation" on the boolean tensor.
+    # We also perform the equivalent of nonzero (tf.where) to maintain data flow.
+    tf.compat.v1.assert_type(var_node_9, tf.bool, message="var_node_9 must be bool")
+    
+    # To keep the program logic consistent with the original (which uses the result),
+    # we calculate the indices. 
+    # Note: tf.where on all False returns shape (0, 2).
+    var_node_8 = tf.where(var_node_9)
+
+    # var_node_2 = torch.ops.aten.add(var_node_3, var_node_8)
+    # Broadcasting (1, 2) + (0, 2) -> (1, 2)
+    var_node_2 = tf.add(var_node_3, tf.cast(var_node_8, tf.int32))
+
+    # var_node_0 = torch.ops.aten.div(var_node_1, var_node_2)
+    # Cast to float for division to match standard behavior and avoid integer division issues
+    var_node_0 = tf.math.divide(tf.cast(var_node_1, tf.float32), tf.cast(var_node_2, tf.float32))
+
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+    return result
+
+# Sentinel tensor
+sentinel = tf.constant(1.0)
+
+# Input arguments
+arg_0 = tf.constant([[1, 2]], dtype=tf.int64)
+
+# 1. Test Eager Mode
+print("Testing Eager Mode...")
+try:
+    with tf.GradientTape() as tape:
+        tape.watch(sentinel)
+        result_eager = fuzzed_program(arg_0, sentinel)
+    
+    grads_eager = tape.gradient(result_eager, sentinel)
+    print(f'✅ Eager success. Result: {result_eager.shape}, Grad: {grads_eager}')
+except Exception as e:
+    print(f'❌ Eager failed: {e}')
+
+# 2. Test Compiled Mode (tf.function)
+print("\nTesting Compiled Mode (tf.function)...")
+try:
+    compiled_program = tf.function(fuzzed_program)
+    
+    with tf.GradientTape() as tape:
+        tape.watch(sentinel)
+        result_compiled = compiled_program(arg_0, sentinel)
+        
+    grads_compiled = tape.gradient(result_compiled, sentinel)
+    print(f'✅ Compile success. Result: {result_compiled.shape}, Grad: {grads_compiled}')
+except Exception as e:
+    print(f'❌ Compile failed: {e}')
+
+# 3. Verify Consistency
+# Note: Due to potential differences in float precision or random seeds (if used),
+# we check shape and dtype consistency primarily.
+if 'result_eager' in locals() and 'result_compiled' in locals():
+    assert result_eager.shape == result_compiled.shape, "Shape divergence detected!"
+    assert result_eager.dtype == result_compiled.dtype, "Dtype divergence detected!"
+    print("\n✅ Eager and Compiled results are consistent.")
+```

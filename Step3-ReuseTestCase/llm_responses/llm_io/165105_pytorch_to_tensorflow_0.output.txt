@@ -1,0 +1,88 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_tf_keras_backend_switch_divergence():
+    """
+    Adapted from PyTorch Issue 165105 (Matmul decomposition DDE).
+    This test checks for Eager vs. Compiled (Graph) mode divergence
+    when using tf.keras.backend.switch with complex float16 tensor shapes.
+    """
+    
+    # Set seeds for reproducibility, matching the PyTorch fuzzer setup
+    tf.random.set_seed(70609)
+    np.random.seed(70609)
+
+    # Define inputs mimicking the PyTorch fuzzer arguments
+    # arg_0: size=(14, 6), dtype=float16
+    arg_0 = tf.constant(np.random.randn(14, 6), dtype=tf.float16)
+    
+    # arg_1: size=(13, 1), dtype=float16
+    arg_1 = tf.constant(np.random.randn(13, 1), dtype=tf.float16)
+    
+    # arg_2: size=(1, 10), dtype=float16
+    arg_2 = tf.constant(np.random.randn(1, 10), dtype=tf.float16)
+    
+    # arg_4: size=(1,), dtype=bool (Used as the condition for switch)
+    arg_4 = tf.constant([True], dtype=tf.bool)
+
+    # Logic function encapsulating the matmul chain from the PyTorch bug report
+    def compute_matmul_chain(a0, a1, a2):
+        # var_node_9 = torch.full((6, 13), 1.3154296875, dtype=torch.float16)
+        var_node_9 = tf.fill([6, 13], tf.cast(1.3154296875, tf.float16))
+        
+        # var_node_8 = torch.matmul(var_node_9, arg_1)
+        var_node_8 = tf.matmul(var_node_9, a1)
+        
+        # var_node_13 = torch.full((10, 416), 0.1331787109375, dtype=torch.float16)
+        var_node_13 = tf.fill([10, 416], tf.cast(0.1331787109375, tf.float16))
+        
+        # var_node_11 = torch.matmul(arg_2, var_node_13)
+        var_node_11 = tf.matmul(a2, var_node_13)
+        
+        # var_node_7 = torch.matmul(var_node_8, var_node_11)
+        var_node_7 = tf.matmul(var_node_8, var_node_11)
+        
+        # var_node_5 = torch.matmul(arg_0, var_node_7)
+        var_node_5 = tf.matmul(a0, var_node_7)
+        
+        # var_node_4 = torch.full((14,), 1.2255859375, dtype=torch.float16)
+        var_node_4 = tf.fill([14], tf.cast(1.2255859375, tf.float16))
+        
+        # var_node_3 = torch.matmul(var_node_4, var_node_5)
+        var_node_3 = tf.matmul(var_node_4, var_node_5)
+        
+        # var_node_2 = var_node_3.contiguous().view([26, 1, 16])
+        var_node_2 = tf.reshape(var_node_3, [26, 1, 16])
+        
+        return var_node_2
+
+    # 1. Execute in Eager Mode
+    with tf.init_scope():
+        result_eager = compute_matmul_chain(arg_0, arg_1, arg_2)
+        # Apply tf.keras.backend.switch
+        # If condition (arg_4) is True, return result_eager, else return zeros
+        switch_eager = tf.keras.backend.switch(arg_4, result_eager, tf.zeros_like(result_eager))
+
+    # 2. Execute in Compiled Mode (Graph Mode)
+    @tf.function
+    def compiled_fn(a0, a1, a2, cond):
+        res = compute_matmul_chain(a0, a1, a2)
+        return tf.keras.backend.switch(cond, res, tf.zeros_like(res))
+
+    switch_compiled = compiled_fn(arg_0, arg_1, arg_2, arg_4)
+
+    # 3. Verify Consistency (Check for Divergence)
+    # Use allclose for float16 tolerance
+    if not np.allclose(switch_eager.numpy(), switch_compiled.numpy()):
+        print("FAILURE: Divergence detected between Eager and Compiled modes.")
+        print(f"Eager shape: {switch_eager.shape}, Compiled shape: {switch_compiled.shape}")
+        print(f"Eager sample: {switch_eager.numpy().flatten()[:5]}")
+        print(f"Compiled sample: {switch_compiled.numpy().flatten()[:5]}")
+        raise AssertionError("Eager and Compiled results diverged.")
+    else:
+        print("SUCCESS: No divergence detected. Eager and Compiled results match.")
+
+if __name__ == "__main__":
+    test_tf_keras_backend_switch_divergence()
+```

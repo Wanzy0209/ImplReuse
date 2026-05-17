@@ -1,0 +1,71 @@
+```python
+import tensorflow as tf
+import pytest
+
+def test_unicode_encode_input_handling():
+    """
+    Test case for tf.strings.unicode_encode inspired by PyTorch Issue #164491.
+    
+    The PyTorch issue highlights that `_scaled_mm` and `_int_mm` fail or perform poorly
+    when the input matrix (rhs) is in a specific layout (row-major) that differs from 
+    the expected default (column-major). Specifically, `_scaled_mm` raises an error 
+    for row-major input, while `_int_mm` is slow.
+
+    This test adapts that logic to `tf.strings.unicode_encode`. We verify how the API
+    handles "invalid" input configurations (non-scalar Unicode values) under different
+    error handling modes ('strict' vs 'replace'), mirroring the error-raising and 
+    fallback behaviors described in the PyTorch bug report.
+    """
+    
+    # Setup: Create a tensor of Unicode code points.
+    # Valid scalar values are 0 - 0x10FFFF, excluding surrogates 0xD800-0xDFFF.
+    # We include a surrogate value (0xD800) to simulate the "problematic" input layout.
+    valid_values = [72, 101, 108, 108, 111]  # "Hello"
+    invalid_value = 0xD800  # High surrogate (invalid scalar value)
+    
+    # Case 1: Strict Error Handling (Analogous to _scaled_mm raising an error)
+    # In the PyTorch issue, `_scaled_mm` raises an error for row-major matrices.
+    # Here, `unicode_encode` with `errors='strict'` should raise an error for 
+    # invalid code points.
+    input_tensor_strict = tf.constant(valid_values + [invalid_value])
+    
+    with pytest.raises(tf.errors.InvalidArgumentError):
+        tf.strings.unicode_encode(
+            input_tensor_strict,
+            output_encoding='UTF-8',
+            errors='strict'
+        )
+
+    # Case 2: Replace Error Handling (Analogous to _int_mm working but slow)
+    # In the PyTorch issue, `_int_mm` does not raise an error but is slow/inefficient.
+    # Here, `unicode_encode` with `errors='replace'` successfully processes the input
+    # by substituting invalid characters, ensuring the operation completes.
+    input_tensor_replace = tf.constant(valid_values + [invalid_value])
+    result_replace = tf.strings.unicode_encode(
+        input_tensor_replace,
+        output_encoding='UTF-8',
+        errors='replace'
+    )
+    
+    # The replacement character is U+FFFD, which is '\xef\xbf\xbd' in UTF-8.
+    expected_bytes = b'Hello\xef\xbf\xbd'
+    assert tf.equal(result_replace, expected_bytes).numpy().all()
+
+    # Case 3: Different Encodings (Analogous to handling different matrix layouts)
+    # The issue mentions that both column-major and row-major are common use cases.
+    # Similarly, different Unicode encodings (UTF-8 vs UTF-16) are common.
+    # We verify the API handles these distinct formats correctly.
+    input_tensor_valid = tf.constant(valid_values)
+    
+    result_utf8 = tf.strings.unicode_encode(input_tensor_valid, 'UTF-8')
+    result_utf16 = tf.strings.unicode_encode(input_tensor_valid, 'UTF-16-BE')
+    
+    # Ensure the outputs differ as expected for different encodings
+    assert result_utf8 != result_utf16
+    # Verify basic correctness for UTF-8
+    assert tf.equal(result_utf8, b'Hello').numpy().all()
+
+if __name__ == "__main__":
+    test_unicode_encode_input_handling()
+    print("Test passed.")
+```

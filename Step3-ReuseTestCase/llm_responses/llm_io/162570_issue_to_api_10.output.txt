@@ -1,0 +1,51 @@
+```python
+import tensorflow as tf
+from tensorflow.keras import regularizers
+
+# Define a simple regularizer (analogous to the Net class in the original bug)
+# We use L2 regularization as the target function.
+class Net(tf.keras.layers.Layer):
+    def __init__(self):
+        super(Net, self).__init__()
+        # Using a regularizer with l2=0.0 to test edge cases similar to atan2(0,0)
+        self.regularizer = regularizers.l2(0.0)
+
+    def call(self, x):
+        return self.regularizer(x)
+
+net = Net()
+
+# Input tensor (analogous to x and y in the original bug)
+# Using [0.0] to match the specific edge case input that triggered the bug
+x = tf.constant([0.0])
+
+# 1. Get the result from the native TensorFlow implementation
+# (Analogous to torch_result = net(x, y))
+native_result = net(x)
+
+# 2. Serialize the regularizer configuration
+# (Analogous to torch.onnx.export)
+# Note: We serialize the specific regularizer instance to test the serialization logic
+config = regularizers.serialize(net.regularizer)
+
+# 3. Deserialize the configuration back into an object
+# (Analogous to ort.InferenceSession loading the model)
+deserialized_reg = regularizers.deserialize(config)
+
+# 4. Get the result from the deserialized (exported) implementation
+# (Analogous to ort_result = sess.run(...))
+# We apply the deserialized regularizer to the same input
+serialized_result = deserialized_reg(x)
+
+# Check if the results match
+# The original bug showed torch_result=0.0 and ort_result=nan.
+# Here we assert that the serialization round-trip preserves the behavior.
+print("native_result", native_result.numpy())
+print("serialized_result", serialized_result.numpy())
+
+# Assert that the native result and the serialized result are equal
+# This ensures that the serialization process did not alter the mathematical behavior
+# (e.g., introducing NaNs where there should be zeros)
+assert tf.reduce_all(tf.equal(native_result, serialized_result)).numpy(), \
+    f"Mismatch found: Native {native_result.numpy()} vs Serialized {serialized_result.numpy()}"
+```

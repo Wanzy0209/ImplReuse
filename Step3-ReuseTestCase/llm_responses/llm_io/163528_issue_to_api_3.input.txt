@@ -1,0 +1,143 @@
+Issue ID: 163528
+Title: torch.compile don't work with searchsorted
+Bug Description:
+### 🐛 Describe the bug
+
+I discovered that torch.searchsorted is not working correctly when used with torch.compile on gpu. Everything looks like working fine on cpu.
+```python
+import torch
+from torch import nn
+
+class Foo(nn.Module):
+    def __init__(
+        self,
+        quantiles: torch.Tensor,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        self.q = nn.Parameter(quantiles, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.searchsorted(self.q, x.T).T
+    
+
+def test_device(device, x, quantiles):
+    x = x.to(device)
+    quantiles = quantiles.to(device)
+    foo = Foo(quantiles).to(device)
+    foo_compiled = torch.compile(Foo(quantiles).to(device), fullgraph=True)
+
+    # warm up
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+
+    # proper inference
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    print(f'device: {device}, diff: {torch.max(torch.abs(y_original - y_compiled)).item()}')
+    print('orignal',y_original[:5, :5])
+
+Original API Under Test: torch.searchsorted
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.experimental.numpy.append
+Similarity score: 0.9931381940841675
+
+Similar API information:
+# Extracted call chain for tf.experimental.numpy.append
+
+# --- tensorflow.python.ops.numpy_ops.np_math_ops.append ---
+def append(arr, values, axis=None):
+  if axis is None:
+    return concatenate([np_array_ops.ravel(arr), np_array_ops.ravel(values)], 0)
+  else:
+    return concatenate([arr, values], axis=axis)
+
+# --- tensorflow.python.ops.numpy_ops.np_math_ops.concatenate ---
+def concatenate(arys, axis=0):  # pylint: disable=missing-function-docstring
+  if not isinstance(arys, (list, tuple)):
+    arys = [arys]
+  if not arys:
+    raise ValueError(
+        'Need at least one array to concatenate. Received empty '
+        f'input: arys={arys}'
+    )
+  dtype = np_utils.result_type(*arys)
+  arys = [np_array_ops.array(array, dtype=dtype) for array in arys]
+  return array_ops.concat(arys, axis)
+
+# --- tensorflow.python.ops.array_ops.concat ---
+def concat(values, axis, name="concat"):
+  """Concatenates tensors along one dimension.
+
+  See also `tf.tile`, `tf.stack`, `tf.repeat`.
+
+  Concatenates the list of tensors `values` along dimension `axis`.  If
+  `values[i].shape = [D0, D1, ... Daxis(i), ...Dn]`, the concatenated
+
+Original Test Case:
+import torch
+from torch import nn
+
+class Foo(nn.Module):
+    def __init__(
+        self,
+        quantiles: torch.Tensor,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        self.q = nn.Parameter(quantiles, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.searchsorted(self.q, x.T).T
+    
+
+def test_device(device, x, quantiles):
+    x = x.to(device)
+    quantiles = quantiles.to(device)
+    foo = Foo(quantiles).to(device)
+    foo_compiled = torch.compile(Foo(quantiles).to(device), fullgraph=True)
+
+    # warm up
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+
+    # proper inference
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    print(f'device: {device}, diff: {torch.max(torch.abs(y_original - y_compiled)).item()}')
+    print('orignal',y_original[:5, :5])
+    print('compiled',y_compiled[:5, :5])
+    
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    quantile_size = 100
+    torch.manual_seed(42)
+    x = torch.randn(batch_size, feature_dim, dtype=torch.float32)
+    quantiles = torch.randn(quantile_size, feature_dim, dtype=torch.float32)
+    quantiles = torch.sort(quantiles, dim=0)[0]
+    test_device('cpu', x, quantiles)
+    test_device('cuda', x, quantiles)
+
+main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

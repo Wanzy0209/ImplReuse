@@ -1,0 +1,57 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def foo(arg0, arg1):
+    # Adapted from the original PyTorch test case logic
+    # Original: t0 = arg0 (bfloat16)
+    t0 = arg0
+    
+    # Original: t1 = t0.reshape((28, 24, 3, 127))
+    # Reshaping to match the specific dimensions that triggered the original bug
+    t1 = tf.reshape(t0, (28, 24, 3, 127))
+    
+    # Original: t2 = t1.var(dim=2) -> This caused the TypeError('unexpected type fp32')
+    # Adapted: t2 = tf.experimental.numpy.gcd(t1, arg1)
+    # Testing the similar API (gcd) with the same tensor shapes and dtype (bfloat16)
+    # to see if it exhibits similar type handling issues in eager vs compiled modes.
+    t2 = tf.experimental.numpy.gcd(t1, arg1)
+    
+    return t2
+
+# Setup inputs
+# Original arg0: size=(36, 7112, 1, 1), dtype=bfloat16
+# We use bfloat16 to target the specific type handling logic from the bug report.
+arg0 = tf.random.uniform((36, 7112, 1, 1), minval=0, maxval=100, dtype=tf.bfloat16)
+
+# arg1 needs to be compatible with t1 shape (28, 24, 3, 127) for the operation.
+# We also use bfloat16 here to stress the type promotion/casting logic.
+arg1 = tf.random.uniform((28, 24, 3, 127), minval=0, maxval=100, dtype=tf.bfloat16)
+
+if __name__ == '__main__':
+    print("Testing tf.experimental.numpy.gcd with bfloat16 inputs...")
+    
+    # Eager Execution
+    try:
+        out_eager = foo(arg0, arg1)
+        print(f'Eager Success! ✅ Output shape: {out_eager.shape}, dtype: {out_eager.dtype}')
+    except Exception as e:
+        print(f'Eager Failed! ❌ Error: {e}')
+
+    # Compiled Execution (tf.function)
+    # Using jit_compile=True to mimic the torch.compile(fullgraph=True) behavior
+    compiled_foo = tf.function(foo, jit_compile=True)
+    
+    try:
+        out_compiled = compiled_foo(arg0, arg1)
+        print(f'Compile Success! ✅ Output shape: {out_compiled.shape}, dtype: {out_compiled.dtype}')
+        
+        # Verify consistency between eager and compiled modes
+        # Note: GCD on floating point inputs involves truncation/casting, so exact match is expected if logic is consistent.
+        if tf.reduce_all(tf.equal(out_eager, out_compiled)):
+            print('Consistency Check: Passed ✅')
+        else:
+            print('Consistency Check: Failed ❌ (Divergence detected)')
+    except Exception as e:
+        print(f'Compile Failed! ❌ Error: {e}')
+```

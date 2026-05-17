@@ -1,0 +1,126 @@
+```python
+import torch
+import torch.nn as nn
+import onnxruntime as ort
+import numpy as np
+import os
+
+def test_atan2_onnx_export():
+    """
+    Test that torch.atan2(0, 0) exports to ONNX correctly.
+    PyTorch returns 0, and the ONNX export should match this behavior
+    rather than producing NaN.
+    """
+    class Atan2Net(nn.Module):
+        def forward(self, x, y):
+            return torch.atan2(x, y)
+
+    model = Atan2Net()
+    model.eval()
+    
+    # Input: both zero
+    x = torch.tensor([0.0])
+    y = torch.tensor([0.0])
+
+    # PyTorch result
+    torch_result = model(x, y)
+    print(f"torch.atan2(0, 0) result: {torch_result.item()}")
+
+    # Export to ONNX
+    onnx_filename = "atan2_export.onnx"
+    torch.onnx.export(
+        model, 
+        (x, y), 
+        onnx_filename, 
+        input_names=["x", "y"], 
+        output_names=["output"],
+        opset_version=14  # Using a standard opset version
+    )
+
+    # ONNX Runtime result
+    try:
+        sess = ort.InferenceSession(onnx_filename)
+        ort_inputs = {"x": x.numpy(), "y": y.numpy()}
+        ort_result = sess.run(["output"], ort_inputs)[0]
+        print(f"ONNX Runtime result: {ort_result[0]}")
+
+        # Check if results are consistent
+        # Note: ONNX might produce NaN if the decomposition is incorrect
+        if np.isnan(ort_result[0]):
+            print("FAIL: ONNX produced NaN for atan2(0, 0)")
+            return False
+        elif np.allclose(torch_result.numpy(), ort_result):
+            print("PASS: ONNX result matches PyTorch result")
+            return True
+        else:
+            print(f"FAIL: Results differ. PyTorch: {torch_result.item()}, ONNX: {ort_result[0]}")
+            return False
+    finally:
+        if os.path.exists(onnx_filename):
+            os.remove(onnx_filename)
+
+def test_angle_onnx_export():
+    """
+    Test that torch.angle(0+0j) exports to ONNX correctly.
+    torch.angle decomposes to atan2(imag, real), so it is affected by the same bug.
+    """
+    class AngleNet(nn.Module):
+        def forward(self, x):
+            return torch.angle(x)
+
+    model = AngleNet()
+    model.eval()
+
+    # Input: 0+0j
+    x = torch.tensor([0.0 + 0.0j])
+
+    # PyTorch result
+    torch_result = model(x)
+    print(f"torch.angle(0+0j) result: {torch_result.item()}")
+
+    # Export to ONNX
+    onnx_filename = "angle_export.onnx"
+    torch.onnx.export(
+        model,
+        (x,),
+        onnx_filename,
+        input_names=["x"],
+        output_names=["output"],
+        opset_version=14
+    )
+
+    # ONNX Runtime result
+    try:
+        sess = ort.InferenceSession(onnx_filename)
+        # ONNX Runtime usually expects float inputs for decomposed complex ops
+        # but here we pass the complex tensor if the environment supports it,
+        # or rely on PyTorch's decomposition to real/imag parts during export.
+        # PyTorch typically decomposes complex math into real operations for ONNX.
+        ort_inputs = {"x": x.numpy()}
+        ort_result = sess.run(["output"], ort_inputs)[0]
+        print(f"ONNX Runtime result: {ort_result[0]}")
+
+        if np.isnan(ort_result[0]):
+            print("FAIL: ONNX produced NaN for angle(0+0j)")
+            return False
+        elif np.allclose(torch_result.numpy(), ort_result):
+            print("PASS: ONNX result matches PyTorch result")
+            return True
+        else:
+            print(f"FAIL: Results differ. PyTorch: {torch_result.item()}, ONNX: {ort_result[0]}")
+            return False
+    finally:
+        if os.path.exists(onnx_filename):
+            os.remove(onnx_filename)
+
+if __name__ == "__main__":
+    print("Testing atan2 export...")
+    atan2_pass = test_atan2_onnx_export()
+    print("\nTesting angle export...")
+    angle_pass = test_angle_onnx_export()
+    
+    if atan2_pass and angle_pass:
+        print("\nAll tests passed.")
+    else:
+        print("\nSome tests failed.")
+```

@@ -1,0 +1,61 @@
+```python
+import tensorflow as tf
+
+# Define the function using the similar API: tf.keras.backend.name_scope
+def foo(arg0, arg1):
+    # Using the requested API to scope the operations
+    with tf.keras.backend.name_scope("fill_diagonal_op"):
+        # PyTorch: t2 = t0.clone(); t2.fill_diagonal_(t1.item())
+        # TensorFlow equivalent:
+        # 1. Tensors are immutable, so we don't clone in-place.
+        # 2. tf.linalg.set_diag replaces the diagonal.
+        # 3. arg1 is a scalar (0-D tensor), set_diag expects a vector for the diagonal.
+        #    For a (1,1) matrix, the diagonal is a vector of size 1.
+        
+        # Reshape scalar to vector of size 1 to match diagonal requirements
+        diagonal_values = tf.reshape(arg1, [1])
+        
+        # Create the new tensor with the filled diagonal
+        t2 = tf.linalg.set_diag(arg0, diagonal_values)
+        return t2
+
+# Setup inputs matching the PyTorch repro
+# arg0: size=(1, 1), dtype=float32
+arg0 = tf.zeros([1, 1], dtype=tf.float32)
+# arg1: size=(), dtype=float32 (Scalar)
+arg1 = tf.constant(5.0, dtype=tf.float32)
+
+if __name__ == '__main__':
+    # 1. Test Eager Mode
+    with tf.GradientTape() as tape_eager:
+        out_eager = foo(arg0, arg1)
+        loss_eager = tf.reduce_sum(out_eager)
+    grads_eager = tape_eager.gradient(loss_eager, [arg0, arg1])
+    
+    print(f"Eager Result: {out_eager.numpy()}")
+    print('Eager Success! ✅')
+
+    # 2. Test Compiled Mode (tf.function is the TF equivalent of torch.compile)
+    # We wrap the function in tf.function to trigger graph compilation
+    compiled_foo = tf.function(foo)
+    
+    # Run the compiled function
+    with tf.GradientTape() as tape_compiled:
+        out_compiled = compiled_foo(arg0, arg1)
+        loss_compiled = tf.reduce_sum(out_compiled)
+    grads_compiled = tape_compiled.gradient(loss_compiled, [arg0, arg1])
+    
+    print(f"Compiled Result: {out_compiled.numpy()}")
+    print('Compile Success! ✅')
+
+    # 3. Verify Consistency
+    # Check if eager and compiled results match
+    assert tf.reduce_all(tf.equal(out_eager, out_compiled)).numpy(), "Divergence detected in outputs!"
+    
+    # Check gradients
+    for g_eager, g_compiled in zip(grads_eager, grads_compiled):
+        if g_eager is not None and g_compiled is not None:
+            assert tf.reduce_all(tf.equal(g_eager, g_compiled)).numpy(), "Divergence detected in gradients!"
+            
+    print('Verification Passed! ✅')
+```

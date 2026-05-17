@@ -1,0 +1,86 @@
+```python
+import tensorflow as tf
+import gc
+
+def test_range_input_producer_resource_management():
+    """
+    Test case adapted for tf.compat.v1.train.range_input_producer.
+    
+    Original Bug Context: PyTorch torch.compile memory leak where the number of 
+    tensors increased every step (ghost tensors).
+    
+    Adaptation Logic: 
+    The TensorFlow equivalent of resource accumulation in a loop often involves 
+    QueueRunners not releasing elements or sessions not closing properly. 
+    This test runs the range_input_producer in a loop, mimicking the training 
+    steps, and ensures that the queue is managed correctly without hanging or 
+    accumulating unmanaged resources.
+    """
+    
+    # Disable eager execution as range_input_producer is a v1 graph-based API
+    tf.compat.v1.disable_eager_execution()
+
+    # Configuration mimicking the training loop parameters
+    limit = 1000
+    batch_size = 32
+    capacity = 64
+    num_steps = 50
+
+    with tf.compat.v1.Graph().as_default():
+        # API Under Test: tf.compat.v1.train.range_input_producer
+        # This produces integers in a queue, similar to how a data loader produces batches.
+        range_producer = tf.compat.v1.train.range_input_producer(
+            limit=limit,
+            num_epochs=None,  # Cycle indefinitely to simulate continuous training
+            shuffle=True,
+            capacity=capacity,
+            seed=42,
+            name="range_producer_test"
+        )
+
+        # Dequeue a batch to simulate processing data in a step
+        batch = range_producer.dequeue_many(batch_size, name="dequeue_batch")
+
+        # Initialize local variables (required for num_epochs logic)
+        init_op = tf.group(
+            tf.compat.v1.global_variables_initializer(),
+            tf.compat.v1.local_variables_initializer()
+        )
+
+    with tf.compat.v1.Session() as sess:
+        sess.run(init_op)
+
+        # Start the queue runners
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+
+        try:
+            print("Starting loop to check for resource accumulation...")
+            for step in range(num_steps):
+                # Run the dequeue operation
+                data = sess.run(batch)
+
+                # Mimic the logging format from the original bug report
+                # Note: TF doesn't expose a live "tensor count" as easily as PyTorch's internal tracker,
+                # but we monitor the batch processing to ensure the queue drains correctly.
+                print(f"Step {step:3d} | Batch Shape: {data.shape} | Min: {data.min()} | Max: {data.max()}")
+
+                # Periodic garbage collection to ensure Python objects are released
+                if step % 10 == 0:
+                    gc.collect()
+
+            print("Test completed successfully without hanging or OOM.")
+
+        except Exception as e:
+            print(f"Error encountered: {e}")
+            coord.request_stop()
+            raise
+        finally:
+            # Critical step: Stop queue runners to release resources and prevent leaks
+            coord.request_stop()
+            coord.join(threads)
+            print("Queue runners stopped and resources released.")
+
+if __name__ == "__main__":
+    test_range_input_producer_resource_management()
+```

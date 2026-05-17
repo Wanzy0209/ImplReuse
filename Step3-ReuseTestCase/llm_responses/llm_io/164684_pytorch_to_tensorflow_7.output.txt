@@ -1,0 +1,56 @@
+```python
+import tensorflow as tf
+
+# Set seeds for reproducibility
+tf.random.set_seed(19990)
+
+# The target API: tf.keras.initializers.LecunUniform
+# This replaces the 'sentinel' tensor creation logic from the PyTorch test
+initializer = tf.keras.initializers.LecunUniform(seed=19990)
+
+def fuzzed_program(scalar_bool):
+    # Use the LecunUniform initializer to generate a tensor
+    # Shape () matches the size=() of the sentinel in the original bug
+    tensor_val = initializer(shape=())
+    
+    # Perform the multiplication: Scalar (bool) * Tensor (float)
+    # This mirrors the 'var_node_0 * sentinel' operation in the original bug
+    result = scalar_bool * tensor_val
+    
+    # Check if result is complex and take real part if so
+    # In TensorFlow, we check the dtype
+    if result.dtype.is_complex:
+        result = tf.math.real(result)
+        
+    return result
+
+# Prepare inputs
+# PyTorch: arg_0 = torch.randint(0, 2, (1,), dtype=torch.bool) > 0
+# TensorFlow equivalent
+arg_0 = tf.cast(tf.random.uniform((1,), minval=0, maxval=2, dtype=tf.int32) > 0, tf.bool)
+
+# Extract the scalar boolean value
+# In PyTorch: var_node_1 = torch.squeeze(var_node_2); var_node_0 = var_node_1.item()
+# In TensorFlow, we extract the numpy value to get a Python bool scalar
+scalar_bool = tf.squeeze(arg_0).numpy()
+
+print(f"Input scalar_bool: {scalar_bool}")
+
+# 1. Test Eager Execution
+print("Testing Eager...")
+try:
+    result_eager = fuzzed_program(scalar_bool)
+    print(f"✅ eager success: {result_eager.numpy()}")
+except Exception as e:
+    print(f"❌ eager failed: {e}")
+
+# 2. Test Compiled Execution (tf.function)
+# This corresponds to torch.compile in the original bug report
+print("Testing Compiled (tf.function)...")
+compiled_program = tf.function(fuzzed_program)
+try:
+    result_compiled = compiled_program(scalar_bool)
+    print(f"✅ compile success: {result_compiled.numpy()}")
+except Exception as e:
+    print(f"❌ compile failed: {e}")
+```

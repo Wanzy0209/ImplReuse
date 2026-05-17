@@ -1,0 +1,71 @@
+```python
+import torch
+import torch.nn as nn
+
+class ComplexRecombinationModel(nn.Module):
+    """
+    Model to test torch.complex behavior under torch.compile.
+    Based on Issue 161906.
+    """
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft = n_fft
+        self.hop = hop
+        self.win = win
+        # Register window as buffer so it moves with .to(device)
+        self.register_buffer("window", torch.hann_window(win))
+        # Introduce parameter for broadcasting / stride ops
+        self.p = nn.Parameter(torch.tensor(2.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # STFT returns a complex tensor
+        S = torch.stft(
+            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,
+            return_complex=True, window=self.window, pad_mode="constant"
+        )
+        
+        # Perform operations on real and imaginary parts
+        # These operations can affect strides or introduce broadcasting
+        R = torch.abs(S.real)   # Unary op on real
+        I = S.imag / self.p     # Scalar divide with Parameter
+        
+        # Recombine into complex tensor using torch.complex
+        # This is the API under test
+        Z = torch.complex(R, I)
+        return Z
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(0)
+
+    # Input tensor
+    x = torch.randn(1, 16000, device=device)
+    model = ComplexRecombinationModel().to(device)
+
+    # 1. Verify Eager Execution
+    model.eval()
+    with torch.no_grad():
+        z_eager = model(x)
+    
+    assert z_eager.is_complex(), "Eager mode output should be complex"
+    print(f"Eager mode OK: shape={z_eager.shape}, is_complex={z_eager.is_complex()}")
+
+    # 2. Verify Compiled Execution (Inductor)
+    # Bug 161906: Fails with AssertionError in assert_size_stride for aten.complex.default
+    try:
+        compiled_model = torch.compile(model)
+        with torch.no_grad():
+            z_compiled = compiled_model(x)
+        
+        assert z_compiled.is_complex(), "Compiled mode output should be complex"
+        # Check numerical consistency
+        assert torch.allclose(z_eager, z_compiled), "Compiled output differs from eager output"
+        print(f"Compiled mode OK: shape={z_compiled.shape}, is_complex={z_compiled.is_complex()}")
+        
+    except AssertionError as e:
+        print(f"AssertionError encountered (Bug 161906): {e}")
+        raise
+
+if __name__ == "__main__":
+    main()
+```

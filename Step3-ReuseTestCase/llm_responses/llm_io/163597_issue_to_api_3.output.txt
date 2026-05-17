@@ -1,0 +1,77 @@
+```python
+import torch
+import torch.nn.functional as F
+
+def test_sdpa_mps_non_contiguous_regression():
+    """
+    Test case for Issue 163597: SDPA MPS regression on 2.8.0.
+    
+    This test verifies that F.scaled_dot_product_attention handles non-contiguous 
+    tensors correctly on the MPS device. 
+    
+    The test structure is inspired by the similar API 
+    'tf.distribute.experimental.partitioners.MinSizePartitioner', which validates 
+    behavior across varying tensor sizes and constraints (shards). Here, we iterate 
+    through multiple tensor configurations to ensure the MPS fast path correctly 
+    handles memory layout (contiguity) regardless of dimension size.
+    """
+    if not torch.backends.mps.is_available():
+        print("Skipping test: MPS device not available.")
+        return
+
+    # Define a range of tensor configurations to test, mimicking the
+    # partitioning logic of checking various sizes/shapes.
+    # This ensures the bug isn't isolated to a single tensor dimension.
+    test_configs = [
+        (1, 8, 12, 64),   # Standard size from bug report
+        (2, 16, 8, 32),   # Smaller heads, larger sequence
+        (1, 4, 4, 128),   # Larger head dim
+    ]
+
+    for batch_size, seq_len, num_heads, head_dim in test_configs:
+        print(f"Testing config: B={batch_size}, S={seq_len}, H={num_heads}, D={head_dim}")
+
+        # Initialize tensors on MPS
+        # Shape: (Batch, Seq, Heads, Dim)
+        q = torch.randn(batch_size, seq_len, num_heads, head_dim, device="mps")
+        k = torch.randn(batch_size, seq_len, num_heads, head_dim, device="mps")
+        v = torch.randn(batch_size, seq_len, num_heads, head_dim, device="mps")
+
+        # Transpose to create non-contiguous tensors (standard attention layout)
+        # Shape: (Batch, Heads, Seq, Dim)
+        # This triggers the fast MPS path which had the bug in 2.8.0.
+        q_nc = q.transpose(1, 2)
+        k_nc = k.transpose(1, 2)
+        v_nc = v.transpose(1, 2)
+
+        # Create contiguous versions for baseline comparison
+        q_c = q_nc.contiguous()
+        k_c = k_nc.contiguous()
+        v_c = v_nc.contiguous()
+
+        # Compute on CPU (Ground Truth)
+        # We use contiguous on CPU to ensure we are comparing against the standard calculation
+        out_cpu = F.scaled_dot_product_attention(q_c.cpu(), k_c.cpu(), v_c.cpu())
+
+        # Compute on MPS (Non-Contiguous) - The Regression Case
+        out_mps_nc = F.scaled_dot_product_attention(q_nc, k_nc, v_nc)
+
+        # Compute on MPS (Contiguous) - Should work
+        out_mps_c = F.scaled_dot_product_attention(q_c, k_c, v_c)
+
+        # Check 1: Contiguous MPS matches CPU
+        diff_cont = torch.norm(out_mps_c.cpu() - out_cpu)
+        assert torch.allclose(out_mps_c.cpu(), out_cpu, atol=1e-4), \
+            f"MPS Contiguous failed for config {test_configs}. Norm: {diff_cont}"
+
+        # Check 2: Non-Contiguous MPS matches CPU
+        # This is the core assertion for Issue 163597.
+        diff_nc = torch.norm(out_mps_nc.cpu() - out_cpu)
+        assert torch.allclose(out_mps_nc.cpu(), out_cpu, atol=1e-4), \
+            f"MPS Non-Contiguous failed (Regression) for config {test_configs}. Norm: {diff_nc}"
+
+        print(f"  Passed. Non-Contiguous Diff: {diff_nc.item():.6f}")
+
+if __name__ == "__main__":
+    test_sdpa_mps_non_contiguous_regression()
+```

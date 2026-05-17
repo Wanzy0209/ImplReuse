@@ -1,0 +1,71 @@
+```python
+import os
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import sys
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+    
+    # Use CUDA if available, as the original bug report was specific to CUDA
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Inputs from the original bug report
+    x = torch.zeros(1, 32, dtype=torch.int64, device=device)
+    y = torch.zeros(1, dtype=torch.int32, device=device)
+
+    if rank == 0:
+        # Adapted call site: using torch.distributed.send_object_list
+        # instead of torch.compile(f)(...)
+        try:
+            dist.send_object_list([x, y], dst=1)
+            print("Send successful on rank 0")
+        except Exception as e:
+            print(f"Send failed on rank 0: {e}")
+            sys.exit(1)
+            
+    elif rank == 1:
+        # Receive the objects to verify the API works with the specific data types
+        recv_list = [None, None]
+        try:
+            dist.recv_object_list(recv_list, src=0)
+            
+            # Assertions to verify data integrity
+            assert recv_list[0] is not None, "Received x is None"
+            assert recv_list[1] is not None, "Received y is None"
+            assert torch.equal(recv_list[0], x), "x tensors do not match"
+            assert torch.equal(recv_list[1], y), "y tensors do not match"
+            assert recv_list[0].dtype == torch.int64, "x dtype mismatch"
+            assert recv_list[1].dtype == torch.int32, "y dtype mismatch"
+            assert recv_list[0].device == x.device, "x device mismatch"
+            assert recv_list[1].device == y.device, "y device mismatch"
+            
+            print("Receive and verification successful on rank 1")
+        except Exception as e:
+            print(f"Receive or verification failed on rank 1: {e}")
+            sys.exit(1)
+
+    cleanup()
+
+if __name__ == "__main__":
+    # Check for CUDA availability to match the bug report context
+    if not torch.cuda.is_available():
+        print("Warning: CUDA not available. Falling back to CPU. The original bug was CUDA-specific.")
+    
+    world_size = 2
+    try:
+        mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+    except Exception as e:
+        print(f"Test execution failed: {e}")
+        sys.exit(1)
+```

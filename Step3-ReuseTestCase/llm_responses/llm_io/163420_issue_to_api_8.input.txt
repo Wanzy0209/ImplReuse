@@ -1,0 +1,105 @@
+Issue ID: 163420
+Title: [Fuzzer][Eager/Compile Divergence] Inductor fails ont2.fill_diagonal_(t1.item())call
+Bug Description:
+### 🐛 Describe the bug
+
+Repro
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(arg0, arg1):
+    t0 = arg0 # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    t1 = arg1 # size=(), stride=(), dtype=float32, device=cuda
+    t2 = t0.clone(); t2.fill_diagonal_(t1.item()) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    return t2
+
+arg0 = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+arg1 = torch.empty([], dtype=torch.float32, device='cuda', requires_grad=True) # size=(), stride=(), dtype=float32, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+```
+
+Error
+```
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] Triton compilation failed: triton_poi_fused_fill_1
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0] def triton_poi_fused_fill_1(out_ptr0, xnumel, XBLOCK : tl.constexpr):
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     xnumel = 1
+E0920 13:45:08.604000 69361 torch/_inductor/runtime/triton_heuristics.py:760] [0/0]     xoffset = tl.program_id(0) * XBLOCK
+E0920 13:45:08.604000 69361 to
+...
+
+Original API Under Test: torch.compile
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.index_select
+Similarity score: 0.9953157901763916
+
+Similar API information:
+# Extracted call chain for torch.index_select
+
+# --- torch._refs.index_select ---
+def index_select(x: TensorLike, dim: int, index: TensorLike):
+    dim = utils.canonicalize_dims(x.ndim, dim)
+    torch._check(
+        index.ndim <= 1,
+        lambda: f"Index should have dimension 1 or 0 (got {index.ndim})",
+    )
+    if index.ndim == 0:
+        index = index.unsqueeze(0)
+    if x.ndim == 0:
+        # Treat scalars as elements of \R^1
+        # We cannot use x[idx] here as it accesses item() (??), hence this awkward construction
+        return torch.empty_like(x).index_copy(0, index, x.expand_as(index))
+
+    idx = (slice(None),) * dim + (index,)
+    return x[idx]
+
+# --- index.unsqueeze ---
+def unsqueeze(x, dim):
+    dim = _validate_dim(x, dim, 1)
+    new_shape = list(x.get_size())
+    new_shape.insert(dim, sympy.S.One)
+    return view(x, new_shape)
+
+# --- torch._inductor.lowering._validate_dim ---
+def _validate_dim(x, dim, offset=0):
+    dim = V.graph.sizevars.shape_env.evaluate_expr(sympy.sympify(dim))
+    ndim = len(x.get_size())
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(arg0, arg1):
+    t0 = arg0 # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    t1 = arg1 # size=(), stride=(), dtype=float32, device=cuda
+    t2 = t0.clone(); t2.fill_diagonal_(t1.item()) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+    return t2
+
+arg0 = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True) # size=(1, 1), stride=(1, 1), dtype=float32, device=cuda
+arg1 = torch.empty([], dtype=torch.float32, device='cuda', requires_grad=True) # size=(), stride=(), dtype=float32, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

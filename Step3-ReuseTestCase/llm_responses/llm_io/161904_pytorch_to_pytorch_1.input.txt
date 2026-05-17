@@ -1,0 +1,171 @@
+Issue ID: 161904
+Title: ZeroBubble and DualPipeV pipeline parallel schedules fail with torch.compiled model
+Bug Description:
+### 🐛 Describe the bug
+
+The ZeroBubble and DualPipeV schedules don't seem to be compatible with models that are `torch.compiled`. Following the TorchTitan code base, I reduced the problem into a minimal repro example:
+
+```py
+"""
+Run:
+
+torchrun --nproc_per_node=2 repro.py
+"""
+
+import torch
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.pipelining import PipelineStage
+from torch.distributed.pipelining.schedules import get_schedule_class
+import torch.nn as nn
+from torchtitan.distributed.pipeline_parallel import pipeline_module_split
+
+PP_DEGREE = 2
+SCHEDULE_NAME = "ZBVZeroBubble"  # or "DualPipeV"
+
+
+class Transformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.tok_embeddings = nn.Embedding(128, 32)
+        self.layers = torch.nn.ModuleDict()
+        for layer_id in range(4):
+            self.layers[str(layer_id)] = nn.Linear(32, 32, bias=False)
+        self.output = nn.Linear(32, 128, bias=False)
+
+    def forward(self, x):
+        x = self.tok_embeddings(x) if self.tok_embeddings else x
+        for layer in self.layers.values():
+            x = layer(x)
+        return self.output(x) if self.output else x
+
+
+def main() -> None:
+    local_rank = torch.distributed.get_node_local_rank()
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.distributed.reduce
+Similarity score: 0.9944814443588257
+
+Similar API information:
+# Extracted call chain for torch.distributed.reduce
+
+# --- torch._dynamo.polyfills.functools.reduce ---
+def reduce(
+    function: Callable[[_U, _T], _U],
+    iterable: Iterable[_T],
+    initial: _U = _INITIAL_MISSING,  # type: ignore[assignment]
+    /,
+) -> _U:
+    it = iter(iterable)
+
+    value: _U
+    if initial is _INITIAL_MISSING:
+        try:
+            value = next(it)  # type: ignore[assignment]
+        except StopIteration:
+            raise TypeError(
+                "reduce() of empty iterable with no initial value",
+            ) from None
+    else:
+        value = initial
+
+    for element in it:
+        value = function(value, element)
+
+    return value
+
+# --- torch._dynamo.decorators.substitute_in_graph ---
+def substitute_in_graph(
+    original_fn: Callable[_P, _R],
+
+Original Test Case:
+"""
+Run:
+
+torchrun --nproc_per_node=2 repro.py
+"""
+
+import torch
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.pipelining import PipelineStage
+from torch.distributed.pipelining.schedules import get_schedule_class
+import torch.nn as nn
+from torchtitan.distributed.pipeline_parallel import pipeline_module_split
+
+PP_DEGREE = 2
+SCHEDULE_NAME = "ZBVZeroBubble"  # or "DualPipeV"
+
+
+class Transformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.tok_embeddings = nn.Embedding(128, 32)
+        self.layers = torch.nn.ModuleDict()
+        for layer_id in range(4):
+            self.layers[str(layer_id)] = nn.Linear(32, 32, bias=False)
+        self.output = nn.Linear(32, 128, bias=False)
+
+    def forward(self, x):
+        x = self.tok_embeddings(x) if self.tok_embeddings else x
+        for layer in self.layers.values():
+            x = layer(x)
+        return self.output(x) if self.output else x
+
+
+def main() -> None:
+    local_rank = torch.distributed.get_node_local_rank()
+    device = torch.device("cuda", local_rank)
+    torch.distributed.init_process_group("nccl")
+    mesh = init_device_mesh("cuda", (2,), mesh_dim_names=("pp",))
+
+    with torch.device("meta"):
+        model = Transformer()
+
+    pp_schedule, model_parts, has_first_stage, has_last_stage = pipeline_transformer(
+        model,
+        mesh,
+        device,
+        parallelize_transformer,
+        loss_fn,
+    )
+    for m in model_parts:
+        m.to_empty(device=device)
+        m.train()
+
+    input_ids = torch.randint(0, 128, (8, 4096), device=device)
+    labels = input_ids.clone()
+
+    losses: list[torch.Tensor] | None
+    targets, losses = (labels, []) if has_last_stage else (None, None)
+    if has_first_stage:
+        pp_schedule.step(
+            input_ids,
+            target=targets,
+            losses=losses,
+        )
+    else:
+        pp_schedule.step(
+            target=targets,
+            losses=losses,
+        )
+
+
+def pipeline_transformer(
+    model: nn.Module,
+    world_mesh,
+    device: torch.device,
+    parallelize_fn,
+    loss_fn,
+):
+    pp_mesh = world_mesh["pp"]
+    module_names_per_stage = [
+
+The API torch.distributed.reduce is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

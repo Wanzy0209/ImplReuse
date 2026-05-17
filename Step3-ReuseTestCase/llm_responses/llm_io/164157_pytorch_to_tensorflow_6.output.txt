@@ -1,0 +1,73 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def foo_tf(arg3, arg4, arg5):
+    """
+    Adapted from the PyTorch bug reproduction logic.
+    Replaces torch.std with tf.experimental.numpy.isposinf.
+    Focuses on float16 type handling in a compiled context.
+    """
+    # Setup tensors matching the original bug's shape and dtype
+    # t6, t7, t8: size=(256, 88, 1), dtype=float16
+    t6 = arg3
+    t7 = arg4
+    t8 = arg5
+    
+    # t9 = torch.cat([t6, t6, t7, t8], dim=2)
+    # size=(256, 88, 4), dtype=float16
+    t9 = tf.concat([t6, t6, t7, t8], axis=2)
+    
+    # Original API: t10 = t9.std(dim=2)
+    # Similar API: tf.experimental.numpy.isposinf
+    # Note: isposinf is element-wise, unlike std which reduces.
+    # We apply it to the float16 tensor to test type compatibility.
+    t10 = tf.experimental.numpy.isposinf(t9)
+    
+    return t10
+
+# Generate inputs matching the original bug's characteristics
+# size=(256, 88, 1), dtype=float16
+# We inject some infinity values to verify the logic of isposinf
+arg3 = tf.random.uniform([256, 88, 1], minval=-10.0, maxval=10.0, dtype=tf.float16)
+arg4 = tf.random.uniform([256, 88, 1], minval=-10.0, maxval=10.0, dtype=tf.float16)
+arg5 = tf.random.uniform([256, 88, 1], minval=-10.0, maxval=10.0, dtype=tf.float16)
+
+# Manually set some values to inf to test the API functionality
+arg3 = tf.tensor_scatter_nd_update(arg3, [[0, 0, 0]], [float('inf')])
+arg4 = tf.tensor_scatter_nd_update(arg4, [[1, 1, 0]], [float('inf')])
+arg5 = tf.tensor_scatter_nd_update(arg5, [[2, 2, 0]], [float('-inf')])
+
+if __name__ == '__main__':
+    # 1. Eager Execution
+    print("Running Eager Execution...")
+    try:
+        out_eager = foo_tf(arg3, arg4, arg5)
+        # Verify basic logic
+        assert out_eager.dtype == tf.bool, "Output dtype should be bool"
+        assert tf.reduce_any(out_eager), "Should detect positive infinity"
+        print('Eager Success! ✅')
+    except Exception as e:
+        print(f'Eager Failed: {e}')
+
+    # 2. Compiled Execution (mimicking torch.compile)
+    # Using jit_compile=True to stress the compiler like the original bug
+    print("Running Compiled Execution...")
+    compiled_foo = tf.function(foo_tf, jit_compile=True)
+    try:
+        out_compiled = compiled_foo(arg3, arg4, arg5)
+        print('Compile Success! ✅')
+    except Exception as e:
+        print(f'Compile Failed: {e}')
+
+    # 3. Divergence Check
+    # The original bug was an Eager/Compile divergence or crash.
+    # We check if results match.
+    if 'out_eager' in locals() and 'out_compiled' in locals():
+        if tf.reduce_all(tf.equal(out_eager, out_compiled)):
+            print("Results Match! ✅")
+        else:
+            print("Results Diverge! ❌")
+            diff_count = tf.reduce_sum(tf.cast(tf.not_equal(out_eager, out_compiled), tf.int32))
+            print(f"Number of differing elements: {diff_count}")
+```

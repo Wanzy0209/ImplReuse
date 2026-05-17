@@ -1,0 +1,51 @@
+```python
+import torch
+
+def example_function_exp2():
+    """
+    Function using torch.special.exp2 to be compiled.
+    Structure mirrors the original bug report to test for similar
+    MPS compilation issues (contiguity, vmap, grad).
+    """
+    def logp(x, scale):
+        # Using torch.special.exp2 as the core operation
+        # x[0, :] is a slice, which might be non-contiguous
+        val = torch.sum(torch.special.exp2(x[0, :] * scale))
+        return val
+
+    # Replicate the vmap and grad wrapping from the original issue
+    score_func = torch.vmap(torch.func.grad(logp, 0), (0, None))
+    return score_func
+
+if __name__ == "__main__":
+    # Check for MPS availability
+    if not torch.backends.mps.is_available():
+        print("MPS is not available. Skipping test.")
+    else:
+        device = torch.device("mps")
+        dtype = torch.float32
+        
+        # Create dummy data matching the dimensions of the original issue
+        data = torch.ones((2, 5, 3), device=device, dtype=dtype)
+        scale = torch.tensor(1.0, device=device, dtype=dtype)
+        
+        # Compile the function
+        compiled_function = torch.compile(example_function_exp2())
+        
+        try:
+            # Run the compiled function
+            res = compiled_function(data, scale)
+            
+            # Basic assertions to verify correctness
+            assert res.shape == (2, 5, 3), f"Shape mismatch: expected (2, 5, 3), got {res.shape}"
+            assert res.device.type == 'mps', "Device mismatch: result not on MPS"
+            
+            print("Test passed: torch.special.exp2 works with torch.compile on MPS.")
+            
+        except RuntimeError as e:
+            if "is_contiguous" in str(e) or "INTERNAL ASSERT FAILED" in str(e):
+                print(f"Test failed with contiguity/assertion error: {e}")
+                raise
+            else:
+                raise
+```

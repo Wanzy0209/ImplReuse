@@ -1,0 +1,128 @@
+Issue ID: 164700
+Title: torch.compile generates illegal triton tl.broadcast_to and crashes from particular unsqueeze and torch.cat interleaving: 'constexpr_type' object has no attribute 'is_block'
+Bug Description:
+### 🐛 Describe the bug
+
+Here's a minimal-ish reproducer (while I will concede that it looks fairly nonsensical; I promise this was reduced from a genuine larger codebase):
+
+```python
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+
+device = "cuda"
+
+def f(x, y):
+    y2 = torch.cat(
+        [
+            x[:, 1:],
+            y[:, None] + 32 * 2048,
+        ],
+        dim=1,
+    )
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    return (
+        torch.cat([x2, y3], dim=1)
+        + torch.arange(-2048, 0, device=device)[None, None, :]
+    ).reshape(1, 32 * 2048)
+
+# This succeeds
+display(
+    f(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+
+# This crashes
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.keras.name_scope
+Similarity score: 0.9931139349937439
+
+Similar API information:
+# Extracted call chain for tf.keras.name_scope
+
+# --- tensorflow.python.framework.ops.name_scope ---
+def name_scope(
+    name, default_name=None, values=None, skip_on_eager=True,
+) -> ContextManager[Optional[str]]:
+  """Internal-only entry point for `name_scope*`.
+
+  Internal ops do not use the public API and instead rely on
+  `ops.name_scope` regardless of the execution mode. This function
+  dispatches to the correct `name_scope*` implementation based on
+  the arguments provided and the current mode. Specifically,
+
+  * if `values` contains a graph tensor `Graph.name_scope` is used;
+  * `name_scope_v1` is used in graph mode;
+  * `name_scope_v2` -- in eager mode.
+
+  Args:
+    name: The name argument that is passed to the op function.
+    default_name: The default name to use if the `name` argument is `None`.
+    values: The list of `Tensor` arguments that are passed to the op function.
+    skip_on_eager: Indicates to return NullContextmanager if executing eagerly.
+      By default this is True since naming tensors and operations in eager mode
+      have little use and cause unnecessary performance overhead. However, it is
+      important to preserve variable names since they are oft
+...
+
+Original Test Case:
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+
+device = "cuda"
+
+def f(x, y):
+    y2 = torch.cat(
+        [
+            x[:, 1:],
+            y[:, None] + 32 * 2048,
+        ],
+        dim=1,
+    )
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    return (
+        torch.cat([x2, y3], dim=1)
+        + torch.arange(-2048, 0, device=device)[None, None, :]
+    ).reshape(1, 32 * 2048)
+
+# This succeeds
+display(
+    f(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+
+# This crashes
+display(
+    torch.compile(f)(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+
+The API tf.keras.name_scope is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

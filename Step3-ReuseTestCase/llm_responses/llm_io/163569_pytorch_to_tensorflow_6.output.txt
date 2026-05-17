@@ -1,0 +1,54 @@
+```python
+import tensorflow as tf
+import sys
+
+# Adapted from the PyTorch bug report to test tf.image.yiq_to_rgb
+# The original bug involves eager/compile divergence with specific tensor shapes.
+# We adapt the input shapes to fit yiq_to_rgb (last dim must be 3) while preserving
+# the other dimensions (17, 261) present in the original bug.
+
+def foo(images):
+    # Mimic the preprocessing from the original bug: t4 = torch.exp(t3)
+    # Original shape was (17, 64, 358). Adapted to (17, 261, 3) for yiq_to_rgb.
+    t = tf.exp(images)
+    
+    # The target API: tf.image.yiq_to_rgb
+    # Equivalent to the conv1d operation in the original bug context (tensor contraction).
+    output = tf.image.yiq_to_rgb(t)
+    
+    return output
+
+# Input generation
+# Original PyTorch arg1: size=(17, 64, 358), dtype=float32
+# Adapted for TensorFlow yiq_to_rgb: size=(17, 261, 3), dtype=float32
+# We keep 17 and 261 as they were key dimensions in the original bug's output.
+arg1 = tf.random.uniform((17, 261, 3), minval=0.0, maxval=1.0, dtype=tf.float32)
+
+if __name__ == '__main__':
+    # Eager execution
+    try:
+        out_eager = foo(arg1)
+        print('Eager Success! ✅')
+    except Exception as e:
+        print(f'Eager Failed! ❌: {e}')
+        sys.exit(1)
+
+    # Compiled execution (tf.function with XLA)
+    # This is the TensorFlow equivalent of torch.compile
+    try:
+        compiled_foo = tf.function(foo, jit_compile=True)
+        out_compiled = compiled_foo(arg1)
+        print('Compile Success! ✅')
+    except Exception as e:
+        print(f'Compile Failed! ❌: {e}')
+        sys.exit(1)
+
+    # Check for divergence
+    # yiq_to_rgb involves floating point operations, so we use a small tolerance.
+    divergence = tf.reduce_max(tf.abs(out_eager - out_compiled))
+    if divergence > 1e-5:
+        print(f'Divergence Detected! ❌ Max diff: {divergence}')
+        sys.exit(1)
+    else:
+        print('No Divergence! ✅')
+```

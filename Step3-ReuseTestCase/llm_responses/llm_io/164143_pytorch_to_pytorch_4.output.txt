@@ -1,0 +1,43 @@
+```python
+import torch
+import torch._dynamo as dynamo
+
+def test_torch_all_with_debug_mode():
+    """
+    Test that torch.all works correctly inside torch.compile
+    when DebugMode (detect_anomaly) is active.
+    
+    This addresses the issue where DebugMode silently disables torch.compile.
+    We use torch.all as the target operation within the compiled function.
+    """
+    def fn(x):
+        # Using torch.all as the API under test
+        return torch.all(x > 0)
+
+    # Compile with aot_eager as suggested in the bug report
+    # to potentially support DebugMode better.
+    compiled_fn = torch.compile(fn, backend="aot_eager")
+
+    # Enable DebugMode via detect_anomaly
+    with torch.autograd.detect_anomaly():
+        x = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
+
+        # Assert that the function is actually compiled and not skipped silently.
+        # If the bug is present (silent disable), this assertion will fail
+        # because the frame will be skipped.
+        with dynamo.assert_compiled():
+            result = compiled_fn(x)
+
+        # Verify the result is correct
+        assert result.item() is True
+
+        # Test a False case to ensure logic holds
+        y = torch.tensor([1.0, -1.0, 3.0], requires_grad=True)
+        with dynamo.assert_compiled():
+            result_false = compiled_fn(y)
+        assert result_false.item() is False
+
+if __name__ == "__main__":
+    test_torch_all_with_debug_mode()
+    print("Test passed.")
+```

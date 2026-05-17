@@ -1,0 +1,72 @@
+```python
+import torch
+import torch.distributed as dist
+import os
+import sys
+
+def test_shrink_group_with_backend_check():
+    """
+    Test case for the shrink_group API.
+    This test leverages the pattern of checking the backend (similar to tf.keras.backend.backend)
+    to ensure the environment is valid before performing the shrink operation.
+    """
+    
+    # Setup for a minimal distributed environment
+    # In a real scenario, this would be launched via torch.multiprocessing or torchrun
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    
+    # Initialize the process group
+    # Assuming world_size=2 for this test: Rank 0 (survivor), Rank 1 (excluded)
+    if not dist.is_initialized():
+        # We mock the init for the purpose of a standalone runnable snippet structure,
+        # but in a real test harness, rank and world_size are passed in.
+        # Here we assume rank 0 for demonstration if not in a real distributed job.
+        try:
+            dist.init_process_group(backend='gloo', rank=0, world_size=2)
+        except Exception as e:
+            print(f"Skipping distributed test as environment not set up: {e}")
+            return
+
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+
+    # --- Leverage Similar API Pattern ---
+    # Similar to: tf.keras.backend.backend() which returns the current backend string.
+    # We verify the distributed backend is active and correct before shrinking.
+    current_backend = dist.get_backend()
+    assert current_backend is not None, "Backend should be initialized"
+    print(f"Rank {rank}: Current backend is {current_backend}")
+
+    # --- Original API Under Test Logic ---
+    # Logic: Exclude the last rank to demonstrate fault tolerance/shrinking.
+    # Only the remaining ranks (updated ProcessGroup) need to call this.
+    
+    if rank < world_size - 1:
+        # This rank is part of the new, smaller group
+        ranks_to_exclude = [world_size - 1]
+        
+        # Call the proposed shrink_group API
+        # Note: This assumes the API is implemented in the environment under test.
+        # We wrap it in a check to ensure the method exists (for RFC context).
+        if hasattr(dist, 'shrink_group'):
+            # Using default flags as per the issue description
+            dist.shrink_group(ranks_to_exclude=ranks_to_exclude)
+            
+            # Verification: The group size should effectively be reduced for the caller
+            # (Note: get_world_size() usually returns the original PG size unless the PG object itself is swapped or updated internally)
+            # In a real implementation, we would verify the new group size.
+            print(f"Rank {rank}: Group shrunk, excluded {ranks_to_exclude}")
+        else:
+            print("shrink_group API not yet implemented (RFC state).")
+    else:
+        # This rank is excluded and does not call shrink_group
+        print(f"Rank {rank}: Excluded from group, not calling shrink_group.")
+
+    # Cleanup
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+if __name__ == "__main__":
+    test_shrink_group_with_backend_check()
+```

@@ -1,0 +1,85 @@
+```python
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+from torch.nn import DataParallel
+
+def test_dataparallel_with_rank_validation():
+    """
+    Test case to verify DataParallel behavior, leveraging 
+    torch.distributed.get_global_rank to validate the device mapping logic.
+    
+    This test simulates the scenario where a custom backend needs to ensure
+    that the device IDs used in DataParallel align correctly with the 
+    global rank mapping, addressing the issue of backend support.
+    """
+    # Check for CUDA availability (acting as the custom backend proxy)
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    device_count = torch.cuda.device_count()
+    if device_count < 2:
+        print(f"Requires at least 2 GPUs, found {device_count}. Skipping test.")
+        return
+
+    # Define the model from the bug report
+    class SimpleModel(nn.Module):
+        def __init__(self, input_size=10, hidden_size=20, output_size=5):
+            super(SimpleModel, self).__init__()
+            self.linear1 = nn.Linear(input_size, hidden_size)
+            self.relu = nn.ReLU()
+            self.linear2 = nn.Linear(hidden_size, output_size)
+
+        def forward(self, x):
+            x = self.linear1(x)
+            x = self.relu(x)
+            x = self.linear2(x)
+            return x
+
+    # Setup model and devices
+    model = SimpleModel()
+    device_ids = [0, 1]
+    primary_device_id = device_ids[0]
+
+    # Leverage the similar API: torch.distributed.get_global_rank
+    # We use this to verify the primary device's context. In a custom backend
+    # implementation, ensuring the device ID maps correctly to the global rank
+    # is crucial for scatter/gather operations used by DataParallel.
+    if dist.is_initialized():
+        try:
+            # Verify the mapping of the primary device (treated as a rank here for validation)
+            global_rank = dist.get_global_rank(dist.group.WORLD, primary_device_id)
+            print(f"Primary device {primary_device_id} corresponds to global rank {global_rank}")
+        except ValueError as e:
+            # This would indicate a mismatch similar to what a custom backend might face
+            # if not properly registered or mapped
+            print(f"Rank mapping error: {e}")
+            raise
+    else:
+        print("Distributed not initialized, skipping global rank check.")
+
+    # Original Bug Reproduction Logic
+    # Move model to the primary device (GPU 0)
+    model = model.to(primary_device_id)
+    
+    # Apply DataParallel
+    model = DataParallel(model, device_ids=device_ids)
+
+    # Create input data
+    batch_size = 20
+    input_data = torch.randn(batch_size, 10).to(primary_device_id)
+
+    # Forward pass
+    output = model(input_data)
+
+    # Assertions to verify correct behavior
+    assert output is not None, "Model output is None"
+    assert output.shape == (batch_size, 5), f"Output shape mismatch: {output.shape}"
+    assert output.device.index == primary_device_id, "Output is not on the primary device"
+    
+    print("Test passed: DataParallel executed successfully with rank validation.")
+
+if __name__ == "__main__":
+    test_dataparallel_with_rank_validation()
+```

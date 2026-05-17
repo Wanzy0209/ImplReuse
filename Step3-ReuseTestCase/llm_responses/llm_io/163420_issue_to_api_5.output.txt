@@ -1,0 +1,89 @@
+```python
+import torch
+import torch._dynamo
+
+# Configure Dynamo to capture scalar outputs, as required by the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+
+def test_inductor_fill_diagonal_scalar_and_tensor():
+    """
+    Test case for Issue 163420: Inductor fails on t2.fill_diagonal_(t1.item()) call.
+    
+    This test preserves the original bug reproduction logic (passing a scalar via .item())
+    and leverages the pattern from the similar API (tf.keras.backend.dropout) which 
+    explicitly converts scalars to tensors (ops.convert_to_tensor) before operations.
+    
+    We test both the scalar path (the bug) and the tensor path (the TF-like pattern)
+    to ensure torch.compile handles both scenarios correctly.
+    """
+    
+    # Setup inputs
+    arg0 = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True)
+    arg1 = torch.empty([], dtype=torch.float32, device='cuda', requires_grad=True)
+    
+    # Original Bug Logic: Using .item() to pass a Python scalar
+    def foo_scalar(arg0, arg1):
+        t0 = arg0
+        t1 = arg1
+        # This line caused the Triton compilation failure
+        t2 = t0.clone()
+        t2.fill_diagonal_(t1.item())
+        return t2
+
+    # Similar API Pattern Logic: Passing the 0-d tensor directly
+    # Mimics tf.keras.backend.dropout's `scale = ops.convert_to_tensor(scale, ...)`
+    def foo_tensor(arg0, arg1):
+        t0 = arg0
+        t1 = arg1
+        t2 = t0.clone()
+        # Pass the tensor directly instead of extracting the scalar
+        t2.fill_diagonal_(t1)
+        return t2
+
+    # Test Scalar Path (Original Bug)
+    print("Testing Scalar Path (.item())...")
+    compiled_foo_scalar = torch.compile(foo_scalar, fullgraph=True, dynamic=True)
+    
+    out_eager_scalar = foo_scalar(arg0, arg1)
+    out_compiled_scalar = compiled_foo_scalar(arg0, arg1)
+    
+    assert torch.allclose(out_eager_scalar, out_compiled_scalar), "Scalar path output mismatch"
+    
+    # Check gradients for scalar path
+    out_eager_scalar.sum().backward()
+    grad_eager_scalar = arg0.grad.clone()
+    arg0.grad = None
+    
+    out_compiled_scalar.sum().backward()
+    grad_compiled_scalar = arg0.grad.clone()
+    
+    assert torch.allclose(grad_eager_scalar, grad_compiled_scalar), "Scalar path gradient mismatch"
+    print("Scalar Path Success! ✅")
+
+    # Test Tensor Path (TF-like Pattern)
+    print("Testing Tensor Path (direct 0-d tensor)...")
+    compiled_foo_tensor = torch.compile(foo_tensor, fullgraph=True, dynamic=True)
+    
+    out_eager_tensor = foo_tensor(arg0, arg1)
+    out_compiled_tensor = compiled_foo_tensor(arg0, arg1)
+    
+    assert torch.allclose(out_eager_tensor, out_compiled_tensor), "Tensor path output mismatch"
+    
+    # Check gradients for tensor path
+    arg0.grad = None
+    out_eager_tensor.sum().backward()
+    grad_eager_tensor = arg0.grad.clone()
+    arg0.grad = None
+    
+    out_compiled_tensor.sum().backward()
+    grad_compiled_tensor = arg0.grad.clone()
+    
+    assert torch.allclose(grad_eager_tensor, grad_compiled_tensor), "Tensor path gradient mismatch"
+    print("Tensor Path Success! ✅")
+
+if __name__ == '__main__':
+    if torch.cuda.is_available():
+        test_inductor_fill_diagonal_scalar_and_tensor()
+    else:
+        print("CUDA is not available. Skipping test.")
+```

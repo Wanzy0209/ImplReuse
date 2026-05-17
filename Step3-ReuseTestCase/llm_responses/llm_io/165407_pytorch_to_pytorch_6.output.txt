@@ -1,0 +1,81 @@
+```python
+import torch
+import gc
+
+def get_tensor_count():
+    """
+    Helper function to count the number of live PyTorch tensors.
+    This mimics the 'Tensors: ...' metric shown in the bug report.
+    """
+    return sum(1 for obj in gc.get_objects() if isinstance(obj, torch.Tensor))
+
+def test_lobpcg_memory_leak():
+    """
+    Test case to verify if torch.lobpcg exhibits a memory leak similar to 
+    the reported torch.compile issue involving flash_attn_varlen_func.
+    
+    The original bug showed an unbounded increase in the number of live tensors
+    during a training loop. This test replicates that loop structure using
+    torch.lobpcg inside a compiled function.
+    """
+    # Setup inputs for lobpcg
+    # A must be a symmetric positive definite matrix
+    n = 64
+    k = 4
+    A = torch.randn(n, n)
+    A = A @ A.T + torch.eye(n) * 0.1  # Make A symmetric positive definite
+    X = torch.randn(n, k)
+
+    # Define the function to be compiled, replacing the original attention mechanism
+    def lobpcg_step(A, X):
+        # lobpcg returns (eigenvalues, eigenvectors)
+        e, v = torch.lobpcg(A, k=k, X=X)
+        # Return a scalar to simulate a loss
+        return e.sum()
+
+    # Compile the function to test Inductor's memory handling
+    # This is critical as the original bug was specific to torch.compile
+    compiled_step = torch.compile(lobpcg_step)
+
+    # Warmup run to allow compilation to finish
+    _ = compiled_step(A, X)
+    gc.collect()
+
+    initial_count = get_tensor_count()
+    print(f"Step 0 | Tensors: {initial_count}")
+
+    steps = 100
+    for i in range(1, steps + 1):
+        loss = compiled_step(A, X)
+        
+        # Simulate a backward pass to ensure the graph is fully executed
+        loss.backward()
+        
+        # Explicitly delete the loss to remove user-held references
+        del loss
+        
+        # Force garbage collection to clear non-referenced objects
+        gc.collect()
+
+        # Log status every 25 steps
+        if i % 25 == 0:
+            current_count = get_tensor_count()
+            print(f"Step {i} | Tensors: {current_count}")
+
+    final_count = get_tensor_count()
+    print(f"Step {steps} | Tensors: {final_count}")
+
+    # Calculate the growth in the number of tensors
+    tensor_growth = final_count - initial_count
+    
+    # Assertion: The number of tensors should remain relatively stable.
+    # The original bug showed an increase of >1000 tensors over a few hundred steps.
+    # We allow a small buffer (e.g., 50) for internal caching, but flag significant growth.
+    assert tensor_growth < 50, (
+        f"Memory leak detected! "
+        f"Tensor count increased from {initial_count} to {final_count} (diff: {tensor_growth})."
+    )
+
+if __name__ == "__main__":
+    test_lobpcg_memory_leak()
+```

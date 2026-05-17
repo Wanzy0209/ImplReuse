@@ -1,0 +1,92 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def foo(arg0, arg1, arg2):
+    """
+    Adapted test case for tf.keras.constraints.MinMaxNorm.
+    Preserves the tensor shapes and data types from the original PyTorch bug report
+    to test the behavior of the constraint under eager vs. compiled execution.
+    """
+    # t0: size=(2, 261, 17, 358), dtype=bfloat16
+    t0 = arg0
+    
+    # t1: max(dim=0) -> size=(261, 17, 358)
+    t1 = tf.reduce_max(t0, axis=0)
+    
+    # t2: transpose(1, 0) -> size=(17, 261, 358)
+    t2 = tf.transpose(t1, perm=[1, 0, 2])
+    
+    # t3: size=(17, 64, 358), dtype=float32
+    t3 = arg1
+    
+    # t4: exp(t3) -> size=(17, 64, 358), dtype=float32
+    t4 = tf.exp(t3)
+    
+    # t5: size=(261, 1, 64), dtype=float32
+    t5 = arg2
+    
+    # t6: transpose(2, 1) -> size=(261, 64, 1)
+    t6 = tf.transpose(t5, perm=[0, 2, 1])
+    
+    # --- API Under Test ---
+    # Original: torch.nn.functional.conv1d(t4, t6, ...)
+    # Adapted: tf.keras.constraints.MinMaxNorm(t4)
+    # Note: MinMaxNorm is a constraint, not a convolution. It preserves the input shape.
+    # We apply it to t4 to verify its behavior with the specific tensor characteristics.
+    constraint = tf.keras.constraints.MinMaxNorm(
+        min_value=0.0, 
+        max_value=1.0, 
+        rate=1.0, 
+        axis=0
+    )
+    t7 = constraint(t4) # size=(17, 64, 358)
+    
+    # Mimic the post-processing logic from the original bug where possible.
+    # Original: t8 = t7.clone(); t8.zero_()
+    t8 = tf.identity(t7)
+    t8 = tf.zeros_like(t8)
+    
+    # Original: t9 = t2 * t7 * t8
+    # Note: In the original, t7 was (17, 261, 358) due to conv1d.
+    # Here t7 is (17, 64, 358). To keep the test runnable without arbitrary reshaping
+    # that might hide bugs, we perform a multiplication that is valid for the current shapes
+    # or simply return the constrained tensor to verify the API output.
+    # We will return the constrained tensor t7.
+    
+    output = t7
+    return output
+
+# Setup inputs matching the original bug report dimensions and dtypes
+# arg0: size=(2, 261, 17, 358), dtype=bfloat16
+arg0 = tf.random.normal([2, 261, 17, 358], dtype=tf.bfloat16)
+
+# arg1: size=(17, 64, 358), dtype=float32
+arg1 = tf.random.normal([17, 64, 358], dtype=tf.float32)
+
+# arg2: size=(261, 1, 64), dtype=float32
+arg2 = tf.random.normal([261, 1, 64], dtype=tf.float32)
+
+if __name__ == '__main__':
+    print("Running Eager Execution...")
+    try:
+        out_eager = foo(arg0, arg1, arg2)
+        print(f'Eager Success! ✅ Output shape: {out_eager.shape}')
+    except Exception as e:
+        print(f'Eager Failed! ❌ Error: {e}')
+
+    print("\nRunning Compiled Execution (tf.function)...")
+    try:
+        # tf.function is the TensorFlow equivalent to torch.compile
+        compiled_foo = tf.function(foo, jit_compile=True)
+        out_compiled = compiled_foo(arg0, arg1, arg2)
+        print(f'Compile Success! ✅ Output shape: {out_compiled.shape}')
+        
+        # Verify consistency between eager and compiled modes
+        if np.allclose(out_eager.numpy(), out_compiled.numpy()):
+            print('Outputs match! ✅')
+        else:
+            print('Outputs diverge! ❌')
+    except Exception as e:
+        print(f'Compile Failed! ❌ Error: {e}')
+```

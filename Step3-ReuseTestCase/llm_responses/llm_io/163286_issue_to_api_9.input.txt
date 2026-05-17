@@ -1,0 +1,100 @@
+Issue ID: 163286
+Title: [inductor] as_strided lowering throws away .view(dtype)
+Bug Description:
+### 🐛 Describe the bug
+
+Marking as high pri because this affects numerics.
+
+Please see the original issue for full context: https://github.com/pytorch/torchtitan/issues/1713#issuecomment-3299862886
+
+## Repro instructions:
+
+In torchtitan, check out https://github.com/pytorch/torchtitan/pull/1701
+
+In torchao, checkout https://github.com/pytorch/ao/pull/3004, and run USE_CPP=1 pip install -e ~/ao
+
+On b200, from torchtitan root, run: `NGPU=4 CONFIG_FILE="./torchtitan/experiments/llama4/train_configs/debug_model.toml" ./run_train.sh --parallelism.data_parallel_shard_degree=4 --parallelism.tensor_parallel_degree=1 --model.converters="mx" --mx.recipe_name="mxfp8_cublas" --mx.moe_fqns_prototype="experts" --model.print-after-conversion --metrics.log_freq=10 --training.steps=30 --compile.enable`
+
+Even though we output_scales_ptr is view'd as a uint8: https://github.com/pytorch/ao/blob/18dbe875a0ce279739dda06fda656e76845acaac/torchao/prototype/moe_training/kernels/mxfp8_blocked_scales.py#L278, we still see float8.e8m0fnu (not yet supported in triton).
+
+```python
+[rank0]:(Pdb) [rank0]:JITFunction(torchao.prototype.moe_training.kernels.mxfp8:triton_scale_swizzle_M_groups)
+kwargs
+[rank0]:(Pdb) [rank0]:{'scales_ptr': TensorBox(StorageBox(
+[rank0]:  ComputedBuffer(name='buf93', layout=FixedLayout('cuda:0', torch.uint8, size=[16512, 160], stride=[160, 1]), data=Pointwise(device=device(type='cuda', index=0), dtype=torch.uint8, inner_fn=<function DtypeView.make_loader.<locals>.loader at 0x7fba0
+...
+
+Original API Under Test: torch._grouped_mm
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.experimental.dtensor.fetch_layout
+Similarity score: 0.9923874735832214
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.fetch_layout
+
+# --- tensorflow.dtensor.python.api.fetch_layout ---
+def fetch_layout(tensor: tensor_lib.Tensor) -> layout_lib.Layout:
+  """Fetches the layout of a DTensor.
+
+  Args:
+    tensor: The DTensor whose layout is to be fetched.
+
+  Returns:
+    The `Layout` of this DTensor.
+
+  Raises:
+    RuntimeError: When not called eagerly.
+  """
+  return _dtensor_device().fetch_layout(tensor)
+
+# --- tensorflow.dtensor.python.api._dtensor_device ---
+def _dtensor_device() -> dtensor_device.DTensorDevice:
+  with _dtensor_singleton_lock:
+    if _dtensor_singleton is None:
+      reset_dtensor_device(is_async=True)
+    return _dtensor_singleton
+
+# --- tensorflow.dtensor.python.api.reset_dtensor_device ---
+def reset_dtensor_device(is_async: bool) -> None:
+  """Resets the Eager execution device for DTensor.
+
+  This function is only intended for testing and diagnostics.
+
+Original Test Case:
+[rank0]:(Pdb) [rank0]:JITFunction(torchao.prototype.moe_training.kernels.mxfp8:triton_scale_swizzle_M_groups)
+kwargs
+[rank0]:(Pdb) [rank0]:{'scales_ptr': TensorBox(StorageBox(
+[rank0]:  ComputedBuffer(name='buf93', layout=FixedLayout('cuda:0', torch.uint8, size=[16512, 160], stride=[160, 1]), data=Pointwise(device=device(type='cuda', index=0), dtype=torch.uint8, inner_fn=<function DtypeView.make_loader.<locals>.loader at 0x7fba0df57060>, ranges=[16512, 160]))
+[rank0]:)), 'scales_stride_dim0': 160, 'scales_stride_dim1': 1, 'scale_rows': 16512, 'scale_cols': 160, 'num_groups': 4, 'orig_offsets': TensorBox(StorageBox(
+[rank0]:  ComputedBuffer(name='buf82', layout=FixedLayout('cuda:0', torch.int32, size=[4], stride=[1]), data=Scan(device=device(type='cuda', index=0), dtype=torch.int32, inner_fn=<function make_pointwise.<locals>.inner.<locals>.inner_fn at 0x7fba3202c220>, ranges=[], scan_ranges=[4], size=[4], combine_fn=<function cumsum.<locals>.combine_fn at 0x7fba320732e0>, reindex=<function Scan.create.<locals>.reindex at 0x7fba32073420>, reduction_hint=<ReductionHint.INNER: 0>, output_index=0, dtypes=(torch.int32,), inner_fns=(<function make_pointwise.<locals>.inner.<locals>.inner_fn at 0x7fba3202c220>,)))
+[rank0]:)), 'output_scales_ptr': TensorBox(
+[rank0]:  ReinterpretView(
+[rank0]:    StorageBox(
+[rank0]:      ComputedBuffer(name='buf92', layout=FixedLayout('cuda:0', torch.float8_e8m0fnu, size=[2723840], stride=[1]), data=Pointwise(device=device(type='cuda', index=0), dtype=torch.float8_e8m0fnu, inner_fn=<function ReinterpretView.make_loader.<locals>.loader at 0x7fba0df563e0>, ranges=[2723840]))
+[rank0]:    ),
+[rank0]:    FixedLayout('cuda:0', torch.float8_e8m0fnu, size=[17024, 160], stride=[160, 1]),
+[rank0]:    origins=OrderedSet([as_strided_default_1]),
+[rank0]:    stack_traces = {,
+[rank0]:      File "/home/xmfan/core/torchtitan/torchtitan/experiments/llama4/model/model.py", line 352, in forward,
+[rank0]:        out = h + self.moe(self.ffn_norm(h)),
+[rank0]:      File "/home/xmfan/core/torchtitan/torchtitan/models/moe.py", line 418, in forward,
+[rank0]:        routed_output = self.experts(routed_input, num_tokens_per_expert),
+[rank0]:      File "/home/xmfan/core/torchtitan/torchtitan/models/moe.py", line 148, in forward,
+[rank0]:        return _run_experts_grouped_mm(,
+[rank0]:      File "/home/xmfan/core/torchtitan/torchtitan/distributed/expert_parallel.py", line 282, in wrapper,
+[rank0]:        out = func(w1, w2, w3, x, num_tokens_per_expert),
+[rank0]:      File "/home/xmfan/core/torchtitan/torchtitan/models/moe.py", line 117, in _run_experts_grouped_mm,
+[rank0]:        torch._grouped_mm(x.bfloat16(), w1.bfloat16().transpose(-2, -1), offs=offsets),
+[rank0]:    ,
+[rank0]:    }
+[rank0]:  )
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

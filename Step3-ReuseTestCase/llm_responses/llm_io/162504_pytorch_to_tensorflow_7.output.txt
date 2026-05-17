@@ -1,0 +1,63 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Set seeds for reproducibility
+tf.random.set_seed(42)
+
+# Define a dataset with a random operation (similar to fn in PyTorch)
+# In PyTorch, fn takes a tensor and returns a tensor.
+# In tf.data, we map a function over a dataset.
+def make_dataset():
+    # Create a dataset of ones
+    return tf.data.Dataset.from_tensors(1.0).repeat(10).map(
+        lambda x: x * tf.random.uniform([])
+    )
+
+# 1. Eager Execution
+# Initialize device state (equivalent to fn(torch.ones(...)))
+eager_ds = make_dataset()
+eager_results = list(eager_ds.as_numpy_iterator())
+
+# 2. Distributed Execution inside tf.function
+# The API provided in the prompt is tf.data.experimental.service.distribute.
+# This requires a running tf.data service.
+# We define the parameters as per the provided docstring.
+# Note: For this test to be fully runnable, a tf.data service must be running at the specified address.
+# This is analogous to the PyTorch test requiring a CUDA device.
+
+service_address = "localhost:5000" # Placeholder address
+
+# Apply the distribute transformation
+# This corresponds to torch.utils.checkpoint.checkpoint in the sense of applying a specific
+# optimization/distribution strategy to the computation.
+distributed_ds = make_dataset().apply(
+    tf.data.experimental.service.distribute(
+        processing_mode="parallel_epochs",
+        service=service_address,
+        job_name="test_job"
+    )
+)
+
+# Wrap in tf.function (TF equivalent of CUDA Graph capture)
+# This verifies that the distributed dataset works correctly in a graph context.
+@tf.function
+def get_graph_results():
+    return list(distributed_ds.as_numpy_iterator())
+
+# Attempt to run and verify
+# We wrap this in a try-except block to handle the case where the service is not running,
+# ensuring the script is "runnable" (doesn't crash immediately) even without the specific infrastructure.
+try:
+    graph_results = get_graph_results()
+    
+    # Verify results match
+    # Note: Due to the distributed nature and potential non-determinism in worker scheduling/ordering
+    # unless strictly controlled, exact matching might require specific configurations.
+    # However, for the purpose of the API adaptation, we perform the check.
+    assert np.allclose(eager_results, graph_results), "Mismatch in outputs"
+    print("Test passed: Eager and Graph outputs match.")
+except tf.errors.UnavailableError:
+    print(f"Test skipped: tf.data service not running at {service_address}.")
+    print("To run this test, start a tf.data service cluster using 'tf_data_service_binary'.")
+```

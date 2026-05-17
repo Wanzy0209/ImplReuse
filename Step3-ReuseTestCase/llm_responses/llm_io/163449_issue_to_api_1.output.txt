@@ -1,0 +1,57 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_geomspace_eager_compile_divergence():
+    """
+    Test case for tf.experimental.numpy.geomspace based on Issue 163449.
+    
+    The original issue highlights a numerical divergence (>5%) between eager and 
+    compiled modes in PyTorch when using bfloat16 and specific precision casting 
+    configurations. This test verifies that tf.experimental.numpy.geomspace, 
+    which handles dtype promotion internally (promoting to float32 for computation 
+    and casting back), maintains numerical consistency between eager execution 
+    and tf.function (compiled) execution when using bfloat16 inputs.
+    """
+    
+    # Define inputs with bfloat16, matching the dtype context of the original bug
+    start = tf.constant(1.0, dtype=tf.bfloat16)
+    stop = tf.constant(1000.0, dtype=tf.bfloat16)
+    num = 50
+
+    # 1. Eager Execution
+    # The API implementation explicitly promotes to computation_dtype (float32)
+    # before calculation, then casts back to bfloat16.
+    res_eager = tf.experimental.numpy.geomspace(start, stop, num=num, dtype=tf.bfloat16)
+
+    # 2. Compiled Execution (tf.function)
+    # This mimics the torch.compile path in the original bug report.
+    @tf.function(jit_compile=True)
+    def compiled_geomspace(s, e, n):
+        return tf.experimental.numpy.geomspace(s, e, num=n, dtype=tf.bfloat16)
+
+    res_compiled = compiled_geomspace(start, stop, num)
+
+    # 3. Comparison
+    # We cast to float32 to calculate the difference to avoid precision loss 
+    # during the error calculation itself.
+    diff = tf.reduce_max(tf.abs(tf.cast(res_eager, tf.float32) - tf.cast(res_compiled, tf.float32)))
+    
+    # The original bug reported >5% difference. Here we expect near-zero difference
+    # because the implementation handles the precision promotion correctly.
+    # We use a small epsilon to account for potential minor differences in 
+    # graph compiler constant folding vs eager execution.
+    tolerance = 1e-6
+    
+    print(f"Max difference between eager and compiled: {diff.numpy()}")
+    
+    assert diff < tolerance, (
+        f"Numerical divergence detected between eager and compiled modes! "
+        f"Diff: {diff.numpy()}, Tolerance: {tolerance}"
+    )
+    
+    print("Test Passed: No significant divergence between eager and compiled modes.")
+
+if __name__ == "__main__":
+    test_geomspace_eager_compile_divergence()
+```

@@ -1,0 +1,143 @@
+Issue ID: 163528
+Title: torch.compile don't work with searchsorted
+Bug Description:
+### 🐛 Describe the bug
+
+I discovered that torch.searchsorted is not working correctly when used with torch.compile on gpu. Everything looks like working fine on cpu.
+```python
+import torch
+from torch import nn
+
+class Foo(nn.Module):
+    def __init__(
+        self,
+        quantiles: torch.Tensor,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        self.q = nn.Parameter(quantiles, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.searchsorted(self.q, x.T).T
+    
+
+def test_device(device, x, quantiles):
+    x = x.to(device)
+    quantiles = quantiles.to(device)
+    foo = Foo(quantiles).to(device)
+    foo_compiled = torch.compile(Foo(quantiles).to(device), fullgraph=True)
+
+    # warm up
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+
+    # proper inference
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    print(f'device: {device}, diff: {torch.max(torch.abs(y_original - y_compiled)).item()}')
+    print('orignal',y_original[:5, :5])
+
+Original API Under Test: torch.searchsorted
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.keras.metrics.sparse_top_k_categorical_accuracy
+Similarity score: 0.9933159351348877
+
+Similar API information:
+# Extracted call chain for tf.keras.metrics.sparse_top_k_categorical_accuracy
+
+# --- tensorflow.python.keras.metrics.sparse_top_k_categorical_accuracy ---
+def sparse_top_k_categorical_accuracy(y_true, y_pred, k=5):
+  """Computes how often integer targets are in the top `K` predictions.
+
+  Standalone usage:
+  >>> y_true = [2, 1]
+  >>> y_pred = [[0.1, 0.9, 0.8], [0.05, 0.95, 0]]
+  >>> m = tf.keras.metrics.sparse_top_k_categorical_accuracy(
+  ...     y_true, y_pred, k=3)
+  >>> assert m.shape == (2,)
+  >>> m.numpy()
+  array([1., 1.], dtype=float32)
+
+  Args:
+    y_true: tensor of true targets.
+    y_pred: tensor of predicted targets.
+    k: (Optional) Number of top elements to look at for computing accuracy.
+      Defaults to 5.
+
+  Returns:
+    Sparse top K categorical accuracy value.
+  """
+  y_pred_rank = tensor_conversion.convert_to_tensor_v2_with_dispatch(
+      y_pred
+  ).shape.ndims
+  y_true_rank = tensor_conversion.convert_to_tensor_v2_with_dispatch(
+      y_true
+  ).shape.ndims
+
+Original Test Case:
+import torch
+from torch import nn
+
+class Foo(nn.Module):
+    def __init__(
+        self,
+        quantiles: torch.Tensor,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        self.q = nn.Parameter(quantiles, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.searchsorted(self.q, x.T).T
+    
+
+def test_device(device, x, quantiles):
+    x = x.to(device)
+    quantiles = quantiles.to(device)
+    foo = Foo(quantiles).to(device)
+    foo_compiled = torch.compile(Foo(quantiles).to(device), fullgraph=True)
+
+    # warm up
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+
+    # proper inference
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    print(f'device: {device}, diff: {torch.max(torch.abs(y_original - y_compiled)).item()}')
+    print('orignal',y_original[:5, :5])
+    print('compiled',y_compiled[:5, :5])
+    
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    quantile_size = 100
+    torch.manual_seed(42)
+    x = torch.randn(batch_size, feature_dim, dtype=torch.float32)
+    quantiles = torch.randn(quantile_size, feature_dim, dtype=torch.float32)
+    quantiles = torch.sort(quantiles, dim=0)[0]
+    test_device('cpu', x, quantiles)
+    test_device('cuda', x, quantiles)
+
+main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

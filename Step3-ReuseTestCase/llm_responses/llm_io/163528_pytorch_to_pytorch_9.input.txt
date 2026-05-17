@@ -1,0 +1,142 @@
+Issue ID: 163528
+Title: torch.compile don't work with searchsorted
+Bug Description:
+### 🐛 Describe the bug
+
+I discovered that torch.searchsorted is not working correctly when used with torch.compile on gpu. Everything looks like working fine on cpu.
+```python
+import torch
+from torch import nn
+
+class Foo(nn.Module):
+    def __init__(
+        self,
+        quantiles: torch.Tensor,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        self.q = nn.Parameter(quantiles, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.searchsorted(self.q, x.T).T
+    
+
+def test_device(device, x, quantiles):
+    x = x.to(device)
+    quantiles = quantiles.to(device)
+    foo = Foo(quantiles).to(device)
+    foo_compiled = torch.compile(Foo(quantiles).to(device), fullgraph=True)
+
+    # warm up
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+
+    # proper inference
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    print(f'device: {device}, diff: {torch.max(torch.abs(y_original - y_compiled)).item()}')
+    print('orignal',y_original[:5, :5])
+
+Original API Under Test: torch.searchsorted
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.functional.batch_norm
+Similarity score: 0.994805097579956
+
+Similar API information:
+# Extracted call chain for torch.nn.functional.batch_norm
+
+# --- torch.nn.functional.batch_norm ---
+def batch_norm(
+    input: Tensor,
+    running_mean: Optional[Tensor],
+    running_var: Optional[Tensor],
+    weight: Optional[Tensor] = None,
+    bias: Optional[Tensor] = None,
+    training: bool = False,
+    momentum: float = 0.1,
+    eps: float = 1e-5,
+) -> Tensor:
+    r"""Apply Batch Normalization for each channel across a batch of data.
+
+    See :class:`~torch.nn.BatchNorm1d`, :class:`~torch.nn.BatchNorm2d`,
+    :class:`~torch.nn.BatchNorm3d` for details.
+    """
+    if has_torch_function_variadic(input, running_mean, running_var, weight, bias):
+        return handle_torch_function(
+            batch_norm,
+            (input, running_mean, running_var, weight, bias),
+            input,
+            running_mean,
+            running_var,
+            weight=weight,
+            bias=bias,
+            training=training,
+            momentum=momentum,
+            eps=eps,
+
+Original Test Case:
+import torch
+from torch import nn
+
+class Foo(nn.Module):
+    def __init__(
+        self,
+        quantiles: torch.Tensor,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        self.q = nn.Parameter(quantiles, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.searchsorted(self.q, x.T).T
+    
+
+def test_device(device, x, quantiles):
+    x = x.to(device)
+    quantiles = quantiles.to(device)
+    foo = Foo(quantiles).to(device)
+    foo_compiled = torch.compile(Foo(quantiles).to(device), fullgraph=True)
+
+    # warm up
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+
+    # proper inference
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    print(f'device: {device}, diff: {torch.max(torch.abs(y_original - y_compiled)).item()}')
+    print('orignal',y_original[:5, :5])
+    print('compiled',y_compiled[:5, :5])
+    
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    quantile_size = 100
+    torch.manual_seed(42)
+    x = torch.randn(batch_size, feature_dim, dtype=torch.float32)
+    quantiles = torch.randn(quantile_size, feature_dim, dtype=torch.float32)
+    quantiles = torch.sort(quantiles, dim=0)[0]
+    test_device('cpu', x, quantiles)
+    test_device('cuda', x, quantiles)
+
+main()
+
+The API torch.nn.functional.batch_norm is identified as same-library similar to the original PyTorch API torch.searchsorted.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

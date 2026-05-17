@@ -1,0 +1,53 @@
+```python
+import torch
+import torch.nn.functional as F
+
+def test_cross_entropy():
+    """
+    Test case for torch.nn.functional.cross_entropy derived from 
+    the context of Issue 163153 (FSDP2).
+    
+    The original bug involves a Transformer model with specific dimensions.
+    We verify the cross_entropy API using those dimensions to ensure compatibility
+    with the model's output shape.
+    """
+    # Constants extracted from the bug report's model configuration
+    vocab_size = 1024
+    batch_size = 4
+    seq_len = 1024
+
+    # Simulate the output of the Transformer model (logits)
+    # Shape: (Batch * Seq_Len, Vocab_Size)
+    logits = torch.randn(batch_size * seq_len, vocab_size, requires_grad=True)
+    
+    # Simulate ground truth targets
+    # Shape: (Batch * Seq_Len)
+    target = torch.randint(0, vocab_size, (batch_size * seq_len,))
+
+    # Test 1: Standard Cross Entropy forward pass
+    loss = F.cross_entropy(logits, target)
+    
+    # Assertions
+    assert loss.dim() == 0, "Loss should be a scalar"
+    assert torch.isfinite(loss), "Loss should be finite (not NaN or Inf)"
+    
+    # Test 2: Backward pass (crucial for the training loop mentioned in the bug)
+    loss.backward()
+    assert logits.grad is not None, "Gradients must be computed for training"
+    assert logits.grad.shape == logits.shape, "Gradient shape must match input shape"
+
+    # Test 3: Cross Entropy with ignore_index (common in Transformers for padding)
+    target_with_padding = target.clone()
+    target_with_padding[:seq_len] = -1 # Simulate padding tokens for the first sequence
+    loss_ignore = F.cross_entropy(logits, target_with_padding, ignore_index=-1)
+    
+    assert torch.isfinite(loss_ignore), "Loss with ignore_index should be finite"
+    # Loss with ignored indices should generally differ from standard loss
+    # (unless the ignored indices happened to have very low loss, which is unlikely with random noise)
+    assert not torch.equal(loss, loss_ignore), "Loss calculation should change with ignore_index"
+
+    print("Test passed: torch.nn.functional.cross_entropy verified.")
+
+if __name__ == "__main__":
+    test_cross_entropy()
+```

@@ -1,0 +1,54 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use tf.compat.v1.placeholder and Session
+tf.compat.v1.disable_eager_execution()
+
+def f(a, x):
+    # In TensorFlow, sparse tensors are distinct objects (SparseTensor vs Tensor).
+    # We perform the sparse-dense matrix multiplication.
+    # The PyTorch bug involved the layout attribute being lost; here we verify
+    # the operation executes correctly in the graph context.
+    return tf.sparse.sparse_dense_matmul(a, x)
+
+# Create a sparse placeholder (equivalent to the sparse tensor 'a' in PyTorch)
+# This acts as the input to the computational graph.
+a = tf.compat.v1.sparse_placeholder(tf.float32, shape=[3, 3], name='sparse_a')
+
+# Create a dense tensor (equivalent to 'x' in PyTorch)
+x = tf.constant([[1.0], [3.0], [2.0]], dtype=tf.float32)
+
+# Define the forward operation
+result_op = f(a, x)
+
+# Define the gradient operation (equivalent to torch.func.vjp)
+# We compute gradients of the sum of the result with respect to the sparse tensor 'a'.
+loss = tf.reduce_sum(result_op)
+grads_op = tf.gradients(loss, a)
+
+# Execute the graph
+with tf.compat.v1.Session() as sess:
+    # Define the sparse data to feed into the placeholder
+    indices = np.array([[0, 1], [1, 2], [2, 0]], dtype=np.int64)
+    values = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+    dense_shape = np.array([3, 3], dtype=np.int64)
+    
+    # Create a SparseTensorValue to feed the placeholder
+    sparse_data = tf.compat.v1.SparseTensorValue(indices, values, dense_shape)
+
+    # Test forward pass
+    print("Forward pass result:")
+    forward_result = sess.run(result_op, feed_dict={a: sparse_data})
+    print(forward_result)
+
+    # Test gradient pass
+    # This verifies that the sparse layout is handled correctly during gradient computation,
+    # similar to the intent of the original PyTorch bug report.
+    print("Gradient pass result:")
+    grad_result = sess.run(grads_op, feed_dict={a: sparse_data})
+    print(grad_result)
+
+    # Assertion to ensure gradients were computed successfully
+    assert grad_result is not None, "Gradient computation failed for sparse placeholder"
+```

@@ -1,0 +1,88 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Check for GPU availability to match the 'cuda' context of the original bug
+print("TensorFlow Version:", tf.__version__)
+print("GPU Available:", tf.config.list_physical_devices('GPU'))
+
+def foo(arg0, arg1, arg2):
+    # t0 = arg0 # size=(2, 261, 17, 358), dtype=bfloat16
+    t0 = arg0
+    
+    # t1 = t0.max(dim=0).values # size=(261, 17, 358)
+    t1 = tf.reduce_max(t0, axis=0)
+    
+    # t2 = t1.transpose(1, 0) # size=(17, 261, 358)
+    t2 = tf.transpose(t1, perm=[1, 0, 2])
+    
+    # t3 = arg1 # size=(17, 64, 358), dtype=float32
+    t3 = arg1
+    
+    # t4 = torch.exp(t3) # size=(17, 64, 358)
+    t4 = tf.exp(t3)
+    
+    # t5 = arg2 # size=(261, 1, 64), dtype=float32
+    t5 = arg2
+    
+    # t6 = t5.transpose(2, 1) # size=(261, 64, 1)
+    t6 = tf.transpose(t5, perm=[0, 2, 1])
+    
+    # --- Adaptation for tf.experimental.numpy.prod ---
+    # Original: t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0)
+    # Adapted: We replace the convolution with a product reduction.
+    # To maintain shape compatibility for the subsequent operations (t2 * t7 * t8),
+    # we reduce t4 along axis 1 (channels) and then tile it to match the expected output dimension.
+    # t4 shape: (17, 64, 358) -> prod(axis=1, keepdims=True) -> (17, 1, 358)
+    t7_reduced = tf.experimental.numpy.prod(t4, axis=1, keepdims=True)
+    
+    # Tile to match the shape (17, 261, 358) expected by the original logic
+    t7 = tf.tile(t7_reduced, [1, 261, 1])
+    
+    # t8 = t7.clone(); t8.zero_()
+    t8 = tf.identity(t7)
+    t8 = tf.zeros_like(t8)
+    
+    # t9 = t2 * t7 * t8
+    # Note: t2 is bfloat16, t7 is float32. TensorFlow handles the type promotion.
+    t9 = t2 * t7 * t8
+    
+    output = t9
+    return output
+
+# Input generation
+# arg0: bfloat16, size=(2, 261, 17, 358)
+arg0 = tf.random.uniform([2, 261, 17, 358], minval=0, maxval=1, dtype=tf.bfloat16)
+# arg1: float32, size=(17, 64, 358)
+arg1 = tf.random.uniform([17, 64, 358], minval=0, maxval=1, dtype=tf.float32)
+# arg2: float32, size=(261, 1, 64)
+arg2 = tf.random.uniform([261, 1, 64], minval=0, maxval=1, dtype=tf.float32)
+
+if __name__ == '__main__':
+    # 1. Test Eager Execution
+    try:
+        out_eager = foo(arg0, arg1, arg2)
+        print('Eager Success! ✅')
+    except Exception as e:
+        print(f'Eager Failed! ❌: {e}')
+
+    # 2. Test Compiled Execution (tf.function with XLA)
+    # This mimics torch.compile(fullgraph=True)
+    try:
+        compiled_foo = tf.function(foo, jit_compile=True)
+        out_compiled = compiled_foo(arg0, arg1, arg2)
+        print('Compile Success! ✅')
+        
+        # Optional: Check for numerical consistency if eager succeeded
+        # (Note: Due to potential differences in reduction order, strict equality might not hold,
+        # but checking for NaNs/Infs is a good sanity check for divergence bugs)
+        if tf.reduce_all(tf.math.is_finite(out_compiled)):
+            print("Compiled output is finite.")
+        else:
+            print("Compiled output contains NaN/Inf.")
+            
+    except Exception as e:
+        print(f'Compile Failed! ❌: {e}')
+        import traceback
+        traceback.print_exc()
+```

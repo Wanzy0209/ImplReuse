@@ -1,0 +1,71 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Check for GPU availability (original bug was on CUDA)
+print("GPU Available:", tf.test.is_gpu_available())
+
+def foo(arg0, arg1, arg2, sentinel):
+    # Original: t1 = torch.tanh(t0) where t0 is int64
+    # Adaptation: Use tf.keras.initializers.HeNormal to generate a tensor.
+    # We use bfloat16 to align with the error message in the bug report (pointer<bf16>).
+    initializer = tf.keras.initializers.HeNormal()
+    t1 = initializer(shape=(4, 4), dtype=tf.bfloat16)
+    
+    # t2 = arg1 (int64)
+    t2 = arg1
+    t3 = tf.reduce_min(t2)
+    
+    # t4 = t1.clone(); t4.fill_(t3.item())
+    # t1 is bf16, t3 is int64. Casting required.
+    t4 = tf.fill(tf.shape(t1), tf.cast(t3, tf.bfloat16))
+    
+    # t5 = arg2 (bfloat16)
+    t5 = arg2
+    t6 = tf.nn.relu(t5)
+    # SiLU is Swish with beta=1
+    t7 = tf.nn.swish(t6) 
+    
+    # t8 = embedding
+    # clamp(t4, 0, t7.size(0) - 1)
+    # t4 is bf16, needs to be int32 for embedding lookup indices
+    indices = tf.cast(t4, tf.int32)
+    indices = tf.clip_by_value(indices, 0, tf.shape(t7)[0] - 1)
+    t8 = tf.nn.embedding_lookup(t7, indices)
+    
+    t9 = tf.reduce_min(t8)
+    output = t9 + sentinel
+    return output
+
+# Setup inputs
+# arg0 is not used directly in the adapted logic because HeNormal generates its own values,
+# but we keep it to match the signature of the original test case.
+arg0 = tf.constant(np.random.randint(0, 1000, (4, 4)), dtype=tf.int64)
+arg1 = tf.constant(np.random.randint(0, 1000, (5,)), dtype=tf.int64)
+
+# Initialize bfloat16 tensors if supported, otherwise fallback to float16
+try:
+    arg2 = tf.Variable(tf.random.uniform((5000, 4), dtype=tf.bfloat16))
+    sentinel = tf.Variable(0.0, dtype=tf.bfloat16)
+except tf.errors.UnimplementedError:
+    print("bfloat16 not supported, falling back to float16")
+    arg2 = tf.Variable(tf.random.uniform((5000, 4), dtype=tf.float16))
+    sentinel = tf.Variable(0.0, dtype=tf.float16)
+
+# 1. Eager Execution
+print("Running Eager...")
+try:
+    out_eager = foo(arg0, arg1, arg2, sentinel)
+    print('Eager Success! ✅')
+except Exception as e:
+    print(f'Eager Failed: {e}')
+
+# 2. Compiled Execution (XLA)
+print("Running Compiled (XLA)...")
+try:
+    compiled_foo = tf.function(foo, jit_compile=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2, sentinel)
+    print('Compile Success! ✅')
+except Exception as e:
+    print(f'Compile Failed: {e}')
+```

@@ -1,0 +1,60 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def foo(arg0, arg1, arg2, sentinel):
+    # Recreate the tensor concatenation context from the original bug
+    # Inputs are float16 (fp16), which is central to the original type mismatch bug
+    t6 = arg0
+    t7 = arg1
+    t8 = arg2
+    
+    # t9 = torch.cat([t6, t6, t7, t8], dim=2)
+    t9 = tf.concat([t6, t6, t7, t8], axis=2)
+    
+    # Original API: t10 = t9.std(dim=2)
+    # Target API: tf.experimental.numpy.isneginf
+    # We apply the target API to the float16 tensor to test type handling
+    t10 = tf.experimental.numpy.isneginf(t9)
+    
+    # To maintain the gradient flow and precision context of the original bug:
+    # Cast the boolean result back to float16 and perform a reduction.
+    # This mimics the usage of the result in subsequent operations (like embedding/math).
+    t11 = tf.cast(t10, tf.float16)
+    
+    # Add sentinel for gradient flow check
+    output = t11 + sentinel
+    return output
+
+# Setup inputs
+# Using float16 to match the precision context of the original bug
+arg0 = tf.random.uniform((256, 88, 1), dtype=tf.float16)
+arg1 = tf.random.uniform((256, 88, 1), dtype=tf.float16)
+arg2 = tf.random.uniform((256, 88, 1), dtype=tf.float16)
+sentinel = tf.constant(0.0, dtype=tf.float16)
+
+if __name__ == '__main__':
+    # 1. Eager Execution
+    with tf.GradientTape() as tape:
+        tape.watch([arg0, arg1, arg2, sentinel])
+        out_eager = foo(arg0, arg1, arg2, sentinel)
+    grads_eager = tape.gradient(tf.reduce_sum(out_eager), [arg0, arg1, arg2, sentinel])
+    print('Eager Success! ✅')
+
+    # 2. Compiled Execution (tf.function with XLA)
+    # This is the TensorFlow equivalent of torch.compile(fullgraph=True)
+    # It strictly checks type compatibility, which is where the original bug manifested.
+    compiled_foo = tf.function(foo, jit_compile=True)
+    
+    with tf.GradientTape() as tape:
+        tape.watch([arg0, arg1, arg2, sentinel])
+        out_compiled = compiled_foo(arg0, arg1, arg2, sentinel)
+    grads_compiled = tape.gradient(tf.reduce_sum(out_compiled), [arg0, arg1, arg2, sentinel])
+    print('Compile Success! ✅')
+
+    # 3. Consistency Check
+    # Verify that the compiled output matches the eager output
+    if not tf.reduce_all(tf.math.is_nan(out_eager)) and not tf.reduce_all(tf.math.is_nan(out_compiled)):
+         assert tf.reduce_all(tf.equal(out_eager, out_compiled)).numpy(), "Divergence detected between eager and compiled outputs"
+         print("Consistency Check Passed! ✅")
+```

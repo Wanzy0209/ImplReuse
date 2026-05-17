@@ -1,0 +1,78 @@
+```python
+import subprocess
+import sys
+import tempfile
+import unittest
+import os
+
+class TestTfCompatEagerExecution(unittest.TestCase):
+    def test_enable_eager_execution_no_timeout(self):
+        """
+        Adapted from the PyTorch test_dtensor_compile_redistribute failure.
+        
+        The original test failed with a subprocess.TimeoutExpired when running
+        a script involving torch.compile. This test adapts that logic to verify
+        that tf.compat.v1.enable_eager_execution (a similar execution-mode 
+        controlling API) does not cause a subprocess hang or timeout.
+        """
+        
+        # The payload script mimics the logic of the original test but for TensorFlow.
+        # It enables eager execution and performs a basic operation to verify
+        # the runtime is responsive.
+        payload = """
+import tensorflow as tf
+import sys
+
+# Enable eager execution (The API under test)
+# This is the TensorFlow equivalent of switching execution modes,
+# analogous to how torch.compile switches to a graph mode.
+tf.compat.v1.enable_eager_execution()
+
+# Verify it is actually enabled
+if not tf.executing_eagerly():
+    print("ERROR: Eager execution not enabled", file=sys.stderr)
+    sys.exit(1)
+
+# Perform a computation to ensure the runtime is responsive.
+# This mimics the execution phase of the original test.
+x = tf.constant([1.0, 2.0, 3.0])
+y = tf.constant([4.0, 5.0, 6.0])
+z = tf.add(x, y)
+
+# Print result to verify output
+print(z.numpy())
+"""
+
+        # Create a temporary file for the subprocess script
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(payload)
+            f.flush()
+            script_path = f.name
+
+        try:
+            # Execute the script with a timeout.
+            # The original test used a 30-second timeout which was exceeded.
+            # We use a similar timeout here to catch potential hangs.
+            res = subprocess.run(
+                [sys.executable, script_path],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            # Verify the script executed successfully
+            self.assertEqual(res.returncode, 0, f"Script failed with stderr: {res.stderr}")
+            self.assertIn("[5. 7. 9.]", res.stdout)
+
+        except subprocess.TimeoutExpired as e:
+            # This reproduces the specific failure mode from the original bug report
+            self.fail(f"Subprocess timed out after {e.timeout} seconds. "
+                      "This mimics the original torch.compile timeout issue.")
+        finally:
+            # Clean up the temporary file
+            if os.path.exists(script_path):
+                os.remove(script_path)
+
+if __name__ == '__main__':
+    unittest.main()
+```

@@ -1,0 +1,76 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Set seeds for reproducibility
+tf.random.set_seed(1012969)
+np.random.seed(1012969)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    # var_node_3 = arg_0 # size=(2, 10), dtype=float64
+    # var_node_4 = arg_1 # size=(10, 3), dtype=float64
+    # var_node_2 = torch.matmul(var_node_3, var_node_4) # size=(2, 3)
+    var_node_2 = tf.linalg.matmul(tf.cast(arg_0, tf.float64), tf.cast(arg_1, tf.float64))
+
+    # Original: _inp_unique_wide = torch.arange(1, ...)
+    # Original: _uniq_wide = torch.unique(_inp_unique_wide)
+    # Adaptation: Use tf.math.add instead of torch.unique
+    # We create two tensors to serve as inputs for the addition operation.
+    # Mimicking the scalar/1D nature of the original unique input.
+    inp_add_a = tf.constant([0], dtype=tf.int64)
+    inp_add_b = tf.constant([0], dtype=tf.int64)
+    
+    # API Under Test: tf.math.add
+    added_val = tf.math.add(inp_add_a, inp_add_b)
+    
+    # var_node_1 = _uniq_wide.to(var_node_2.dtype) # size=(1,), dtype=float64
+    var_node_1 = tf.cast(added_val, tf.float64)
+
+    # var_node_5 = torch.full((1, 18), 0.40330381448978797, dtype=torch.float64)
+    var_node_5 = tf.fill((1, 18), tf.constant(0.40330381448978797, dtype=tf.float64))
+
+    # var_node_0 = torch.matmul(var_node_1, var_node_5) # size=(18,)
+    # (1,) * (1, 18) -> (18,)
+    var_node_0 = tf.linalg.matmul(var_node_1, var_node_5)
+
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+    
+    # Check for complex type and take real part if necessary
+    if result.dtype in (tf.complex64, tf.complex128):
+        result = tf.math.real(result)
+        
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = tf.constant(1.0)
+
+# Create inputs
+# torch.as_strided(torch.randn(20).to(torch.float64), (2, 10), (10, 1))
+# torch.as_strided(torch.randn(30).to(torch.float64), (10, 3), (3, 1))
+arg_0 = tf.random.normal((2, 10), dtype=tf.float64)
+arg_1 = tf.random.normal((10, 3), dtype=tf.float64)
+
+args = (arg_0, arg_1, sentinel)
+
+# Run Eager Mode
+print('Running Eager Mode...')
+result_eager = fuzzed_program(*args)
+print('✅ eager success')
+
+# Run Compiled Mode (tf.function)
+print('Running Compiled Mode...')
+compiled_program = tf.function(fuzzed_program)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+# Verify consistency
+# Note: Due to potential subtle differences in low-level implementation, 
+# we check if the results are close.
+if tf.reduce_all(tf.abs(result_eager - result_compiled) < 1e-6).numpy():
+    print('✅ Results match')
+else:
+    print('❌ Results diverge')
+    print(f"Eager: {result_eager}")
+    print(f"Compiled: {result_compiled}")
+```

@@ -1,0 +1,74 @@
+Issue ID: 163337
+Title: Compilation error withstatic_castfromfloatto__halfwhen building PyTorch extension with rocWMMA on ROCm
+Bug Description:
+### 🐛 Describe the bug
+
+
+When attempting to build a PyTorch C++ extension that utilizes rocWMMA kernels on a ROCm-based system (AMD GPU), the compilation fails. The error message indicates a problem with `static_cast` from `float` to `rocwmma::hfloat16_t` (which is an alias for `__half`). This issue seems to originate from within the rocWMMA header files (`vector.hpp`) when they are included and compiled in the context of a PyTorch extension.
+
+The compilation command is executed by `torch.utils.cpp_extension.load`. The error suggests that the compiler cannot find a suitable constructor to convert a `float` literal (like `0.0f`) to a `__half` type, which is required by some rocWMMA vector initialization templates.
+
+Here is the core error message from the build process:
+```
+/opt/rocm-7.0.1/include/rocwmma/internal/layout/../vector.hpp:446:1148: error: no matching conversion for static_cast from 'float' to 'rocwmma::hfloat16_t' (aka '__half')
+  446 | ... constexpr explicit HIP_vector_base(rocwmma::hfloat16_t val) noexcept : HIP_vector_base(rocwmma::detail::template bCast<HIP_vector_base>( static_cast<rocwmma::hfloat16_t>(0.0f), rocwmma::detail::Seq<1>{})) { data[0] = val; } ...
+      |
+...
+
+Original API Under Test: torch.utils.cpp_extension.load
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.distributed.recv_object_list
+Similarity score: 0.9941228032112122
+
+Similar API information:
+# Extracted call chain for torch.distributed.recv_object_list
+
+# --- torch.distributed.distributed_c10d.recv_object_list ---
+def recv_object_list(
+    object_list: list[Any],
+    src: Optional[int] = None,
+    group: Optional[ProcessGroup] = None,
+    device: Optional[torch.device] = None,
+    group_src: Optional[int] = None,
+):
+    """
+    Receives picklable objects in ``object_list`` synchronously.
+
+    Similar to :func:`recv`, but can receive Python objects.
+
+    Args:
+        object_list (List[Any]): List of objects to receive into.
+            Must provide a list of sizes equal to the size of the list being sent.
+        src (int, optional): Source rank from which to recv ``object_list``.
+            Source rank is based on global process group (regardless of ``group`` argument)
+            Will receive from any rank if set to None. Default is ``None``.
+        group: (ProcessGroup, optional): The process group to work on. If None,
+            the default process group will be used. Default is ``None``.
+        device (``torch.device``, optional): If not None, receives on this device.
+            Default is ``None``.
+        group_src (int, optional): Destination rank on ``gro
+...
+
+Original Test Case:
+# In rocwmma_fattn/FlashAttn.py
+import torch
+...
+flash_attn_wmma = torch.utils.cpp_extension.load(
+    name="flash_attn_wmma",
+    sources=[
+        "rocwmma_fattn/host.cpp",
+        "rocwmma_fattn/kernel_fp16.hip",
+        "rocwmma_fattn/kernel_bf16.hip",
+    ],
+    extra_hip_cflags=hip_flags,
+    ...
+)
+
+The API torch.distributed.recv_object_list is identified as same-library similar to the original PyTorch API torch.utils.cpp_extension.load.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

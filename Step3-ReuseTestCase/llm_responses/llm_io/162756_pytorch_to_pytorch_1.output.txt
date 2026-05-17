@@ -1,0 +1,51 @@
+```python
+import torch
+import torch.distributed as dist
+import os
+
+# Minimal setup for distributed environment
+# This allows the script to run in a single-process environment for testing purposes
+def setup_distributed():
+    if not dist.is_initialized():
+        try:
+            # Use TCP for simplicity in single-node/single-gpu testing scenarios
+            # Rank 0, World Size 1
+            dist.init_process_group(
+                backend="nccl", 
+                init_method="tcp://127.0.0.1:29500", 
+                rank=0, 
+                world_size=1
+            )
+        except Exception as e:
+            print(f"Distributed initialization skipped or failed: {e}")
+
+setup_distributed()
+
+# Enable combo_kernels as per the bug report context
+torch._inductor.config.combo_kernels = True
+
+@torch.compile
+def fn(x, y, z):
+    # Adapted to use torch.distributed.reduce instead of sum/mean/cumsum
+    # Note: torch.distributed.reduce is an in-place operation
+    dist.reduce(x, dst=0)
+    dist.reduce(y, dst=0)
+    dist.reduce(z, dst=0)
+    return x, y, z
+
+if torch.cuda.is_available():
+    inps = (
+        torch.rand(16, 128, device="cuda"),
+        torch.rand(32, 128, device="cuda"),
+        torch.rand(32, 256, device="cuda"),
+    )
+    
+    # Run the function to verify compilation and execution
+    try:
+        result = fn(*inps)
+        print("Test passed: torch.distributed.reduce compiled and executed successfully.")
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+else:
+    print("CUDA is not available. Skipping test.")
+```

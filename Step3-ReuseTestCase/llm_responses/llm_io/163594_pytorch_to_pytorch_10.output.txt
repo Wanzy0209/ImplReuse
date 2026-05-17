@@ -1,0 +1,86 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+import unittest
+import sys
+
+class TestDistributedGatherObject(unittest.TestCase):
+    """
+    Test case for torch.distributed.gather_object.
+    Adapted from the context of distributed compilation tests to verify
+    collective communication stability and correctness.
+    """
+    
+    def setUp(self):
+        # Use a fixed port to avoid conflicts during rapid testing
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '29500'
+
+    def tearDown(self):
+        # Clean up environment variables if necessary
+        if 'MASTER_ADDR' in os.environ:
+            del os.environ['MASTER_ADDR']
+        if 'MASTER_PORT' in os.environ:
+            del os.environ['MASTER_PORT']
+
+    def test_gather_object_basic(self):
+        """
+        Verifies that gather_object correctly collects picklable objects
+        from all ranks to the destination rank without hanging.
+        """
+        def worker(rank, world_size):
+            try:
+                # Initialize process group
+                dist.init_process_group(
+                    backend="gloo", # gloo is generally sufficient for object gathering
+                    rank=rank,
+                    world_size=world_size
+                )
+
+                # Create a unique object for this rank
+                # Using a dictionary containing a tensor to test pickling complexity
+                local_obj = {
+                    "rank": rank,
+                    "tensor": torch.tensor([rank * 10], dtype=torch.float32)
+                }
+
+                # Prepare the output list
+                if rank == 0:
+                    gathered_objects = [None] * world_size
+                else:
+                    gathered_objects = None
+
+                # Call the API under test
+                # This is the critical section where the original test experienced timeouts
+                dist.gather_object(
+                    obj=local_obj,
+                    object_gather_list=gathered_objects,
+                    dst=0
+                )
+
+                # Verification on the destination rank
+                if rank == 0:
+                    self.assertEqual(len(gathered_objects), world_size)
+                    for i in range(world_size):
+                        self.assertIsNotNone(gathered_objects[i])
+                        self.assertEqual(gathered_objects[i]["rank"], i)
+                        self.assertTrue(
+                            torch.equal(
+                                gathered_objects[i]["tensor"], 
+                                torch.tensor([i * 10], dtype=torch.float32)
+                            )
+                        )
+            finally:
+                # Ensure cleanup happens even if assertions fail
+                dist.destroy_process_group()
+
+        world_size = 2
+        # Spawn processes to simulate distributed environment
+        mp.spawn(worker, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == '__main__':
+    # Run the test
+    unittest.main()
+```

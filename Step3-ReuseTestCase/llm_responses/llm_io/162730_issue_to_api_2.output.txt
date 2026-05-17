@@ -1,0 +1,73 @@
+```python
+import torch
+import torch.futures
+import einops
+
+def test_mps_linear_noncontiguous_with_futures():
+    """
+    Test case for Issue 162730: MPS F.Linear producing inconsistent results 
+    between contiguous and non-contiguous tensors.
+    
+    This test leverages torch.futures.collect_all to manage the execution 
+    and collection of results from the linear operations.
+    """
+    if not torch.backends.mps.is_available():
+        print("MPS not available, skipping test.")
+        return
+
+    device = 'mps'
+    
+    # Setup test tensors
+    W = torch.randn(12, 64, 768, device=device)
+    x = torch.randn(1, 3, 768, device=device) 
+    bias = torch.randn(768, device=device)
+
+    # Create non-contiguous weight via rearrange
+    w_noncontig = einops.rearrange(W, "h d m -> m (h d)")
+    w_contig = w_noncontig.contiguous()
+
+    print(f"Weight contiguous: {w_contig.is_contiguous()}")
+    print(f"Weight non-contiguous: {w_noncontig.is_contiguous()}")
+
+    # Helper to wrap the linear operation in a Future object
+    def run_linear_async(input_tensor, weight, bias_val):
+        fut = torch.futures.Future()
+        try:
+            result = torch.nn.functional.linear(input_tensor, weight, bias_val)
+            fut.set_result(result)
+        except Exception as e:
+            fut.set_exception(e)
+        return fut
+
+    # Create futures for both contiguous and non-contiguous operations
+    fut_noncontig = run_linear_async(x, w_noncontig, bias)
+    fut_contig = run_linear_async(x, w_contig, bias)
+
+    # Use torch.futures.collect_all (the similar API) to gather results
+    all_futures = torch.futures.collect_all([fut_noncontig, fut_contig])
+    
+    # Wait for all operations to complete
+    completed_futures = all_futures.wait()
+    
+    result1 = completed_futures[0].wait()
+    result2 = completed_futures[1].wait()
+
+    # Verify the results match
+    match = torch.allclose(result1, result2, atol=1e-5)
+    print(f"Results match: {match}")
+    
+    if not match:
+        max_diff = torch.abs(result1 - result2).max()
+        print(f"Max difference: {max_diff}")
+        # Compare with CPU to confirm it is an MPS-specific issue
+        result_cpu_noncontig = torch.nn.functional.linear(x.cpu(), w_noncontig.cpu(), bias.cpu())
+        result_cpu_contig = torch.nn.functional.linear(x.cpu(), w_contig.cpu(), bias.cpu())
+        cpu_match = torch.allclose(result_cpu_noncontig, result_cpu_contig, atol=1e-5)
+        print(f"CPU contiguous vs non-contiguous match: {cpu_match}")
+        assert False, "MPS Linear bug detected: Non-contiguous and contiguous results differ."
+    
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_mps_linear_noncontiguous_with_futures()
+```

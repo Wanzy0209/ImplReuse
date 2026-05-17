@@ -1,0 +1,129 @@
+Issue ID: 163372
+Title: Expand sometimes interpreted as Repeat by compiler
+Bug Description:
+### 🐛 Describe the bug
+
+This sample code leads to a huge amount or RAM allocated on GPU.
+It seems like torch.expand() is interpreted as torch.repeat(), leading the compiled code to try to allocate much more memory than needed instead of seeing it as a View.
+
+Versions to reproduce:
+* It works when NOT compiled with torch 2.5.1 / 2.7.1 / 2.8.0
+* It works when compiled with torch 2.5.1
+* It doesn't work (=huge RAM allocated) when compiled with torch 2.7.1 / 2.8.0
+
+Ablation:
+* It only fails with the Inductor backend
+* It fails with all 3 modes (default/reduce-overhead/max-autotune)
+
+```
+import torch
+
+BATCH_SIZE = 64
+CHANNELS, IMG_SIZE = 3, 224
+GRID_SIZE = 13
+
+class MyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.grid = torch.nn.Parameter(torch.randn((5000, GRID_SIZE, GRID_SIZE, 2), device='cuda'))
+        self.fc = torch.nn.Linear(GRID_SIZE*GRID_SIZE*CHANNELS, 16)
+
+    def forward(self, x):
+        per_channel = []
+        for i in range(CHANNELS):
+            channel = x[:,i,...].expand(5000,-1,-1,-1)
+            patch = torch.nn.functional.grid_sample(channel, self.grid, mode="bilinear", align_corners=False, padding_mode="border")
+            patch = patch.transpose(0,1).flatten(start_dim=2)
+            per_channel.append(patch)
+        x = torch.cat(per_channel, axis=2)
+        x = self.fc(x)
+        return x
+
+def main():
+    model = MyModel()
+
+Original API Under Test: torch.expandtorch.expand
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.sort
+Similarity score: 0.984896183013916
+
+Similar API information:
+# Extracted call chain for torch.sort
+
+# --- torch._inductor.lowering.sort ---
+def sort(x, dim=-1, descending=False):
+    return sort_stable(x, stable=False, dim=dim, descending=descending)
+
+# --- torch._inductor.lowering.register_lowering ---
+def register_lowering(
+    aten_fn,
+    broadcast=False,
+    type_promotion_kind: Optional[
+        ELEMENTWISE_TYPE_PROMOTION_KIND
+    ] = ELEMENTWISE_TYPE_PROMOTION_KIND.DEFAULT,
+    convert_input_to_bool=False,
+) -> Callable[[Callable[_P, _T]], Callable[_P, _T]]:
+    """
+    Shim to support decorator syntax.
+    """
+    return functools.partial(
+        _register_lowering,
+        aten_fn,
+        broadcast=broadcast,
+        type_promotion_kind=type_promotion_kind,
+        convert_input_to_bool=convert_input_to_bool,
+    )
+
+# --- torch._inductor.lowering.sort_stable ---
+def sort_stable(x, *, stable=None, dim=-1, descending=False):
+    if stable is None:
+        stable = False
+
+Original Test Case:
+import torch
+
+BATCH_SIZE = 64
+CHANNELS, IMG_SIZE = 3, 224
+GRID_SIZE = 13
+
+class MyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.grid = torch.nn.Parameter(torch.randn((5000, GRID_SIZE, GRID_SIZE, 2), device='cuda'))
+        self.fc = torch.nn.Linear(GRID_SIZE*GRID_SIZE*CHANNELS, 16)
+
+    def forward(self, x):
+        per_channel = []
+        for i in range(CHANNELS):
+            channel = x[:,i,...].expand(5000,-1,-1,-1)
+            patch = torch.nn.functional.grid_sample(channel, self.grid, mode="bilinear", align_corners=False, padding_mode="border")
+            patch = patch.transpose(0,1).flatten(start_dim=2)
+            per_channel.append(patch)
+        x = torch.cat(per_channel, axis=2)
+        x = self.fc(x)
+        return x
+
+def main():
+    model = MyModel()
+    model = model.cuda()
+    model = torch.compile(model)
+
+    for _ in range(10):
+        x = torch.randn((BATCH_SIZE, CHANNELS, IMG_SIZE, IMG_SIZE), device='cuda')
+        x = model(x)
+        x = torch.sum(x)
+        x.backward()
+
+
+if __name__ == "__main__":
+    main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

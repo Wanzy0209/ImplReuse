@@ -1,0 +1,79 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+# Constants from the original bug report
+BATCH_SIZE = 4
+NUM_CLASSES = 10
+
+def setup(rank, world_size):
+    """
+    Initialize the distributed process group.
+    """
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Use 'gloo' backend as it is compatible with CPU and MPS for testing purposes
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    """
+    Destroy the distributed process group.
+    """
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    """
+    Worker function that executes the test logic for torch.distributed.broadcast_object_list.
+    """
+    setup(rank, world_size)
+
+    # Adaptation: Use MPS device if available, similar to the original bug report context
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+        if rank == 0:
+            print("MPS not available, falling back to CPU for test.")
+
+    # Create data similar to the original bug report (images and labels)
+    # Only rank 0 creates the data to broadcast
+    if rank == 0:
+        images = torch.randn(BATCH_SIZE, 3, 224, 224).to(device)
+        labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,)).to(device)
+        object_list = [images, labels]
+    else:
+        # Other ranks initialize empty lists to receive data
+        object_list = [None, None]
+
+    # --- Call Site Adaptation ---
+    # Original API: @torch.compile def train(...)
+    # Similar API: torch.distributed.broadcast_object_list
+    # We test if broadcasting objects containing MPS tensors works correctly.
+    dist.broadcast_object_list(object_list, src=0)
+
+    # Assertions to verify the broadcast worked
+    if rank != 0:
+        # Verify that the received objects are tensors and on the correct device
+        assert isinstance(object_list[0], torch.Tensor), "Images should be a Tensor"
+        assert isinstance(object_list[1], torch.Tensor), "Labels should be a Tensor"
+        
+        assert object_list[0].device == device, f"Images expected on {device}, got {object_list[0].device}"
+        assert object_list[1].device == device, f"Labels expected on {device}, got {object_list[1].device}"
+        
+        assert object_list[0].shape == (BATCH_SIZE, 3, 224, 224), "Images shape mismatch"
+        assert object_list[1].shape == (BATCH_SIZE,), "Labels shape mismatch"
+        
+        print(f"Rank {rank}: Test passed. Successfully received objects on {device}.")
+    else:
+        print(f"Rank {rank}: Broadcasted objects on {device}.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    # Use multiprocessing to simulate a distributed environment
+    world_size = 2
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+```

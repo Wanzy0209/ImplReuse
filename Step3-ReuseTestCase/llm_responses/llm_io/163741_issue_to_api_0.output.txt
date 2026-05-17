@@ -1,0 +1,65 @@
+```python
+import tensorflow as tf
+import time
+import tf.data.experimental.service as data_service
+
+def worker(trainer_id, service_address):
+    """
+    Worker function that mimics the lifecycle of the PyTorch bug report:
+    1. Initialize distributed environment (CrossTrainerCache).
+    2. Perform work (consume dataset).
+    3. Cleanup (release dataset).
+    4. Observe state (sleep).
+    """
+    # Setup: Initialize distributed dataset with CrossTrainerCache
+    # This corresponds to dist.init_process_group in the original issue
+    dataset = tf.data.Dataset.range(100)
+    dataset = dataset.apply(
+        data_service.distribute(
+            processing_mode=data_service.ShardingPolicy.OFF,
+            service=service_address,
+            job_name="shared_job",
+            cross_trainer_cache=data_service.CrossTrainerCache(
+                trainer_id=trainer_id
+            )
+        )
+    )
+
+    # Work: Consume the data
+    # This corresponds to the barrier and work phase in the original issue
+    print(f"Trainer {trainer_id} consuming data...")
+    _ = list(dataset.as_numpy_iterator())
+    
+    # Cleanup: Destroy the dataset reference
+    # This corresponds to dist.destroy_process_group in the original issue
+    del dataset
+    
+    # Observation: Sleep to allow checking resource state
+    # This corresponds to the sleep for observing nvidia-smi
+    print(f"Trainer {trainer_id} finished, sleeping to observe state...")
+    time.sleep(1)
+
+def test_cross_trainer_cache():
+    """
+    Test case for tf.data.experimental.service.CrossTrainerCache.
+    This test verifies the lifecycle management of resources in a distributed
+    data service context, similar to the CUDA context issue in PyTorch.
+    """
+    # Setup the service cluster
+    cluster = data_service.TestCluster()
+    
+    # Run multiple workers to simulate the distributed process group
+    # PyTorch uses mp.spawn, here we execute sequentially to verify cache behavior
+    # and resource cleanup between "trainers".
+    worker("trainer_1", cluster.address)
+    
+    # The second trainer should reuse the cache from the first trainer
+    # This validates that resources persist as intended (caching) 
+    # or are cleaned up if not needed (depending on implementation details).
+    worker("trainer_2", cluster.address)
+    
+    cluster.stop()
+
+if __name__ == '__main__':
+    test_cross_trainer_cache()
+```

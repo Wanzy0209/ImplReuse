@@ -1,0 +1,52 @@
+```python
+import torch
+import einops
+
+# Check for MPS availability
+if not torch.backends.mps.is_available():
+    print("MPS is not available. Skipping MPS test.")
+else:
+    device = 'mps'
+
+    # Create test tensors on MPS
+    # Shape: (Batch, Channels, Height) -> (2, 3, 4)
+    x = torch.randn(2, 3, 4, device=device)
+
+    # Create non-contiguous input via rearranging dimensions and rearranging back
+    # This preserves the shape but changes the memory layout (strides)
+    x_noncontig = einops.rearrange(x, "b c h -> b h c")
+    x_noncontig = einops.rearrange(x_noncontig, "b h c -> b c h")
+    x_contig = x_noncontig.contiguous()
+
+    print(f"Input contiguous: {x_contig.is_contiguous()}")
+    print(f"Input non-contiguous: {x_noncontig.is_contiguous()}")
+
+    # Quantization parameters
+    # Axis 1 corresponds to the 'Channels' dimension (size 3)
+    scales = torch.randn(3, device=device)
+    zero_points = torch.zeros(3, device=device, dtype=torch.int32)
+    axis = 1
+    dtype = torch.quint8
+
+    # These should be identical
+    result1 = torch.quantize_per_channel(x_noncontig, scales, zero_points, axis, 0, 255, dtype)
+    result2 = torch.quantize_per_channel(x_contig, scales, zero_points, axis, 0, 255, dtype)
+
+    # Dequantize to compare floating point values
+    print(f"MPS Results match: {torch.allclose(result1.dequantize(), result2.dequantize(), atol=1e-5)}")
+    print(f"Max difference: {torch.abs(result1.dequantize() - result2.dequantize()).max()}")
+
+    # Compare with CPU (works correctly)
+    x_cpu = x.cpu()
+    x_cpu_noncontig = einops.rearrange(x_cpu, "b c h -> b h c")
+    x_cpu_noncontig = einops.rearrange(x_cpu_noncontig, "b h c -> b c h")
+    x_cpu_contig = x_cpu_noncontig.contiguous()
+
+    scales_cpu = scales.cpu()
+    zero_points_cpu = zero_points.cpu()
+
+    result_cpu_noncontig = torch.quantize_per_channel(x_cpu_noncontig, scales_cpu, zero_points_cpu, axis, 0, 255, dtype)
+    result_cpu_contig = torch.quantize_per_channel(x_cpu_contig, scales_cpu, zero_points_cpu, axis, 0, 255, dtype)
+
+    print(f"CPU contiguous vs non-contiguous match: {torch.allclose(result_cpu_noncontig.dequantize(), result_cpu_contig.dequantize(), atol=1e-5)}")
+```

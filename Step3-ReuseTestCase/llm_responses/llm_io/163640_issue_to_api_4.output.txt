@@ -1,0 +1,68 @@
+```python
+import torch
+import torch.nn as nn
+
+# Note: The similar API provided (tf.keras.backend.floatx) is a TensorFlow 
+# configuration utility. Since the bug is specific to PyTorch's torch.compile 
+# and internal tensor handling, we cannot directly reuse the TensorFlow API 
+# to fix or test the PyTorch issue. 
+#
+# However, we can adapt the *pattern* of checking types/configurations 
+# (which floatx represents) to ensure the PyTorch model handles the 
+# boolean mask correctly during compilation. The test below preserves 
+# the original bug reproduction logic (PyTorch Transformer with padding mask 
+# in fullgraph mode) and adds assertions to verify the output types, 
+# mimicking the intent of type-aware configuration.
+
+class TinyEnc(nn.Module):
+    def __init__(self, d_model=512, nhead=8, num_layers=1):
+        super().__init__()
+        layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, batch_first=True, dropout=0.1
+        )
+        self.enc = nn.TransformerEncoder(layer, num_layers=num_layers)
+        self.proj = nn.Linear(d_model, 10)
+
+    def forward(self, x, pad_mask):
+        # Passing src_key_padding_mask triggers torch._nested_tensor_from_mask_left_aligned
+        y = self.enc(x, mask=None, src_key_padding_mask=pad_mask)
+        return self.proj(y)
+
+def test_transformer_encoder_with_boolean_mask():
+    torch.manual_seed(0)
+    m = TinyEnc().eval()
+
+    B, T, C = 1, 41, 512
+    x = torch.randn(B, T, C, dtype=torch.float32)
+    pad_mask = (torch.rand(B, T) > 0.5)
+    pad_mask[..., 0] = True
+
+    # Eager mode check
+    with torch.inference_mode():
+        y_eager = m(x, pad_mask)
+    
+    assert isinstance(y_eager, torch.Tensor), "Eager output should be a Tensor"
+    assert y_eager.shape == (B, T, 10), f"Eager shape mismatch: {y_eager.shape}"
+    print("eager ok:", tuple(y_eager.shape))
+
+    # Compile mode check (fullgraph=True required to reproduce the bug)
+    # The bug was that torch._nested_tensor_from_mask_left_aligned returned a bool
+    # instead of a Tensor, causing torch._dynamo.exc.Unsupported.
+    try:
+        cm = torch.compile(m, backend="inductor", fullgraph=True)
+        y_compiled = cm(x, pad_mask)
+        
+        assert isinstance(y_compiled, torch.Tensor), "Compiled output should be a Tensor"
+        assert y_compiled.shape == (B, T, 10), f"Compiled shape mismatch: {y_compiled.shape}"
+        
+        # Verify numerical consistency (optional, but good practice)
+        # Note: Inductor might introduce slight numerical differences, but shapes must match
+        print("compile ok:", tuple(y_compiled.shape))
+        
+    except Exception as e:
+        print(f"Compilation failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_transformer_encoder_with_boolean_mask()
+```

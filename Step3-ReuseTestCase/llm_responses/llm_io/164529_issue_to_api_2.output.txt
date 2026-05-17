@@ -1,0 +1,80 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_shrink_group(rank, world_size):
+    """
+    Test case for the shrink_group API proposed in Issue 164529.
+    
+    This test verifies the fault tolerance capability by excluding a specific rank
+    and ensuring the remaining process group operates correctly without hanging.
+    
+    The test logic adapts the state verification pattern seen in the similar API
+    (tf.raw_ops.HashTable.init) by checking the ProcessGroup state (size) after
+    the modification operation.
+    """
+    
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    
+    # Using 'gloo' backend for compatibility in testing environments
+    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size)
+    
+    pg = dist.group.WORLD
+    
+    # Define the rank to be excluded (simulating a faulty rank)
+    ranks_to_exclude = [world_size - 1]
+    
+    if rank not in ranks_to_exclude:
+        # Call the new shrink_group API
+        # This corresponds to the "Original API Under Test"
+        try:
+            # Assuming NCCL_SHRINK_DEFAULT is exposed in torch.distributed
+            # or the backend handles the flag logic.
+            dist.shrink_group(
+                ranks_to_exclude=ranks_to_exclude,
+                Pg=pg,
+                shrink_flags=dist.NCCL_SHRINK_DEFAULT if hasattr(dist, 'NCCL_SHRINK_DEFAULT') else 0
+            )
+        except AttributeError:
+            # Fallback for environments where the constant is not yet defined
+            # but the function signature requires an int.
+            dist.shrink_group(
+                ranks_to_exclude=ranks_to_exclude,
+                Pg=pg,
+                shrink_flags=0
+            )
+
+        # Verification 1: State Check
+        # Similar to how tf.raw_ops.HashTable.init returns the initializer state,
+        # we verify the ProcessGroup has updated its internal state (size) correctly.
+        expected_size = world_size - 1
+        actual_size = pg.size()
+        assert actual_size == expected_size, \
+            f"Rank {rank}: Group size mismatch. Expected {expected_size}, got {actual_size}"
+
+        # Verification 2: Functional Check (Fault Tolerance)
+        # Ensure the group can still perform collective operations without hanging.
+        # This addresses the motivation: "malfunctioning participants should be excluded to avoid hangings"
+        tensor = torch.ones(1) * rank
+        dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=pg)
+        
+        # Sum of ranks 0 to world_size-2
+        expected_sum = sum(range(world_size - 1))
+        assert tensor.item() == expected_sum, \
+            f"Rank {rank}: AllReduce failed after shrink. Expected {expected_sum}, got {tensor.item()}"
+            
+    else:
+        # The excluded rank does not call shrink_group, as per the API specification.
+        # In a real fault scenario, this process might be dead or unresponsive.
+        pass
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 4
+    mp.spawn(test_shrink_group, args=(world_size,), nprocs=world_size, join=True)
+```

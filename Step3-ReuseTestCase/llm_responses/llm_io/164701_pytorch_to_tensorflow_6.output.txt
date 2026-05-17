@@ -1,0 +1,91 @@
+```python
+import tensorflow as tf
+
+def test_tf_name_scope_state_update():
+    """
+    Adapts the PyTorch miscompilation reproducer to TensorFlow.
+    The original bug involved torch.compile miscompiling in-place updates
+    within a fused kernel. This test verifies that the equivalent logic
+    runs correctly inside a tf.compat.v1.name_scope context.
+    """
+    
+    # Check for GPU availability similar to the original "cuda" device
+    device = "/gpu:0" if tf.config.list_physical_devices('GPU') else "/cpu:0"
+    
+    with tf.device(device):
+        batch_size = 4
+        state_len = 2048
+        feat_dim = 1024
+        new_events_len = 2
+        
+        # Initialize inputs
+        # new_events: [4, 2, 1024] - values 1 and 2 expanded
+        new_events = tf.range(1, 3, dtype=tf.float32)[tf.newaxis, :, tf.newaxis]
+        new_events = tf.tile(new_events, [batch_size, 1, feat_dim])
+        
+        # arange: [2050]
+        arange = tf.range(state_len + new_events_len, dtype=tf.int32)
+        
+        # State variable: [4, 2048, 1024]
+        # Using tf.Variable to allow in-place updates (assign)
+        state = tf.Variable(tf.zeros([batch_size, state_len, feat_dim], dtype=tf.float32))
+        
+        # dev_null variable: [4, 2050, 1024]
+        # In PyTorch this was a tensor modified in-place. In TF, we use a Variable.
+        dev_null = tf.Variable(tf.zeros([batch_size, state_len + new_events_len, feat_dim], dtype=tf.float32))
+
+        # Wrap the logic in the target API: tf.compat.v1.name_scope
+        with tf.compat.v1.name_scope("slide_to_the_left_scope"):
+            # 1. Concatenate state and new_events
+            # PyTorch: concatenated = torch.cat([state, new_events], dim=1)
+            concatenated = tf.concat([state, new_events], axis=1)
+            
+            # 2. Advanced Indexing (Identity transformation)
+            # PyTorch: 
+            #   batch_idx = torch.arange(batch_size, dtype=torch.int32, device=device)[:, None]
+            #   arange = arange[None, :]
+            #   concatenated = concatenated[batch_idx, arange]
+            
+            # TensorFlow equivalent for advanced indexing using gather_nd
+            # We construct indices of shape (B, L, 2) to select (b, i) for all b, i
+            b_indices = tf.range(batch_size)[:, tf.newaxis] # (B, 1)
+            a_indices = arange[tf.newaxis, :] # (1, L)
+            
+            # Broadcast to (B, L)
+            b_grid = tf.tile(b_indices, [1, tf.size(arange)])
+            a_grid = tf.tile(a_indices, [batch_size, 1])
+            
+            # Stack to form (B, L, 2) indices
+            indices = tf.stack([b_grid, a_grid], axis=-1)
+            
+            gathered = tf.gather_nd(concatenated, indices)
+            
+            # 3. Update state (In-place equivalent)
+            # PyTorch: state[:, :, :] = gathered[:, -2048:, :]
+            state.assign(gathered[:, -state_len:, :])
+            
+            # 4. Update dev_null
+            # PyTorch: dev_null[:, :, :] = concatenated[:, :, :]
+            # Note: The original PyTorch code assigned 'concatenated' here, but the logic 
+            # description implies using the result. We follow the code structure.
+            dev_null.assign(gathered[:, :, :])
+
+        # Verification
+        # The original bug was that state[:, :-2, :] contained non-zero values 
+        # due to miscompilation. We assert that this is NOT the case here.
+        
+        state_val = state.numpy()
+        
+        # Check that history (all but last 2 rows) is zero
+        assert (state_val[:, :-2, :] == 0).all(), \
+            f"Bug reproduced: History should be zero. Found non-zeros."
+            
+        # Check that new events (last 2 rows) are non-zero
+        assert (state_val[:, -2:, :] != 0).all(), \
+            "New events should be present in state."
+            
+        print("Test passed: State updated correctly within tf.compat.v1.name_scope")
+
+if __name__ == "__main__":
+    test_tf_name_scope_state_update()
+```

@@ -1,0 +1,140 @@
+Issue ID: 164247
+Title: Dynamo graph break on flex attention code
+Bug Description:
+### 🐛 Describe the bug
+
+```python
+import torch
+import torch.nn as nn
+from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+
+
+class MixedFakeModeModel(nn.Module):
+    def __init__(self, dim=64):
+        super().__init__()
+        self.dim = dim
+        self.lin = torch.nn.Linear(64, 64)
+
+    def forward(self, x):
+        batch_size, seq_len, _ = x.shape
+
+        # Process input first - this creates fake tensors in export's fake mode
+        processed = self.lin(x)
+
+        # Create some computation that depends on processed tensor
+        intermediate = processed.sum(dim=-1).detach()  # Shape: (batch, seq_len)
+
+        def dynamic_mask_function(batch_idx, head_idx, q_idx, kv_idx):
+            threshold = intermediate[
+                batch_idx, q_idx % seq_len
+            ]  # Access the captured tensor
+            return (kv_idx <= q_idx) & (threshold > 0)
+
+        block_mask = create_block_mask(
+            mask_mod=dynamic_mask_function,
+            B=batch_size,
+            H=None,
+            Q_LEN=seq_len,
+            KV_LEN=seq_len,
+            device=x.device,
+            _compile=False,  # HF sets this to True, which runs into the issue i am talking below
+        )
+        q = processed.view(batch_size, 1, seq_len, self.dim)
+        k = processed.view(batch_size, 1, seq_len, self.dim)
+
+Original API Under Test: torch.nn.attention.flex_attention.create_block_mask
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.compat.v1.nn.space_to_depth
+Similarity score: 0.9867048263549805
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.nn.space_to_depth
+
+# --- tensorflow.python.ops.array_ops.space_to_depth ---
+def space_to_depth(input, block_size, name=None, data_format="NHWC"):  # pylint: disable=redefined-builtin
+  return gen_array_ops.space_to_depth(input, block_size, data_format, name=name)
+
+# --- tensorflow.python.util.deprecation.deprecated_endpoints ---
+def deprecated_endpoints(*args):
+  """Decorator for marking endpoints deprecated.
+
+  This decorator does not print deprecation messages.
+  TODO(annarev): eventually start printing deprecation warnings when
+  @deprecation_endpoints decorator is added.
+
+  Args:
+    *args: Deprecated endpoint names.
+
+  Returns:
+    A function that takes symbol as an argument and adds
+    _tf_deprecated_api_names to that symbol.
+    _tf_deprecated_api_names would be set to a list of deprecated
+    endpoint names for the symbol.
+  """
+
+  def deprecated_wrapper(func):
+    # pylint: disable=protected-access
+    if '_tf_deprecated_api_names' in func.__dict__:
+      raise DeprecatedNamesAlreadySetError(
+          f'Cannot set deprecated names for {func.__name__} to {args}. '
+          'Deprecated names are already set to '
+
+Original Test Case:
+import torch
+import torch.nn as nn
+from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+
+
+class MixedFakeModeModel(nn.Module):
+    def __init__(self, dim=64):
+        super().__init__()
+        self.dim = dim
+        self.lin = torch.nn.Linear(64, 64)
+
+    def forward(self, x):
+        batch_size, seq_len, _ = x.shape
+
+        # Process input first - this creates fake tensors in export's fake mode
+        processed = self.lin(x)
+
+        # Create some computation that depends on processed tensor
+        intermediate = processed.sum(dim=-1).detach()  # Shape: (batch, seq_len)
+
+        def dynamic_mask_function(batch_idx, head_idx, q_idx, kv_idx):
+            threshold = intermediate[
+                batch_idx, q_idx % seq_len
+            ]  # Access the captured tensor
+            return (kv_idx <= q_idx) & (threshold > 0)
+
+        block_mask = create_block_mask(
+            mask_mod=dynamic_mask_function,
+            B=batch_size,
+            H=None,
+            Q_LEN=seq_len,
+            KV_LEN=seq_len,
+            device=x.device,
+            _compile=False,  # HF sets this to True, which runs into the issue i am talking below
+        )
+        q = processed.view(batch_size, 1, seq_len, self.dim)
+        k = processed.view(batch_size, 1, seq_len, self.dim)
+        v = processed.view(batch_size, 1, seq_len, self.dim)
+
+        # this doesn't work
+        out = torch.compile(flex_attention)(q, k, v, block_mask=block_mask)
+        # this works (flex attention internally calls torch.compile(backend=eager) which
+        # has special handling similar to torch.cond
+        out = flex_attention(q, k, v, block_mask=block_mask)
+
+        return out
+
+torch.compile(MixedFakeModeModel(), fullgraph=True)(torch.randn(2, 128, 64))
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

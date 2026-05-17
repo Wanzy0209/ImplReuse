@@ -1,0 +1,80 @@
+```python
+import tensorflow as tf
+import os
+import tempfile
+
+# Setup a temporary file path for the test
+temp_dir = tempfile.mkdtemp()
+file_path = os.path.join(temp_dir, "test_output.txt")
+
+# Set random seed for reproducibility
+tf.random.set_seed(19990)
+
+def fuzzed_program(arg_0, sentinel):
+    # arg_0 represents the filename, mimicking the boolean tensor in the original test
+    var_node_2 = arg_0  # shape=(1,), dtype=string
+    var_node_1 = tf.squeeze(var_node_2)  # shape=(), dtype=string
+    
+    # Mimic the .item() call from the PyTorch test case.
+    # In PyTorch, .item() extracts a Python scalar.
+    # In TensorFlow, .numpy() extracts a numpy scalar (works in eager, fails in graph).
+    # This is the critical point where eager/compile divergence occurs in TF 
+    # similar to the SymBool/FakeTensor issue in PyTorch.
+    var_node_0 = var_node_1.numpy().decode('utf-8')
+
+    # Call the target API: tf.io.write_file
+    # PyTorch: result = var_node_0 * sentinel
+    # TensorFlow: result = tf.io.write_file(var_node_0, sentinel)
+    # Note: sentinel acts as the content here.
+    result = tf.io.write_file(var_node_0, sentinel)
+    
+    # tf.io.write_file returns an Operation, not a Tensor, so is_complex() is not applicable.
+    # We simply return the result (or None).
+    return result
+
+# Sentinel tensor to mimic the gradient-tracking tensor in the original test
+# Here it serves as the content to write.
+sentinel = tf.constant("Hello from TensorFlow", dtype=tf.string)
+
+# Argument 0: A tensor containing the filename
+arg_0 = tf.constant([file_path], dtype=tf.string)
+
+args = (arg_0, sentinel)
+
+# Test Eager Mode
+try:
+    result_original = fuzzed_program(*args)
+    # Verify file was written
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            content = f.read()
+            if content == "Hello from TensorFlow":
+                print('✅ eager success')
+            else:
+                print(f'❌ eager content mismatch: {content}')
+    else:
+        print('❌ eager file not created')
+except Exception as e:
+    print(f'❌ eager failed: {e}')
+
+# Test Compiled Mode (tf.function)
+# This mimics torch.compile
+compiled_program = tf.function(fuzzed_program)
+
+try:
+    # In TensorFlow, calling .numpy() on a tensor inside a tf.function (graph mode)
+    # raises an AttributeError: 'Tensor' object has no attribute 'numpy'.
+    # This reproduces the "Divergence" behavior where eager works but compile fails
+    # when attempting to extract a scalar value to use in an operation.
+    result_compiled = compiled_program(*args)
+    print('✅ compile success')
+except AttributeError as e:
+    print(f'❌ compile failed (Expected Divergence): {e}')
+except Exception as e:
+    print(f'❌ compile failed: {e}')
+
+# Cleanup
+if os.path.exists(file_path):
+    os.remove(file_path)
+os.rmdir(temp_dir)
+```

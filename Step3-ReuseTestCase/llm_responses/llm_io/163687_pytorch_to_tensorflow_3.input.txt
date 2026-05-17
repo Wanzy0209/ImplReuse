@@ -1,0 +1,108 @@
+Issue ID: 163687
+Title: [Fuzzer][Eager/Compile Divergence] flexattention works in eager but ooms in compile
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+import sys
+from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10):
+    t0 = arg0 # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t1 = arg1 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t2 = arg2 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t3 = flex_attention(t0, t1, t2) # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t4 = arg3 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t5 = arg4 # size=(27, 26, 248, 122), stride=(174096, 6448, 248, 1), dtype=float32, device=cuda
+    t6 = arg5 # size=(27, 26, 248, 122), stride=(174096, 6448, 248, 1), dtype=float32, device=cuda
+    t7 = flex_attention(t4, t5, t6) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t8 = flex_attention(t3, t7, t7) # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t9 = arg6 # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t10 = arg7 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32,
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.enable_eager_execution
+Similarity score: 0.9934076070785522
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.enable_eager_execution
+
+# --- tensorflow.python.framework.ops.enable_eager_execution ---
+def enable_eager_execution(config=None, device_policy=None,
+                           execution_mode=None) -> None:
+  """Enables eager execution for the lifetime of this program.
+
+  Eager execution provides an imperative interface to TensorFlow. With eager
+  execution enabled, TensorFlow functions execute operations immediately (as
+  opposed to adding to a graph to be executed later in a `tf.compat.v1.Session`)
+  and
+  return concrete values (as opposed to symbolic references to a node in a
+  computational graph).
+
+  For example:
+
+  ```python
+  tf.compat.v1.enable_eager_execution()
+
+  # After eager execution is enabled, operations are executed as they are
+  # defined and Tensor objects hold concrete values, which can be accessed as
+  # numpy.ndarray`s through the numpy() method.
+  assert tf.multiply(6, 7).numpy() == 42
+  ```
+
+  Eager execution cannot be enabled after TensorFlow APIs have been used to
+  create or execute graphs. It is typically recommended to invoke this function
+  at program startup and not in a library (as most libraries should be usabl
+...
+
+Original Test Case:
+import torch
+import sys
+from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10):
+    t0 = arg0 # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t1 = arg1 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t2 = arg2 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t3 = flex_attention(t0, t1, t2) # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t4 = arg3 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t5 = arg4 # size=(27, 26, 248, 122), stride=(174096, 6448, 248, 1), dtype=float32, device=cuda
+    t6 = arg5 # size=(27, 26, 248, 122), stride=(174096, 6448, 248, 1), dtype=float32, device=cuda
+    t7 = flex_attention(t4, t5, t6) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t8 = flex_attention(t3, t7, t7) # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t9 = arg6 # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t10 = arg7 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t11 = flex_attention(t9, t7, t10) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t12 = flex_attention(t11, t8, t3) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t13 = arg8 # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t14 = arg9 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t15 = flex_attention(t13, t2, t14) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t16 = arg10 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t17 = t16.clone(); t17.zero_() # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t18 = flex_attention(t17, t8, t3) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t19 = flex_attention(t15, t17, t18) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t20 = flex_attention(t8, t12, t19) # size=(27, 26, 62, 122), stride=(196664, 7564, 122, 1), dtype=float32, device=cuda
+    output = t20  # output tensor
+    return output
+
+arg0 = torch.rand([27, 26, 62, 122], dtype=torch.float32, device='cuda', requires_grad=True) # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+arg1 = torch.rand([27, 26, 124, 122], dtype=torch.float32, device='cuda', requires_grad=True) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1)
+...
+
+The API tf.compat.v1.enable_eager_execution is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,146 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Set seeds for reproducibility
+tf.random.set_seed(42)
+np.random.seed(42)
+
+class CausalAttention(tf.keras.layers.Layer):
+    def __init__(self, embed_size, heads):
+        super(CausalAttention, self).__init__()
+        self.embed_size = embed_size
+        self.heads = heads
+        self.head_dim = embed_size // heads
+        assert self.head_dim * heads == embed_size, "Embed size needs to be divisible by heads"
+        self.values = tf.keras.layers.Dense(self.head_dim, use_bias=False)
+        self.keys = tf.keras.layers.Dense(self.head_dim, use_bias=False)
+        self.queries = tf.keras.layers.Dense(self.head_dim, use_bias=False)
+        self.fc_out = tf.keras.layers.Dense(embed_size)
+
+    def call(self, values, keys, query, mask):
+        N = tf.shape(query)[0]
+        value_len, key_len, query_len = tf.shape(values)[1], tf.shape(keys)[1], tf.shape(query)[1]
+
+        # Reshape for multi-head attention
+        values = tf.reshape(values, (N, value_len, self.heads, self.head_dim))
+        keys = tf.reshape(keys, (N, key_len, self.heads, self.head_dim))
+        queries = tf.reshape(query, (N, query_len, self.heads, self.head_dim))
+
+        values = self.values(values)
+        keys = self.keys(keys)
+        queries = self.queries(queries)
+
+        # Einsum for energy calculation
+        energy = tf.einsum("nqhd,nkhd->nhqk", queries, keys)
+
+        # Masking
+        if mask is not None:
+            # PyTorch: energy.masked_fill(mask == 0, float("-1e20"))
+            energy = tf.where(mask == 0, -1e20, energy)
+
+        attention = tf.nn.softmax(energy / tf.math.sqrt(tf.cast(self.embed_size, tf.float32)), axis=3)
+
+        # Einsum for output calculation
+        out = tf.einsum("nhql,nlhd->nqhd", attention, values)
+        out = tf.reshape(out, (N, query_len, self.heads * self.head_dim))
+
+        out = self.fc_out(out)
+        return out
+
+class CausalAttentionBlock(tf.keras.layers.Layer):
+    def __init__(self, embed_size, heads, forward_expansion, dropout):
+        super(CausalAttentionBlock, self).__init__()
+        self.attention = CausalAttention(embed_size, heads)
+        self.norm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.norm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        
+        self.feed_forward = tf.keras.Sequential([
+            tf.keras.layers.Dense(embed_size * forward_expansion, activation='relu'),
+            tf.keras.layers.Dense(embed_size)
+        ])
+        self.dropout = tf.keras.layers.Dropout(dropout)
+
+    def call(self, values, keys, query, mask, training=False):
+        attention = self.attention(values, keys, query, mask)
+        x = self.dropout(attention, training=training)
+        x = self.norm1(x + query)
+        
+        forward = self.feed_forward(x)
+        forward = self.dropout(forward, training=training)
+        out = self.norm2(forward + x)
+        return out
+
+class CausalAttentionDNN(tf.keras.Model):
+    def __init__(self, input_size, embed_size, num_layers, heads, forward_expansion, output_size, dropout, max_length):
+        super(CausalAttentionDNN, self).__init__()
+        self.embed_size = embed_size
+        self.word_embedding = tf.keras.layers.Embedding(input_size, embed_size)
+        self.position_embedding = tf.keras.layers.Embedding(max_length, embed_size)
+        
+        self.layers = [CausalAttentionBlock(embed_size, heads, forward_expansion, dropout) for _ in range(num_layers)]
+        
+        self.fc = tf.keras.layers.Dense(output_size)
+        self.dropout = tf.keras.layers.Dropout(dropout)
+
+    def call(self, x, mask, training=False):
+        N, seq_length = tf.shape(x)[0], tf.shape(x)[1]
+        
+        positions = tf.tile(tf.expand_dims(tf.range(seq_length), 0), [N, 1])
+        out = self.dropout(self.word_embedding(x) + self.position_embedding(positions), training=training)
+        
+        for layer in self.layers:
+            out = layer(out, out, out, mask, training=training)
+            
+        out = self.fc(out)
+        return out
+
+def test_name_scope_numerical_consistency():
+    """
+    Adapts the PyTorch torch.compile numerical inconsistency test to TensorFlow.
+    Verifies that tf.keras.backend.name_scope does not introduce numerical 
+    inconsistencies, similar to how torch.compile should not.
+    """
+    # Model Parameters
+    input_size = 100
+    embed_size = 256
+    num_layers = 2
+    heads = 8
+    forward_expansion = 4
+    output_size = 10
+    dropout = 0.0 # Set to 0 for deterministic testing
+    max_length = 50
+    batch_size = 4
+    seq_len = 10
+
+    # Initialize Model
+    model = CausalAttentionDNN(input_size, embed_size, num_layers, heads, forward_expansion, output_size, dropout, max_length)
+    
+    # Dummy Input
+    x = tf.random.uniform((batch_size, seq_len), minval=0, maxval=input_size, dtype=tf.int32)
+    # Create a mask suitable for broadcasting (N, 1, 1, key_len)
+    mask = tf.ones((batch_size, 1, 1, seq_len))
+
+    # Execution 1: Inside the first name_scope
+    with tf.keras.backend.name_scope("scope_execution_1"):
+        out1 = model(x, mask, training=False)
+
+    # Execution 2: Inside a different name_scope
+    # This mimics the "compiled vs uncompiled" structure of the original bug report
+    # by checking if the context manager affects numerical output.
+    with tf.keras.backend.name_scope("scope_execution_2"):
+        out2 = model(x, mask, training=False)
+
+    # Assertion: Check for numerical consistency
+    # The original bug reported severe inconsistencies. We verify that 
+    # using name_scope (the similar API) maintains consistency.
+    try:
+        np.testing.assert_allclose(out1.numpy(), out2.numpy(), rtol=1e-5, atol=1e-5)
+        print("Test Passed: Numerical consistency maintained across different name_scopes.")
+    except AssertionError as e:
+        print(f"Test Failed: Numerical inconsistency detected.\n{e}")
+        raise
+
+if __name__ == "__main__":
+    test_name_scope_numerical_consistency()
+```

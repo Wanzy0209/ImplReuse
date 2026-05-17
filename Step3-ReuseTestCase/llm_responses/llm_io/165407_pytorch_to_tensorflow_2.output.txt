@@ -1,0 +1,93 @@
+```python
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+import gc
+import sys
+
+def test_copy_to_mesh_memory_leak():
+    """
+    Adapted from PyTorch Issue 165407.
+    
+    Original Bug: Memory leak in torch.compile involving flash_attn_varlen_func 
+    where the number of tensors increases every step.
+    
+    Adaptation: Tests for memory leaks when repeatedly calling 
+    tf.experimental.dtensor.copy_to_mesh inside a tf.function (graph mode),
+    monitoring memory usage to detect unbounded growth.
+    """
+    
+    # Setup devices
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        device_name = 'GPU:0'
+        # Configure memory growth to prevent immediate OOM
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    else:
+        # Fallback to CPU if no GPU is available
+        device_name = 'CPU:0'
+        print("Warning: No GPU found. Running on CPU. Memory tracking may be less precise.", file=sys.stderr)
+
+    # Initialize Mesh and Layout
+    # We use a single device mesh to simplify the reproduction logic
+    mesh = dtensor.create_mesh(['batch'], [device_name])
+    layout = dtensor.Layout([dtensor.UNSHARDED], mesh)
+
+    # Define the operation inside tf.function
+    # This is analogous to torch.compile in the original bug report
+    @tf.function
+    def step():
+        # Create a tensor (analogous to input data in the original bug)
+        x = tf.random.normal([1024, 1024], dtype=tf.float32)
+        
+        # Call the API under test: copy_to_mesh
+        # This is the target operation corresponding to the attention kernel in the original bug
+        d_x = dtensor.copy_to_mesh(x, layout)
+        
+        return d_x
+
+    # Warmup steps to allow graph compilation and initialization
+    print("Warming up...")
+    for _ in range(5):
+        _ = step()
+
+    # Helper to get memory usage
+    def get_memory_usage():
+        if 'GPU' in device_name:
+            mem_info = tf.config.experimental.get_memory_info(device_name)
+            return mem_info['current'] / (1024 ** 2)  # Return in MB
+        return 0.0
+
+    # Initial memory check
+    gc.collect()
+    start_mem = get_memory_usage()
+    print(f"Initial Memory: {start_mem:.2f} MB")
+
+    # Run the loop to detect leaks
+    # The original bug showed increasing tensor counts over steps (150, 200, 250, 300)
+    steps = 300
+    leak_threshold_mb = 500  # Allow some buffer, but flag significant growth
+    
+    print(f"Running {steps} steps...")
+    for i in range(steps):
+        res = step()
+        del res # Explicitly delete to ensure Python scope isn't holding it
+        
+        # Periodic checks similar to the original bug report logs
+        if (i + 1) % 50 == 0:
+            gc.collect()
+            current_mem = get_memory_usage()
+            mem_diff = current_mem - start_mem
+            
+            print(f"Step {i + 1:3d} | Memory: {current_mem:.2f} MB | Diff: {mem_diff:+.2f} MB")
+            
+            # In a real test suite, we might assert this, but for repro scripts
+            # we observe the trend. A linear increase suggests a leak.
+            if mem_diff > leak_threshold_mb:
+                print(f"WARNING: Potential memory leak detected. Growth > {leak_threshold_mb} MB")
+
+    print("Test completed.")
+
+if __name__ == "__main__":
+    test_copy_to_mesh_memory_leak()
+```

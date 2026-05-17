@@ -1,0 +1,48 @@
+```python
+import torch
+from torch.utils._python_dispatch import TorchDispatchMode
+import torch.distributed as dist
+from torch.distributed._distributed_c10d import FakeProcessGroup
+from torch.testing._internal.distributed.fake_pg import FakeStore
+
+def test_fake_process_group_dispatch():
+    """
+    Test case for Issue 162129.
+    Verifies that FakeProcessGroup correctly dispatches c10d operations 
+    when constructed directly, rather than failing silently.
+    """
+    
+    class DispatchRecorder(TorchDispatchMode):
+        def __init__(self):
+            self.recorded_ops = []
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            if kwargs is None:
+                kwargs = {}
+            self.recorded_ops.append(func)
+            return func(*args, **kwargs)
+
+    # Direct construction of FakeProcessGroup (the reported bug scenario)
+    fake_pg = FakeProcessGroup(rank=0, world_size=3)
+    
+    recorder = DispatchRecorder()
+    with recorder:
+        tensor = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        dist.all_reduce(tensor, group=fake_pg)
+
+    # Check if the expected c10d operator was dispatched
+    # The bug report indicates that 'c10d.allreduce_.default' is missing.
+    dispatched_ops = [str(op) for op in recorder.recorded_ops]
+    
+    has_allreduce = any("allreduce" in op for op in dispatched_ops)
+    
+    # This assertion acts as a regression test. 
+    # It will fail if the bug is present (silent incorrectness).
+    assert has_allreduce, (
+        f"Expected c10d.allreduce_ to be dispatched, but only found: {dispatched_ops}. "
+        "This indicates the bug described in Issue 162129."
+    )
+
+if __name__ == "__main__":
+    test_fake_process_group_dispatch()
+```

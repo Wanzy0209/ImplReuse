@@ -1,0 +1,56 @@
+```python
+import torch
+import sys
+import platform
+import unittest
+
+class TestMPSBackend(unittest.TestCase):
+    """
+    Test case for MPS backend availability on macOS 13+.
+    This test mirrors the pattern of tf.test.is_built_with_gpu_support(),
+    where we verify environment support before attempting device operations.
+    """
+
+    def test_mps_tensor_transfer(self):
+        # Check if we are on the relevant platform
+        if sys.platform != 'darwin':
+            self.skipTest("MPS is only available on macOS")
+
+        # Get OS version to manually verify the bug condition
+        # The bug report indicates a version parsing error where 13.7.4 is treated as < 13.0.
+        release = platform.mac_ver()[0]
+        if not release:
+            self.skipTest("Could not determine macOS version")
+
+        try:
+            major_version = int(release.split('.')[0])
+        except ValueError:
+            self.skipTest(f"Could not parse macOS version: {release}")
+
+        # If the OS version is < 13, we expect the backend to be unavailable.
+        # We skip the test if the environment genuinely doesn't support it.
+        if major_version < 13:
+            self.skipTest(f"Test requires macOS 13.0+, current is {release}")
+
+        # Original bug reproduction logic
+        # This mimics the usage pattern: with tf.device("GPU:0"): ...
+        try:
+            foo = torch.tensor([[1]])
+            foo = foo.to('mps')
+            # If we reach here, the backend initialized correctly
+            self.assertIsNotNone(foo)
+        except RuntimeError as e:
+            error_msg = str(e)
+            # The specific error from the bug report indicating a version check failure
+            if "MacOS 13.0+" in error_msg:
+                self.fail(
+                    f"Bug reproduced: MPS backend rejected on macOS {release} "
+                    f"despite meeting version requirements. Error: {error_msg}"
+                )
+            else:
+                # Re-raise other runtime errors (e.g., no MPS hardware found)
+                raise
+
+if __name__ == '__main__':
+    unittest.main()
+```

@@ -1,0 +1,76 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_range_input_producer_consistency():
+    """
+    Adapted test case for tf.compat.v1.train.range_input_producer.
+    
+    Original Bug Context: Severe numerical inconsistency with torch.compile().
+    Adaptation Logic: Verify that the TensorFlow input pipeline produces 
+    numerically consistent results (determinism) when seeds are fixed, 
+    and correct results when order is preserved.
+    """
+    
+    # Disable eager execution to use tf.compat.v1 queues and sessions
+    tf.compat.v1.disable_eager_execution()
+
+    # Test Case 1: Verify numerical correctness and order (No Shuffle)
+    # This ensures the API produces the fundamental sequence correctly.
+    with tf.compat.v1.Session() as sess:
+        limit = 10
+        # Create a range input producer without shuffling
+        queue = tf.compat.v1.train.range_input_producer(
+            limit, 
+            shuffle=False, 
+            seed=None, 
+            capacity=32
+        )
+        # Dequeue the entire batch to verify the sequence
+        batch = queue.dequeue_many(limit)
+        
+        # Initialize variables
+        sess.run(tf.compat.v1.local_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
+        
+        # Run the op
+        result = sess.run(batch)
+        expected = np.arange(limit, dtype=np.int32)
+        
+        # Assert the sequence is exactly 0 to limit-1
+        assert np.array_equal(result, expected), \
+            f"Numerical Incorrectness: Expected {expected}, got {result}"
+        print("Test 1 Passed: Unshuffled output is numerically correct.")
+
+    # Test Case 2: Verify numerical consistency/determinism (With Shuffle)
+    # This mirrors the original bug report's concern about inconsistencies.
+    # We check if the same seed produces the exact same output across runs.
+    results = []
+    seed_val = 42
+    limit = 20
+
+    for i in range(2):
+        with tf.compat.v1.Session() as sess:
+            # Create a range input producer with shuffling and a fixed seed
+            queue = tf.compat.v1.train.range_input_producer(
+                limit, 
+                shuffle=True, 
+                seed=seed_val, 
+                capacity=32
+            )
+            batch = queue.dequeue_many(limit)
+            
+            sess.run(tf.compat.v1.local_variables_initializer())
+            sess.run(tf.compat.v1.global_variables_initializer())
+            
+            result = sess.run(batch)
+            results.append(result)
+
+    # Assert that both runs with the same seed produced identical outputs
+    assert np.array_equal(results[0], results[1]), \
+        "Severe Numerical Inconsistency: Same seed produced different outputs."
+    print("Test 2 Passed: Shuffled output is deterministic with fixed seed.")
+
+if __name__ == "__main__":
+    test_range_input_producer_consistency()
+```

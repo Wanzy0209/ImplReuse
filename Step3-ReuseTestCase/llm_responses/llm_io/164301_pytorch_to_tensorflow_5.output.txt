@@ -1,0 +1,103 @@
+```python
+import tensorflow.compat.v1 as tf
+import time
+import numpy as np
+
+# Disable eager execution to use tf.compat.v1 graph mode features
+tf.disable_eager_execution()
+
+def test_queue_runner_performance():
+    """
+    Adapted test case for tf.compat.v1.train.add_queue_runner.
+    
+    Original Bug Context: A performance regression in torch.compile for mxfp8 
+    quantization was observed between specific nightly builds, measured by 
+    memory bandwidth (gbps) and execution time (us).
+    
+    Adaptation Logic: Since tf.compat.v1.train.add_queue_runner manages 
+    asynchronous data pipeline execution rather than kernel compilation, 
+    this test verifies the performance and correctness of the queue runner 
+    mechanism. It mimics the original test structure by setting up a workload 
+    (data dimensions), running the operation, and measuring execution time.
+    """
+    
+    # Configuration adapted from the original bug report (M=16384, K=16384)
+    # We use these dimensions to define the tensor shape flowing through the queue.
+    dim_m = 16384
+    dim_k = 16384
+    num_iterations = 100
+
+    # 1. Setup the Graph
+    # Create a FIFOQueue to hold float32 tensors
+    queue = tf.FIFOQueue(capacity=50, dtypes=[tf.float32], shapes=[dim_m, dim_k])
+
+    # Generate random input data to simulate the workload
+    # In the original bug, this was the matrix being quantized.
+    # Here, it is the data being enqueued.
+    input_data = tf.random.normal([num_iterations, dim_m, dim_k])
+
+    # Define the enqueue operation
+    enqueue_op = queue.enqueue_many([input_data])
+
+    # Define the dequeue operation (the consumer)
+    dequeue_op = queue.dequeue()
+
+    # 2. API Under Test: tf.compat.v1.train.add_queue_runner
+    # Create a QueueRunner with multiple threads to handle the enqueueing
+    qr = tf.train.QueueRunner(queue, [enqueue_op] * 4)
+
+    # Add the QueueRunner to the graph's default collection
+    # This is the specific API function being tested.
+    tf.compat.v1.train.add_queue_runner(qr)
+
+    # 3. Execution and Benchmarking
+    with tf.Session() as sess:
+        # Initialize variables
+        sess.run(tf.global_variables_initializer())
+        sess.run(tf.local_variables_initializer())
+
+        # Coordinator to manage threads
+        coord = tf.train.Coordinator()
+
+        # Start the queue runners
+        # This retrieves the runner added via add_queue_runner and starts the threads.
+        threads = tf.train.start_queue_runners(coord=coord, start=True)
+
+        # Warm-up run
+        for _ in range(5):
+            sess.run(dequeue_op)
+
+        # Benchmark loop
+        start_time = time.time()
+        processed_count = 0
+
+        try:
+            while not coord.should_stop() and processed_count < num_iterations:
+                # Dequeue and process data
+                data = sess.run(dequeue_op)
+                
+                # Assertions to verify correctness (mimicking correctness checks in quantization)
+                assert data.shape == (dim_m, dim_k), f"Shape mismatch: {data.shape}"
+                assert not np.isnan(data).any(), "NaN detected in output"
+                
+                processed_count += 1
+        except tf.errors.OutOfRangeError:
+            pass
+        finally:
+            end_time = time.time()
+            
+            # Calculate metrics similar to the original bug report
+            total_time_us = (end_time - start_time) * 1_000_000
+            throughput = processed_count / (end_time - start_time) if (end_time - start_time) > 0 else 0
+
+            print(f"Processed: {processed_count} items")
+            print(f"Time (us): {total_time_us:.4f}")
+            print(f"Throughput (items/sec): {throughput:.2f}")
+
+            # Clean up threads
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_queue_runner_performance()
+```

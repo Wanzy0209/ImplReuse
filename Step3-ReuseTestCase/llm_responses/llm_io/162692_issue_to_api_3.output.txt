@@ -1,0 +1,69 @@
+```python
+import torch
+import torch.distributed as dist
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh
+import os
+
+def test_dtensor_mean_uneven_sharding():
+    """
+    Test case for Issue #162692: Incorrect results of DTensor.mean with uneven sharding.
+    
+    This test verifies that DTensor.mean() correctly handles uneven sharding 
+    (e.g., 3x4 tensor on 2 devices) and edge cases (e.g., 1x4 tensor on 2 devices)
+    that previously resulted in incorrect values or NaN.
+    """
+    # Initialize process group
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    dist.init_process_group(backend=backend)
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    
+    if torch.cuda.is_available():
+        torch.cuda.set_device(rank)
+        device = "cuda"
+    else:
+        device = "cpu"
+
+    # Create a device mesh
+    mesh = init_device_mesh(device, (world_size,))
+
+    # Test Case 1: Uneven sharding (3x4 tensor on 2 devices)
+    # Rank 0 gets 2 rows, Rank 1 gets 1 row
+    tensor_3x4 = torch.arange(12, dtype=torch.float32).reshape(3, 4).to(device)
+    expected_mean_3x4 = tensor_3x4.mean()
+    
+    dt_3x4 = distribute_tensor(tensor_3x4, device_mesh=mesh, placements=[Shard(0)])
+    result_dt_3x4 = dt_3x4.mean()
+    full_result_3x4 = result_dt_3x4.full_tensor()
+
+    if rank == 0:
+        print(f"Test Case 1 (3x4): Expected {expected_mean_3x4.item()}, Got {full_result_3x4.item()}")
+        assert torch.allclose(full_result_3x4, expected_mean_3x4), \
+            f"Test Case 1 Failed: {full_result_3x4} != {expected_mean_3x4}"
+
+    # Test Case 2: Edge case with uneven sharding (1x4 tensor on 2 devices)
+    # Rank 0 gets 1 row, Rank 1 gets 0 rows (empty shard)
+    # This previously resulted in NaN
+    tensor_1x4 = torch.arange(4, dtype=torch.float32).reshape(1, 4).to(device)
+    expected_mean_1x4 = tensor_1x4.mean()
+    
+    dt_1x4 = distribute_tensor(tensor_1x4, device_mesh=mesh, placements=[Shard(0)])
+    result_dt_1x4 = dt_1x4.mean()
+    full_result_1x4 = result_dt_1x4.full_tensor()
+
+    if rank == 0:
+        print(f"Test Case 2 (1x4): Expected {expected_mean_1x4.item()}, Got {full_result_1x4.item()}")
+        assert not torch.isnan(full_result_1x4), "Test Case 2 Failed: Result is NaN"
+        assert torch.allclose(full_result_1x4, expected_mean_1x4), \
+            f"Test Case 2 Failed: {full_result_1x4} != {expected_mean_1x4}"
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Check if running with torchrun
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        test_dtensor_mean_uneven_sharding()
+    else:
+        # Fallback for local testing without torchrun (requires spawning)
+        print("Please run this test using torchrun, e.g., torchrun --nproc-per-node=2 test_script.py")
+```

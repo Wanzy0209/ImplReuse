@@ -1,0 +1,60 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+# Leveraging the similar API pattern: tf.test.is_built_with_cuda
+# We translate this to PyTorch to check for CUDA availability before running the test.
+def is_built_with_cuda():
+    """Returns whether PyTorch was built with CUDA (GPU) support."""
+    return torch.cuda.is_available()
+
+def test_all_gather_memory_format(rank, world_size):
+    # Initialize process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
+    # Reproduce the bug logic: Create a tensor with channels_last memory format
+    x = torch.arange(0, 16).reshape(2, 2, 2, 2).cuda().to(memory_format=torch.channels_last)
+    
+    # Verify input is in channels_last format
+    assert x.is_contiguous(memory_format=torch.channels_last), "Input tensor setup failed"
+
+    x_list = [torch.zeros_like(x) for _ in range(world_size)]
+    
+    # Perform the all_gather operation
+    dist.all_gather(x_list, x)
+
+    # Check the gathered tensor corresponding to the current rank
+    gathered_x = x_list[rank]
+
+    # The bug report indicates memory ordering changes.
+    # We assert that the memory format is preserved.
+    is_input_cl = x.is_contiguous(memory_format=torch.channels_last)
+    is_output_cl = gathered_x.is_contiguous(memory_format=torch.channels_last)
+
+    # Also check value equality as indicated by the original repro's torch.equal check
+    values_equal = torch.equal(x, gathered_x)
+
+    print(f"Rank {rank}: Input CL: {is_input_cl}, Output CL: {is_output_cl}, Values Equal: {values_equal}")
+
+    assert is_output_cl, f"Bug reproduced: all_gather changed memory ordering on rank {rank}"
+    assert values_equal, f"Data mismatch on rank {rank}"
+
+    dist.destroy_process_group()
+
+def main():
+    # Use the similar API pattern to guard execution
+    if not is_built_with_cuda():
+        print("Test skipped: CUDA not available (similar to tf.test.is_built_with_cuda check).")
+        return
+
+    world_size = 2
+    mp.spawn(test_all_gather_memory_format, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()
+```

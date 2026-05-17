@@ -1,0 +1,77 @@
+```python
+import tensorflow as tf
+import threading
+import time
+
+# Global flag to check if the background thread could acquire the GIL
+background_thread_ran = False
+
+def background_task():
+    """
+    This function runs in a separate thread. 
+    If the main thread holds the GIL during kernel execution, 
+    this thread will be blocked. If the GIL is released, 
+    this thread will be able to run.
+    """
+    global background_thread_ran
+    start_time = time.time()
+    # Perform some CPU-bound work to require the GIL
+    while time.time() - start_time < 0.5:
+        pass
+    background_thread_ran = True
+
+def tf_standard_add(x: tf.Tensor, y: tf.Tensor):
+    """Standard TensorFlow addition."""
+    return x + y
+
+def tf_namescope_add(x: tf.Tensor, y: tf.Tensor):
+    """Addition wrapped in tf.name_scope (the API under test)."""
+    with tf.name_scope("test_scope"):
+        return x + y
+
+def main():
+    # Check for GPU to mimic the original CUDA context
+    gpus = tf.config.list_physical_devices('GPU')
+    device = '/GPU:0' if gpus else '/CPU:0'
+    print(f"Running on device: {device}")
+
+    with tf.device(device):
+        # Create large tensors to ensure sufficient execution time for GIL observation
+        x = tf.random.normal((4096, 4096))
+        y = tf.random.normal((4096, 4096))
+
+        # --- Test Case 1: Standard TensorFlow Operation ---
+        print("Testing standard TF operation...")
+        global background_thread_ran
+        background_thread_ran = False
+        
+        t = threading.Thread(target=background_task)
+        t.start()
+        
+        # Execute operation
+        res = tf_standard_add(x, y)
+        # Force synchronization for CPU to ensure execution completes before checking thread
+        if device == '/CPU:0':
+            _ = res.numpy()
+        
+        t.join(timeout=2.0)
+        print(f"Standard Op: Background thread ran? {background_thread_ran}")
+
+        # --- Test Case 2: Operation inside tf.name_scope ---
+        print("Testing tf.name_scope...")
+        background_thread_ran = False
+        
+        t = threading.Thread(target=background_task)
+        t.start()
+        
+        # Execute operation inside the scope
+        res = tf_namescope_add(x, y)
+        if device == '/CPU:0':
+            _ = res.numpy()
+            
+        t.join(timeout=2.0)
+        print(f"tf.name_scope: Background thread ran? {background_thread_ran}")
+
+if __name__ == "__main__":
+    main()
+```

@@ -1,0 +1,105 @@
+Issue ID: 163569
+Title: [Fuzzer][Eager/Compile Divergence] torch.nn.functional.conv1d works in eager but fails compile
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0 # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda
+    t1 = t0.max(dim=0).values # size=(261, 17, 358), stride=(358, 93438, 1), dtype=bfloat16, device=cuda
+    t2 = t1.transpose(1, 0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=bfloat16, device=cuda
+    t3 = arg1 # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+    t4 = torch.exp(t3) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+    t5 = arg2 # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda
+    t6 = t5.transpose(2, 1) # size=(261, 64, 1), stride=(16704, 64, 1), dtype=float32, device=cuda
+    t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    t8 = t7.clone(); t8.zero_() # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    t9 = t2 * t7 * t8 # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    output = t9  # output tensor
+    return output
+
+arg0 = torch.rand([2, 261, 17, 358], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda
+arg1 = tor
+...
+
+Original API Under Test: torch.nn.functional.conv1d
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.CosineEmbeddingLoss
+Similarity score: 0.9948550462722778
+
+Similar API information:
+# Extracted call chain for torch.nn.CosineEmbeddingLoss
+
+# --- torch.nn.modules.loss.CosineEmbeddingLoss ---
+class CosineEmbeddingLoss(_Loss):
+    r"""Creates a criterion that measures the loss given input tensors
+    :math:`x_1`, :math:`x_2` and a `Tensor` label :math:`y` with values 1 or -1.
+    Use (:math:`y=1`) to maximize the cosine similarity of two inputs, and (:math:`y=-1`) otherwise.
+    This is typically used for learning nonlinear
+    embeddings or semi-supervised learning.
+
+    The loss function for each sample is:
+
+    .. math::
+        \text{loss}(x, y) =
+        \begin{cases}
+        1 - \cos(x_1, x_2), & \text{if } y = 1 \\
+        \max(0, \cos(x_1, x_2) - \text{margin}), & \text{if } y = -1
+        \end{cases}
+
+    Args:
+        margin (float, optional): Should be a number from :math:`-1` to :math:`1`,
+            :math:`0` to :math:`0.5` is suggested. If :attr:`margin` is missing, the
+            default value is :math:`0`.
+        size_average (bool, optional): Deprecated (see :attr:`reduction`). By default,
+            the losses are averaged over each loss element in the batch. Note that for
+            some losses, there are multiple elements per sample. If th
+...
+
+Original Test Case:
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0 # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda
+    t1 = t0.max(dim=0).values # size=(261, 17, 358), stride=(358, 93438, 1), dtype=bfloat16, device=cuda
+    t2 = t1.transpose(1, 0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=bfloat16, device=cuda
+    t3 = arg1 # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+    t4 = torch.exp(t3) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+    t5 = arg2 # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda
+    t6 = t5.transpose(2, 1) # size=(261, 64, 1), stride=(16704, 64, 1), dtype=float32, device=cuda
+    t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    t8 = t7.clone(); t8.zero_() # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    t9 = t2 * t7 * t8 # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    output = t9  # output tensor
+    return output
+
+arg0 = torch.rand([2, 261, 17, 358], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda
+arg1 = torch.rand([17, 64, 358], dtype=torch.float32, device='cuda', requires_grad=True) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+arg2 = torch.rand([261, 1, 64], dtype=torch.float32, device='cuda', requires_grad=True) # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+
+The API torch.nn.CosineEmbeddingLoss is identified as same-library similar to the original PyTorch API torch.nn.functional.conv1d.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

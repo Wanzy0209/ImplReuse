@@ -1,0 +1,79 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_thresholded_relu_precision():
+    """
+    Adapted test case for tf.keras.layers.ThresholdedReLU based on the 
+    torch.nn.functional.normalize precision bug.
+    
+    The original bug involved torch.compile + CUDA causing a norm > 1.
+    Here, we test if tf.keras.layers.ThresholdedReLU (which has a hard threshold boundary)
+    behaves consistently between eager execution and compiled (XLA/graph) execution
+    when inputs are very close to the threshold (theta).
+    """
+    
+    # Check for GPU availability to mimic the CUDA environment of the original bug
+    gpus = tf.config.list_physical_devices('GPU')
+    device = '/GPU:0' if gpus else '/CPU:0'
+    
+    if not gpus:
+        print("Warning: No GPU found. Running on CPU. The original bug was CUDA-specific.")
+
+    with tf.device(device):
+        # Initialize the layer
+        # Theta=1.0 is the boundary. We test values extremely close to this boundary.
+        layer = tf.keras.layers.ThresholdedReLU(theta=1.0)
+
+        # Define the compiled function (analogous to torch.compile)
+        # Using jit_compile=True to enable XLA, which is more aggressive and similar 
+        # to the optimizations in torch.compile that caused the original bug.
+        @tf.function(jit_compile=True)
+        def apply_thresholded_relu_compiled(x):
+            return layer(x)
+
+        # Define the uncompiled (eager) function
+        def apply_thresholded_relu_eager(x):
+            return layer(x)
+
+        # Input tensor
+        # Value 1.0000001 is slightly above theta (should be passed through)
+        # Value 0.9999999 is slightly below theta (should be zeroed)
+        # Value 0.0 is well below theta (should be zeroed)
+        # This mimics the precision sensitivity of the original bug (norm > 1.0).
+        c = tf.constant([[1.0000001, 0.9999999, 0.0]], dtype=tf.float32)
+
+        print("Input vector:", c.numpy().tolist())
+
+        # Run compiled version
+        xyz_compiled = apply_thresholded_relu_compiled(c)
+        print("Output vector (compiled):", xyz_compiled.numpy().tolist())
+
+        # Run eager version
+        xyz_eager = apply_thresholded_relu_eager(c)
+        print("Output vector (eager):", xyz_eager.numpy().tolist())
+
+        # Verify behavior
+        # We expect the first element to remain 1.0000001 and the second to be 0.0
+        # If compiled mode has precision issues (like the PyTorch bug), 
+        # the first element might be zeroed or the second might pass through.
+        
+        diff = tf.reduce_sum(tf.abs(xyz_compiled - xyz_eager))
+        print("Absolute difference between compiled and eager:", diff.numpy())
+
+        # Assertions to check for the specific precision boundary behavior
+        # Check that the value > theta is preserved
+        assert xyz_compiled[0, 0].numpy() > 1.0, \
+            f"Compiled output failed to preserve value > theta. Got {xyz_compiled[0, 0].numpy()}"
+        
+        # Check that the value < theta is zeroed out
+        assert xyz_compiled[0, 1].numpy() == 0.0, \
+            f"Compiled output failed to zero out value < theta. Got {xyz_compiled[0, 1].numpy()}"
+
+        # Check that compiled and eager outputs match exactly
+        assert np.allclose(xyz_compiled.numpy(), xyz_eager.numpy()), \
+            "Mismatch between compiled and eager execution detected."
+
+if __name__ == "__main__":
+    test_thresholded_relu_precision()
+```

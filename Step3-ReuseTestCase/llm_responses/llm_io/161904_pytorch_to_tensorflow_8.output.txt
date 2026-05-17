@@ -1,0 +1,76 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Adapted from the original PyTorch Transformer model to use TensorFlow/Keras
+# The original bug involved torch.compile and pipeline schedules.
+# Here we adapt the model definition to use tf.keras.name_scope to verify
+# the behavior of the similar API in a model construction context.
+
+class Transformer(tf.keras.Model):
+    def __init__(self):
+        super().__init__()
+        
+        # Use tf.keras.name_scope to group the embedding layer
+        # This corresponds to the self.tok_embeddings in the original code
+        with tf.keras.name_scope("tok_embeddings"):
+            self.tok_embeddings = tf.keras.layers.Embedding(input_dim=128, output_dim=32)
+
+        self.layers_list = []
+        # Use tf.keras.name_scope to group the transformer layers
+        # This corresponds to the self.layers ModuleDict in the original code
+        with tf.keras.name_scope("transformer_layers"):
+            for layer_id in range(4):
+                # Scope individual layers to mimic the ModuleDict keys
+                with tf.keras.name_scope(f"layer_{layer_id}"):
+                    self.layers_list.append(tf.keras.layers.Dense(32, use_bias=False))
+
+        # Use tf.keras.name_scope to group the output layer
+        # This corresponds to self.output in the original code
+        with tf.keras.name_scope("output"):
+            self.output_layer = tf.keras.layers.Dense(128, use_bias=False)
+
+    @tf.function
+    def call(self, x):
+        # Forward pass logic mirroring the original PyTorch forward method
+        x = self.tok_embeddings(x)
+        for layer in self.layers_list:
+            x = layer(x)
+        return self.output_layer(x)
+
+def main() -> None:
+    # Instantiate the model
+    model = Transformer()
+
+    # Verify that tf.keras.name_scope has correctly applied prefixes to the layers
+    # This ensures the API is behaving as expected for organizing the graph.
+    assert "tok_embeddings" in model.tok_embeddings.name, \
+        f"Expected 'tok_embeddings' in {model.tok_embeddings.name}"
+    
+    assert "transformer_layers" in model.layers_list[0].name, \
+        f"Expected 'transformer_layers' in {model.layers_list[0].name}"
+    
+    assert "output" in model.output_layer.name, \
+        f"Expected 'output' in {model.output_layer.name}"
+
+    print("Layer name scoping verified successfully.")
+
+    # Create dummy input matching the original dimensions (batch_size=8, seq_len=4096)
+    # Note: Using smaller seq_len for quick testing if needed, but keeping original for fidelity.
+    input_ids = tf.constant(np.random.randint(0, 128, (8, 4096)), dtype=tf.int32)
+
+    # Run the forward pass.
+    # The @tf.function decorator compiles the call, similar to torch.compile in the original issue.
+    # We verify that the name scopes do not break the graph execution.
+    output = model(input_ids)
+
+    # Verify output shape
+    expected_shape = (8, 4096, 128)
+    assert output.shape == expected_shape, \
+        f"Expected output shape {expected_shape}, but got {output.shape}"
+
+    print(f"Test passed. Output shape is {output.shape}.")
+
+if __name__ == "__main__":
+    main()
+```

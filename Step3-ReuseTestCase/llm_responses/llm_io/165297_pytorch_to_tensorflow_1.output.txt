@@ -1,0 +1,81 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_multinomial_bfloat16_large():
+    """
+    Adapted test case for tf.compat.v1.distributions.Multinomial based on 
+    the PyTorch MaxPool2d channels_last + bfloat16 bug report.
+    
+    The original bug involves large tensors, bfloat16 dtype, and specific 
+    memory layouts (channels_last/NHWC) causing NaNs. This test verifies 
+    if the TensorFlow Multinomial distribution exhibits similar instability 
+    under these conditions.
+    """
+    
+    # Check for CUDA (GPU) availability
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        print("Test skipped: No GPU available.")
+        return
+
+    # Configure GPU memory growth to prevent immediate OOM on allocation
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
+
+    # Dimensions from the original bug report
+    # PyTorch: N, C, H, W = 84, 64, 512, 960
+    # TensorFlow (NHWC / channels_last): N, H, W, C
+    N, H, W, C = 84, 512, 960, 64
+    
+    # Use bfloat16 as in the original bug report
+    dtype = tf.bfloat16
+    
+    print(f"Testing with large tensor: Shape=({N}, {H}, {W}, {C}), dtype={dtype}")
+
+    # Create large random probabilities
+    # We generate in float32 first for stability of random ops, then cast
+    # The shape mimics the "channels_last" (NHWC) memory format implicitly
+    probs_float32 = tf.random.uniform((N, H, W, C), minval=0.0, maxval=1.0, dtype=tf.float32)
+    
+    # Normalize to ensure valid probabilities (sum to 1 along the last axis)
+    probs_float32 = tf.math.softmax(probs_float32, axis=-1)
+    
+    # Cast to bfloat16 to trigger the potential numerical instability
+    probs = tf.cast(probs_float32, dtype)
+    
+    print(f"Input tensor: dtype={probs.dtype}, shape={probs.shape}")
+
+    # Define the Multinomial distribution
+    # total_count is set to a reasonable integer for the distribution
+    total_count = 10
+    dist = tf.compat.v1.distributions.Multinomial(total_count=total_count, probs=probs)
+
+    # Sample from the distribution
+    # This operation performs the heavy computation similar to the pooling pass
+    y = dist.sample()
+
+    # Check results for NaNs or Infs
+    contains_nan = tf.reduce_any(tf.math.is_nan(y))
+    contains_inf = tf.reduce_any(tf.math.is_inf(y))
+    
+    # Calculate stats (casting to float32 to avoid overflow issues in min/max calculation if output is bfloat16)
+    y_float32 = tf.cast(y, tf.float32)
+    min_val = tf.reduce_min(y_float32)
+    max_val = tf.reduce_max(y_float32)
+
+    print(f"Output contains NaN? {contains_nan.numpy()}")
+    print(f"Output contains Inf? {contains_inf.numpy()}")
+    print(f"Stats: min={min_val.numpy()}, max={max_val.numpy()}")
+
+    if contains_nan.numpy() or contains_inf.numpy():
+        print("Detected NaNs or Infs in Multinomial output!")
+    else:
+        print("Test passed: No NaNs or Infs detected.")
+
+if __name__ == "__main__":
+    test_multinomial_bfloat16_large()
+```

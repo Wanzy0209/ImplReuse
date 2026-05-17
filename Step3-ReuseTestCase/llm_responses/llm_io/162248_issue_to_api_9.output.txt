@@ -1,0 +1,51 @@
+```python
+import torch
+import torch.distributed as dist
+import os
+import multiprocessing as mp
+
+def run(local_rank):
+    """
+    Worker function to reproduce the bug where GLOO backend does not support all_to_all.
+    """
+    # Setup environment variables for distributed communication
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '27015'
+    os.environ['WORLD_SIZE'] = '2'
+
+    # Initialize the process group with GLOO backend
+    group = dist.init_process_group(backend='gloo', rank=local_rank)
+
+    # Prepare input and output tensors
+    world_size = 2
+    output = list(torch.empty([world_size], dtype=torch.int64).chunk(world_size))
+    input_tensor = list((torch.arange(world_size) + local_rank * world_size).chunk(world_size))
+
+    # Leverage the similar API: Check OpenMP availability
+    # This mirrors the pattern of checking backend capabilities, similar to what is needed
+    # to verify if all_to_all is supported on the current backend.
+    is_openmp_available = torch.backends.openmp.is_available()
+
+    try:
+        # Attempt the operation claimed to be supported in documentation
+        dist.all_to_all(output, input_tensor, group=group)
+        return (local_rank, "Success", is_openmp_available)
+    except RuntimeError as e:
+        return (local_rank, str(e), is_openmp_available)
+
+if __name__ == "__main__":
+    # Check system capability using the similar API in the main scope
+    print(f"System OpenMP Available: {torch.backends.openmp.is_available()}")
+
+    world_size = 2
+    ctx = mp.get_context('spawn')
+
+    with ctx.Pool(world_size) as p:
+        results = p.map(run, range(world_size))
+
+    # Verify results
+    for rank, status, openmp_status in results:
+        print(f"Rank {rank} (OpenMP: {openmp_status}): {status}")
+        # The bug report confirms this operation is not supported, so we expect the RuntimeError
+        assert "does not support alltoall" in status, f"Expected RuntimeError for rank {rank}, got: {status}"
+```

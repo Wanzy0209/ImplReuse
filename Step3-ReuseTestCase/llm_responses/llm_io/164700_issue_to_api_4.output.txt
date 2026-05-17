@@ -1,0 +1,72 @@
+```python
+import torch
+import torch.nn.functional as F
+
+def test_compile_with_leaky_relu_and_cat():
+    """
+    Test case for Issue 164700 adapted to use torch.nn.functional.leaky_relu_.
+    
+    The original issue involves torch.compile crashing due to illegal triton 
+    tl.broadcast_to generated from interleaving unsqueeze and torch.cat.
+    
+    This test preserves the original logic (slicing, unsqueezing, concatenating)
+    but integrates the similar API (leaky_relu_) into the computation graph.
+    Note: Inputs are adapted to float32 to accommodate leaky_relu_.
+    """
+    device = "cuda"
+    
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # Inputs adapted to float32 to support leaky_relu_
+    x = torch.zeros(1, 32, dtype=torch.float32, device=device)
+    y = torch.zeros(1, dtype=torch.float32, device=device)
+
+    def f(x, y):
+        # Leverage the similar API: in-place leaky_relu
+        F.leaky_relu_(x, negative_slope=0.01)
+        F.leaky_relu_(y, negative_slope=0.01)
+
+        # Original bug reproduction logic:
+        # Interleaving unsqueeze (via None indexing) and torch.cat
+        y2 = torch.cat(
+            [
+                x[:, 1:],
+                y[:, None] + 32 * 2048,
+            ],
+            dim=1,
+        )
+
+        x2 = x[:, 1:, None]
+        y3 = y2[:, -1:, None]
+
+        return (
+            torch.cat([x2, y3], dim=1)
+            + torch.arange(-2048, 0, device=device, dtype=torch.float32)[None, None, :]
+        ).reshape(1, 32 * 2048)
+
+    # 1. Test eager mode (should succeed)
+    try:
+        eager_result = f(x.clone(), y.clone())
+        print("Eager execution succeeded.")
+    except Exception as e:
+        print(f"Eager execution failed: {e}")
+        raise
+
+    # 2. Test compiled mode (this is where the original bug crashes)
+    try:
+        compiled_f = torch.compile(f)
+        compiled_result = compiled_f(x.clone(), y.clone())
+        print("Compiled execution succeeded.")
+        
+        # Verify results match
+        assert torch.allclose(eager_result, compiled_result), "Results differ between eager and compiled modes"
+        
+    except Exception as e:
+        print(f"Compiled execution failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_compile_with_leaky_relu_and_cat()
+```

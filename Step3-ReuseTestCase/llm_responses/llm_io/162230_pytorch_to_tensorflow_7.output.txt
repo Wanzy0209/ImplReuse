@@ -1,0 +1,79 @@
+```python
+import subprocess
+import sys
+import tempfile
+import os
+import unittest
+
+class TestLecunUniformSimilar(unittest.TestCase):
+    """
+    Adapted test case for tf.keras.initializers.LecunUniform based on the 
+    failing PyTorch test_scalar_multiply.
+    
+    The original bug was a subprocess timeout (hanging) when running 
+    scalar multiplication operations in a graph context.
+    
+    This test adapts that logic to verify that the TensorFlow equivalent 
+    (LecunUniform) does not exhibit similar hanging behavior when executed 
+    in a graph mode (tf.function) via a subprocess with a timeout.
+    """
+
+    def test_lecun_uniform_graph_mode_timeout(self):
+        # Script content to be executed in the subprocess
+        # We use tf.function to mimic the graph compilation context of the original PyTorch test
+        script_content = """
+import tensorflow as tf
+import sys
+
+# Define the initializer
+initializer = tf.keras.initializers.LecunUniform(seed=42)
+
+# Wrap in tf.function to test graph mode execution (analogous to torch.compile/dynamo)
+@tf.function
+def initialize_and_check(shape):
+    # Call the initializer
+    weights = initializer(shape)
+    # Perform a simple operation to ensure the tensor is realized
+    return weights + 0
+
+try:
+    # Execute the function
+    result = initialize_and_check((100, 100))
+    # Verify shape
+    assert result.shape == (100, 100)
+    print("SUCCESS")
+except Exception as e:
+    print(f"ERROR: {e}")
+    sys.exit(1)
+"""
+
+        # Create a temporary file for the script
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(script_content)
+            script_path = f.name
+
+        try:
+            # Execute the script with a timeout, mirroring the original test's failure condition
+            # The original test timed out after 30 seconds.
+            res = subprocess.run(
+                [sys.executable, script_path],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            # Check for successful execution
+            self.assertEqual(res.returncode, 0, f"Subprocess failed with stderr:\n{res.stderr}")
+            self.assertIn("SUCCESS", res.stdout, "Subprocess did not produce expected output")
+
+        except subprocess.TimeoutExpired:
+            # This reproduces the core bug: a timeout indicating a hang or infinite loop
+            self.fail("Subprocess timed out after 30 seconds. The API may be hanging similar to the original bug.")
+        finally:
+            # Clean up the temporary file
+            if os.path.exists(script_path):
+                os.unlink(script_path)
+
+if __name__ == '__main__':
+    unittest.main()
+```

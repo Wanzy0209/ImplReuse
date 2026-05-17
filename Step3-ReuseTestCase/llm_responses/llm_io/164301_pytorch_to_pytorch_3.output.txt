@@ -1,0 +1,53 @@
+```python
+import torch
+import torch.library
+
+# Define a custom library to simulate the mxfp8 quantization operator
+# mentioned in the bug report.
+lib = torch.library.Library("test_mxfp8", "DEF")
+lib.define("quantize(Tensor input, int block_size) -> Tensor")
+
+# Use torch.library.impl_abstract to register the abstract (fake) implementation.
+# This is the API being tested.
+@torch.library.impl_abstract("test_mxfp8::quantize")
+def quantize_abstract(input, block_size):
+    # Based on the bug report, the operation is mxfp8 quantization along rows.
+    # The output tensor shape matches the input tensor shape (M x K),
+    # but the dtype is typically float8.
+    return torch.empty_like(input, dtype=torch.float8_e4m3fn)
+
+# Register a dummy concrete implementation for CPU to allow torch.compile to run
+@torch.library.impl("test_mxfp8::quantize", "CPU")
+def quantize_cpu(input, block_size):
+    return input.to(torch.float8_e4m3fn)
+
+def test_mxfp8_abstract():
+    # Parameters from the bug report
+    M, K, BLOCK_SIZE = 16384, 16384, 32
+
+    # 1. Test the abstract implementation directly with FakeTensors
+    # This simulates what torch.compile does internally during tracing.
+    fake_input = torch.empty((M, K), device='meta')
+    fake_output = torch.ops.test_mxfp8.quantize(fake_input, BLOCK_SIZE)
+
+    assert fake_output.shape == (M, K), f"Shape mismatch: expected {(M, K)}, got {fake_output.shape}"
+    assert fake_output.dtype == torch.float8_e4m3fn, f"Dtype mismatch: expected float8_e4m3fn, got {fake_output.dtype}"
+    print("Abstract implementation test passed.")
+
+    # 2. Test interaction with torch.compile
+    # The bug report highlights a regression in torch.compile performance.
+    # A correct abstract implementation is required for torch.compile to work.
+    def fn(x):
+        return torch.ops.test_mxfp8.quantize(x, BLOCK_SIZE)
+
+    compiled_fn = torch.compile(fn)
+    real_input = torch.randn((M, K))
+    output = compiled_fn(real_input)
+
+    assert output.shape == (M, K)
+    assert output.dtype == torch.float8_e4m3fn
+    print("torch.compile interaction test passed.")
+
+if __name__ == "__main__":
+    test_mxfp8_abstract()
+```

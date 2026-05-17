@@ -1,0 +1,52 @@
+```python
+import torch
+import einops
+
+# Create test tensors on MPS
+device = 'mps'
+# Using shapes similar to the original bug report
+input_tensor = torch.randn(1, 3, 768, device=device)
+target_tensor = torch.randn(1, 3, 768, device=device)
+weight_tensor = torch.randn(1, 3, 768, device=device)
+
+# Create non-contiguous versions via rearrange
+# Rearranging dimensions usually breaks contiguity
+input_noncontig = einops.rearrange(input_tensor, "b s d -> d s b")
+input_contig = input_noncontig.contiguous()
+
+target_noncontig = einops.rearrange(target_tensor, "b s d -> d s b")
+target_contig = target_noncontig.contiguous()
+
+weight_noncontig = einops.rearrange(weight_tensor, "b s d -> d s b")
+weight_contig = weight_noncontig.contiguous()
+
+print(f"Input non-contiguous: {not input_noncontig.is_contiguous()}")
+print(f"Target non-contiguous: {not target_noncontig.is_contiguous()}")
+print(f"Weight non-contiguous: {not weight_noncontig.is_contiguous()}")
+
+# Test 1: Non-contiguous Input
+result1 = torch.nn.functional.mse_loss(input_noncontig, target_contig)
+result2 = torch.nn.functional.mse_loss(input_contig, target_contig)
+print(f"MPS Input: Results match: {torch.allclose(result1, result2, atol=1e-5)}")
+if not torch.allclose(result1, result2, atol=1e-5):
+    print(f"Max difference: {torch.abs(result1 - result2).max()}")
+
+# Test 2: Non-contiguous Target
+result3 = torch.nn.functional.mse_loss(input_contig, target_noncontig)
+result4 = torch.nn.functional.mse_loss(input_contig, target_contig)
+print(f"MPS Target: Results match: {torch.allclose(result3, result4, atol=1e-5)}")
+if not torch.allclose(result3, result4, atol=1e-5):
+    print(f"Max difference: {torch.abs(result3 - result4).max()}")
+
+# Test 3: Non-contiguous Weight (Most similar to original bug)
+result5 = torch.nn.functional.mse_loss(input_contig, target_contig, weight=weight_noncontig)
+result6 = torch.nn.functional.mse_loss(input_contig, target_contig, weight=weight_contig)
+print(f"MPS Weight: Results match: {torch.allclose(result5, result6, atol=1e-5)}")
+if not torch.allclose(result5, result6, atol=1e-5):
+    print(f"Max difference: {torch.abs(result5 - result6).max()}")
+
+# Compare with CPU (works correctly)
+result_cpu_nc = torch.nn.functional.mse_loss(input_noncontig.cpu(), target_contig.cpu(), weight=weight_noncontig.cpu())
+result_cpu_c = torch.nn.functional.mse_loss(input_contig.cpu(), target_contig.cpu(), weight=weight_contig.cpu())
+print(f"CPU contiguous vs non-contiguous match: {torch.allclose(result_cpu_nc, result_cpu_c, atol=1e-5)}")
+```

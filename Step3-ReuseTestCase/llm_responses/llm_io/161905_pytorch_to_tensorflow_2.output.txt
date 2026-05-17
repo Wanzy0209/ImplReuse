@@ -1,0 +1,63 @@
+```python
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+# Constants
+BATCH_SIZE = 4
+NUM_CLASSES = 10
+LEARNING_RATE = 0.01
+
+# Setup Mesh and Layout
+# We use the CPU device to simulate the target device context (analogous to 'mps')
+devices = tf.config.list_physical_devices('CPU')
+if not devices:
+    # Fallback for environments without explicit CPU listing (though rare)
+    devices = [tf.DeviceSpec(device_type="CPU")]
+
+mesh = dtensor.create_mesh(['batch'], devices=devices)
+# Layout: Unsharded (replicated) on the mesh, effectively moving the tensor to the device
+layout = dtensor.Layout([dtensor.UNSHARDED], mesh)
+
+# Model Definition (Simplified ResNet-like structure for minimal reproduction)
+def create_model():
+    inputs = tf.keras.Input(shape=(224, 224, 3))
+    x = tf.keras.layers.Conv2D(64, 7, strides=2, padding='same')(inputs)
+    x = tf.keras.layers.MaxPooling2D()(x)
+    x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    outputs = tf.keras.layers.Dense(NUM_CLASSES)(x)
+    return tf.keras.Model(inputs, outputs)
+
+model = create_model()
+optimizer = tf.keras.optimizers.SGD(learning_rate=LEARNING_RATE)
+loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+
+# Training Step
+# Analogous to @torch.compile in PyTorch
+@tf.function
+def train_step(images, labels):
+    # Use copy_to_mesh to move data to the DTensor device mesh
+    # This replaces the PyTorch logic: images=images.to(device)
+    d_images = dtensor.copy_to_mesh(images, layout)
+    d_labels = dtensor.copy_to_mesh(labels, layout)
+
+    with tf.GradientTape() as tape:
+        outputs = model(d_images, training=True)
+        loss = loss_fn(d_labels, outputs)
+
+    gradients = tape.gradient(loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+    return loss
+
+# Generate Dummy Data
+images = tf.random.normal((BATCH_SIZE, 224, 224, 3))
+labels = tf.random.uniform((BATCH_SIZE,), 0, NUM_CLASSES, dtype=tf.int32)
+
+# Execute Training Step
+# This verifies that copy_to_mesh works correctly within a compiled context
+# and that the backward pass (gradient computation) succeeds.
+loss_value = train_step(images, labels)
+
+# Assertion to verify the test case ran successfully
+assert loss_value is not None, "Loss calculation failed"
+print(f"Test passed. Loss: {loss_value.numpy()}")
+```

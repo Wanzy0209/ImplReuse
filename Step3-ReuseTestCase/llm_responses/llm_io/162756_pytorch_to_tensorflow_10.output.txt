@@ -1,0 +1,77 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use tf.compat.v1.train.range_input_producer
+tf.compat.v1.disable_eager_execution()
+
+def test_range_input_producer():
+    """
+    Adapted test case for tf.compat.v1.train.range_input_producer.
+    
+    The original PyTorch issue involved a configuration flag (combo_kernels) 
+    causing a NameError during compilation when combining specific operations.
+    
+    In this TensorFlow adaptation, we test the range_input_producer with 
+    specific configurations (shuffle=True, num_epochs set) to ensure 
+    the internal queue and helper logic (like shuffling) execute correctly 
+    within a session, analogous to verifying the compilation path in PyTorch.
+    """
+    
+    # Setup inputs analogous to the original test's tensor shapes
+    # Original inputs had batch sizes 16, 32, 32. We use 32 as the limit.
+    limit = 32
+    
+    # Configuration flags analogous to torch._inductor.config.combo_kernels
+    shuffle = True
+    num_epochs = 2
+    capacity = 32
+    seed = 42
+
+    with tf.compat.v1.Session() as sess:
+        # Call the API: range_input_producer
+        # This creates a queue that produces integers 0 to limit-1
+        queue = tf.compat.v1.train.range_input_producer(
+            limit=limit,
+            num_epochs=num_epochs,
+            shuffle=shuffle,
+            seed=seed,
+            capacity=capacity,
+            name="range_producer_test"
+        )
+
+        # Dequeue elements to verify execution
+        dequeue_op = queue.dequeue()
+
+        # Initialize local variables (required for num_epochs)
+        sess.run([tf.compat.v1.local_variables_initializer(), 
+                  tf.compat.v1.global_variables_initializer()])
+
+        # Start queue runners to execute the queue operations
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord, sess=sess)
+
+        try:
+            # Run the operation multiple times to verify stability
+            # Original test ran the function once, but queues require dequeuing.
+            results = []
+            for _ in range(10):
+                val = sess.run(dequeue_op)
+                results.append(val)
+                # Basic sanity check
+                assert 0 <= val < limit, f"Value {val} out of bounds [0, {limit})"
+
+            print("Test passed. Successfully dequeued values:", results)
+            
+            # If shuffle is True, check that we didn't just get 0, 1, 2... (probabilistic)
+            if shuffle:
+                assert results != sorted(results), "Expected shuffled output, got sorted sequence."
+
+        finally:
+            # Stop the threads
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_range_input_producer()
+```

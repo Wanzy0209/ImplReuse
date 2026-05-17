@@ -1,0 +1,60 @@
+```python
+import unittest
+import torch
+import triton
+import triton.language as tl
+# Importing the module under test based on the bug report
+import torch.symm_mem._nvshmem_triton as nvshmem
+
+class TestNVSHMEMTriton(unittest.TestCase):
+    def test_enable_triton_naming_convention(self):
+        """
+        Test that enable_triton correctly handles kernel initialization based on naming.
+        
+        Bug Description:
+        The previous `enable_triton` UI requires the user-defined Triton kernel have a 
+        "nvshmem" in its name. If users did not do so, the kernel would miss the NVSHMEM 
+        init, and silently hit CUDA IMA.
+
+        Similarity to tf.control_dependencies:
+        Just as tf.control_dependencies ensures that certain operations (control_inputs)
+        are executed before others, this test verifies that the NVSHMEM initialization
+        dependency is correctly established for the kernel based on the naming convention.
+        """
+        
+        # Enable Triton for NVSHMEM
+        nvshmem.enable_triton()
+
+        # Allocate a dummy tensor on CUDA
+        x = torch.empty(1, device='cuda')
+
+        # Case 1: Kernel name does NOT contain 'nvshmem'
+        # This reproduces the bug scenario where initialization might be missed.
+        @triton.jit
+        def foo(ptr):
+            # This call requires NVSHMEM initialization
+            nvshmem.get(ptr, 0)
+
+        # Case 2: Kernel name DOES contain 'nvshmem'
+        # This is the expected working scenario.
+        @triton.jit
+        def nvshmem_bar(ptr):
+            nvshmem.get(ptr, 0)
+
+        # Test Case 1: Invalid naming
+        # We expect this to raise a RuntimeError if the fix adds explicit validation,
+        # or fail silently/crash if the bug is present.
+        # Here we assert that a RuntimeError is raised (assuming the fix validates the name).
+        with self.assertRaises(RuntimeError):
+            foo[(1,)](x)
+
+        # Test Case 2: Valid naming
+        # This should execute successfully as the initialization dependency is met.
+        try:
+            nvshmem_bar[(1,)](x)
+        except Exception as e:
+            self.fail(f"Kernel with 'nvshmem' in name failed unexpectedly: {e}")
+
+if __name__ == '__main__':
+    unittest.main()
+```

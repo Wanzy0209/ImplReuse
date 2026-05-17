@@ -1,0 +1,56 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+class M(tf.Module):
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft = n_fft
+        self.hop = hop
+        self.win = win
+        # Register window as a variable/buffer so it moves with the model
+        self.window = tf.signal.hann_window(win)
+        # Introduce parameter for broadcasting / stride ops
+        self.p = tf.Variable(2.0, dtype=tf.float32)
+
+    def forward(self, x: tf.Tensor) -> tf.Tensor:
+        # TensorFlow equivalent of torch.stft
+        S = tf.signal.stft(
+            x, frame_length=self.n_fft, frame_step=self.hop, fft_length=self.n_fft,
+            window_fn=lambda: self.window, pad_end=True
+        )
+        
+        R = tf.abs(tf.math.real(S))   # unary op on real
+        I = tf.math.imag(S) / self.p  # scalar divide with Variable (stride/broadcast)
+        
+        # Adaptation: Apply tf.nn.dropout (Similar API) to the real part
+        # This tests the dropout operation within the complex tensor pipeline
+        R = tf.nn.dropout(R, rate=0.1)
+        
+        Z = tf.complex(R, I) # recombine
+        return Z
+
+def main():
+    # TensorFlow handles device placement automatically (GPU if available)
+    tf.random.set_seed(0)
+
+    x = tf.random.normal((1, 16000))
+    m = M()
+
+    # Eager: works fine
+    z_eager = m.forward(x)
+    assert z_eager.dtype == tf.complex64
+    print("eager mode OK:", z_eager.shape, z_eager.dtype)
+
+    # Compile: tf.function (equivalent to torch.compile)
+    # We wrap the forward method in tf.function to trigger graph compilation
+    m_compiled = tf.function(m.forward)
+    z_compiled = m_compiled(x)
+
+    # Verify output
+    assert z_compiled.dtype == tf.complex64
+    print("compiled mode OK:", z_compiled.shape, z_compiled.dtype)
+
+if __name__ == "__main__":
+    main()
+```

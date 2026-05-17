@@ -1,0 +1,66 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def example_function():
+    def logp(x, matrix):
+        # print(matrix.is_contiguous()) # Uncomment this line to make the code run
+        p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+        p_mat_sqrt_inv = p_mat_sqrt.inverse()
+        val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+        return -val/2
+
+    score_func = torch.vmap(torch.func.grad(logp, 0), (0, None))
+    return score_func
+
+def run(rank, size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=size)
+
+    # Create data similar to the original bug report
+    # Note: Using CPU here to ensure distributed test runs reliably without MPS backend complexities
+    device = torch.device("cpu") 
+    dtype = torch.float32
+    data = torch.zeros((2, 5, 3), device=device, dtype=dtype)
+    
+    # Create the function object
+    func_obj = example_function()
+    
+    p = torch.diag(torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)**2)
+
+    # Prepare list of objects to broadcast
+    # We include the function, the data tensor, and the matrix tensor
+    object_list = [func_obj, data, p] if rank == 0 else [None, None, None]
+
+    # Adapted call site: replacing torch.compile with torch.distributed.broadcast_object_list
+    # This tests if the distributed API can handle the complex objects (function closure + tensors)
+    # from the original bug report.
+    try:
+        dist.broadcast_object_list(object_list, src=0)
+        
+        # Verify reception on non-source ranks
+        if rank != 0:
+            received_func, received_data, received_p = object_list
+            # Basic assertion to check data integrity
+            assert torch.equal(received_data, data), "Data mismatch after broadcast"
+            assert torch.equal(received_p, p), "Matrix mismatch after broadcast"
+            # Check if function is callable (deep copy of closure)
+            assert callable(received_func), "Function object not received correctly"
+            print(f"Rank {rank}: Broadcast successful and objects verified.")
+        else:
+            print(f"Rank {rank}: Broadcast successful.")
+
+    except Exception as e:
+        print(f"Rank {rank} encountered error: {e}")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Use 2 processes to simulate a minimal distributed environment
+    world_size = 2
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)
+```

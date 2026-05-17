@@ -1,0 +1,101 @@
+Issue ID: 162756
+Title: torch.compile fails with NameError when helper functions are required and combo_kernels enabled
+Bug Description:
+### 🐛 Describe the bug
+
+When `torch._inductor.config.combo_kernels = True` is enabled, compilation fails with `NameError` for Triton helper functions (e.g., `_triton_helper_fn_add0`) when operations that require helper functions (like `cumsum`) are combined into combo kernels.
+
+repro:
+```python
+import torch
+torch._inductor.config.combo_kernels = True
+
+@torch.compile
+def fn(x, y, z):
+    return x.sum(1), y.mean(1), z.cumsum(1)
+
+inps = (
+    torch.rand(16, 128, device="cuda"),
+    torch.rand(32, 128, device="cuda"),
+    torch.rand(32, 256, device="cuda"),
+)
+
+fn(*inps)
+```
+
+error:
+```bash
+torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+CompilationError: at 73:50:
+        xmask = xindex < xnumel
+        r0_index = tl.arange(0, R0_BLOCK_2)[None, :]
+        r0_offset = 0
+        r0_mask = r0_index < r0_numel
+        roffset = r0_offset
+        rindex = r0_index
+        r0_5 = r0_index
+        x4 = xindex
+        tmp12 = tl.load(in_ptr2 + (r0_5 + 256*x4), r0_mask & xmask, other=0.0)
+        tmp13 = tmp12.to(tl.float32)
+        tmp14 = tl.broadcast_to(tmp13, [XBLOCK, R0_BLOCK_2])
+        tmp15, = tl.associative_scan((tmp14,), 1, _triton_helper_fn_add0)
+                                                  ^
+NameError('_triton_helper_fn_add0 is not defined')
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.keras.name_scope
+Similarity score: 0.9931139349937439
+
+Similar API information:
+# Extracted call chain for tf.keras.name_scope
+
+# --- tensorflow.python.framework.ops.name_scope ---
+def name_scope(
+    name, default_name=None, values=None, skip_on_eager=True,
+) -> ContextManager[Optional[str]]:
+  """Internal-only entry point for `name_scope*`.
+
+  Internal ops do not use the public API and instead rely on
+  `ops.name_scope` regardless of the execution mode. This function
+  dispatches to the correct `name_scope*` implementation based on
+  the arguments provided and the current mode. Specifically,
+
+  * if `values` contains a graph tensor `Graph.name_scope` is used;
+  * `name_scope_v1` is used in graph mode;
+  * `name_scope_v2` -- in eager mode.
+
+  Args:
+    name: The name argument that is passed to the op function.
+    default_name: The default name to use if the `name` argument is `None`.
+    values: The list of `Tensor` arguments that are passed to the op function.
+    skip_on_eager: Indicates to return NullContextmanager if executing eagerly.
+      By default this is True since naming tensors and operations in eager mode
+      have little use and cause unnecessary performance overhead. However, it is
+      important to preserve variable names since they are oft
+...
+
+Original Test Case:
+import torch
+torch._inductor.config.combo_kernels = True
+
+@torch.compile
+def fn(x, y, z):
+    return x.sum(1), y.mean(1), z.cumsum(1)
+
+inps = (
+    torch.rand(16, 128, device="cuda"),
+    torch.rand(32, 128, device="cuda"),
+    torch.rand(32, 256, device="cuda"),
+)
+
+fn(*inps)
+
+The API tf.keras.name_scope is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

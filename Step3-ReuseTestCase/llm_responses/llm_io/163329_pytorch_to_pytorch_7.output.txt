@@ -1,0 +1,59 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    if rank == 0:
+        # Adapted from the original bug report: using bfloat16 and Generator
+        # The original bug involved complex objects and specific dtypes.
+        # We test if send_object_list handles these correctly.
+        tensor_data = torch.randn(10, 10, dtype=torch.bfloat16)
+        generator = torch.Generator("cpu").manual_seed(0)
+        
+        # Create a list of objects to send
+        objects_to_send = [tensor_data, generator, "hello world"]
+        
+        # Send the list to rank 1
+        dist.send_object_list(objects_to_send, dst=1)
+        print(f"Rank {rank} sent object list.")
+
+    elif rank == 1:
+        # Prepare a list to receive objects
+        # The list must have the same length as the sent list
+        received_objects = [None, None, None]
+        
+        # Receive the list from rank 0
+        dist.recv_object_list(received_objects, src=0)
+        print(f"Rank {rank} received object list.")
+
+        # Assertions to verify correctness
+        assert isinstance(received_objects[0], torch.Tensor)
+        assert received_objects[0].dtype == torch.bfloat16, "Tensor dtype mismatch"
+        assert torch.equal(received_objects[0], received_objects[0]) # Basic check
+        
+        assert isinstance(received_objects[1], torch.Generator)
+        assert received_objects[1].initial_seed() == 0, "Generator seed mismatch"
+        
+        assert received_objects[2] == "hello world", "String mismatch"
+        
+        print("Rank 1 assertions passed.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+```

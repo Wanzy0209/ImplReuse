@@ -1,0 +1,70 @@
+```python
+import unittest
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+class TestDistributedSendObjectList(unittest.TestCase):
+    """
+    Test case for torch.distributed.send_object_list.
+    Adapted from the context of test_dtensor_compile_redistribute to verify
+    distributed communication stability and correctness.
+    """
+    
+    def setUp(self):
+        # Use a fixed port to avoid conflicts during rapid testing
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '29500'
+        self.world_size = 2
+
+    def _worker(self, rank, world_size):
+        # Initialize the distributed environment
+        dist.init_process_group(
+            backend="gloo", 
+            rank=rank, 
+            world_size=world_size
+        )
+
+        if rank == 0:
+            # Rank 0: Sender
+            # Create a list of mixed objects (tensors and strings)
+            tensor_a = torch.randn(3, 3)
+            tensor_b = torch.tensor([1, 2, 3])
+            message = "test_payload"
+            
+            obj_list = [tensor_a, tensor_b, message]
+            
+            # Send the list of objects to rank 1
+            dist.send_object_list(obj_list, dst=1)
+            
+        elif rank == 1:
+            # Rank 1: Receiver
+            # Initialize a list with placeholders to receive data
+            obj_list = [None, None, None]
+            
+            # Receive objects from rank 0
+            dist.recv_object_list(obj_list, src=0)
+            
+            # Verify the received objects
+            self.assertIsInstance(obj_list[0], torch.Tensor)
+            self.assertEqual(obj_list[0].shape, (3, 3))
+            
+            self.assertIsInstance(obj_list[1], torch.Tensor)
+            self.assertTrue(torch.equal(obj_list[1], torch.tensor([1, 2, 3])))
+            
+            self.assertEqual(obj_list[2], "test_payload")
+
+        dist.destroy_process_group()
+
+    def test_send_object_list(self):
+        """
+        Verifies that send_object_list successfully transmits objects
+        between processes without hanging or timing out.
+        """
+        # Use multiprocessing to simulate the distributed environment
+        mp.spawn(self._worker, args=(self.world_size,), nprocs=self.world_size)
+
+if __name__ == '__main__':
+    unittest.main()
+```

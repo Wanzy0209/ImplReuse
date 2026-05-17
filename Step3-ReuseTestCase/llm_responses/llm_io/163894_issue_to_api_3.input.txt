@@ -1,0 +1,122 @@
+Issue ID: 163894
+Title: [Fuzzer][Eager/Compile Divergence] DDE _get_symint_hints(ph_arg.stride()) != real_stride:
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(9)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0 # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    var_node_5 = torch.full((1, 2), -66, dtype=torch.int32) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_6 = torch.full((1, 2), 77, dtype=torch.int64) # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    var_node_4 = torch.ops.aten.add(var_node_5, var_node_6) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_7 = torch.full((1, 2), -64, dtype=torch.int32) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_3 = torch.ops.aten.mul(var_node_4, var_node_7) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_9 = torch.full((3, 4), False, dtype=torch.bool) # size=(3, 4), stride=(4, 1), dtype=bool, device=cuda
+    var_node_8 = torch.nonzero(var_node_9) # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    var_node_2 = torch.ops.aten.add(var_node_3, var_node_8) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_0 = torch.ops.aten.div(var_node_1, var_node_2) # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor
+...
+
+Original API Under Test: torch.nonzero
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.backends.cudnn.version
+Similarity score: 0.9894628524780273
+
+Similar API information:
+# Extracted call chain for torch.backends.cudnn.version
+
+# --- torch.backends.cudnn.version ---
+def version():
+    """Return the version of cuDNN."""
+    if not _init():
+        return None
+    return __cudnn_version
+
+# --- benchmarks.operator_benchmark.pt.qbatchnorm_test.QBatchNorm1dBenchmark._init ---
+def _init():
+    r"""Register prims as implementation of var_mean and group_norm."""
+    global _lib
+
+    if _lib is not None or not is_built():
+        return
+
+    from torch._decomp.decompositions import native_group_norm_backward
+    from torch._refs import native_group_norm
+
+    _lib = _Library("aten", "IMPL")  # noqa: TOR901
+    _lib.impl("native_group_norm", native_group_norm, "MPS")
+    _lib.impl("native_group_norm_backward", native_group_norm_backward, "MPS")
+
+# --- _lib.impl ---
+def impl(qualname, *, device_types=("cpu", "cuda"), func=None):
+    r"""Register an implementation for a device type for this custom op.
+
+    If the op is passed multiple Tensor inputs with different device
+    types, it will dispatch to the registered implementation for the highest
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(9)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0 # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    var_node_5 = torch.full((1, 2), -66, dtype=torch.int32) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_6 = torch.full((1, 2), 77, dtype=torch.int64) # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    var_node_4 = torch.ops.aten.add(var_node_5, var_node_6) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_7 = torch.full((1, 2), -64, dtype=torch.int32) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_3 = torch.ops.aten.mul(var_node_4, var_node_7) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_9 = torch.full((3, 4), False, dtype=torch.bool) # size=(3, 4), stride=(4, 1), dtype=bool, device=cuda
+    var_node_8 = torch.nonzero(var_node_9) # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    var_node_2 = torch.ops.aten.add(var_node_3, var_node_8) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_0 = torch.ops.aten.div(var_node_1, var_node_2) # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.randint(0, 3, (1, 2), dtype=torch.int64)
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+# Test compilation with unbacked operations - this should work!
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success with unbacked operations')
+
+# Compare results - shapes may differ due to data-dependent operations
+print(f'Eager result: {result_original}')
+print(f'Compiled result: {result_compiled}')
+if hasattr(result_original, 'shape') and hasattr(result_compiled, 'shape'):
+    print(f'Eager shape: {result_original.shape}')
+    print(f'Compiled shape: {result_compiled.shape}')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

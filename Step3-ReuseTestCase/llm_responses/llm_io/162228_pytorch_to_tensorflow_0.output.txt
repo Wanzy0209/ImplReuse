@@ -1,0 +1,79 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Define the computation function to be rewritten/compiled
+def test_computation(x, y):
+    """
+    Mimics the logic of the PyTorch test case:
+    1. Materialize a bias matrix from y.
+    2. Use this bias in a computation (simulating flex_attention).
+    """
+    B, L, D = tf.shape(x)[0], tf.shape(x)[1], tf.shape(x)[2]
+    
+    # Materialize a bias matrix similar to the PyTorch snippet:
+    # PyTorch: bias_mat = y[b, q_idx] + y[b, kv_idx] # (B, L, L)
+    # We simulate this by broadcasting y to (B, L, L) and adding its transpose.
+    
+    # y shape: (B, L)
+    # Expand y to (B, L, 1) and (B, 1, L) to create the pairwise sum
+    y_expanded_1 = tf.expand_dims(y, axis=2)  # (B, L, 1)
+    y_expanded_2 = tf.expand_dims(y, axis=1)  # (B, 1, L)
+    
+    bias_mat = y_expanded_1 + y_expanded_2  # (B, L, L)
+    
+    # Simulate an attention-like operation (QK^T) using x
+    # x shape: (B, L, D). We treat x as Q, K, V for simplicity.
+    # QK^T result shape: (B, L, L)
+    attn_scores = tf.matmul(x, x, transpose_b=True)
+    
+    # Apply the bias (mimicking score_mod)
+    biased_scores = attn_scores + bias_mat
+    
+    # Return the result (mimicking flex_attention output)
+    return biased_scores
+
+# Setup inputs
+DEVICE = "/device:TPU:0"  # tf.compat.v1.tpu.rewrite targets TPU
+B, L, D = 2, 16, 64
+
+# Initialize tensors
+# Note: In TF 2.x, we usually use tf.Variable for gradients, but tf.Tensor with tape.watch works too.
+x = tf.random.normal((B, L, D))
+y = tf.random.normal((B, L))
+
+# Use GradientTape to verify backpropagation
+with tf.GradientTape(persistent=True) as tape:
+    tape.watch(x)
+    tape.watch(y)
+    
+    # Call the API: tf.compat.v1.tpu.rewrite
+    # This compiles 'test_computation' for TPU execution.
+    # inputs must be a list of tensors.
+    outputs = tf.compat.v1.tpu.rewrite(test_computation, [x, y])
+    
+    # rewrite returns a list of tensors corresponding to the function's return.
+    # test_computation returns a single tensor.
+    result = outputs[0]
+    
+    # Calculate loss to trigger backprop
+    loss = tf.reduce_mean(result)
+
+# Calculate gradients
+grad_x = tape.gradient(loss, x)
+grad_y = tape.gradient(loss, y)
+
+# Verify gradients
+# Check if gradients are not None
+assert grad_x is not None, "Gradient for x is None"
+assert grad_y is not None, "Gradient for y is None"
+
+# Check if gradients have non-zero norm
+norm_x = tf.norm(grad_x)
+norm_y = tf.norm(grad_y)
+
+assert norm_x > 0, f"Gradient for x is zero (norm: {norm_x})"
+assert norm_y > 0, f"Gradient for y is zero (norm: {norm_y})"
+
+print("Test passed: Gradients propagated correctly for both x and y.")
+```

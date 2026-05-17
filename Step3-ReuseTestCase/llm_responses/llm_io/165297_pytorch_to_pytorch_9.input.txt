@@ -1,0 +1,122 @@
+Issue ID: 165297
+Title: [BUG] MaxPool2d with channels_last + bfloat16 on CUDA produces NaNs for large tensors
+Bug Description:
+### 🐛 Describe the bug
+
+# Description
+When using torch.nn.MaxPool2d on large tensors with memory_format=torch.channels_last on GPU, the output can contain NaN values or even cause an illegal memory access error, depending on dtype and the memory content. This happens even when the input has no NaN/Inf. Changing to contiguous (NCHW) memory format before MaxPool fixes the issue.
+
+# Steps to Reproduce
+```python
+import torch
+import torch.nn as nn
+
+device = torch.device("cuda")
+
+def test_maxpool_nan():
+    # Large input tensor
+    N, C, H, W = 84, 64, 512, 960
+    # Case 1: bfloat16 + channels_last  => NaN
+    x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+
+    # Case 2: float32 + channels_last => illegal memory access
+    # x = torch.randn(N, C, H, W, device=device)  # default float32
+
+
+    # Convert to NHWC channels_last layout
+    x = x.to(memory_format=torch.channels_last)
+
+    # Uncommenting the line below avoids NaNs
+    # x = x.contiguous()
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+    print(f"Input stride: {x.stride()}")
+
+    pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1).to(device)
+    y = pool(x)
+
+    print(f"Output contains NaN? {torch.isnan(y).any().item()}")
+    print(f"Output contains Inf? {torch.isinf(y).any().item()}")
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    if torch.isnan(y).any():
+        print("Detected NaNs in MaxPool out
+...
+
+Original API Under Test: torch.nn.MaxPool2d
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.NLLLoss
+Similarity score: 0.9962190389633179
+
+Similar API information:
+# Extracted call chain for torch.nn.NLLLoss
+
+# --- torch.nn.modules.loss.NLLLoss ---
+class NLLLoss(_WeightedLoss):
+    r"""The negative log likelihood loss. It is useful to train a classification
+    problem with `C` classes.
+
+    If provided, the optional argument :attr:`weight` should be a 1D Tensor assigning
+    weight to each of the classes. This is particularly useful when you have an
+    unbalanced training set.
+
+    The `input` given through a forward call is expected to contain
+    log-probabilities of each class. `input` has to be a Tensor of size either
+    :math:`(minibatch, C)` or :math:`(minibatch, C, d_1, d_2, ..., d_K)`
+    with :math:`K \geq 1` for the `K`-dimensional case. The latter is useful for
+    higher dimension inputs, such as computing NLL loss per-pixel for 2D images.
+
+    Obtaining log-probabilities in a neural network is easily achieved by
+    adding a  `LogSoftmax`  layer in the last layer of your network.
+    You may use `CrossEntropyLoss` instead, if you prefer not to add an extra
+    layer.
+
+    The `target` that this loss expects should be a class index in the range :math:`[0, C-1]`
+    where `C = number of classes`; if `ignore_index` is specified,
+...
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+device = torch.device("cuda")
+
+def test_maxpool_nan():
+    # Large input tensor
+    N, C, H, W = 84, 64, 512, 960
+    # Case 1: bfloat16 + channels_last  => NaN
+    x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+
+    # Case 2: float32 + channels_last => illegal memory access
+    # x = torch.randn(N, C, H, W, device=device)  # default float32
+
+
+    # Convert to NHWC channels_last layout
+    x = x.to(memory_format=torch.channels_last)
+
+    # Uncommenting the line below avoids NaNs
+    # x = x.contiguous()
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+    print(f"Input stride: {x.stride()}")
+
+    pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1).to(device)
+    y = pool(x)
+
+    print(f"Output contains NaN? {torch.isnan(y).any().item()}")
+    print(f"Output contains Inf? {torch.isinf(y).any().item()}")
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    if torch.isnan(y).any():
+        print("Detected NaNs in MaxPool output!")
+
+test_maxpool_nan()
+
+The API torch.nn.NLLLoss is identified as same-library similar to the original PyTorch API torch.nn.MaxPool2d.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

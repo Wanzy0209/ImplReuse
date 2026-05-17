@@ -1,0 +1,63 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_default_session_context_preservation():
+    """
+    Test case adapted from PyTorch Issue 163294.
+    
+    Original Bug: Retracing a module with `torch.no_grad` (a context manager)
+    resulted in an empty submodule, losing the context's logic.
+    
+    Adaptation: Test if `tf.compat.v1.get_default_session` correctly preserves
+    the session context across multiple executions (simulating re-tracing).
+    We verify that the context stack is not "emptied" or lost after the first run.
+    """
+    
+    # Create a Session
+    sess = tf.compat.v1.Session()
+    
+    # Define a function that relies on the default session context.
+    # This mimics the 'submod' or the body of the context manager in the PyTorch issue.
+    def context_dependent_op(x):
+        current_sess = tf.compat.v1.get_default_session()
+        
+        # In the PyTorch bug, the submodule became empty/invalid.
+        # Here we check if the session context is lost (None).
+        if current_sess is None:
+            raise ValueError("Default session context is empty/lost!")
+            
+        # Perform a simple operation using the session
+        return x + 1.0
+
+    # Input tensor
+    x = tf.constant(5.0)
+
+    # --- First "Export" / Run ---
+    # Enter the context and execute
+    with sess.as_default():
+        # Initialize variables (standard TF1 procedure)
+        sess.run(tf.compat.v1.global_variables_initializer())
+        
+        result1 = sess.run(context_dependent_op(x))
+        print(f"First run result: {result1}")
+        assert result1 == 6.0, "First run failed"
+
+    # --- Second "Export" / Re-trace ---
+    # Re-enter the context and execute again.
+    # The PyTorch bug manifested here: the context logic was lost.
+    with sess.as_default():
+        result2 = sess.run(context_dependent_op(x))
+        print(f"Second run result: {result2}")
+        assert result2 == 6.0, "Second run failed (context potentially lost)"
+
+    # --- Verify Context Exit ---
+    # Outside the context, get_default_session should return None
+    outer_sess = tf.compat.v1.get_default_session()
+    assert outer_sess is None, "Session context leaked outside 'with' block"
+
+    print("Test Passed: Session context preserved correctly across runs.")
+
+if __name__ == "__main__":
+    test_default_session_context_preservation()
+```

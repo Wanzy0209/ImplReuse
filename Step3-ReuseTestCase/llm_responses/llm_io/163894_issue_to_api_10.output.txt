@@ -1,0 +1,96 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Define the similar API: tf.experimental.BatchableExtensionType
+# This type is used to wrap the result of a dynamic shape operation,
+# analogous to how the PyTorch bug involves operations on the result of torch.nonzero.
+class DynamicIndexResult(tf.experimental.BatchableExtensionType):
+    """An extension type to hold indices from a dynamic operation (e.g., tf.where)."""
+    indices: tf.Tensor
+
+def test_batchable_extension_dynamic_shape_divergence():
+    """
+    This test mirrors the logic of Issue 163894.
+    Original Issue: torch.nonzero (dynamic shape) -> arithmetic -> torch.compile (divergence).
+    Similar API Test: tf.where (dynamic shape) -> wrap in BatchableExtensionType -> arithmetic -> tf.function.
+    """
+    
+    # Enable strict checks to mimic the divergence detection
+    tf.config.optimizer.set_jit(True) # Ensure XLA/compilation is active if possible
+
+    # 1. Prepare input data
+    # Mimicking the setup in the bug report where a boolean tensor is used.
+    # var_node_9 = torch.full((3, 4), False, dtype=torch.bool)
+    # We create a tensor with a specific number of True values to trigger a non-empty dynamic shape.
+    # In the bug, nonzero resulted in size (1, 2).
+    input_data = np.zeros((3, 4), dtype=bool)
+    input_data[0, 0] = True # Ensure one non-zero element
+    input_tensor = tf.constant(input_data)
+
+    # 2. Define the computation graph
+    # Using tf.function to simulate the compilation context in PyTorch (torch.compile)
+    @tf.function
+    def compiled_program(input_bool):
+        # Analogous to torch.nonzero(var_node_9)
+        # tf.where returns the indices of True elements. Shape is (N, 2) where N is dynamic.
+        raw_indices = tf.where(input_bool)
+
+        # Wrap the result in the BatchableExtensionType
+        # This tests if the ExtensionType encoding handles the dynamic shape correctly.
+        ext_result = DynamicIndexResult(indices=raw_indices)
+
+        # Perform arithmetic operations on the wrapped data
+        # Analogous to var_node_2 = torch.ops.aten.add(var_node_3, var_node_8)
+        # We create a tensor to add. Note: handling dynamic shapes in arithmetic requires
+        # correct shape inference by the compiler.
+        
+        # Cast to int64 to match PyTorch bug context (int64 indices)
+        indices_int64 = tf.cast(ext_result.indices, tf.int64)
+        
+        # Create a constant tensor to add. 
+        # In the bug, var_node_3 was size (1, 2). 
+        # We broadcast a scalar or small tensor to the dynamic shape.
+        addend = tf.constant(1, dtype=tf.int64)
+        
+        # Arithmetic: Add
+        res_add = indices_int64 + addend
+        
+        # Arithmetic: Mul (mimicking var_node_3 = torch.ops.aten.mul...)
+        res_mul = res_add * 2
+        
+        # Arithmetic: Div (mimicking var_node_0 = torch.ops.aten.div...)
+        # Using floor division to match integer semantics of the bug report
+        res_div = res_mul // 2
+        
+        return res_div
+
+    # 3. Execute Eager Mode
+    print("Running Eager Mode...")
+    try:
+        # Disable function to run eagerly
+        eager_result = compiled_program.python_function(input_tensor)
+        print(f"✅ Eager Success. Shape: {eager_result.shape}, Value: {eager_result.numpy()}")
+    except Exception as e:
+        print(f"❌ Eager Failed: {e}")
+        return
+
+    # 4. Execute Compiled Mode (tf.function)
+    print("Running Compiled Mode (tf.function)...")
+    try:
+        compiled_result = compiled_program(input_tensor)
+        print(f"✅ Compile Success. Shape: {compiled_result.shape}, Value: {compiled_result.numpy()}")
+    except Exception as e:
+        print(f"❌ Compile Failed: {e}")
+        # In the PyTorch bug, this is where the divergence occurred.
+        raise
+
+    # 5. Verify Consistency
+    # The bug was about divergence (hints != real). Here we check if results match.
+    assert tf.reduce_all(eager_result == compiled_result).numpy(), \
+        "Divergence detected between eager and compiled results!"
+    print("✅ Results match: No divergence detected.")
+
+if __name__ == "__main__":
+    test_batchable_extension_dynamic_shape_divergence()
+```

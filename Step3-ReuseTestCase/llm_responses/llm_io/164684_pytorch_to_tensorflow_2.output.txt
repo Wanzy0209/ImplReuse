@@ -1,0 +1,76 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Ensure reproducibility
+tf.random.set_seed(19990)
+
+# Define the function to be tested
+def fuzzed_program(arg_0, sparse_1, sparse_2):
+    # Mimic: var_node_1 = torch.squeeze(var_node_2)
+    var_node_1 = tf.squeeze(arg_0)
+    
+    # Mimic: var_node_0 = var_node_1.item()
+    # In TensorFlow, to use the value dynamically in a graph-compatible way (similar to the compiler context),
+    # we cast the tensor to an integer type to be used as the axis.
+    # The original bug involved a Python scalar (SymBool) interacting with a FakeTensor.
+    # Here we use a Tensor (int) interacting with SparseTensors.
+    var_node_0 = tf.cast(var_node_1, tf.int64)
+    
+    # Mimic: result = var_node_0 * sentinel
+    # Adaptation: Use the extracted value as the axis for concatenation.
+    # This tests if the compiler handles the dynamic scalar value correctly.
+    result = tf.sparse.concat([sparse_1, sparse_2], axis=var_node_0)
+    
+    # Note: The original code checked for complex numbers. 
+    # tf.sparse.concat propagates dtype, but explicit complex checks are omitted here 
+    # to focus on the core operation logic.
+    return result
+
+# Setup inputs
+# arg_0: A boolean tensor, squeezed to a scalar effectively
+arg_0 = tf.constant([True], dtype=tf.bool)
+
+# Sentinel sparse tensors to ensure gradient computation (values are Variables)
+# Shape (2, 2)
+indices_1 = tf.constant([[0, 0]], dtype=tf.int64)
+values_1 = tf.Variable([1.0], dtype=tf.float32) # requires_grad=True equivalent
+shape_1 = tf.constant([2, 2], dtype=tf.int64)
+sparse_1 = tf.sparse.SparseTensor(indices_1, values_1, shape_1)
+
+indices_2 = tf.constant([[1, 1]], dtype=tf.int64)
+values_2 = tf.Variable([2.0], dtype=tf.float32)
+shape_2 = tf.constant([2, 2], dtype=tf.int64)
+sparse_2 = tf.sparse.SparseTensor(indices_2, values_2, shape_2)
+
+args = (arg_0, sparse_1, sparse_2)
+
+# Test Eager Mode
+print('Testing Eager Mode...')
+try:
+    result_original = fuzzed_program(*args)
+    print('✅ eager success')
+    print(f"Result indices: {result_original.indices}")
+except Exception as e:
+    print(f"❌ eager failed: {e}")
+
+# Test Compiled Mode (tf.function with JIT)
+print('\nTesting Compiled Mode...')
+try:
+    compiled_program = tf.function(fuzzed_program, jit_compile=True)
+    result_compiled = compiled_program(*args)
+    print('✅ compile success')
+    print(f"Result indices: {result_compiled.indices}")
+except Exception as e:
+    print(f"❌ compile failed: {e}")
+
+# Verify consistency
+try:
+    if 'result_original' in locals() and 'result_compiled' in locals():
+        # Compare indices and values
+        assert tf.reduce_all(result_original.indices == result_compiled.indices).numpy()
+        assert tf.reduce_all(result_original.values == result_compiled.values).numpy()
+        print("\n✅ Results match between Eager and Compiled modes.")
+except AssertionError:
+    print("\n❌ Results diverge between Eager and Compiled modes.")
+```

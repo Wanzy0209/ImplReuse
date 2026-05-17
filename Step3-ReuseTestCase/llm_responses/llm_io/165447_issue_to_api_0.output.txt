@@ -1,0 +1,78 @@
+```python
+import torch
+import tempfile
+import os
+
+# Define a custom operator to utilize the similar API: torch.library.get_ctx
+# This API is typically used within the 'fake' implementation (meta function) of a custom op.
+def custom_op_meta(x):
+    # Leverage the similar API: get_ctx
+    # This retrieves the current AbstractImplCtx object.
+    ctx = torch.library.get_ctx()
+    # For the purpose of this test, we simply return the input to satisfy the meta contract.
+    return x
+
+def custom_op_impl(x):
+    # Actual implementation (simple pass-through for testing)
+    return x
+
+# Register the custom operator
+try:
+    torch.library.define("testlib::op_with_ctx", "(Tensor x) -> Tensor")
+    torch.library.register_fake("testlib::op_with_ctx", custom_op_meta)
+    torch.library.impl("testlib::op_with_ctx", custom_op_impl, "CPU")
+    if torch.cuda.is_available():
+        torch.library.impl("testlib::op_with_ctx", custom_op_impl, "CUDA")
+except Exception:
+    # Ignore if already defined in some contexts
+    pass
+
+# Model definition from the original bug report, adapted to use the custom op
+class M(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear1 = torch.nn.Linear(2, 4)
+        self.relu = torch.nn.ReLU()
+        self.linear2 = torch.nn.Linear(4, 8)
+    def forward(self, x):
+        # Integrate the custom op that uses torch.library.get_ctx
+        x = torch.ops.testlib.op_with_ctx(x)
+        return self.linear2(self.relu(self.linear1(x)))
+
+# Reproduction logic from the bug report
+# Using CPU to ensure the test is runnable without specific hardware requirements
+device = "cpu" 
+m = M().to(device)
+sample_inputs = (torch.randn(2, 2, device=device),)
+eager_out = m(*sample_inputs)
+
+with torch._dynamo.config.patch("enable_aot_compile", True):
+    # Use a temporary file for serialization to ensure cleanup
+    with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
+        compiled_fn_path = tmp.name
+
+    try:
+        compiled_fn = torch.compile(
+            m,
+            fullgraph=True
+        ).forward.aot_compile((sample_inputs, {}))
+
+        compiled_fn.save_compiled_function(compiled_fn_path)
+        torch._dynamo.reset()
+        
+        with torch.compiler.set_stance("fail_on_recompile"):
+            with open(compiled_fn_path, "rb") as f:
+                loaded_fn = torch.compiler.load_compiled_function(f)
+
+        assert loaded_fn is not None
+
+        # Execute the loaded function
+        compiled_out = loaded_fn(m, *sample_inputs)
+
+        # Verify correctness
+        assert torch.allclose(eager_out, compiled_out)
+    finally:
+        # Clean up the temporary file
+        if os.path.exists(compiled_fn_path):
+            os.remove(compiled_fn_path)
+```

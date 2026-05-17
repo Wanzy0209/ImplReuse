@@ -1,0 +1,83 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import gc
+import os
+
+def test_broadcast_object_list_memory_leak(rank, world_size):
+    """
+    Test case to verify that torch.distributed.broadcast_object_list does not 
+    cause a memory leak, similar to the reported issue with torch.compile.
+    """
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Use 'gloo' for CPU compatibility or 'nccl' if GPUs are strictly required and available
+    backend = 'nccl' if torch.cuda.is_available() else 'gloo'
+    dist.init_process_group(backend, rank=rank, world_size=world_size)
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(rank)
+
+    # Warmup
+    dummy_list = [torch.randn(10, 10)]
+    dist.broadcast_object_list(dummy_list, src=0)
+    del dummy_list
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    # Record initial memory state
+    if torch.cuda.is_available():
+        initial_mem = torch.cuda.memory_allocated()
+    else:
+        # On CPU, we can't easily track allocated bytes precisely without external tools,
+        # but we can run the loop to ensure no crashes occur.
+        initial_mem = 0
+
+    # Run the loop similar to the bug report (Steps 150, 200, 250, 300)
+    # We run fewer steps for a quick unit test, but enough to detect a trend.
+    num_steps = 100
+    
+    for step in range(num_steps):
+        # Create a list of tensors to broadcast
+        # This mimics the workload that might cause leaks
+        obj_list = [torch.randn(10, 10) for _ in range(5)]
+        
+        # Call the API under test
+        dist.broadcast_object_list(obj_list, src=0)
+        
+        # Explicit cleanup
+        del obj_list
+        gc.collect()
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Periodic check (mimicking the logs in the original bug report)
+        if step % 20 == 0 and torch.cuda.is_available():
+            current_mem = torch.cuda.memory_allocated()
+            # print(f"Rank {rank} | Step {step} | Mem: {current_mem / 1024**2:.2f}MB")
+
+    # Final assertion
+    if torch.cuda.is_available():
+        final_mem = torch.cuda.memory_allocated()
+        # The original bug showed Tensors increasing from 2266 to 3514.
+        # We check if memory usage remains stable within a reasonable tolerance (e.g., 20MB).
+        # This accounts for minor fragmentation but catches unbounded leaks.
+        tolerance = 20 * 1024 * 1024  # 20MB
+        assert final_mem < initial_mem + tolerance, \
+            f"Memory leak detected! Initial: {initial_mem}, Final: {final_mem}, Diff: {final_mem - initial_mem}"
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Check if CUDA is available to determine world size
+    # If no GPU, we can still run on CPU with gloo
+    world_size = 2
+    
+    # Spawn processes for distributed testing
+    mp.spawn(test_broadcast_object_list_memory_leak, args=(world_size,), nprocs=world_size, join=True)
+```

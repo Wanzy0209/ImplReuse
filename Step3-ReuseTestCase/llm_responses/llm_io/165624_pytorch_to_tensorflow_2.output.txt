@@ -1,0 +1,46 @@
+```python
+import tensorflow as tf
+import tensorflow.experimental.dtensor as dtensor
+from unittest.mock import patch
+
+def test_copy_to_mesh_no_duplicate_execution():
+    """
+    Adapted test case for Issue 165624 (Likely Merge Mistake).
+    
+    The original bug in PyTorch involved a code block being duplicated during a merge,
+    causing a graph pass to be executed twice. This test verifies that the similar
+    TensorFlow API, tf.experimental.dtensor.copy_to_mesh, executes its underlying
+    transformation (relayout) exactly once, ensuring no similar merge mistake exists.
+    """
+    
+    # Setup a basic mesh and layout for the test
+    # We use a single CPU mesh to keep the test minimal and runnable
+    mesh = dtensor.create_mesh([("x", 1)], devices=["CPU:0"])
+    layout = dtensor.Layout([dtensor.UNSHARDED], mesh)
+    tensor = tf.constant([1.0, 2.0, 3.0, 4.0])
+
+    # We mock the 'relayout' function which is called internally by 'copy_to_mesh'.
+    # This allows us to detect if the operation is called multiple times (duplicate execution).
+    with patch('tensorflow.experimental.dtensor.relayout') as mock_relayout:
+        # Configure the mock to return the tensor so the code proceeds
+        mock_relayout.return_value = tensor
+
+        # Execute the API under test
+        # Note: source_layout is deprecated but included to test argument handling
+        result = dtensor.copy_to_mesh(tensor, layout, source_layout=None)
+
+        # Assertion: Verify that the internal relayout function was called exactly once.
+        # If a merge mistake similar to the PyTorch bug occurred (duplicate code block),
+        # this count would be 2.
+        assert mock_relayout.call_count == 1, (
+            f"relayout was called {mock_relayout.call_count} times. "
+            "Expected 1. This indicates a potential duplicate execution bug."
+        )
+
+        # Verify the arguments passed were correct
+        mock_relayout.assert_called_once_with(tensor, layout)
+
+if __name__ == "__main__":
+    test_copy_to_mesh_no_duplicate_execution()
+    print("Test passed: copy_to_mesh executes relayout exactly once.")
+```

@@ -1,0 +1,128 @@
+Issue ID: 163374
+Title: [DTensor] Inplace ops preduces wrong result
+Bug Description:
+```
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import torch
+from torch import distributed as dist
+from torch.utils.debug_mode import DebugMode
+
+
+if __name__ == '__main__':
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    partial_dt = in_dtensor.sum()
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        out = partial_dt.clamp_(max=2)
+        full = out.full_tensor()
+
+    if rank == 0:
+        print(debug_mode.debug_string())
+        # redistribute_input(0, [P] -> [R])
+        #   _c10d_functional::all_reduce(t: f32[], sum, 0)
+        #   _c10d_functional::wait_tensor(t: f32[])
+        # aten::clamp_(t: f32[], None, 2)
+        # _c10d_functional::all_reduce(t: f32[], sum, 0)
+        # _c10d_functional::wait_tensor(t: f32[])
+        # aten::view(t: f32[], [])
+
+        print(out.placements)
+        # (Partial(sum),)
+        # Expected (Replicate(),)
+
+        print(full)
+        # tensor(144., device='cuda:0')
+        # Expected tensor(2., device='cuda:0')
+``` 
+
+Placement is wrong, it should be replicated, instead of Partial(sum)
+
+Original API Under Test: torch.clamp_
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.grad_pass_through
+Similarity score: 0.9943112134933472
+
+Similar API information:
+# Extracted call chain for tf.grad_pass_through
+
+# --- tensorflow.python.ops.custom_gradient.grad_pass_through ---
+def grad_pass_through(f):
+  """Creates a grad-pass-through op with the forward behavior provided in f.
+
+  Use this function to wrap any op, maintaining its behavior in the forward
+  pass, but replacing the original op in the backward graph with an identity.
+  For example:
+
+  ```python
+  x = tf.Variable(1.0, name="x")
+  z = tf.Variable(3.0, name="z")
+
+  with tf.GradientTape() as tape:
+    # y will evaluate to 9.0
+    y = tf.grad_pass_through(x.assign)(z**2)
+  # grads will evaluate to 6.0
+  grads = tape.gradient(y, z)
+  ```
+
+  Another example is a 'differentiable' moving average approximation, where
+  gradients are allowed to flow into the last value fed to the moving average,
+  but the moving average is still used for the forward pass:
+
+  ```python
+  x = ... # Some scalar value
+  # A moving average object, we don't need to know how this is implemented
+  moving_average = MovingAverage()
+  with backprop.GradientTape() as tape:
+
+Original Test Case:
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import torch
+from torch import distributed as dist
+from torch.utils.debug_mode import DebugMode
+
+
+if __name__ == '__main__':
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    partial_dt = in_dtensor.sum()
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        out = partial_dt.clamp_(max=2)
+        full = out.full_tensor()
+
+    if rank == 0:
+        print(debug_mode.debug_string())
+        # redistribute_input(0, [P] -> [R])
+        #   _c10d_functional::all_reduce(t: f32[], sum, 0)
+        #   _c10d_functional::wait_tensor(t: f32[])
+        # aten::clamp_(t: f32[], None, 2)
+        # _c10d_functional::all_reduce(t: f32[], sum, 0)
+        # _c10d_functional::wait_tensor(t: f32[])
+        # aten::view(t: f32[], [])
+
+        print(out.placements)
+        # (Partial(sum),)
+        # Expected (Replicate(),)
+
+        print(full)
+        # tensor(144., device='cuda:0')
+        # Expected tensor(2., device='cuda:0')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

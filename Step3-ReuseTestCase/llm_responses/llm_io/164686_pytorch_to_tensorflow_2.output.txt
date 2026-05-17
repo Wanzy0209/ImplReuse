@@ -1,0 +1,102 @@
+```python
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+# Enable DTensor to ensure the API is available and functional
+# Note: This might require a compatible TensorFlow version (2.9+)
+try:
+    tf.config.experimental.enable_dtensor()
+except AttributeError:
+    pass
+
+# Setup a basic mesh for DTensor operations
+# Using a single CPU mesh for minimal reproducibility
+mesh = dtensor.create_mesh(['x'], ['cpu'])
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    # var_node_3 = torch.full((), 1.0, dtype=torch.float32)
+    var_node_3 = tf.constant(1.0, dtype=tf.float32)
+    
+    # var_node_2 = var_node_3.item() -> In TF, we just use the tensor
+    var_node_2 = var_node_3
+    
+    # var_node_5 = -3 (int32), var_node_6 = arg_0 (int64)
+    var_node_5 = tf.constant(-3, dtype=tf.int32)
+    var_node_6 = arg_0
+    
+    # var_node_4 = var_node_5 + var_node_6
+    # PyTorch comment says result is int32. 
+    # TF promotes int32 + int64 to int64, so we cast arg_0 to int32 to match the bug's type logic.
+    var_node_4 = var_node_5 + tf.cast(var_node_6, tf.int32)
+    
+    # var_node_1 = var_node_2 + var_node_4 (float32 + int32 -> float32)
+    var_node_1 = var_node_2 + tf.cast(var_node_4, tf.float32)
+    
+    # var_node_9 = 1 (int64), var_node_10 = -10 (int32)
+    var_node_9 = tf.constant(1, dtype=tf.int64)
+    var_node_10 = tf.constant(-10, dtype=tf.int32)
+    
+    # var_node_8 = var_node_9 / var_node_10
+    # PyTorch comment says result is int64, implying integer division.
+    # Using tf.math.floordiv to mimic integer division behavior.
+    var_node_8 = tf.math.floordiv(var_node_9, var_node_10)
+    
+    # var_node_12 = arg_1 (int64), var_node_13 = -5 (int32)
+    var_node_12 = arg_1
+    var_node_13 = tf.constant(-5, dtype=tf.int32)
+    
+    # var_node_11 = var_node_12 / var_node_13
+    # PyTorch comment says result is int32.
+    # We cast arg_1 to int32 to match the specific type stress logic.
+    var_node_11 = tf.math.floordiv(tf.cast(var_node_12, tf.int32), var_node_13)
+    
+    # var_node_7 = var_node_8 + var_node_11
+    # PyTorch comment says result is int32.
+    # var_node_8 is int64, var_node_11 is int32. We cast var_node_8 to int32 to match.
+    var_node_7 = tf.cast(var_node_8, tf.int32) + var_node_11
+    
+    # var_node_0 = var_node_1 * var_node_7 (float32 * int32 -> float32)
+    var_node_0 = var_node_1 * tf.cast(var_node_7, tf.float32)
+    
+    # Ensure gradient computation logic (multiplying by sentinel)
+    result = var_node_0 * sentinel
+    
+    # Check for complex type (though unlikely with these ops, kept for logic parity)
+    if result.dtype == tf.complex64 or result.dtype == tf.complex128:
+        result = tf.math.real(result)
+        
+    return result
+
+# Sentinel tensor
+sentinel = tf.constant(1.0)
+
+# Generate random scalar inputs similar to torch.randn(()).item()
+# Using a fixed seed for reproducibility
+tf.random.set_seed(13653)
+arg_0 = tf.cast(tf.random.uniform((), minval=-100, maxval=100, dtype=tf.int32), tf.int64)
+arg_1 = tf.cast(tf.random.uniform((), minval=-100, maxval=100, dtype=tf.int32), tf.int64)
+
+# Run the program
+result_tensor = fuzzed_program(arg_0, arg_1, sentinel)
+print('✅ eager success')
+
+# Test the similar API: tf.experimental.dtensor.copy_to_mesh
+try:
+    # Define a layout for the scalar result
+    # Since it's a scalar, we use an unsharded layout on the mesh
+    layout = dtensor.Layout([dtensor.UNSHARDED], mesh)
+    
+    # Attempt to copy the result to the mesh
+    # This tests if the API handles the tensor resulting from complex type promotion correctly
+    dtensor_result = dtensor.copy_to_mesh(result_tensor, layout)
+    
+    print('✅ copy_to_mesh success')
+    
+    # Verify the result is valid
+    assert dtensor_result is not None
+    print(f"Result: {dtensor_result}")
+    
+except Exception as e:
+    print(f"❌ copy_to_mesh failed: {e}")
+    raise
+```

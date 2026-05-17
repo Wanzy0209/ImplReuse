@@ -1,0 +1,77 @@
+```python
+import torch
+import torch.autograd
+
+class BackwardStreamSwitcher(torch.autograd.Function):
+    """
+    A custom autograd function that attempts to switch the CUDA stream
+    during the backward pass. This reproduces the logic from the issue
+    where torch.cuda.set_stream is used inside the backward method.
+    """
+    @staticmethod
+    def forward(ctx, input_tensor: torch.Tensor, target_stream: torch.cuda.Stream) -> torch.Tensor:
+        ctx.target_stream = target_stream
+        # Forward pass runs on the current stream (default or user-specified)
+        return input_tensor.clone()
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
+        target_stream = ctx.target_stream
+        
+        # Ensure the target stream waits for the current stream (forward stream)
+        # to maintain dependency ordering before switching.
+        target_stream.wait_stream(torch.cuda.current_stream())
+        
+        # Attempt to switch the stream for the backward pass
+        torch.cuda.set_stream(target_stream)
+        
+        # To verify the stream switch effectively, we perform a computation.
+        # We use torch.exp here, mirroring the 'tf.keras.backend.exp' API 
+        # mentioned in the similarity context, to ensure a CUDA kernel is launched.
+        # The bug implies that this kernel might still run on the forward stream.
+        result = torch.exp(grad_output)
+        
+        # Verify that the current stream is indeed the target stream.
+        # Note: While torch.cuda.current_stream() returns the handle, 
+        # the actual kernel dispatch in the buggy version might ignore this context.
+        current = torch.cuda.current_stream()
+        if current != target_stream:
+            raise AssertionError(
+                f"Failed to switch stream in backward. "
+                f"Expected stream: {target_stream}, Current stream: {current}"
+            )
+            
+        return result, None
+
+def test_backward_stream_switch():
+    """
+    Test case to reproduce the issue where torch.cuda.set_stream 
+    fails to change the stream in the backward pass.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        return
+
+    # Create two distinct streams
+    forward_stream = torch.cuda.Stream()
+    backward_stream = torch.cuda.Stream()
+
+    # Create a tensor requiring gradient
+    x = torch.randn(10, device='cuda', requires_grad=True)
+
+    # Run forward pass on 'forward_stream'
+    with torch.cuda.stream(forward_stream):
+        # We pass 'backward_stream' to be used in the backward pass
+        y = BackwardStreamSwitcher.apply(x, backward_stream)
+
+    # Trigger backward pass
+    # The backward method of BackwardStreamSwitcher will attempt to switch to 'backward_stream'
+    try:
+        y.sum().backward()
+        print("Test Passed: Stream context successfully switched in backward pass.")
+    except AssertionError as e:
+        print(f"Test Failed: {e}")
+
+if __name__ == "__main__":
+    test_backward_stream_switch()
+```

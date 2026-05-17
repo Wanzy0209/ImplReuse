@@ -1,0 +1,55 @@
+```python
+import tensorflow as tf
+
+# Set seed for reproducibility
+tf.random.set_seed(19990)
+
+# Use the similar API: tf.keras.initializers.HeUniform
+# to create the sentinel tensor, replacing the manual torch.tensor creation.
+initializer = tf.keras.initializers.HeUniform(seed=19990)
+# Create a scalar tensor to match the original sentinel size=()
+sentinel = initializer(shape=())
+
+# Arg 0: bool tensor
+# Original: torch.randint(0, 2, (1,), dtype=torch.bool) > 0
+arg_0 = tf.constant([True], dtype=tf.bool)
+
+def fuzzed_program(arg_0, sentinel):
+    # var_node_2 = arg_0
+    # var_node_1 = torch.squeeze(var_node_2)
+    var_node_1 = tf.squeeze(arg_0)
+
+    # var_node_0 = var_node_1.item()
+    # In TensorFlow, .item() is not a method. .numpy() extracts a numpy scalar.
+    # This works in eager mode but will fail in tf.function (graph mode),
+    # mimicking the eager/compile divergence of the original bug where 
+    # .item() returns a Python bool in eager but a SymBool in dynamo.
+    var_node_0 = var_node_1.numpy()
+
+    # result = var_node_0 * sentinel
+    result = var_node_0 * sentinel
+
+    # if result.is_complex():
+    #     result = result.real
+    if tf.dtypes.is_complex(result.dtype):
+        result = tf.math.real(result)
+
+    return result
+
+# Run Eager
+print('Running eager...')
+try:
+    result_original = fuzzed_program(arg_0, sentinel)
+    print('✅ eager success')
+except Exception as e:
+    print(f'❌ eager failed: {e}')
+
+# Run Compiled
+print('Running compiled...')
+compiled_program = tf.function(fuzzed_program)
+try:
+    result_compiled = compiled_program(arg_0, sentinel)
+    print('✅ compile success')
+except Exception as e:
+    print(f'❌ compile failed: {e}')
+```

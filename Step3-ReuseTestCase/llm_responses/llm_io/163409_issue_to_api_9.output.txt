@@ -1,0 +1,66 @@
+```python
+import torch
+import unittest
+import sys
+
+class TestMaxUnpool3dSegfault(unittest.TestCase):
+    """
+    Test case for Issue 163409: Segmentation fault in torch.nn.MaxUnpool3d.
+    
+    The bug is triggered by initializing MaxUnpool3d with empty arguments
+    and calling it with specific tensor shapes and types (complex128, uint32)
+    on CUDA.
+    """
+    
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_maxunpool3d_segfault_invalid_args(self):
+        # Reproduce the input structure from the bug report
+        # input = [[()],{},[torch.empty(...),torch.empty(...)],{}]
+        
+        # Constructor arguments: empty tuple and empty dict
+        args_constructor = ()
+        kwargs_constructor = {}
+        
+        # Call arguments: two tensors with specific shapes and dtypes
+        # The shapes (9, 6, 3, 6, 9) and (5, 7, 9, 8, 5) are mismatched,
+        # and dtypes are complex128 and uint32.
+        input_tensor = torch.empty((9, 6, 3, 6, 9), dtype=torch.complex128, device='cuda')
+        indices_tensor = torch.empty((5, 7, 9, 8, 5), dtype=torch.uint32, device='cuda')
+        
+        args_call = (input_tensor, indices_tensor)
+        kwargs_call = {}
+        
+        # The bug report indicates this sequence causes a segfault.
+        # We wrap it in a try-except block. If the bug is fixed, it should raise
+        # a standard Python exception (e.g., TypeError for missing args or RuntimeError for shape mismatch).
+        # If the bug exists, the process will segfault (uncatchable in Python).
+        try:
+            # Initialize with empty args/kwargs
+            r1 = torch.nn.MaxUnpool3d(*args_constructor, **kwargs_constructor)
+            
+            # Call with the tensors
+            r2 = r1(*args_call, **kwargs_call)
+            
+            # If we reach here, the library allowed the operation (unlikely given shapes/types)
+            # or handled it silently.
+            self.fail("Expected an exception (TypeError or RuntimeError) but operation succeeded or failed silently.")
+            
+        except TypeError as e:
+            # Expected behavior: MaxUnpool3d requires kernel_size argument.
+            # If we get this, the segfault is prevented by argument validation.
+            print(f"Caught expected TypeError: {e}")
+            
+        except RuntimeError as e:
+            # Expected behavior: Shape mismatch or dtype mismatch.
+            # If we get this, the segfault is prevented by runtime validation.
+            print(f"Caught expected RuntimeError: {e}")
+            
+        except Exception as e:
+            # Catch any other exception to ensure we don't mask the bug with a generic fail
+            # if a different error occurs.
+            print(f"Caught unexpected exception: {type(e).__name__}: {e}")
+            raise
+
+if __name__ == '__main__':
+    unittest.main()
+```

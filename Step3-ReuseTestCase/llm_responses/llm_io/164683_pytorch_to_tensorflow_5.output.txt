@@ -1,0 +1,70 @@
+```python
+import tensorflow as tf
+import sys
+
+# The original PyTorch test case checks for divergence between Eager and Compiled modes
+# involving type handling (int64, bfloat16) and operations (tanh).
+# 
+# Here, we adapt the test structure to verify the behavior of 
+# tf.compat.v1.VariableAggregation. Since VariableAggregation is an Enum 
+# used for configuration rather than a mathematical operation, we verify 
+# its consistency and usage within variable definitions across Eager and 
+# Graph (tf.function) modes.
+
+def test_aggregation_api(agg_mode, dtype):
+    # We mimic the "arg" setup from the original test
+    # Original: arg0 = torch.randint(..., dtype=int64)
+    # Here: We use the dtype to create a variable, configured with the aggregation mode.
+    
+    # Create a variable using the specific aggregation mode
+    # This tests if the API handles the enum correctly in the graph
+    try:
+        var = tf.Variable(0.0, dtype=dtype, aggregation=agg_mode)
+        
+        # Access properties to ensure the enum is resolved correctly
+        agg_val = var.aggregation.value
+        return agg_val
+    except Exception as e:
+        # Catch potential type errors similar to the original bug report
+        print(f"Error: {e}")
+        return None
+
+# Setup inputs similar to the original test's scope
+# Original used int64 and bfloat16. We test with float32 (standard) and int64.
+dtypes_to_test = [tf.float32, tf.int64]
+agg_modes = [
+    tf.compat.v1.VariableAggregation.MEAN, 
+    tf.compat.v1.VariableAggregation.SUM, 
+    tf.compat.v1.VariableAggregation.NONE
+]
+
+print("Running Eager Mode Tests...")
+eager_results = {}
+for dtype in dtypes_to_test:
+    for mode in agg_modes:
+        res = test_aggregation_api(mode, dtype)
+        eager_results[(mode, dtype)] = res
+        print(f"Eager: Mode={mode.name}, Dtype={dtype}, Result={res}")
+
+print("\nRunning Compiled Mode Tests (tf.function)...")
+compiled_fn = tf.function(test_aggregation_api)
+compiled_results = {}
+for dtype in dtypes_to_test:
+    for mode in agg_modes:
+        res = compiled_fn(mode, dtype)
+        compiled_results[(mode, dtype)] = res
+        print(f"Compiled: Mode={mode.name}, Dtype={dtype}, Result={res}")
+
+print("\nVerifying Consistency...")
+all_passed = True
+for key in eager_results:
+    if eager_results[key] != compiled_results[key]:
+        print(f"Divergence detected for {key}: Eager={eager_results[key]}, Compiled={compiled_results[key]}")
+        all_passed = False
+
+if all_passed:
+    print("Success: No divergence between Eager and Compiled modes for tf.compat.v1.VariableAggregation. ✅")
+else:
+    print("Failure: Divergence detected. ❌")
+    sys.exit(1)
+```

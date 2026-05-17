@@ -1,0 +1,105 @@
+Issue ID: 162756
+Title: torch.compile fails with NameError when helper functions are required and combo_kernels enabled
+Bug Description:
+### 🐛 Describe the bug
+
+When `torch._inductor.config.combo_kernels = True` is enabled, compilation fails with `NameError` for Triton helper functions (e.g., `_triton_helper_fn_add0`) when operations that require helper functions (like `cumsum`) are combined into combo kernels.
+
+repro:
+```python
+import torch
+torch._inductor.config.combo_kernels = True
+
+@torch.compile
+def fn(x, y, z):
+    return x.sum(1), y.mean(1), z.cumsum(1)
+
+inps = (
+    torch.rand(16, 128, device="cuda"),
+    torch.rand(32, 128, device="cuda"),
+    torch.rand(32, 256, device="cuda"),
+)
+
+fn(*inps)
+```
+
+error:
+```bash
+torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+CompilationError: at 73:50:
+        xmask = xindex < xnumel
+        r0_index = tl.arange(0, R0_BLOCK_2)[None, :]
+        r0_offset = 0
+        r0_mask = r0_index < r0_numel
+        roffset = r0_offset
+        rindex = r0_index
+        r0_5 = r0_index
+        x4 = xindex
+        tmp12 = tl.load(in_ptr2 + (r0_5 + 256*x4), r0_mask & xmask, other=0.0)
+        tmp13 = tmp12.to(tl.float32)
+        tmp14 = tl.broadcast_to(tmp13, [XBLOCK, R0_BLOCK_2])
+        tmp15, = tl.associative_scan((tmp14,), 1, _triton_helper_fn_add0)
+                                                  ^
+NameError('_triton_helper_fn_add0 is not defined')
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.prod
+Similarity score: 0.9944407939910889
+
+Similar API information:
+# Extracted call chain for torch.prod
+
+# --- functorch.dim.reference.prod ---
+def prod(x):
+    return reduce(operator.mul, x, 1)
+
+# --- torch._dynamo.polyfills.functools.reduce ---
+def reduce(
+    function: Callable[[_U, _T], _U],
+    iterable: Iterable[_T],
+    initial: _U = _INITIAL_MISSING,  # type: ignore[assignment]
+    /,
+) -> _U:
+    it = iter(iterable)
+
+    value: _U
+    if initial is _INITIAL_MISSING:
+        try:
+            value = next(it)  # type: ignore[assignment]
+        except StopIteration:
+            raise TypeError(
+                "reduce() of empty iterable with no initial value",
+            ) from None
+    else:
+        value = initial
+
+    for element in it:
+        value = function(value, element)
+
+    return value
+
+Original Test Case:
+import torch
+torch._inductor.config.combo_kernels = True
+
+@torch.compile
+def fn(x, y, z):
+    return x.sum(1), y.mean(1), z.cumsum(1)
+
+inps = (
+    torch.rand(16, 128, device="cuda"),
+    torch.rand(32, 128, device="cuda"),
+    torch.rand(32, 256, device="cuda"),
+)
+
+fn(*inps)
+
+The API torch.prod is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

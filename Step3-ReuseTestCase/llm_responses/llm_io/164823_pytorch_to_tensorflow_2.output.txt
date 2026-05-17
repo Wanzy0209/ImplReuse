@@ -1,0 +1,46 @@
+```python
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+# Setup a mesh for DTensor
+# Using a single CPU device for a minimal reproducible test
+mesh = dtensor.create_mesh([("x", 1)], devices=["CPU:0"])
+layout = dtensor.Layout([dtensor.UNSHARDED], mesh)
+
+class TestModel(tf.Module):
+    @tf.function
+    def __call__(self, x):
+        # Analogous to x.to_sparse() - changing the layout/distribution
+        # This is the core API being tested: copy_to_mesh
+        x_dtensor = dtensor.copy_to_mesh(x, layout)
+        
+        # Perform an operation on the distributed tensor
+        result = x_dtensor * 2
+        
+        # Analogous to result.to_dense() - converting back to a local tensor
+        # to verify the round trip logic of the original bug report
+        return dtensor.depack(result)
+
+x = tf.random.normal((10, 10))
+
+model = TestModel()
+
+# Test Eager execution
+eager_output = model(x)
+print("Eager output:", eager_output)
+
+# Test Compiled execution (Graph mode via tf.function)
+compiled_output = model(x)
+print("Compiled output:", compiled_output)
+
+# Verify the results are consistent
+# Note: Due to potential randomness in initialization if stateful, 
+# here we just check shape and type consistency for the API test.
+assert eager_output.shape == (10, 10)
+assert compiled_output.shape == (10, 10)
+
+# Check that the values are actually doubled
+expected = x * 2
+# Use tf.reduce_all to check equality
+assert tf.reduce_all(tf.equal(compiled_output, expected))
+```

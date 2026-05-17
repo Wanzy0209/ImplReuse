@@ -1,0 +1,63 @@
+```python
+import torch
+import torch.distributed as dist
+
+def test_send_object_list_with_mps_tensors():
+    """
+    Test case for torch.distributed.send_object_list using MPS tensors 
+    derived from the scenario in Issue 161969.
+    
+    The original issue involved a contiguity assertion failure on MPS 
+    during a compiled function involving Cholesky decomposition and inversion.
+    This test verifies if torch.distributed.send_object_list can handle 
+    these specific MPS tensors.
+    """
+    
+    # Check for MPS availability
+    if not torch.backends.mps.is_available():
+        print("MPS is not available. Skipping test.")
+        return
+
+    device = torch.device("mps")
+    dtype = torch.float32
+
+    # Setup data from the bug report
+    data = torch.zeros((2, 5, 3), device=device, dtype=dtype)
+    p = torch.diag(torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)**2)
+
+    # Perform operations from the bug report that might affect contiguity
+    # We simulate the internal logic of the function that was compiled
+    p_mat_sqrt = torch.linalg.cholesky(p).contiguous()
+    p_mat_sqrt_inv = p_mat_sqrt.inverse()
+    
+    # Note: The original code had a dimension mismatch in the matmul line 
+    # (3x3 @ 5x3). We focus on the tensors generated before that point 
+    # as they are the subject of the contiguity check in the bug.
+    
+    # Assertions to verify tensor state
+    assert p_mat_sqrt.is_contiguous(), "p_mat_sqrt should be contiguous"
+    assert p_mat_sqrt.device.type == "mps", "p_mat_sqrt should be on MPS"
+
+    # Check distributed availability
+    if not dist.is_available() or not dist.is_initialized():
+        print("Distributed package is available but not initialized. Skipping send.")
+        print("To run this test with distributed, use torchrun or initialize process group.")
+        return
+
+    # Adaptation: Replace the original compiled_function call with send_object_list
+    # We send the tensors that were problematic in the original bug
+    objects_to_send = [data, p, p_mat_sqrt, p_mat_sqrt_inv]
+
+    # Assuming rank 0 sends to rank 1 for demonstration
+    if dist.get_rank() == 0:
+        try:
+            # Sending to rank 1
+            dist.send_object_list(objects_to_send, dst=1)
+            print("Successfully sent MPS tensors via send_object_list.")
+        except Exception as e:
+            print(f"Failed to send objects: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_send_object_list_with_mps_tensors()
+```

@@ -1,0 +1,64 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Adapt the setup from the PyTorch bug report:
+# The original issue involved eager vs. compiled divergence with scalar tensors and specific dtypes.
+# We test tf.keras.initializers.HeNormal (the similar API) for similar behavior.
+
+# Set seeds for reproducibility
+tf.random.set_seed(238)
+
+# The original bug used int16. HeNormal is a float initializer, but we test float16
+# to check for low-precision/divergence issues analogous to the original bug.
+test_dtype = tf.float16
+
+def test_he_normal_divergence(shape, dtype):
+    """
+    Tests if HeNormal produces the same results in eager mode and graph (compiled) mode.
+    """
+    print(f"Testing shape: {shape}, dtype: {dtype}")
+
+    # 1. Eager Execution
+    # Re-instantiate to ensure clean state for the specific call
+    initializer_eager = tf.keras.initializers.HeNormal(seed=42)
+    out_eager = initializer_eager(shape, dtype=dtype)
+
+    # 2. Compiled Execution (tf.function is analogous to torch.compile)
+    # We wrap the initialization call in a tf.function to simulate the compilation step.
+    @tf.function
+    def compiled_init(initializer, shape, dtype):
+        return initializer(shape, dtype=dtype)
+
+    initializer_compiled = tf.keras.initializers.HeNormal(seed=42)
+    out_compiled = compiled_init(initializer_compiled, shape, dtype)
+
+    # 3. Verification
+    # Check if the outputs are close. Since we use the same seed, they should be identical.
+    # We use a small tolerance for floating point operations.
+    if not np.allclose(out_eager.numpy(), out_compiled.numpy(), rtol=1e-5, atol=1e-5):
+        print(f'❌ Divergence detected!')
+        print(f'Eager output: {out_eager.numpy()}')
+        print(f'Compiled output: {out_compiled.numpy()}')
+        diff = np.abs(out_eager.numpy() - out_compiled.numpy())
+        print(f'Absolute diff: {diff}')
+        return False
+    else:
+        print('✅ Eager and Compiled outputs match.')
+        return True
+
+# Test cases inspired by the original bug report:
+# The original bug involved scalar tensors (size=()) and tensors squeezed to scalars.
+# We test these specific shapes to see if the similar API handles them correctly.
+
+# Case 1: Scalar shape (analogous to the result of squeeze in the bug)
+test_he_normal_divergence((), test_dtype)
+
+# Case 2: Shape (1,) (analogous to the input before squeeze)
+test_he_normal_divergence((1,), test_dtype)
+
+# Case 3: Standard 2D shape
+test_he_normal_divergence((3, 3), test_dtype)
+
+print("Test run completed.")
+```

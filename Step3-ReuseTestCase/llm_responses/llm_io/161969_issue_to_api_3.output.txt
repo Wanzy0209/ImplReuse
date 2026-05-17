@@ -1,0 +1,44 @@
+```python
+import torch
+import torch.special
+
+def example_function():
+    # Adapted from the original bug report's structure to test torch.special.erfcx
+    def logp(x, scale):
+        # Using torch.special.erfcx as the core operation
+        # The original bug involved contiguity issues with matrix ops (LinearAlgebra.mm).
+        # We test if erfcx behaves correctly in the same context (compile + vmap + grad + mps).
+        val = torch.special.erfcx(x * scale)
+        return torch.sum(val)
+
+    # Replicate the vmap + grad pattern from the original issue
+    score_func = torch.vmap(torch.func.grad(logp, 0), (0, None))
+    return score_func
+
+if __name__ == "__main__":
+    # Check for MPS availability
+    if not torch.backends.mps.is_available():
+        print("MPS is not available. Skipping test.")
+    else:
+        device = torch.device("mps")
+        dtype = torch.float32
+        
+        # Create input data similar to the original report
+        data = torch.randn((2, 5, 3), device=device, dtype=dtype)
+        scale = torch.tensor(1.0, device=device, dtype=dtype)
+        
+        # Compile the function
+        compiled_function = torch.compile(example_function())
+        
+        # Run the test
+        try:
+            res = compiled_function(data, scale)
+            # Basic assertion to ensure execution and correct shape
+            assert res.shape == (2, 5, 3), f"Expected shape (2, 5, 3), got {res.shape}"
+            print("Test passed: torch.special.erfcx works with torch.compile, vmap, and grad on MPS.")
+        except RuntimeError as e:
+            if "is_contiguous() INTERNAL ASSERT FAILED" in str(e):
+                print(f"Test failed with contiguity error: {e}")
+            else:
+                raise
+```

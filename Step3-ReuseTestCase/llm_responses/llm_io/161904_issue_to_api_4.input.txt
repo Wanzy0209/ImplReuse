@@ -1,0 +1,167 @@
+Issue ID: 161904
+Title: ZeroBubble and DualPipeV pipeline parallel schedules fail with torch.compiled model
+Bug Description:
+### 🐛 Describe the bug
+
+The ZeroBubble and DualPipeV schedules don't seem to be compatible with models that are `torch.compiled`. Following the TorchTitan code base, I reduced the problem into a minimal repro example:
+
+```py
+"""
+Run:
+
+torchrun --nproc_per_node=2 repro.py
+"""
+
+import torch
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.pipelining import PipelineStage
+from torch.distributed.pipelining.schedules import get_schedule_class
+import torch.nn as nn
+from torchtitan.distributed.pipeline_parallel import pipeline_module_split
+
+PP_DEGREE = 2
+SCHEDULE_NAME = "ZBVZeroBubble"  # or "DualPipeV"
+
+
+class Transformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.tok_embeddings = nn.Embedding(128, 32)
+        self.layers = torch.nn.ModuleDict()
+        for layer_id in range(4):
+            self.layers[str(layer_id)] = nn.Linear(32, 32, bias=False)
+        self.output = nn.Linear(32, 128, bias=False)
+
+    def forward(self, x):
+        x = self.tok_embeddings(x) if self.tok_embeddings else x
+        for layer in self.layers.values():
+            x = layer(x)
+        return self.output(x) if self.output else x
+
+
+def main() -> None:
+    local_rank = torch.distributed.get_node_local_rank()
+
+Original API Under Test: torch.compile
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.compat.v1.train.SessionRunArgs
+Similarity score: 0.9889923930168152
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.train.SessionRunArgs
+
+# --- tensorflow.python.training.session_run_hook.SessionRunArgs ---
+class SessionRunArgs(
+    collections.namedtuple("SessionRunArgs",
+                           ["fetches", "feed_dict", "options"])):
+  """Represents arguments to be added to a `Session.run()` call.
+
+  Args:
+    fetches: Exactly like the 'fetches' argument to Session.Run().
+      Can be a single tensor or op, a list of 'fetches' or a dictionary
+      of fetches.  For example:
+        fetches = global_step_tensor
+        fetches = [train_op, summary_op, global_step_tensor]
+        fetches = {'step': global_step_tensor, 'summ': summary_op}
+      Note that this can recurse as expected:
+        fetches = {'step': global_step_tensor,
+                   'ops': [train_op, check_nan_op]}
+    feed_dict: Exactly like the `feed_dict` argument to `Session.Run()`
+    options: Exactly like the `options` argument to `Session.run()`, i.e., a
+      config_pb2.RunOptions proto.
+  """
+
+  def __new__(cls, fetches, feed_dict=None, options=None):
+    return super(SessionRunArgs, cls).__new__(cls, fetches, feed_dict, options)
+
+Original Test Case:
+"""
+Run:
+
+torchrun --nproc_per_node=2 repro.py
+"""
+
+import torch
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.pipelining import PipelineStage
+from torch.distributed.pipelining.schedules import get_schedule_class
+import torch.nn as nn
+from torchtitan.distributed.pipeline_parallel import pipeline_module_split
+
+PP_DEGREE = 2
+SCHEDULE_NAME = "ZBVZeroBubble"  # or "DualPipeV"
+
+
+class Transformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.tok_embeddings = nn.Embedding(128, 32)
+        self.layers = torch.nn.ModuleDict()
+        for layer_id in range(4):
+            self.layers[str(layer_id)] = nn.Linear(32, 32, bias=False)
+        self.output = nn.Linear(32, 128, bias=False)
+
+    def forward(self, x):
+        x = self.tok_embeddings(x) if self.tok_embeddings else x
+        for layer in self.layers.values():
+            x = layer(x)
+        return self.output(x) if self.output else x
+
+
+def main() -> None:
+    local_rank = torch.distributed.get_node_local_rank()
+    device = torch.device("cuda", local_rank)
+    torch.distributed.init_process_group("nccl")
+    mesh = init_device_mesh("cuda", (2,), mesh_dim_names=("pp",))
+
+    with torch.device("meta"):
+        model = Transformer()
+
+    pp_schedule, model_parts, has_first_stage, has_last_stage = pipeline_transformer(
+        model,
+        mesh,
+        device,
+        parallelize_transformer,
+        loss_fn,
+    )
+    for m in model_parts:
+        m.to_empty(device=device)
+        m.train()
+
+    input_ids = torch.randint(0, 128, (8, 4096), device=device)
+    labels = input_ids.clone()
+
+    losses: list[torch.Tensor] | None
+    targets, losses = (labels, []) if has_last_stage else (None, None)
+    if has_first_stage:
+        pp_schedule.step(
+            input_ids,
+            target=targets,
+            losses=losses,
+        )
+    else:
+        pp_schedule.step(
+            target=targets,
+            losses=losses,
+        )
+
+
+def pipeline_transformer(
+    model: nn.Module,
+    world_mesh,
+    device: torch.device,
+    parallelize_fn,
+    loss_fn,
+):
+    pp_mesh = world_mesh["pp"]
+    module_names_per_stage = [
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

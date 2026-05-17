@@ -1,0 +1,116 @@
+Issue ID: 162630
+Title: [RFC] Intrusive Caching DLPack for Fast Conversion
+Bug Description:
+Currently DLPack is being used for Tensor data exchange. This conversion, which involves populating metadata such as shape, data pointer, and strides, can introduce a small but non-negligible overhead, typically in the range of 40-80 nanoseconds on the C++ side. While this latency is already quite low, frequent tensor exchanges—such as those involving model weights or intermediate values used multiple times—can accumulate this overhead. 
+
+This RFC addresses the question of whether this overhead can be further reduced, particularly in scenarios where the same tensor is converted to DLPack multiple times during its lifetime. 
+
+It does involve change to the c10::TensorImpl data structure, so likely needs to be done with care. This post first put the high-level idea out to the community to seek feedbacks.
+
+## Proposal
+
+We propose an approach that integrates a caching mechanism directly into the framework's tensor object. The high-level concept is as follows:
+
+- **Cache Storage**: A std::unique_ptr<DLManagedTensorVersioned> will be added as a member field to the framework's tensor object (e.g., TensorImpl). This modification requires a change to the framework's internal tensor structure.
+- **On-Demand Population**: When the ToDLPack conversion method is called for the first time on a given tensor, the DLManagedTensorVersioned object will be created and populated. The framework's internal metadata will be transferred, and the manager_ctx of the DLManagedTensorVersioned will be set
+...
+
+Original API Under Test: torch.utils.dlpack
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.distributions.constraints.greater_than_eq
+Similarity score: 0.9776555299758911
+
+Similar API information:
+# Extracted call chain for torch.distributions.constraints.greater_than_eq
+
+# --- torch.distributions.constraints._GreaterThanEq ---
+class _GreaterThanEq(Constraint):
+    """
+    Constrain to a real half line `[lower_bound, inf)`.
+    """
+
+    def __init__(self, lower_bound):
+        self.lower_bound = lower_bound
+        super().__init__()
+
+    def check(self, value):
+        return self.lower_bound <= value
+
+    def __repr__(self):
+        fmt_string = self.__class__.__name__[1:]
+        fmt_string += f"(lower_bound={self.lower_bound})"
+        return fmt_string
+
+Original Test Case:
+#include <atomic>
+
+// TensorImpl is a target of an intrusive ptr that contains a reference counter.
+// in the context of PyTorch, based on my understanding,
+// it would be c10::TensorImpl or something c10::TensorImpl holds like ExtraMeta
+class TensorImpl : public intrusive_ptr_target<TensorImpl> {
+ public:
+  ~TensorImpl() {
+    // deleting the cached dl managed tensor versioned
+    // We need to acquire the value in case it is released by another thread
+    // However, because this destructor is triggered as part of the intrusive pointer deletion
+    // there is already a memory fence in intrusive pointer deleter triggering to ensure
+    // all fields of the TensorImpl are visible here, so we do not have to do acquire, actually 
+    // we can even do a non-atomic load here
+    DLManagedTensorVersioned* cached = cached_dl_managed_tensor_.load(
+      std::memory_order_relaxed);
+    if (cached != nullptr) {
+      delete cached;
+    }
+  }
+  /*!
+   * \brief Converts the current Tensor to a DLPack Tensor.
+   * \return The converted DLManagedTensorVersioned pointer.
+   */
+  DLManagedTensorVersioned* ToDLPack() const {
+    // this function holds a strong reference to the TensorImpl
+    TensorImpl* self = const_cast<TensorImpl*>(this);
+    // we need to use acquire to ensure that write to DLManagedTensorVersioned
+    // from another thread is visible to this thread.
+    DLManagedTensorVersioned* cached = self->cached_dl_managed_tensor_.load(
+      std::memory_order_acquire);
+    if (cached == nullptr) {
+      // First time conversion: create and populate the DLManagedTensorVersioned.
+      // this creation may race among multiple threads, so we need to use atomic exchange.
+      DLManagedTensorVersioned* ret = new DLManagedTensorVersioned();
+      // Populate metadata (framework-specific logic).
+      // Assuming metadata_ is a DLTensor structure
+      PopulateMetadata(this, &(self->cached_dl_managed_tensor_->dl_tensor)); 
+      // Set the deleter to our custom function.
+      ret->deleter = DLManagedTensorDeleter;
+
+      // now set the cached_dl_managed_tensor_ field using CAS
+      // success set must release the new value to all other threads
+      // failure set must acquire, since the expected value is now coming
+      // from another thread that released this value
+      if (std::atomic_compare_exchange_strong_explicit(
+        &cached_dl_managed_tensor_versioned_, &expected, ret,
+        std::memory_order_release, std::memory_order_acquire)) {
+        // set is succes
+        cached = ret;
+      } else {
+        // delete the ret value as another thread raced to set this one first
+        // expected now contains the value that was set by another thread
+        delete ret;
+        cached = expected;
+      }
+    }
+    // at this point, cached is the value that officially set to the field
+    // Always increment the reference counter of the TensorImpl.
+    // This ensures the TensorImpl remains valid as long as the
+    // DLPack tensor is in use.
+...
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

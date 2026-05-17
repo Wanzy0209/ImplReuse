@@ -1,0 +1,67 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution as tf.compat.v1.tpu.batch_parallel is a graph-based operation
+tf.compat.v1.disable_eager_execution()
+
+def transformer_computation(inputs):
+    """
+    Mimics the Transformer model forward pass from the PyTorch example.
+    The computation receives a list of inputs (sharded tensors).
+    """
+    x = inputs[0]
+    
+    # Embedding layer (simplified as Dense for this context)
+    x = tf.compat.v1.layers.dense(x, 32, name="tok_embeddings")
+    
+    # Linear layers
+    for i in range(4):
+        x = tf.compat.v1.layers.dense(x, 32, name=f"layer_{i}", use_bias=False)
+        
+    # Output layer
+    x = tf.compat.v1.layers.dense(x, 128, name="output", use_bias=False)
+    return x
+
+def main():
+    # Initialize TPU system
+    resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(resolver)
+    tf.tpu.experimental.initialize_tpu_system(resolver)
+
+    # Define the graph
+    # batch_size=8, seq_len=128 (reduced from 4096 for minimal test speed)
+    input_ph = tf.compat.v1.placeholder(tf.float32, shape=(8, 128), name="input_ids")
+
+    # Use the similar API: tf.compat.v1.tpu.batch_parallel
+    # This shards the computation along the batch dimension, analogous to the 
+    # parallel execution in the original bug report.
+    outputs = tf.compat.v1.tpu.batch_parallel(
+        transformer_computation,
+        inputs=[[input_ph]],
+        num_shards=8  # Assuming 8 TPU cores available
+    )
+
+    # Execute the graph
+    with tf.compat.v1.Session(resolver.get_master()) as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
+        
+        # Create dummy input data
+        dummy_input = np.random.rand(8, 128).astype(np.float32)
+        
+        try:
+            # Run the step
+            result = sess.run(outputs, feed_dict={input_ph: dummy_input})
+            
+            # Verify behavior: Check that output is produced and shape is correct
+            assert result is not None, "Output is None"
+            assert result[0].shape == (8, 128), f"Expected shape (8, 128), got {result[0].shape}"
+            print("Test passed: tf.compat.v1.tpu.batch_parallel executed successfully with compiled model logic.")
+            
+        except Exception as e:
+            print(f"Test failed: {e}")
+            raise
+
+if __name__ == "__main__":
+    main()
+```

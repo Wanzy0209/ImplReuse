@@ -1,0 +1,88 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_conv2d_transpose_layout_handling():
+    """
+    Adapts the PyTorch bug reproduction logic regarding row-major vs column-major 
+    matrix layouts to tf.nn.conv2d_transpose.
+    
+    The original bug report indicates that `_scaled_mm` and `_int_mm` in PyTorch 
+    raise errors or perform poorly when the Right Hand Side (RHS) matrix is in 
+    row-major layout. In the context of `conv2d_transpose`, the kernel (filter) 
+    acts similarly to the weights in a matrix multiplication.
+    
+    This test verifies that `tf.nn.conv2d_transpose` handles kernels with 
+    different memory layouts (Row-Major/C-contiguous vs Column-Major/F-contiguous) 
+    correctly without raising errors.
+    """
+    
+    # 1. Setup Input Dimensions
+    batch_size = 1
+    height = 8
+    width = 8
+    in_channels = 3
+    out_channels = 16
+    
+    # Input tensor (NHWC format)
+    input_shape = (batch_size, height, width, in_channels)
+    input_tensor = tf.random.normal(input_shape)
+    
+    # Filter shape for conv2d_transpose: [filter_height, filter_width, out_channels, in_channels]
+    filter_shape = (3, 3, out_channels, in_channels)
+    
+    # Output shape for the transposed convolution
+    output_shape = (batch_size, height * 2, width * 2, out_channels)
+    strides = [1, 2, 2, 1]
+    
+    # 2. Create Kernels with Different Memory Layouts
+    
+    # Case A: Row-Major (C-contiguous) - This is the default layout.
+    # In the PyTorch bug, this layout caused issues for the RHS matrix.
+    np_kernel_row_major = np.random.randn(*filter_shape).astype(np.float32)
+    kernel_row_major = tf.constant(np_kernel_row_major)
+    
+    # Case B: Column-Major (F-contiguous) - This layout is often expected by 
+    # optimized BLAS/GEMM kernels (like the one implied in the PyTorch bug).
+    np_kernel_col_major = np.asfortranarray(np.random.randn(*filter_shape).astype(np.float32))
+    kernel_col_major = tf.constant(np_kernel_col_major)
+    
+    # 3. Test Execution with Row-Major Kernel
+    print("Testing tf.nn.conv2d_transpose with Row-Major kernel...")
+    try:
+        output_row = tf.nn.conv2d_transpose(
+            input_tensor,
+            kernel_row_major,
+            output_shape=output_shape,
+            strides=strides,
+            padding='SAME',
+            data_format='NHWC'
+        )
+        # Verify the operation completed and produced the correct shape
+        assert output_row.shape == output_shape, "Output shape mismatch with Row-Major kernel"
+        print("Row-Major kernel test: PASSED")
+    except Exception as e:
+        print(f"Row-Major kernel test: FAILED with error {e}")
+        raise
+
+    # 4. Test Execution with Column-Major Kernel
+    print("Testing tf.nn.conv2d_transpose with Column-Major kernel...")
+    try:
+        output_col = tf.nn.conv2d_transpose(
+            input_tensor,
+            kernel_col_major,
+            output_shape=output_shape,
+            strides=strides,
+            padding='SAME',
+            data_format='NHWC'
+        )
+        # Verify the operation completed and produced the correct shape
+        assert output_col.shape == output_shape, "Output shape mismatch with Column-Major kernel"
+        print("Column-Major kernel test: PASSED")
+    except Exception as e:
+        print(f"Column-Major kernel test: FAILED with error {e}")
+        raise
+
+if __name__ == "__main__":
+    test_conv2d_transpose_layout_handling()
+```

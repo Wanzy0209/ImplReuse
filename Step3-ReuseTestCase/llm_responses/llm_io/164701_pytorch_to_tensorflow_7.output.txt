@@ -1,0 +1,90 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def slide_to_the_left_tf(state, new_events, arange, dev_null):
+    """
+    TensorFlow adaptation of the slide_to_the_left2 logic.
+    Uses tf.keras.backend.name_scope as requested.
+    """
+    # Use the similar API: tf.keras.backend.name_scope
+    with tf.keras.backend.name_scope("slide_to_the_left"):
+        batch_size = tf.shape(new_events)[0]
+
+        # torch.cat([state, new_events], dim=1)
+        concatenated = tf.concat([state, new_events], axis=1)
+
+        # Replicate the "complicated identity transformation":
+        # batch_idx = torch.arange(batch_size, dtype=torch.int32, device=device)[:, None]
+        # arange = arange[None, :]
+        # concatenated = concatenated[batch_idx, arange]
+        
+        # In TensorFlow, this advanced indexing maps to tf.gather with batch_dims.
+        # We need indices of shape (batch_size, 2050).
+        # arange is shape (2050,). We broadcast it to (batch_size, 2050).
+        indices = tf.broadcast_to(arange, [batch_size, tf.shape(arange)[0]])
+        
+        # tf.gather with batch_dims=1 selects indices along axis 1 for each batch.
+        concatenated = tf.gather(concatenated, indices, batch_dims=1, axis=1)
+
+        # state[:, :, :] = concatenated[:, -2048:, :]
+        # In TensorFlow, state must be a Variable to be updated in-place.
+        state.assign(concatenated[:, -2048:, :])
+        
+        # dev_null[:, :, :] = concatenated[:, :, :]
+        dev_null.assign(concatenated)
+
+# Compile the function to mimic torch.compile behavior
+# This ensures the operations run in a graph context, similar to the bug report.
+slide_to_the_left_compiled = tf.function(slide_to_the_left_tf)
+
+# --- Test Setup ---
+
+# Initialize state: [4, 2048, 1024]
+state = tf.Variable(tf.zeros([4, 2048, 1024], dtype=tf.float32))
+
+# Initialize new_events: [4, 2, 1024]
+# PyTorch: torch.arange(start=1, end=3, device=device)[None, :, None].expand(4, 2, 1024)
+# Values will be 1.0 and 2.0
+new_events = tf.broadcast_to(
+    tf.range(1, 3, dtype=tf.float32)[tf.newaxis, :, tf.newaxis], 
+    [4, 2, 1024]
+)
+
+# Initialize arange: [2050]
+arange = tf.range(2050, dtype=tf.int32)
+
+# Initialize dev_null: [4, 2050, 1024]
+dev_null = tf.Variable(tf.zeros([4, 2050, 1024], dtype=tf.float32))
+
+# --- Execution ---
+
+# The original bug was a race condition/miscompilation that could take a few attempts.
+# We run it multiple times to verify stability.
+print("Running test...")
+for attempt in range(1, 100):
+    # Reset state for each attempt
+    state.assign(tf.zeros([4, 2048, 1024]))
+    dev_null.assign(tf.zeros([4, 2050, 1024]))
+
+    # Execute the compiled function
+    slide_to_the_left_compiled(state, new_events, arange, dev_null)
+
+    # Verify the result
+    # Because new_events has shape [4, 2, 1024], only the last 2 rows of state 
+    # (indices 2046 and 2047) should be non-zero. The rest should be zeros.
+    # state[:, :-2, :] corresponds to the first 2046 rows.
+    
+    # Check if all values in the first 2046 rows are zero
+    is_correct = tf.reduce_all(state[:, :-2, :] == 0)
+    
+    if not is_correct.numpy():
+        print(f"FAILURE at attempt {attempt}: Miscompilation detected.")
+        print("Non-zero elements found in state[:, :-2, :]:")
+        # Print indices of non-zero elements
+        print(tf.where(state[:, :-2, :] != 0))
+        print("State tensor snippet:", state[:, :5, :5]) # Print a snippet
+        break
+else:
+    print("SUCCESS: All 100 attempts passed. No miscompilation detected.")
+```

@@ -1,0 +1,80 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to simulate the "compile" behavior (graph mode)
+# which is analogous to torch.compile's graph generation.
+tf.compat.v1.disable_eager_execution()
+
+# Replicate the seed setup
+tf.random.set_seed(19989)
+np.random.seed(19989)
+
+def test_range_input_producer_logic():
+    # Replicate input generation: arg_0 = torch.randn(()).item() -> int32
+    # We use numpy to generate the scalar value similar to torch.randn
+    arg_0_val = np.random.randn(()).astype(np.int32)
+    
+    # Define the graph
+    with tf.compat.v1.Graph().as_default():
+        # var_node_3 = arg_0 (dtype=int32)
+        arg_0 = tf.constant(arg_0_val, dtype=tf.int32)
+        
+        # var_node_2 = -6 (dtype=int64)
+        var_node_2 = tf.constant(-6, dtype=tf.int64)
+        
+        # var_node_1 = var_node_2 * var_node_3 (dtype=int32)
+        # PyTorch implicitly handles the multiplication, TF requires explicit casting or matching types.
+        # We cast var_node_2 to int32 to match the PyTorch logic flow.
+        var_node_1 = tf.cast(var_node_2, dtype=tf.int32) * arg_0
+        
+        # var_node_5 = torch.full((), 1, dtype=torch.int64)
+        var_node_5 = tf.constant(1, dtype=tf.int64)
+        
+        # var_node_0 = var_node_1 / var_node_4 (dtype=int64)
+        # PyTorch integer division behavior. Using floordiv for integer arithmetic.
+        var_node_0 = tf.cast(var_node_1, dtype=tf.int64) // var_node_5
+        
+        # Use the calculated value as the limit for range_input_producer
+        # The API expects an int32 scalar tensor.
+        limit = tf.cast(var_node_0, dtype=tf.int32)
+        
+        # Ensure limit is positive as range_input_producer requires limit > 0
+        limit = tf.abs(limit)
+        
+        # Call the target API
+        # range_input_producer creates a queue.
+        queue = tf.compat.v1.train.range_input_producer(
+            limit=limit,
+            shuffle=False, # Keep deterministic to match seed behavior
+            seed=19989,
+            capacity=32
+        )
+        
+        # To verify execution, we must dequeue from the queue
+        dequeue_op = queue.dequeue()
+        
+        # Execute the graph
+        with tf.compat.v1.Session() as sess:
+            # Initialize local variables (required for num_epochs if used, and queue runners)
+            sess.run(tf.compat.v1.local_variables_initializer())
+            sess.run(tf.compat.v1.global_variables_initializer())
+            
+            # Start the queue runners to populate the queue
+            coord = tf.train.Coordinator()
+            threads = tf.train.start_queue_runners(coord=coord, sess=sess)
+            
+            try:
+                # Attempt to get a result
+                result = sess.run(dequeue_op)
+                print(f'✅ success: {result}')
+            except Exception as e:
+                print(f'❌ failure: {e}')
+            finally:
+                # Stop the queue runners
+                coord.request_stop()
+                coord.join(threads)
+
+if __name__ == "__main__":
+    test_range_input_producer_logic()
+```

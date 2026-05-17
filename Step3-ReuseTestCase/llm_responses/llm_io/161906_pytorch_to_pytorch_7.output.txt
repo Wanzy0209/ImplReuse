@@ -1,0 +1,55 @@
+```python
+import torch
+import torch.nn as nn
+
+class QuantileModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Introduce parameter for broadcasting / stride ops similar to the original bug
+        self.p = nn.Parameter(torch.tensor(2.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Apply operation involving parameter to potentially alter strides/broadcasting
+        y = x * self.p
+        
+        # Define quantile values as a tensor
+        q = torch.tensor([0.25, 0.5, 0.75], device=x.device)
+        
+        # Call torch.quantile
+        # This replaces torch.complex from the original bug report
+        result = torch.quantile(y, q, dim=1)
+        return result
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(0)
+
+    # Create input tensor
+    x = torch.randn(2, 100, 50, device=device)
+    m = QuantileModel().to(device)
+
+    # Eager execution: works fine
+    try:
+        z_eager = m(x)
+        print("Eager mode OK:", z_eager.shape)
+    except Exception as e:
+        print(f"Eager mode failed: {e}")
+        return
+
+    # Compiled execution: check for assertion errors or stride issues
+    m_c = torch.compile(m)
+    try:
+        z_compiled = m_c(x)
+        print("Compiled mode OK:", z_compiled.shape)
+        
+        # Verify correctness
+        assert torch.allclose(z_eager, z_compiled)
+        print("Results match between eager and compiled modes.")
+    except AssertionError as e:
+        print(f"Compiled mode assertion error (potential bug): {e}")
+    except Exception as e:
+        print(f"Compiled mode failed: {e}")
+
+if __name__ == "__main__":
+    main()
+```

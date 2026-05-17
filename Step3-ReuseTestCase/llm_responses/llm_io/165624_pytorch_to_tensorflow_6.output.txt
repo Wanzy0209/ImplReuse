@@ -1,0 +1,82 @@
+```python
+import tensorflow as tf
+
+def test_joint_graph_duplicate_scope():
+    """
+    Adapts the PyTorch 'joint_custom_pre_pass' duplicate execution bug 
+    to verify tf.compat.v1.name_scope behavior under similar code structure.
+    
+    The original bug involved a merge mistake where a configuration check 
+    and subsequent graph pass execution were duplicated, causing a counter 
+    to increment twice and the pass to run twice.
+    
+    This test replicates that control flow structure using TensorFlow's 
+    name_scope to verify how the API handles duplicate invocations.
+    """
+    
+    # Mock configuration object similar to the PyTorch bug report
+    class Config:
+        joint_custom_pre_pass = "custom_pre_pass"
+        joint_graph_constant_folding = False
+
+    config = Config()
+    count = 0
+
+    # Create a graph to simulate the inductor environment
+    graph = tf.Graph()
+    with graph.as_default():
+        
+        # --- First Block (Original Code) ---
+        if config.joint_custom_pre_pass is not None:
+            # In PyTorch: GraphTransformObserver(...).apply_graph_pass(...)
+            # In TF: Entering the name scope
+            with tf.compat.v1.name_scope(config.joint_custom_pre_pass):
+                # Simulate a graph transformation operation
+                tf.constant(1, name="transform_op")
+            count += 1
+
+        # --- Intermediate Block ---
+        # Simulating 'from .post_grad import remove_noop_ops'
+        # GraphTransformObserver(graph, "remove_noop_ops").apply_graph_pass(remove_noop_ops)
+        with tf.compat.v1.name_scope("remove_noop_ops"):
+            tf.constant(0, name="noop")
+
+        # --- Second Block (The Merge Mistake / Duplicate) ---
+        if config.joint_custom_pre_pass is not None:
+            # This block is the duplicate identified in the bug report.
+            # We verify how tf.compat.v1.name_scope handles re-entering a scope 
+            # with the same name after it has been closed.
+            with tf.compat.v1.name_scope(config.joint_custom_pre_pass):
+                # Simulate the graph transformation operation again
+                tf.constant(2, name="transform_op")
+            count += 1
+
+    # --- Verification ---
+    
+    # 1. Verify the "bug" logic (duplicate execution) occurred in the control flow
+    # In the PyTorch bug, 'count' would incorrectly be 2.
+    assert count == 2, f"Expected count to be 2 due to duplicate blocks, got {count}"
+
+    # 2. Verify TensorFlow's specific behavior with duplicate scope names
+    # TensorFlow handles name collisions by appending a suffix (e.g., _1) to the scope name.
+    ops = graph.get_operations()
+    op_names = [op.name for op in ops]
+
+    # The first operation should be in the base scope
+    assert "custom_pre_pass/transform_op" in op_names, \
+        f"First scope operation missing. Found ops: {op_names}"
+
+    # The second operation should be in a uniquely suffixed scope (e.g., custom_pre_pass_1)
+    # because the first 'custom_pre_pass' scope was already closed.
+    assert "custom_pre_pass_1/transform_op" in op_names, \
+        f"Second scope operation missing or naming collision not handled. Found ops: {op_names}"
+    
+    # Verify the intermediate operation exists
+    assert "remove_noop_ops/noop" in op_names, \
+        f"Intermediate operation missing. Found ops: {op_names}"
+
+    print("Test Passed: Duplicate logic structure executed and TensorFlow API handled name scoping correctly.")
+
+if __name__ == "__main__":
+    test_joint_graph_duplicate_scope()
+```

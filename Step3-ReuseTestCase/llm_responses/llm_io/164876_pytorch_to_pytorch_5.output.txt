@@ -1,0 +1,51 @@
+```python
+import torch
+
+# Configuration from the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1012969)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0
+    var_node_4 = arg_1
+    var_node_2 = torch.matmul(var_node_3.to(torch.float64), var_node_4.to(torch.float64))
+
+    # Adaptation: Replace torch.unique with torch.real
+    # Create a complex tensor to test torch.real behavior in this context
+    _inp_real = torch.randn(1, device=var_node_2.device, dtype=torch.complex128)
+    _real_val = torch.real(_inp_real)
+
+    var_node_1 = _real_val.to(var_node_2.dtype)
+    var_node_5 = torch.full((1, 18), 0.40330381448978797, dtype=torch.float64, device=var_node_2.device)
+    var_node_0 = torch.matmul(var_node_1.to(torch.float64), var_node_5.to(torch.float64))
+
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Setup inputs
+# Using CPU to ensure runnability, but logic supports device propagation
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+sentinel = torch.tensor(1.0, requires_grad=True, device=device)
+arg_0 = torch.as_strided(torch.randn(20, device=device).to(torch.float64), (2, 10), (10, 1))
+arg_1 = torch.as_strided(torch.randn(30, device=device).to(torch.float64), (10, 3), (3, 1))
+
+args = (arg_0, arg_1, sentinel)
+
+# Run Eager
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+
+# Run Compiled
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+# Verify results match
+assert torch.allclose(result_original, result_compiled), "Eager and compiled results differ"
+print('✅ results match')
+```

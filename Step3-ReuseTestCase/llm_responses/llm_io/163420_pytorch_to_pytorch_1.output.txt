@@ -1,0 +1,47 @@
+```python
+import torch
+import torch.distributed as dist
+import os
+
+# Setup for single-process distributed testing to ensure the test is runnable
+# without external launchers like torchrun.
+if not dist.is_initialized():
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
+    # Using 'gloo' backend for CPU compatibility. 
+    # If CUDA is available and desired, 'nccl' can be used with appropriate setup.
+    dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(arg0, arg1):
+    t0 = arg0 # size=(1, 1), stride=(1, 1), dtype=float32, device=cpu
+    t1 = arg1 # size=(), stride=(), dtype=float32, device=cpu
+    
+    # Adaptation: Replace fill_diagonal_ with torch.distributed.reduce
+    # We perform a reduction operation on t0. 
+    # Since world_size=1, this is effectively a no-op but tests the API integration.
+    dist.reduce(t0, dst=0)
+    
+    return t0
+
+# Inputs adapted to CPU for 'gloo' backend compatibility
+arg0 = torch.empty([1, 1], dtype=torch.float32, device='cpu', requires_grad=True)
+arg1 = torch.empty([], dtype=torch.float32, device='cpu', requires_grad=True)
+
+if __name__ == '__main__':
+    # Test Eager mode
+    out_eager = foo(arg0.clone(), arg1)
+    print('Eager Success! ✅')
+
+    # Test Compiled mode
+    # The original bug was a compilation failure, so we verify if torch.compile
+    # handles the similar API (torch.distributed.reduce) without crashing.
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0.clone(), arg1)
+    print('Compile Success! ✅')
+
+    # Verify results match
+    assert torch.allclose(out_eager, out_compiled)
+    print('Test Passed! ✅')
+```

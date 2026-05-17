@@ -1,0 +1,102 @@
+Issue ID: 163483
+Title: all_gather can change memory ordering of tensor
+Bug Description:
+### 🐛 Describe the bug
+
+I try the `all_gather` operation on a tensor with `channels_last` format , then I found the memory ordering of output is changed so that the output and input are not aligned. This is not as expected. I think it's a BUG.
+
+The reproducible minimal example, test.py is:
+```
+import torch
+
+torch.distributed.init_process_group(backend='nccl')
+rank = torch.distributed.get_rank()
+world_size = torch.distributed.get_world_size()
+torch.cuda.set_device(rank)
+
+x = torch.arange(0, 16).reshape(2, 2, 2, 2).cuda().to(memory_format=torch.channels_last)
+x_list = [torch.zeros_like(x) for _ in range(world_size)]
+torch.distributed.all_gather(x_list, x)
+
+print('rank_{}: {}\n x:\n{}\n gathered_x:\n{}\n'.format(rank, torch.equal(x, x_list[rank]), x.storage(), x_list[rank].storage()))
+```
+The command is:
+`torchrun --nproc_per_node 2 test.py`
+The result is:
+```
+rank_1: False
+ x:
+ 0
+ 4
+ 1
+ 5
+ 2
+ 6
+ 3
+ 7
+ 8
+ 12
+ 9
+ 13
+ 10
+ 14
+ 11
+
+Original API Under Test: torch.distributed.all_gather
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.distributed.reduce_scatter
+Similarity score: 0.9998311996459961
+
+Similar API information:
+# Extracted call chain for torch.distributed.reduce_scatter
+
+# --- torch.cuda.nccl.reduce_scatter ---
+def reduce_scatter(
+    inputs: Sequence[torch.Tensor],
+    outputs: Sequence[torch.Tensor],
+    op: int = SUM,
+    streams=None,
+    comms=None,
+) -> None:
+    _check_sequence_type(inputs)
+    _check_sequence_type(outputs)
+    torch._C._nccl_reduce_scatter(inputs, outputs, op, streams, comms)
+
+# --- torch.cuda.nccl._check_sequence_type ---
+def _check_sequence_type(inputs: Union[torch.Tensor, Sequence[torch.Tensor]]) -> None:
+    if not isinstance(inputs, collections.abc.Container) or isinstance(
+        inputs, torch.Tensor
+    ):
+        raise TypeError("Inputs should be a collection of tensors")
+
+# --- torch.jit.isinstance ---
+def isinstance(obj, target_type):
+    """
+    Provide container type refinement in TorchScript.
+
+    It can refine parameterized containers of the List, Dict, Tuple, and Optional types. E.g. ``List[str]``,
+    ``Dict[str, List[torch.Tensor]]``, ``Optional[Tuple[int,str,int]]``. It can also
+    refine basic types such as bools and ints that are available in TorchScript.
+
+Original Test Case:
+import torch
+
+torch.distributed.init_process_group(backend='nccl')
+rank = torch.distributed.get_rank()
+world_size = torch.distributed.get_world_size()
+torch.cuda.set_device(rank)
+
+x = torch.arange(0, 16).reshape(2, 2, 2, 2).cuda().to(memory_format=torch.channels_last)
+x_list = [torch.zeros_like(x) for _ in range(world_size)]
+torch.distributed.all_gather(x_list, x)
+
+print('rank_{}: {}\n x:\n{}\n gathered_x:\n{}\n'.format(rank, torch.equal(x, x_list[rank]), x.storage(), x_list[rank].storage()))
+
+The API torch.distributed.reduce_scatter is identified as same-library similar to the original PyTorch API torch.distributed.all_gather.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

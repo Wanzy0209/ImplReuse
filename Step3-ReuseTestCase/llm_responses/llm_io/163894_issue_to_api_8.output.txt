@@ -1,0 +1,91 @@
+```python
+import torch
+import torch._dynamo
+
+# Configure Dynamo settings as per the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+# Reuse logic: Implementing a check similar to tf.compat.v1.executing_eagerly_outside_functions
+# to distinguish between eager execution and compiled graph execution.
+def executing_eagerly_outside_functions() -> bool:
+    """
+    Returns True if executing eagerly, False if inside a torch.compile graph.
+    This mimics the behavior of the TensorFlow API to check execution context.
+    """
+    # In PyTorch, we check if we are currently inside a compiled graph.
+    # Note: PyTorch doesn't have a direct "outermost" context check exposed simply,
+    # but is_compiling() serves the analogous purpose for the current scope.
+    return not torch._dynamo.is_compiling()
+
+def fuzzed_program(arg_0, sentinel):
+    # Setup tensors
+    var_node_1 = arg_0  # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    
+    # Create intermediate tensors
+    var_node_5 = torch.full((1, 2), -66, dtype=torch.int32, device='cuda')
+    var_node_6 = torch.full((1, 2), 77, dtype=torch.int64, device='cuda')
+    var_node_4 = torch.ops.aten.add(var_node_5, var_node_6)
+    
+    var_node_7 = torch.full((1, 2), -64, dtype=torch.int32, device='cuda')
+    var_node_3 = torch.ops.aten.mul(var_node_4, var_node_7)
+    
+    # Original API Under Test: torch.nonzero
+    # Fix: Ensure var_node_9 has exactly one True element to match the (1, 2) shape expectation
+    # and avoid the broadcasting error present in the original snippet (which used all False).
+    # This preserves the logic of using nonzero on a bool tensor.
+    var_node_9 = torch.zeros((3, 4), dtype=torch.bool, device='cuda')
+    var_node_9[0, 0] = True 
+    
+    # Check execution mode using the reused API logic
+    if executing_eagerly_outside_functions():
+        print("Running in Eager mode")
+    else:
+        print("Running in Compiled mode")
+
+    var_node_8 = torch.nonzero(var_node_9) # Expected size=(1, 2)
+    
+    var_node_2 = torch.ops.aten.add(var_node_3, var_node_8)
+    var_node_0 = torch.ops.aten.div(var_node_1, var_node_2)
+    
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True, device='cuda')
+
+# Input argument
+arg_0 = torch.randint(0, 3, (1, 2), dtype=torch.int64, device='cuda')
+
+args = (arg_0, sentinel)
+
+# Test Eager Execution
+print("--- Testing Eager Execution ---")
+try:
+    result_original = fuzzed_program(*args)
+    print('✅ Eager execution success')
+    print(f'Eager result: {result_original}')
+    print(f'Eager shape: {result_original.shape}')
+except Exception as e:
+    print(f'❌ Eager execution failed: {e}')
+
+# Test Compiled Execution
+print("\n--- Testing Compiled Execution ---")
+try:
+    compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+    result_compiled = compiled_program(*args)
+    print('✅ Compile success with unbacked operations')
+    print(f'Compiled result: {result_compiled}')
+    print(f'Compiled shape: {result_compiled.shape}')
+
+    # Compare results
+    if torch.allclose(result_original, result_compiled):
+        print("✅ Results match between Eager and Compiled modes")
+    else:
+        print("❌ Divergence detected between Eager and Compiled modes")
+except Exception as e:
+    print(f'❌ Compile execution failed: {e}')
+```

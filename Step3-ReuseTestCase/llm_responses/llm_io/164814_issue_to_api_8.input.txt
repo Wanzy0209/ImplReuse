@@ -1,0 +1,118 @@
+Issue ID: 164814
+Title: [Fuzzer][Eager/Compile Divergence] dimensionality of sizes (0) must match dimensionality of strides (1)
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1000560)
+
+def fuzzed_program(sentinel):
+    var_node_3 = torch.full((2, 3), 3, dtype=torch.int32) # size=(2, 3), stride=(3, 1), dtype=int32, device=cuda
+    _inp_unique_wide = torch.arange(1, device=var_node_3.device, dtype=torch.int64)
+    _uniq_wide = torch.unique(_inp_unique_wide)
+    var_node_2 = _uniq_wide.to(var_node_3.dtype) # size=(1,), stride=(1,), dtype=int32, device=cuda
+    var_node_1 = torch.reshape(var_node_2, [1]) # size=(1,), stride=(1,), dtype=int32, device=cuda
+    var_node_0 = torch.squeeze(var_node_1) # size=(), stride=(), dtype=int32, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+
+args = () + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+```
+
+```
+   ✅ eager success
+...
+
+Original API Under Test: as_strided
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.library.wrap_triton
+Similarity score: 0.9936237335205078
+
+Similar API information:
+# Extracted call chain for torch.library.wrap_triton
+
+# --- torch._library.triton.wrap_triton ---
+def wrap_triton(triton_kernel: Callable, /) -> Any:
+    """Allows capture of a triton kernel into a graph via make_fx or
+    non-strict ``torch.export``.
+
+    These technologies perform Dispatcher-based tracing (via
+    ``__torch_dispatch__``) and cannot see calls to raw triton kernels.
+    The ``wrap_triton`` API wraps a triton kernel into a callable that
+    can actually be traced into a graph.
+
+    Please use this API together with :func:`torch.library.triton_op`.
+
+    Examples:
+
+        >>> # xdoctest: +SKIP
+        >>> import torch
+        >>> import triton
+        >>> from triton import language as tl
+        >>> from torch.fx.experimental.proxy_tensor import make_fx
+        >>> from torch.library import wrap_triton
+        >>>
+        >>> @triton.jit
+        >>> def add_kernel(
+        >>>     in_ptr0,
+        >>>     in_ptr1,
+        >>>     out_ptr,
+        >>>     n_elements,
+        >>>     BLOCK_SIZE: "tl.constexpr",
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1000560)
+
+def fuzzed_program(sentinel):
+    var_node_3 = torch.full((2, 3), 3, dtype=torch.int32) # size=(2, 3), stride=(3, 1), dtype=int32, device=cuda
+    _inp_unique_wide = torch.arange(1, device=var_node_3.device, dtype=torch.int64)
+    _uniq_wide = torch.unique(_inp_unique_wide)
+    var_node_2 = _uniq_wide.to(var_node_3.dtype) # size=(1,), stride=(1,), dtype=int32, device=cuda
+    var_node_1 = torch.reshape(var_node_2, [1]) # size=(1,), stride=(1,), dtype=int32, device=cuda
+    var_node_0 = torch.squeeze(var_node_1) # size=(), stride=(), dtype=int32, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+
+args = () + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

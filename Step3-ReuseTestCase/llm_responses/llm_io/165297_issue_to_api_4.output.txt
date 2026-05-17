@@ -1,0 +1,74 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_maxpool_nan_keras():
+    """
+    Test case adapted from PyTorch Issue 165297.
+    Verifies MaxPooling2D behavior with bfloat16 and NHWC (channels_last) on CUDA.
+    Leverages tf.keras.callbacks.LambdaCallback to inspect outputs for NaNs.
+    """
+    # Check for CUDA device
+    if not tf.config.list_physical_devices('GPU'):
+        print("Skipping test: CUDA device not found.")
+        return
+
+    # Dimensions: PyTorch (N, C, H, W) -> Keras (N, H, W, C)
+    # Original: N, C, H, W = 84, 64, 512, 960
+    N, H, W, C = 84, 512, 960, 64
+
+    # Create input tensor
+    # Using bfloat16 as in the bug report
+    x = np.random.randn(N, H, W, C).astype(np.float32)
+    x = tf.cast(x, tf.bfloat16)
+
+    # Dummy labels for fitting
+    y = np.random.randn(N, H // 2, W // 2, C).astype(np.float32)
+
+    # Define Model with MaxPooling2D
+    # PyTorch: kernel_size=3, stride=2, padding=1
+    # Keras: pool_size=3, strides=2, padding='same' (equivalent spatial behavior)
+    # Keras defaults to channels_last (NHWC), matching the bug report's condition.
+    model = tf.keras.Sequential([
+        tf.keras.layers.InputLayer(input_shape=(H, W, C), dtype=tf.bfloat16),
+        tf.keras.layers.MaxPooling2D(pool_size=3, strides=2, padding='same')
+    ])
+
+    # Custom metric to detect NaNs in the output tensor
+    # This allows us to pass the NaN status to the LambdaCallback
+    def check_for_nans(y_true, y_pred):
+        return tf.reduce_any(tf.math.is_nan(y_pred))
+
+    model.compile(optimizer='adam', loss='mse', metrics=[check_for_nans])
+
+    # State to track NaNs
+    nan_found = [False]
+
+    # Use LambdaCallback (Similar API) to inspect the batch logs
+    # This mirrors the print statements and checks in the original PyTorch code
+    def on_batch_end(batch, logs):
+        has_nan = logs.get('check_for_nans', False)
+        if has_nan:
+            nan_found[0] = True
+            print(f"Batch {batch}: Detected NaNs in MaxPool output!")
+        
+        # Mimic original output stats
+        if batch == 0:
+            print(f"Input shape: {x.shape}")
+            print(f"Batch {batch} loss: {logs.get('loss')}")
+
+    callback = tf.keras.callbacks.LambdaCallback(on_batch_end=on_batch_end)
+
+    # Run a single step to trigger the operation
+    print("Running MaxPool2d with bfloat16 on CUDA (NHWC)...")
+    model.fit(x, y, batch_size=1, epochs=1, callbacks=[callback], verbose=0)
+
+    # Assertion
+    if nan_found[0]:
+        raise AssertionError("Detected NaNs in MaxPool output!")
+    else:
+        print("Test passed: No NaNs detected.")
+
+if __name__ == "__main__":
+    test_maxpool_nan_keras()
+```

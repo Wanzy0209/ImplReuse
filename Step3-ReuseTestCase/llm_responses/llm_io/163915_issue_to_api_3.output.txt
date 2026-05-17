@@ -1,0 +1,56 @@
+```python
+import torch
+import triton
+import triton.language as tl
+import torch.symm_mem._nvshmem_triton as nvshmem
+
+def test_nvshmem_triton_kernel_naming():
+    """
+    Test case for Issue 163915: nvshmem triton kernels IMA silently.
+    
+    This test verifies the behavior of nvshmem.enable_triton() with respect to 
+    kernel naming conventions. It mirrors the pattern of checking execution 
+    context/state seen in tf.executing_eagerly by comparing the behavior of 
+    two different kernel definitions (one compliant with the naming convention, 
+    one not).
+    """
+    # Enable NVSHMEM for Triton kernels
+    nvshmem.enable_triton()
+
+    # Setup dummy data
+    x = torch.empty(128, device='cuda')
+
+    # Case 1: Kernel without "nvshmem" in the name.
+    # According to the bug report, this kernel misses NVSHMEM init 
+    # and silently hits CUDA IMA (Invalid Memory Access).
+    @triton.jit
+    def generic_kernel(ptr, BLOCK_SIZE: tl.constexpr):
+        # Placeholder for nvshmem.get(...) call mentioned in the bug
+        pass
+
+    # Case 2: Kernel with "nvshmem" in the name.
+    # This is the workaround that ensures NVSHMEM init is applied.
+    @triton.jit
+    def specific_nvshmem_kernel(ptr, BLOCK_SIZE: tl.constexpr):
+        # Placeholder for nvshmem.get(...) call
+        pass
+
+    # Execute the generic kernel (Bug Scenario)
+    # Note: In a real environment with the bug present, this might cause a silent crash.
+    # The test structure here is to demonstrate the reproduction logic.
+    try:
+        generic_kernel[(1,)](x, BLOCK_SIZE=128)
+        print("generic_kernel executed successfully.")
+    except RuntimeError as e:
+        print(f"generic_kernel failed: {e}")
+
+    # Execute the specific kernel (Workaround Scenario)
+    try:
+        specific_nvshmem_kernel[(1,)](x, BLOCK_SIZE=128)
+        print("specific_nvshmem_kernel executed successfully.")
+    except RuntimeError as e:
+        print(f"specific_nvshmem_kernel failed: {e}")
+
+if __name__ == "__main__":
+    test_nvshmem_triton_kernel_naming()
+```

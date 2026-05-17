@@ -1,0 +1,47 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_broadcast_object_list(rank, world_size):
+    setup(rank, world_size)
+
+    # Create a list of objects to broadcast
+    # Rank 0 has the data, others have empty lists
+    if rank == 0:
+        object_list = [1, "test", {"key": "value"}]
+    else:
+        object_list = [None, None, None]
+
+    # First broadcast
+    dist.broadcast_object_list(object_list, src=0)
+    
+    # Verify the first broadcast
+    assert object_list == [1, "test", {"key": "value"}], f"Rank {rank} data mismatch after first broadcast"
+
+    # Second broadcast (Simulating the duplicate execution scenario from the bug report)
+    # This ensures that calling the API twice in succession does not cause corruption or errors
+    dist.broadcast_object_list(object_list, src=0)
+
+    # Verify the second broadcast
+    assert object_list == [1, "test", {"key": "value"}], f"Rank {rank} data mismatch after second broadcast"
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_broadcast_object_list,
+             args=(world_size,),
+             nprocs=world_size,
+             join=True)
+```

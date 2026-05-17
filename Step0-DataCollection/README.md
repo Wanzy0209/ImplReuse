@@ -147,6 +147,30 @@ python 5-test-case-generator.py --input-dir data/pytorch_llm_processed_data --ou
 
 ---
 
+### 6️⃣ 第六步：PR 代码链接 (`6-pr-code-linker.py`)
+**功能**：将 issue 与对应的 PR（Pull Request）代码变更进行关联，提取修复代码
+
+**输入**：
+- GitHub 仓库 URL
+- Issue ID 列表或已处理的 JSON 文件
+
+**输出**：
+- `data/{framework}_pr_data/` 文件夹中存储关联后的 JSON 文件
+- 包含 PR 信息、代码变更、修复前后对比
+
+**处理逻辑**：
+- 通过 GitHub API 查询 issue 关联的 PR
+- 提取 PR 中的代码变更
+- 分析修复前后的代码差异
+- 生成修复代码与测试用例的关联
+
+**运行示例**：
+```bash
+python 6-pr-code-linker.py --input-dir data/pytorch_llm_processed_data --output-dir data/pytorch_pr_data --repo "pytorch/pytorch"
+```
+
+---
+
 ## 完整运行流程
 
 ```bash
@@ -164,6 +188,9 @@ python 4-llm-processor.py --prompt-dir data/pytorch_prompts --output-dir data/py
 
 # 5. 生成测试用例
 python 5-test-case-generator.py --input-dir data/pytorch_llm_processed_data --output-dir data/pytorch_test_case
+
+# 6. 关联 PR 代码（可选）
+python 6-pr-code-linker.py --input-dir data/pytorch_llm_processed_data --output-dir data/pytorch_pr_data --repo "pytorch/pytorch"
 ```
 
 ---
@@ -202,23 +229,25 @@ python 5-test-case-generator.py --input-dir data/pytorch_llm_processed_data --ou
 ## 文件夹结构
 
 ```
-Step1-DataCollection/
+Step0-DataCollection/
 ├── 1-issue-crawler.py           # 爬虫脚本
 ├── 2-file-processor.py          # 提取器
 ├── 3-prompt-generator.py        # Prompt 生成
 ├── 4-llm-processor.py           # LLM 处理
 ├── 4-fix-parse-errors.py        # 错误修复
 ├── 5-test-case-generator.py     # 测试用例生成
+├── 6-pr-code-linker.py          # PR 代码关联
 ├── data/
 │   ├── pytorch_issue/           # HTML 原始数据
 │   ├── pytorch_processed_data/  # 处理后的 JSON
 │   ├── pytorch_prompts/         # LLM Prompt
 │   ├── pytorch_llm_processed_data/  # LLM 输出
-│   └── pytorch_test_case/       # 最终测试用例
-│       ├── executable/
-│       ├── non_executable/
-│       ├── non_code/
-│       └── empty/
+│   ├── pytorch_test_case/       # 最终测试用例
+│   │   ├── executable/
+│   │   ├── non_executable/
+│   │   ├── non_code/
+│   │   └── empty/
+│   └── pytorch_pr_data/         # PR 关联数据
 └── README.md
 ```
 

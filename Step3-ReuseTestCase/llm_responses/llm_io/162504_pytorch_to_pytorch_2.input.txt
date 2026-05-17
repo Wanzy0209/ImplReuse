@@ -1,0 +1,119 @@
+Issue ID: 162504
+Title: torch.utils.checkpoint.checkpoint does not work under stream capture to a cuda graph
+Bug Description:
+### 🐛 Describe the bug
+
+The following does not work today:
+
+```python
+import torch
+
+torch.cuda.manual_seed(42)
+
+def fn(x):
+    return x * torch.sigmoid(torch.randn(1, device="cuda"))
+
+# initialize device state
+fn(torch.ones(1, device="cuda"))
+
+torch.cuda.manual_seed(42)
+eager_in = torch.ones(1, device="cuda", requires_grad=True)
+eager_out = torch.utils.checkpoint.checkpoint(
+    fn, eager_in,
+    use_reentrant=False,
+    preserve_rng_state=True,
+)
+eager_in_grad,  = torch.autograd.grad(eager_out, eager_in)
+
+g = torch.cuda.CUDAGraph()
+with torch.cuda.graph(g):
+    graph_in = torch.ones(1, device="cuda", requires_grad=True)
+    graph_out = torch.utils.checkpoint.checkpoint(
+        fn, graph_in,
+        use_reentrant=False,
+        preserve_rng_state=True,
+    )
+    graph_in_grad,  = torch.autograd.grad(graph_out, graph_in)
+
+torch.cuda.manual_seed(42)
+g.replay()
+assert torch.allclose(eager_in_grad, graph_in_grad, rtol=0.0, atol=0.0), "Mismatch in gradient outputs"
+print(eager_in_grad)
+print(graph_in_grad)
+```
+
+Original API Under Test: torch.utils.checkpoint.checkpoint
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.utils.prune.global_unstructured
+Similarity score: 0.995094358921051
+
+Similar API information:
+# Extracted call chain for torch.nn.utils.prune.global_unstructured
+
+# --- torch.nn.utils.prune.global_unstructured ---
+def global_unstructured(parameters, pruning_method, importance_scores=None, **kwargs):
+    r"""
+    Globally prunes tensors corresponding to all parameters in ``parameters`` by applying the specified ``pruning_method``.
+
+    Modifies modules in place by:
+
+    1) adding a named buffer called ``name+'_mask'`` corresponding to the
+       binary mask applied to the parameter ``name`` by the pruning method.
+    2) replacing the parameter ``name`` by its pruned version, while the
+       original (unpruned) parameter is stored in a new parameter named
+       ``name+'_orig'``.
+
+    Args:
+        parameters (Iterable of (module, name) tuples): parameters of
+            the model to prune in a global fashion, i.e. by aggregating all
+            weights prior to deciding which ones to prune. module must be of
+            type :class:`nn.Module`, and name must be a string.
+        pruning_method (function): a valid pruning function from this module,
+            or a custom one implemented by the user that satisfies the
+            implementation guidelines and has ``PRUNING_T
+...
+
+Original Test Case:
+import torch
+
+torch.cuda.manual_seed(42)
+
+def fn(x):
+    return x * torch.sigmoid(torch.randn(1, device="cuda"))
+
+# initialize device state
+fn(torch.ones(1, device="cuda"))
+
+torch.cuda.manual_seed(42)
+eager_in = torch.ones(1, device="cuda", requires_grad=True)
+eager_out = torch.utils.checkpoint.checkpoint(
+    fn, eager_in,
+    use_reentrant=False,
+    preserve_rng_state=True,
+)
+eager_in_grad,  = torch.autograd.grad(eager_out, eager_in)
+
+g = torch.cuda.CUDAGraph()
+with torch.cuda.graph(g):
+    graph_in = torch.ones(1, device="cuda", requires_grad=True)
+    graph_out = torch.utils.checkpoint.checkpoint(
+        fn, graph_in,
+        use_reentrant=False,
+        preserve_rng_state=True,
+    )
+    graph_in_grad,  = torch.autograd.grad(graph_out, graph_in)
+
+torch.cuda.manual_seed(42)
+g.replay()
+assert torch.allclose(eager_in_grad, graph_in_grad, rtol=0.0, atol=0.0), "Mismatch in gradient outputs"
+print(eager_in_grad)
+print(graph_in_grad)
+
+The API torch.nn.utils.prune.global_unstructured is identified as same-library similar to the original PyTorch API torch.utils.checkpoint.checkpoint.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

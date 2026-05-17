@@ -1,0 +1,104 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_issue_165081_tf_linear():
+    """
+    Test case based on Issue 165081 (PyTorch Dynamo divergence).
+    This test translates the reproduction logic to TensorFlow, leveraging
+    tf.keras.activations.linear (the similar API) to handle input pass-throughs.
+    
+    The original issue involved a complex graph of matrix multiplications causing
+    a guard failure ("Could not guard on data-dependent expression Ne(u0, 9)")
+    during compilation. This test verifies that the TensorFlow equivalent
+    (using tf.function) handles the similar graph structure correctly without
+    divergence between eager and compiled execution.
+    """
+    
+    # Set seed for reproducibility
+    tf.random.set_seed(52676)
+    np.random.seed(52676)
+
+    # Initialize inputs matching the PyTorch fuzzer dimensions and dtype (float64)
+    # arg_0: size=(9, 9, 9)
+    arg_0 = tf.random.normal((9, 9, 9), dtype=tf.float64)
+    # arg_1: size=(9, 9, 11)
+    arg_1 = tf.random.normal((9, 9, 11), dtype=tf.float64)
+    # arg_2: size=(9, 12, 8)
+    arg_2 = tf.random.normal((9, 12, 8), dtype=tf.float64)
+    # arg_3: size=(9, 8, 13)
+    arg_3 = tf.random.normal((9, 8, 13), dtype=tf.float64)
+    # arg_4: size=(9, 13, 7)
+    arg_4 = tf.random.normal((9, 13, 7), dtype=tf.float64)
+    # arg_5: size=(9, 7, 16)
+    arg_5 = tf.random.normal((9, 7, 16), dtype=tf.float64)
+    # arg_6: size=(9, 16, 12)
+    arg_6 = tf.random.normal((9, 16, 12), dtype=tf.float64)
+    # arg_7: size=(9, 12, 11)
+    arg_7 = tf.random.normal((9, 12, 11), dtype=tf.float64)
+
+    # Define the computation graph
+    def fuzzed_program_tf(a0, a1, a2, a3, a4, a5, a6, a7):
+        # Leverage the similar API: tf.keras.activations.linear
+        # This acts as the pass-through logic seen in the original fuzzer program
+        # (e.g., var_node_6 = arg_0).
+        var_node_6 = tf.keras.activations.linear(a0)
+        var_node_7 = tf.keras.activations.linear(a1)
+        var_node_10 = tf.keras.activations.linear(a2)
+        var_node_13 = tf.keras.activations.linear(a3)
+        var_node_14 = tf.keras.activations.linear(a4)
+        var_node_15 = tf.keras.activations.linear(a5)
+        var_node_17 = tf.keras.activations.linear(a6)
+        var_node_18 = tf.keras.activations.linear(a7)
+
+        # Reproduce the matmul chain from the original issue
+        # var_node_5 = torch.matmul(var_node_6, var_node_7)
+        var_node_5 = tf.matmul(var_node_6, var_node_7)
+
+        # var_node_9 = torch.full((9, 11, 12), 1.5758497316910556, dtype=torch.float64)
+        var_node_9 = tf.fill((9, 11, 12), 1.5758497316910556)
+        var_node_9 = tf.cast(var_node_9, tf.float64)
+
+        # var_node_8 = torch.matmul(var_node_9, var_node_10)
+        var_node_8 = tf.matmul(var_node_9, var_node_10)
+
+        # var_node_4 = torch.matmul(var_node_5, var_node_8)
+        var_node_4 = tf.matmul(var_node_5, var_node_8)
+
+        # var_node_12 = torch.matmul(var_node_13, var_node_14)
+        var_node_12 = tf.matmul(var_node_13, var_node_14)
+
+        # var_node_11 = torch.matmul(var_node_12, var_node_15)
+        var_node_11 = tf.matmul(var_node_12, var_node_15)
+
+        # var_node_3 = torch.matmul(var_node_4, var_node_11)
+        var_node_3 = tf.matmul(var_node_4, var_node_11)
+
+        # var_node_16 = torch.matmul(var_node_17, var_node_18)
+        var_node_16 = tf.matmul(var_node_17, var_node_18)
+
+        # var_node_2 = torch.matmul(var_node_3, var_node_16)
+        var_node_2 = tf.matmul(var_node_3, var_node_16)
+
+        return var_node_2
+
+    # 1. Run in Eager mode
+    eager_result = fuzzed_program_tf(arg_0, arg_1, arg_2, arg_3, arg_4, arg_5, arg_6, arg_7)
+
+    # 2. Run in Compiled mode (tf.function is analogous to torch._dynamo)
+    compiled_func = tf.function(fuzzed_program_tf)
+    compiled_result = compiled_func(arg_0, arg_1, arg_2, arg_3, arg_4, arg_5, arg_6, arg_7)
+
+    # 3. Check for divergence
+    # The original issue reported a divergence or error. We assert equality here.
+    diff = np.abs(eager_result.numpy() - compiled_result.numpy())
+    max_diff = np.max(diff)
+    
+    # Allow for small floating point errors
+    assert max_diff < 1e-5, f"Divergence detected! Max diff: {max_diff}"
+
+    print("Test Passed: No divergence between eager and compiled execution.")
+
+if __name__ == "__main__":
+    test_issue_165081_tf_linear()
+```

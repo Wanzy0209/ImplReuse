@@ -1,0 +1,83 @@
+```python
+import torch
+import torch.nn as nn
+import onnx
+import onnxruntime as ort
+import numpy as np
+import tempfile
+import os
+
+# Define the model from the bug report
+class Model(nn.Module):
+    def __init__(self, kernel_size=3, upscale_factor=2):
+        super(Model, self).__init__()
+        self.conv = nn.Conv2d(1, 4, kernel_size=kernel_size, padding="same")
+        self.pixel_shuffle = nn.PixelShuffle(upscale_factor)
+
+    def forward(self, input):
+        x = self.conv(input)
+        x = self.pixel_shuffle(x)
+        return x
+
+def test_pixel_shuffle_dynamo_export():
+    """
+    Test case to verify that torch.onnx.export with dynamo=True
+    produces a functionally correct ONNX model for PixelShuffle.
+    
+    This test mirrors the semantic focus on tensor manipulation (reshaping/axis logic)
+    found in similar APIs like tf.keras.ops.categorical_crossentropy, ensuring
+    that the dimensional transformations are handled correctly during export.
+    """
+    # Setup
+    model = Model()
+    model.eval()
+    
+    # Input tensor (Batch, Channel, Height, Width)
+    # PixelShuffle(2) will transform (1, 4, 128, 128) -> (1, 1, 256, 256)
+    x = torch.randn(1, 1, 128, 128)
+    
+    # 1. PyTorch Inference
+    with torch.no_grad():
+        torch_output = model(x)
+    
+    # Expected shape check (analogous to axis checks in loss functions)
+    expected_shape = (1, 1, 256, 256)
+    assert torch_output.shape == expected_shape, \
+        f"PyTorch output shape mismatch. Expected {expected_shape}, got {torch_output.shape}"
+
+    # 2. Export to ONNX using Dynamo
+    with tempfile.TemporaryDirectory() as tmpdir:
+        onnx_path = os.path.join(tmpdir, "dynamo.onnx")
+        
+        torch.onnx.export(
+            model,
+            x,
+            onnx_path,
+            dynamo=True,
+            opset_version=20,
+            input_names=["input"],
+            output_names=["output"],
+        )
+
+        # 3. Verify ONNX Model Structure
+        onnx_model = onnx.load(onnx_path)
+        onnx.checker.check_model(onnx_model)
+
+        # 4. ONNX Runtime Inference
+        ort_session = ort.InferenceSession(onnx_path)
+        ort_inputs = {ort_session.get_inputs()[0].name: x.numpy()}
+        ort_outputs = ort_session.run(None, ort_inputs)
+
+        # 5. Compare Outputs
+        np.testing.assert_allclose(
+            torch_output.numpy(), 
+            ort_outputs[0], 
+            rtol=1e-3, 
+            atol=1e-5,
+            err_msg="ONNX output does not match PyTorch output"
+        )
+
+if __name__ == "__main__":
+    test_pixel_shuffle_dynamo_export()
+    print("Test passed.")
+```

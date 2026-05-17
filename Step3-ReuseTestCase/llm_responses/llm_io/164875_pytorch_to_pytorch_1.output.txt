@@ -1,0 +1,48 @@
+```python
+import torch
+
+# Configuration from the bug report to trigger the specific behavior
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1014698)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0
+    var_node_3 = torch.full((), True, dtype=torch.bool)
+    _x_nz = torch.zeros((), dtype=torch.bool, device=var_node_3.device)
+    _x_nz_flat = _x_nz.reshape(-1)
+    _x_nz_flat[:20] = True
+    var_node_2 = torch.nonzero(_x_nz)
+    
+    # Replaced torch.add with torch.mul
+    var_node_0 = torch.mul(var_node_1, var_node_2)
+    
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(5, 30, (20,)).to(torch.int64), (20, 0), (1, 20))
+
+args = (arg_0,) + (sentinel,)
+
+# Test Eager execution
+try:
+    result_original = fuzzed_program(*args)
+    print('✅ eager success')
+except Exception as e:
+    print(f'❌ eager failed: {e}')
+
+# Test Compiled execution
+try:
+    compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+    result_compiled = compiled_program(*args)
+    print('✅ compile success')
+except Exception as e:
+    print(f'❌ compile failed: {e}')
+```

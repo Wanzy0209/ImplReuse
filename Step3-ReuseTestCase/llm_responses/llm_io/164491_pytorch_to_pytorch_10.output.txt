@@ -1,0 +1,56 @@
+```python
+import torch
+
+def test_split_with_non_contiguous_input():
+    """
+    Adapted from Issue 164491: 
+    The original issue reports that _scaled_mm and _int_mm are slow or error 
+    when the rhs matrix is row-major (non-contiguous in specific dimensions).
+    
+    This test verifies that torch.split handles non-contiguous (transposed/row-major) 
+    tensors correctly without raising errors or producing incorrect results.
+    """
+    print(f"PyTorch version: {torch.__version__}")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Running test on device: {device}")
+
+    # Create a standard contiguous tensor (Column-major in math terms, but row-major storage in PyTorch)
+    # Shape: (20, 10)
+    x = torch.randn(20, 10, device=device)
+    
+    # Create a non-contiguous tensor by transposing.
+    # In the context of the bug, this represents the "row-major" case where strides are swapped.
+    # Shape: (10, 20)
+    x_non_contiguous = x.t()
+    
+    assert not x_non_contiguous.is_contiguous(), "Test setup failed: Tensor should be non-contiguous."
+
+    # Test Case 1: Split the non-contiguous tensor
+    # We split along dimension 0 (size 10) into chunks of size 5.
+    try:
+        result_chunks = torch.split(x_non_contiguous, 5, dim=0)
+    except Exception as e:
+        print(f"FAILED: torch.split raised an error on non-contiguous input: {e}")
+        raise
+
+    # Verify the number of chunks
+    assert len(result_chunks) == 2, f"Expected 2 chunks, got {len(result_chunks)}"
+
+    # Verify the shapes of the resulting chunks
+    # Original shape (10, 20) split on dim 0 with size 5 -> (5, 20) and (5, 20)
+    assert result_chunks[0].shape == (5, 20), f"Expected shape (5, 20), got {result_chunks[0].shape}"
+    assert result_chunks[1].shape == (5, 20), f"Expected shape (5, 20), got {result_chunks[1].shape}"
+
+    # Verify the values are correct by comparing against manual slicing
+    # This ensures no implicit transposition or data corruption occurred
+    expected_chunk_0 = x_non_contiguous[:5, :]
+    expected_chunk_1 = x_non_contiguous[5:, :]
+
+    assert torch.equal(result_chunks[0], expected_chunk_0), "Values in chunk 0 do not match expected."
+    assert torch.equal(result_chunks[1], expected_chunk_1), "Values in chunk 1 do not match expected."
+
+    print("Test passed: torch.split handles non-contiguous tensors correctly.")
+
+if __name__ == "__main__":
+    test_split_with_non_contiguous_input()
+```

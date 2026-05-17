@@ -1,0 +1,107 @@
+```python
+import tensorflow as tf
+import numpy as np
+import sys
+
+def foo(arg0, arg1, arg2, arg3, arg4):
+    # t0 = arg0 # size=(5, 4), dtype=bfloat16
+    # t1 = arg1 # size=(5, 1024), dtype=bfloat16
+    # t2 = arg2 # size=(1024, 4), dtype=bfloat16
+    
+    # Original: t3 = torch.addmm(t0, t1, t2)
+    # TensorFlow equivalent of addmm is matmul + add
+    # We apply the target API tf.keras.backend.stop_gradient here
+    # to test its behavior within the graph.
+    matmul_res = tf.matmul(arg1, arg2)
+    addmm_res = tf.add(arg0, matmul_res)
+    
+    # Applying the similar API: stop_gradient
+    t3 = tf.keras.backend.stop_gradient(addmm_res)
+    
+    # t4 = t3.norm()
+    t4 = tf.norm(t3)
+    
+    # t5 = arg3 # size=(3, 4, 5, 2), dtype=float32
+    # t6 = t5.var(dim=0)
+    t6 = tf.math.reduce_variance(t5, axis=0)
+    # t7 = t6.var()
+    t7 = tf.math.reduce_variance(t6)
+    
+    # t8 = arg4 # size=(), dtype=float32
+    # t9 = torch.nn.functional.relu(t8)
+    t9 = tf.nn.relu(t8)
+    
+    # t10 = t7 + t4 + t9
+    t10 = t7 + t4 + t9
+    
+    # t11 = torch.pow(torch.pow(t4, t7), t10)
+    t11 = tf.pow(tf.pow(t4, t7), t10)
+    
+    output = t11
+    return output
+
+# Setup inputs matching the original test case shapes and dtypes
+# Note: TensorFlow uses float32 by default, so we cast to bfloat16 where necessary
+arg0 = tf.cast(tf.random.uniform([5, 4]), tf.bfloat16)
+arg1 = tf.cast(tf.random.uniform([5, 1024]), tf.bfloat16)
+arg2 = tf.cast(tf.random.uniform([1024, 4]), tf.bfloat16)
+arg3 = tf.random.uniform([3, 4, 5, 2]) # float32
+arg4 = tf.random.uniform([]) # float32
+
+if __name__ == '__main__':
+    # Run Eager
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4)
+    print('Eager Success! ✅')
+
+    # Run Compiled (tf.function is the TF equivalent of torch.compile)
+    compiled_foo = tf.function(foo)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4)
+    print('Compile Success! ✅')
+
+    # Compare outputs (forward)
+    # Since stop_gradient is an identity op in the forward pass, 
+    # we expect the outputs to be identical.
+    diff = tf.abs(out_eager - out_compiled)
+    rel_diff = diff / (tf.abs(out_eager) + 1e-12) * 100
+    
+    print(f'Relative diff: {rel_diff.numpy():.6f}%')
+    
+    # Check for significant divergence
+    if rel_diff.numpy() > 1e-5: # Using a smaller threshold for TF/stop_gradient identity check
+        print(f'❌ Forward outputs differ significantly!')
+        print('out_eager:', out_eager.numpy())
+        print('out_compiled:', out_compiled.numpy())
+        sys.exit(1)
+    else:
+        print('✅ Forward outputs match.')
+        
+    # Verify Gradient behavior
+    # stop_gradient should block gradients to arg0, arg1, arg2
+    with tf.GradientTape() as tape_eager:
+        out_eager_grad = foo(arg0, arg1, arg2, arg3, arg4)
+    grads_eager = tape_eager.gradient(out_eager_grad, [arg0, arg1, arg2, arg3, arg4])
+    
+    with tf.GradientTape() as tape_compiled:
+        out_compiled_grad = compiled_foo(arg0, arg1, arg2, arg3, arg4)
+    grads_compiled = tape_compiled.gradient(out_compiled_grad, [arg0, arg1, arg2, arg3, arg4])
+
+    # Check that gradients for arg0, arg1, arg2 are None (stopped)
+    for i, (g_e, g_c) in enumerate(zip(grads_eager[:3], grads_compiled[:3])):
+        if g_e is not None or g_c is not None:
+            print(f'❌ Gradient for arg{i} should be None (stopped), but got eager={g_e}, compiled={g_c}')
+            sys.exit(1)
+            
+    print('✅ Gradients stopped correctly for arg0, arg1, arg2.')
+    
+    # Check that gradients for arg3, arg4 are consistent between eager and compiled
+    for i, (g_e, g_c) in enumerate(zip(grads_eager[3:], grads_compiled[3:])):
+        if g_e is None or g_c is None:
+             print(f'❌ Gradient for arg{i+3} is unexpectedly None')
+             sys.exit(1)
+        grad_diff = tf.reduce_max(tf.abs(g_e - g_c))
+        if grad_diff > 1e-5:
+            print(f'❌ Gradients for arg{i+3} differ between eager and compiled: {grad_diff}')
+            sys.exit(1)
+            
+    print('✅ Gradients match for arg3, arg4.')
+```

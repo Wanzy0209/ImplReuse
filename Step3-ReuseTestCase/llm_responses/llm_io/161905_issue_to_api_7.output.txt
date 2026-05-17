@@ -1,0 +1,83 @@
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision.models import resnet18
+import sys
+
+def test_torch_compile_mps_backward_with_step_tracking():
+    """
+    Test case to reproduce the MPS backward pass failure with torch.compile,
+    while integrating the semantic pattern of tf.compat.v1.train.global_step
+    (tracking the training iteration) into the PyTorch workflow.
+    """
+    # Check for MPS availability
+    if not torch.backends.mps.is_available():
+        print("MPS backend is not available. Skipping test.")
+        return
+
+    BATCH_SIZE = 4
+    NUM_CLASSES = 10
+    LEARNING_RATE = 0.01
+    device = 'mps'
+
+    # Setup Model
+    model = resnet18(num_classes=NUM_CLASSES)
+    model = model.to(device)
+    model.train()
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+
+    # Mimicking tf.compat.v1.train.global_step using a PyTorch tensor.
+    # In TensorFlow, global_step is often a variable that is incremented 
+    # during the training step. We use a tensor here to test state management
+    # alongside the backward pass within the compiled scope.
+    global_step = torch.tensor(0, dtype=torch.long, device=device)
+
+    @torch.compile
+    def train_step(images, labels, step_counter):
+        # Move data to device (as per original reproduction logic)
+        images = images.to(device)
+        labels = labels.to(device)
+        
+        optimizer.zero_grad()
+
+        # Forward pass
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+
+        # Backward pass
+        # This is where the bug occurs on MPS backend with torch.compile
+        loss.backward()
+        
+        # Optimizer step
+        optimizer.step()
+
+        # Increment global step (Translating tf.compat.v1.train.global_step semantics)
+        step_counter.add_(1)
+        
+        return loss, step_counter
+
+    # Generate dummy data
+    images = torch.randn(BATCH_SIZE, 3, 224, 224)
+    labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,))
+
+    try:
+        # Execute the compiled training step
+        loss, current_step = train_step(images, labels, global_step)
+
+        # Assertions to verify correct execution
+        assert torch.isfinite(loss), "Loss value is not finite (NaN or Inf)"
+        assert current_step.item() == 1, f"Global step did not increment correctly. Expected 1, got {current_step.item()}"
+        
+        print("Test Passed: torch.compile on MPS executed backward pass and step tracking successfully.")
+        
+    except RuntimeError as e:
+        print(f"Test Failed: RuntimeError encountered during backward pass on MPS.")
+        print(f"Error details: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_torch_compile_mps_backward_with_step_tracking()
+```

@@ -1,0 +1,50 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def inner(x):
+    # Helper function to modify data, similar to the original test case
+    return x + 1
+
+def run_test(rank, world_size):
+    # Setup for distributed communication
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    if rank == 0:
+        # Sender logic
+        x = torch.ones(3)
+        # Apply the inner function logic
+        x = inner(x)
+        
+        # Prepare the list of objects to send
+        object_list = [x, "test_string"]
+        
+        # Call the similar API: torch.distributed.send_object_list
+        dist.send_object_list(object_list, dst=1)
+        
+    elif rank == 1:
+        # Receiver logic
+        object_list = [None, None]
+        
+        # Receive the objects
+        dist.recv_object_list(object_list, src=0)
+        
+        # Assertions to verify the data received matches the expected transformation
+        assert torch.equal(object_list[0], torch.ones(3) + 1), "Tensor value mismatch"
+        assert object_list[1] == "test_string", "String value mismatch"
+        print("Test passed successfully on rank 1.")
+
+    # Clean up
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn processes to run the distributed test
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+```

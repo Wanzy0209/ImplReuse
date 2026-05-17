@@ -1,0 +1,60 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Set environment variables for the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Create a tensor specific to the rank
+    tensor = torch.ones(1) * rank
+
+    # Define a function using the similar API: torch.distributed.reduce
+    # This replaces the 'forward' function mentioned in the bug report.
+    def func_with_reduce(x):
+        # Perform a reduce operation
+        dist.reduce(x, dst=0)
+        return x
+
+    # Apply torch.compile (Original API Under Test)
+    # The bug report indicates that DebugMode (detect_anomaly) causes this to skip.
+    compiled_func = torch.compile(func_with_reduce)
+
+    # Enable DebugMode via torch.autograd.detect_anomaly
+    # This is the context that triggers the bug described in Issue 164143.
+    with torch.autograd.detect_anomaly():
+        try:
+            result = compiled_func(tensor)
+            
+            # Basic assertion to ensure the operation ran
+            # Note: The bug is about silent skipping, so we want to ensure
+            # the code path is exercised.
+            if rank == 0:
+                # Rank 0 should receive the sum of all ranks (0 + 1 = 1)
+                assert result.item() == 1, f"Expected 1, got {result.item()}"
+            else:
+                # Other ranks might have undefined values depending on backend, 
+                # but we check that it didn't crash.
+                pass
+        except Exception as e:
+            # Depending on the fix, this might raise an error instead of silently skipping.
+            print(f"Rank {rank} encountered error: {e}")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn processes for distributed testing
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+```

@@ -1,0 +1,47 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def run_test(rank, world_size):
+    """
+    Test case for torch.distributed.recv_object_list.
+    Adapted from the context of the torch.compile regression to verify
+    data handling capabilities of the similar API.
+    """
+    # Initialize the process group
+    dist.init_process_group(
+        backend="gloo", # Using gloo for CPU compatibility in this test
+        init_method=f"tcp://127.0.0.1:{29500}",
+        rank=rank,
+        world_size=world_size
+    )
+
+    if rank == 0:
+        # Sender: Create a list of tensors to simulate the data workload
+        # Original bug involved mxfp8 quantization, here we use standard tensors
+        # to verify the transport mechanism of recv_object_list.
+        tensor_list = [torch.randn(16384, 16384) for _ in range(2)]
+        dist.send_object_list(tensor_list, dst=1)
+    elif rank == 1:
+        # Receiver: This is the API under test
+        recv_list = [None] * 2
+        
+        # Call the similar API
+        dist.recv_object_list(recv_list, src=0)
+
+        # Assertions to verify correctness and catch regressions
+        assert len(recv_list) == 2, "Received list length mismatch"
+        for t in recv_list:
+            assert isinstance(t, torch.Tensor), "Received object is not a Tensor"
+            assert t.shape == (16384, 16384), f"Received tensor shape mismatch: {t.shape}"
+        
+        print(f"Rank {rank}: Test passed. Successfully received object list.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+```

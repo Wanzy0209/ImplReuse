@@ -1,0 +1,126 @@
+Issue ID: 164300
+Title: [dynamo][sac] functools partial'ed context_fn is not supported
+Bug Description:
+### 🐛 Describe the bug
+
+Thanks to @soulitzer for the repro
+
+```
+import torch
+import functools
+from torch.utils.checkpoint import CheckpointPolicy
+
+class CustomPolicy:
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, ctx, out, func, *args, **kwargs):
+        return CheckpointPolicy.MUST_SAVE
+
+from torch.utils.checkpoint import (
+    CheckpointPolicy,
+    create_selective_checkpoint_contexts,
+)
+
+def f(x, y):
+    return torch.sigmoid(torch.matmul(torch.matmul(x, y), y)) * y
+
+context_fn1 = functools.partial(create_selective_checkpoint_contexts, CustomPolicy())
+
+def context_fn2():
+    return create_selective_checkpoint_contexts(CustomPolicy())
+
+@torch.compile(backend="aot_eager_decomp_partition", fullgraph=True)
+def g(x, y):
+    return torch.utils.checkpoint.checkpoint(
+        f, x, y,
+        use_reentrant=False,
+        context_fn=context_fn1,
+    )
+
+a = torch.randn(4, 4, requires_grad=True, device="cpu")
+b = torch.randn(4, 4, requires_grad=True, device="cpu")
+g(a, b).sum().backward()
+
+Original API Under Test: torch.utils.checkpoint.checkpoint
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.distributed.new_group
+Similarity score: 0.9941294193267822
+
+Similar API information:
+# Extracted call chain for torch.distributed.new_group
+
+# --- torch.distributed.distributed_c10d.new_group ---
+def new_group(
+    ranks=None,
+    timeout=None,
+    backend=None,
+    pg_options=None,
+    use_local_synchronization=False,
+    group_desc=None,
+    device_id: Optional[torch.device] = None,
+):
+    """
+    Create a new distributed group.
+
+    This function requires that all processes in the main group (i.e. all
+    processes that are part of the distributed job) enter this function, even
+    if they are not going to be members of the group. Additionally, groups
+    should be created in the same order in all processes.
+
+    .. warning::
+        Safe concurrent usage:
+        When using multiple process groups with the ``NCCL`` backend, the user
+        must ensure a globally consistent execution order of collectives across
+        ranks.
+
+        If multiple threads within a process issue collectives, explicit
+        synchronization is necessary to ensure consistent ordering.
+
+        When using async variants of torch.distributed communication APIs,
+
+Original Test Case:
+import torch
+import functools
+from torch.utils.checkpoint import CheckpointPolicy
+
+class CustomPolicy:
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, ctx, out, func, *args, **kwargs):
+        return CheckpointPolicy.MUST_SAVE
+
+from torch.utils.checkpoint import (
+    CheckpointPolicy,
+    create_selective_checkpoint_contexts,
+)
+
+def f(x, y):
+    return torch.sigmoid(torch.matmul(torch.matmul(x, y), y)) * y
+
+context_fn1 = functools.partial(create_selective_checkpoint_contexts, CustomPolicy())
+
+def context_fn2():
+    return create_selective_checkpoint_contexts(CustomPolicy())
+
+@torch.compile(backend="aot_eager_decomp_partition", fullgraph=True)
+def g(x, y):
+    return torch.utils.checkpoint.checkpoint(
+        f, x, y,
+        use_reentrant=False,
+        context_fn=context_fn1,
+    )
+
+a = torch.randn(4, 4, requires_grad=True, device="cpu")
+b = torch.randn(4, 4, requires_grad=True, device="cpu")
+g(a, b).sum().backward()
+
+The API torch.distributed.new_group is identified as same-library similar to the original PyTorch API torch.utils.checkpoint.checkpoint.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

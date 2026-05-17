@@ -1,0 +1,66 @@
+```python
+import torch
+import torch.distributed as dist
+import tempfile
+import os
+import sys
+
+def test_compile_broadcast_with_floats():
+    """
+    Test case to verify that torch.distributed.broadcast_object_list
+    handles float inputs correctly when used within a torch.compile context.
+    
+    This test is based on the bug fix for missing float handling in 
+    torch.fx.experimental.symbolic_shapes.py (rebind_unbacked).
+    """
+    
+    # Check if distributed is available
+    if not torch.distributed.is_available():
+        print("Distributed package not available. Skipping test.")
+        return
+
+    # Setup a minimal distributed environment using a temporary file store
+    # to ensure the test is runnable without external dependencies.
+    with tempfile.NamedTemporaryFile(delete=True) as tmp_file:
+        try:
+            # Initialize process group with world_size=1 for local testing
+            dist.init_process_group(
+                backend='gloo', # gloo is generally available for CPU testing
+                init_method=f'file://{tmp_file.name}',
+                world_size=1,
+                rank=0
+            )
+
+            # Define a function that uses the similar API: torch.distributed.broadcast_object_list
+            def func_to_compile(obj_list):
+                # The bug in symbolic_shapes.py relates to handling floats during 
+                # rebinding. We pass a list containing floats here.
+                dist.broadcast_object_list(obj_list, src=0)
+                return obj_list
+
+            # Compile the function using torch.compile (AOTInductor/Eager)
+            # This triggers the symbolic shape analysis where the bug occurred.
+            compiled_func = torch.compile(func_to_compile)
+
+            # Input data containing floats, which triggered the original bug
+            # in the symbolic shape handling logic.
+            input_data = [3.14159, 2.71828, 1.618]
+
+            # Execute the compiled function
+            result = compiled_func(input_data)
+
+            # Verify the result matches the input
+            assert result == input_data, f"Expected {input_data}, but got {result}"
+            print("Test passed: torch.compile handles torch.distributed.broadcast_object_list with floats correctly.")
+
+        except Exception as e:
+            print(f"Test failed with exception: {e}")
+            raise
+        finally:
+            # Clean up the process group
+            if dist.is_initialized():
+                dist.destroy_process_group()
+
+if __name__ == "__main__":
+    test_compile_broadcast_with_floats()
+```

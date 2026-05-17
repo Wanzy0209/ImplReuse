@@ -1,0 +1,121 @@
+Issue ID: 165257
+Title: MPS Random in-place operations fail silently on non-contiguous tensors (macOS < 15.0)
+Bug Description:
+### 🐛 Describe the bug
+
+## Description
+
+All implemented random in-place operations (`normal_`, `uniform_`, `exponential_`, `random_`, `bernoulli_`) silently fail when called on non-contiguous tensors on the MPS backend. The operations complete without error but the tensor remains unchanged (all zeros).
+
+This affects 7 commonly-used operations and impacts all Apple Silicon users on macOS < 15.0.
+
+## Reproduction
+
+```python
+import torch
+
+# Test each operation on CPU and MPS
+ops = [
+    ("normal_(0,1)", lambda t: t.normal_(0, 1)),
+    ("uniform_(0,1)", lambda t: t.uniform_(0, 1)),
+    ("exponential_(1)", lambda t: t.exponential_(1.0)),
+    ("bernoulli_(0.5)", lambda t: t.bernoulli_(0.5)),
+    ("random_()", lambda t: t.random_()),
+    ("random_(10)", lambda t: t.random_(10)),
+    ("random_(0,10)", lambda t: t.random_(0, 10)),
+]
+
+print(f"{'Operation':<20} {'CPU Max':<12} {'MPS Max':<12} {'Status'}")
+print("-" * 60)
+
+for name, op_func in ops:
+    # CPU: works correctly
+    t_cpu = torch.zeros(50, 50, device='cpu').T.clone()  # Non-contiguous
+    op_func(t_cpu)
+    cpu_max = t_cpu.max().item()
+
+    # MPS: fails silently
+    t_mps = torch.zeros(50, 50, device='mps').T.clone()  # Non-contiguous
+    op_func(t_mps)
+    mps_max = t_mps.max().item()
+
+    status = "✓ OK" if mps_max != 0.0 else "✗ BUG"
+    print(f"{name:<20} {cpu_max:<12.4f} {mps_max:<12.4f} {status}")
+
+Original API Under Test: random_mps_impl
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.compat.v1.global_variables_initializer
+Similarity score: 0.9854263067245483
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.global_variables_initializer
+
+# --- tensorflow.python.ops.variables.global_variables_initializer ---
+def global_variables_initializer():
+  """Returns an Op that initializes global variables.
+
+  This is just a shortcut for `variables_initializer(global_variables())`
+
+  @compatibility(TF2)
+  In TF2, variables are initialized immediately when they are created. There is
+  no longer a need to run variable initializers before using them.
+  @end_compatibility
+
+  Returns:
+    An Op that initializes global variables in the graph.
+  """
+  if context.executing_eagerly():
+    return control_flow_ops.no_op(name="global_variables_initializer")
+  return variables_initializer(global_variables())
+
+# --- tensorflow.python.eager.context.executing_eagerly ---
+def executing_eagerly():
+  """Checks whether the current thread has eager execution enabled.
+
+  Eager execution is enabled by default and this API returns `True`
+  in most of cases. However, this API might return `False` in the following use
+  cases.
+
+  *  Executing inside `tf.function`, unless under `tf.init_scope` or
+     `tf.config.run_functions_eagerly(True)` is previously called.
+
+Original Test Case:
+import torch
+
+# Test each operation on CPU and MPS
+ops = [
+    ("normal_(0,1)", lambda t: t.normal_(0, 1)),
+    ("uniform_(0,1)", lambda t: t.uniform_(0, 1)),
+    ("exponential_(1)", lambda t: t.exponential_(1.0)),
+    ("bernoulli_(0.5)", lambda t: t.bernoulli_(0.5)),
+    ("random_()", lambda t: t.random_()),
+    ("random_(10)", lambda t: t.random_(10)),
+    ("random_(0,10)", lambda t: t.random_(0, 10)),
+]
+
+print(f"{'Operation':<20} {'CPU Max':<12} {'MPS Max':<12} {'Status'}")
+print("-" * 60)
+
+for name, op_func in ops:
+    # CPU: works correctly
+    t_cpu = torch.zeros(50, 50, device='cpu').T.clone()  # Non-contiguous
+    op_func(t_cpu)
+    cpu_max = t_cpu.max().item()
+
+    # MPS: fails silently
+    t_mps = torch.zeros(50, 50, device='mps').T.clone()  # Non-contiguous
+    op_func(t_mps)
+    mps_max = t_mps.max().item()
+
+    status = "✓ OK" if mps_max != 0.0 else "✗ BUG"
+    print(f"{name:<20} {cpu_max:<12.4f} {mps_max:<12.4f} {status}")
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

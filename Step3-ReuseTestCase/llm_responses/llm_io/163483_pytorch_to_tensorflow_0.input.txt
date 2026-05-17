@@ -1,0 +1,103 @@
+Issue ID: 163483
+Title: all_gather can change memory ordering of tensor
+Bug Description:
+### 🐛 Describe the bug
+
+I try the `all_gather` operation on a tensor with `channels_last` format , then I found the memory ordering of output is changed so that the output and input are not aligned. This is not as expected. I think it's a BUG.
+
+The reproducible minimal example, test.py is:
+```
+import torch
+
+torch.distributed.init_process_group(backend='nccl')
+rank = torch.distributed.get_rank()
+world_size = torch.distributed.get_world_size()
+torch.cuda.set_device(rank)
+
+x = torch.arange(0, 16).reshape(2, 2, 2, 2).cuda().to(memory_format=torch.channels_last)
+x_list = [torch.zeros_like(x) for _ in range(world_size)]
+torch.distributed.all_gather(x_list, x)
+
+print('rank_{}: {}\n x:\n{}\n gathered_x:\n{}\n'.format(rank, torch.equal(x, x_list[rank]), x.storage(), x_list[rank].storage()))
+```
+The command is:
+`torchrun --nproc_per_node 2 test.py`
+The result is:
+```
+rank_1: False
+ x:
+ 0
+ 4
+ 1
+ 5
+ 2
+ 6
+ 3
+ 7
+ 8
+ 12
+ 9
+ 13
+ 10
+ 14
+ 11
+
+Original API Under Test: torch.distributed.all_gather
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.numpy.random.standard_normal
+Similarity score: 0.9944989085197449
+
+Similar API information:
+# Extracted call chain for tf.experimental.numpy.random.standard_normal
+
+# --- tensorflow.python.ops.numpy_ops.np_random.standard_normal ---
+def standard_normal(size=None):
+  # TODO(wangpeng): Use new stateful RNG
+  if size is None:
+    size = ()
+  elif np_utils.isscalar(size):
+    size = (size,)
+  dtype = np_utils.result_type(float)
+  return random_ops.random_normal(size, dtype=dtype)
+
+# --- tensorflow.python.ops.numpy_ops.np_utils.isscalar ---
+def isscalar(val):
+  """Returns whether `val` is a scalar value or scalar Tensor."""
+  if isinstance(val, np_arrays.ndarray):
+    val = val.data
+  if isinstance(val, core.Tensor):
+    ndims = val.shape.ndims
+    if ndims is not None:
+      return ndims == 0
+    else:
+      return math_ops.equal(array_ops.rank(val), 0)
+  else:
+    return np.isscalar(val)
+
+# --- tensorflow.python.ops.array_ops.rank ---
+def rank(input, name=None):
+  # pylint: disable=redefined-builtin
+  """Returns the rank of a tensor.
+
+Original Test Case:
+import torch
+
+torch.distributed.init_process_group(backend='nccl')
+rank = torch.distributed.get_rank()
+world_size = torch.distributed.get_world_size()
+torch.cuda.set_device(rank)
+
+x = torch.arange(0, 16).reshape(2, 2, 2, 2).cuda().to(memory_format=torch.channels_last)
+x_list = [torch.zeros_like(x) for _ in range(world_size)]
+torch.distributed.all_gather(x_list, x)
+
+print('rank_{}: {}\n x:\n{}\n gathered_x:\n{}\n'.format(rank, torch.equal(x, x_list[rank]), x.storage(), x_list[rank].storage()))
+
+The API tf.experimental.numpy.random.standard_normal is identified as cross-library similar to the original PyTorch API torch.distributed.all_gather.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

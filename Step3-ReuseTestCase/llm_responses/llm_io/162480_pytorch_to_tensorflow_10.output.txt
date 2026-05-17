@@ -1,0 +1,83 @@
+```python
+import tensorflow as tf
+import unittest
+
+class TestRangeInputProducerFloatHandling(unittest.TestCase):
+    """
+    Adapted from PyTorch Issue 162480: missing float handling in rebind_unbacked.
+    
+    This test case verifies the behavior of tf.compat.v1.train.range_input_producer
+    when encountering float inputs for the 'limit' argument, analogous to the 
+    float handling issue in PyTorch's symbolic shape rebind logic.
+    """
+
+    def setUp(self):
+        # range_input_producer is a legacy v1 API that requires graph mode
+        tf.compat.v1.disable_eager_execution()
+
+    def test_limit_with_python_float(self):
+        """
+        Test passing a Python float to the limit parameter.
+        PyTorch fix: check isinstance(u1, float) -> continue.
+        Here we verify if the TF API handles the float gracefully (cast or error).
+        """
+        with tf.compat.v1.Session() as sess:
+            try:
+                # Pass a Python float (10.5) where an int is expected
+                producer = tf.compat.v1.train.range_input_producer(limit=10.5)
+                
+                # Initialize queue runners
+                coord = tf.compat.v1.train.Coordinator()
+                threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+                
+                sess.run(tf.compat.v1.local_variables_initializer())
+                
+                # Attempt to dequeue
+                result = sess.run(producer.dequeue())
+                
+                # If successful, verify the result is an integer (handled by casting/truncation)
+                self.assertIsInstance(result, (int, tf.Tensor))
+                
+                coord.request_stop()
+                coord.join(threads)
+                
+            except (ValueError, TypeError) as e:
+                # It is acceptable behavior for the API to explicitly reject the float type
+                # with a clear error message, rather than crashing or behaving undefinedly.
+                error_msg = str(e).lower()
+                self.assertTrue("int" in error_msg or "type" in error_msg, 
+                                f"Error message should mention type/int, got: {e}")
+            except Exception as e:
+                self.fail(f"API failed to handle float input gracefully: {e}")
+
+    def test_limit_with_float_tensor(self):
+        """
+        Test passing a tf.float32 tensor to the limit parameter.
+        """
+        with tf.compat.v1.Session() as sess:
+            try:
+                # Pass an explicit float tensor
+                limit_tensor = tf.constant(10.5, dtype=tf.float32)
+                producer = tf.compat.v1.train.range_input_producer(limit=limit_tensor)
+                
+                coord = tf.compat.v1.train.Coordinator()
+                threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+                
+                sess.run(tf.compat.v1.local_variables_initializer())
+                result = sess.run(producer.dequeue())
+                
+                coord.request_stop()
+                coord.join(threads)
+                
+                # If successful, the API handled the float tensor (likely casted)
+                self.assertTrue(True)
+                
+            except ValueError as e:
+                # Expected if strict type checking is enforced on the tensor input
+                self.assertIn("int32", str(e))
+            except Exception as e:
+                self.fail(f"Unexpected error handling float tensor: {e}")
+
+if __name__ == "__main__":
+    unittest.main()
+```

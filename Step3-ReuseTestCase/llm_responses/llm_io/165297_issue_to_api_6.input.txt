@@ -1,0 +1,128 @@
+Issue ID: 165297
+Title: [BUG] MaxPool2d with channels_last + bfloat16 on CUDA produces NaNs for large tensors
+Bug Description:
+### 🐛 Describe the bug
+
+# Description
+When using torch.nn.MaxPool2d on large tensors with memory_format=torch.channels_last on GPU, the output can contain NaN values or even cause an illegal memory access error, depending on dtype and the memory content. This happens even when the input has no NaN/Inf. Changing to contiguous (NCHW) memory format before MaxPool fixes the issue.
+
+# Steps to Reproduce
+```python
+import torch
+import torch.nn as nn
+
+device = torch.device("cuda")
+
+def test_maxpool_nan():
+    # Large input tensor
+    N, C, H, W = 84, 64, 512, 960
+    # Case 1: bfloat16 + channels_last  => NaN
+    x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+
+    # Case 2: float32 + channels_last => illegal memory access
+    # x = torch.randn(N, C, H, W, device=device)  # default float32
+
+
+    # Convert to NHWC channels_last layout
+    x = x.to(memory_format=torch.channels_last)
+
+    # Uncommenting the line below avoids NaNs
+    # x = x.contiguous()
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+    print(f"Input stride: {x.stride()}")
+
+    pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1).to(device)
+    y = pool(x)
+
+    print(f"Output contains NaN? {torch.isnan(y).any().item()}")
+    print(f"Output contains Inf? {torch.isinf(y).any().item()}")
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    if torch.isnan(y).any():
+        print("Detected NaNs in MaxPool out
+...
+
+Original API Under Test: torch.nn.MaxPool2d
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.library.wrap_triton
+Similarity score: 0.9855644702911377
+
+Similar API information:
+# Extracted call chain for torch.library.wrap_triton
+
+# --- torch._library.triton.wrap_triton ---
+def wrap_triton(triton_kernel: Callable, /) -> Any:
+    """Allows capture of a triton kernel into a graph via make_fx or
+    non-strict ``torch.export``.
+
+    These technologies perform Dispatcher-based tracing (via
+    ``__torch_dispatch__``) and cannot see calls to raw triton kernels.
+    The ``wrap_triton`` API wraps a triton kernel into a callable that
+    can actually be traced into a graph.
+
+    Please use this API together with :func:`torch.library.triton_op`.
+
+    Examples:
+
+        >>> # xdoctest: +SKIP
+        >>> import torch
+        >>> import triton
+        >>> from triton import language as tl
+        >>> from torch.fx.experimental.proxy_tensor import make_fx
+        >>> from torch.library import wrap_triton
+        >>>
+        >>> @triton.jit
+        >>> def add_kernel(
+        >>>     in_ptr0,
+        >>>     in_ptr1,
+        >>>     out_ptr,
+        >>>     n_elements,
+        >>>     BLOCK_SIZE: "tl.constexpr",
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+device = torch.device("cuda")
+
+def test_maxpool_nan():
+    # Large input tensor
+    N, C, H, W = 84, 64, 512, 960
+    # Case 1: bfloat16 + channels_last  => NaN
+    x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+
+    # Case 2: float32 + channels_last => illegal memory access
+    # x = torch.randn(N, C, H, W, device=device)  # default float32
+
+
+    # Convert to NHWC channels_last layout
+    x = x.to(memory_format=torch.channels_last)
+
+    # Uncommenting the line below avoids NaNs
+    # x = x.contiguous()
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+    print(f"Input stride: {x.stride()}")
+
+    pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1).to(device)
+    y = pool(x)
+
+    print(f"Output contains NaN? {torch.isnan(y).any().item()}")
+    print(f"Output contains Inf? {torch.isinf(y).any().item()}")
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    if torch.isnan(y).any():
+        print("Detected NaNs in MaxPool output!")
+
+test_maxpool_nan()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

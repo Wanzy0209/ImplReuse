@@ -1,0 +1,66 @@
+```python
+import unittest
+import torch
+
+# Check for RMM availability as it is an external dependency required for the bug reproduction
+try:
+    import rmm
+    from rmm.allocators.torch import rmm_torch_allocator
+    HAS_RMM = True
+except ImportError:
+    HAS_RMM = False
+
+@unittest.skipIf(not HAS_RMM, "RMM library is required for this test")
+class TestPluggableAllocatorWithQuantile(unittest.TestCase):
+    def test_compile_quantile_with_rmm_allocator(self):
+        """
+        Test that torch.compile works with torch.quantile when using a pluggable
+        allocator (RMM). 
+        
+        This reproduces the issue where checkPoolLiveAllocations is not supported
+        for pluggable devices, causing a RuntimeError during compilation.
+        
+        The test leverages torch.quantile (the similar API) as the workload 
+        inside the compiled function.
+        """
+        # 1. Setup the custom allocator (Reproducing the bug setup logic)
+        rmm.reinitialize(pool_allocator=True)
+        torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+
+        # 2. Define a function using the similar API (torch.quantile)
+        # The similar API implementation shows logic for handling specific dtypes
+        # (e.g., casting float16 to float32). We use torch.quantile here to 
+        # exercise the compilation path with this specific operation.
+        def compute_quantile(x):
+            # torch.quantile might involve internal type checks/conversions
+            return torch.quantile(x, 0.5)
+
+        # 3. Attempt to compile (This triggers the checkPoolLiveAllocations check)
+        # The bug report states this raises:
+        # RuntimeError: pluggable does not yet support checkPoolLiveAllocations.
+        try:
+            compiled_fn = torch.compile(compute_quantile)
+            
+            # Create input tensor
+            input_tensor = torch.randn(100, 100, device='cuda')
+            
+            # Run the compiled function
+            result = compiled_fn(input_tensor)
+            
+            # If the bug is fixed, this passes. 
+            # If the bug exists, the line above raises RuntimeError.
+            self.assertIsNotNone(result)
+            
+        except RuntimeError as e:
+            if "checkPoolLiveAllocations" in str(e):
+                self.fail(f"Bug reproduced: Pluggable allocator does not support checkPoolLiveAllocations. Error: {e}")
+            else:
+                # Re-raise if it's a different RuntimeError
+                raise
+        finally:
+            # Cleanup: Reset to default allocator to avoid side effects on other tests
+            torch.cuda.memory.change_current_allocator(torch.cuda.memory._get_default_allocator())
+
+if __name__ == "__main__":
+    unittest.main()
+```

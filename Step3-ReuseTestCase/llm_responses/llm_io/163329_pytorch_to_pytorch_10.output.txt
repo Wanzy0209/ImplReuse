@@ -1,0 +1,54 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_gather_object_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Create a complex picklable object to gather
+    # This mimics the complexity of the pipeline state in the original bug
+    local_object = {
+        "rank": rank,
+        "tensor": torch.randn(2, 2),
+        "list": [1, 2, 3, rank],
+        "string": f"hello_from_rank_{rank}"
+    }
+
+    # Prepare the list to store gathered objects
+    # Only the destination rank (0) allocates the list
+    if rank == 0:
+        gathered_objects = [None] * world_size
+    else:
+        gathered_objects = None
+
+    # Call the similar API: torch.distributed.gather_object
+    dist.gather_object(local_object, gathered_objects, dst=0)
+
+    # Verify the results on the destination rank
+    if rank == 0:
+        assert len(gathered_objects) == world_size
+        for i, obj in enumerate(gathered_objects):
+            assert obj["rank"] == i
+            assert obj["string"] == f"hello_from_rank_{i}"
+            assert obj["list"][-1] == i
+            assert isinstance(obj["tensor"], torch.Tensor)
+        print("torch.distributed.gather_object test passed.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn processes to simulate a distributed environment
+    mp.spawn(run_gather_object_test, args=(world_size,), nprocs=world_size, join=True)
+```

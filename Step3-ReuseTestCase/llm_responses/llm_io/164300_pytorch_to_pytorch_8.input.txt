@@ -1,0 +1,121 @@
+Issue ID: 164300
+Title: [dynamo][sac] functools partial'ed context_fn is not supported
+Bug Description:
+### 🐛 Describe the bug
+
+Thanks to @soulitzer for the repro
+
+```
+import torch
+import functools
+from torch.utils.checkpoint import CheckpointPolicy
+
+class CustomPolicy:
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, ctx, out, func, *args, **kwargs):
+        return CheckpointPolicy.MUST_SAVE
+
+from torch.utils.checkpoint import (
+    CheckpointPolicy,
+    create_selective_checkpoint_contexts,
+)
+
+def f(x, y):
+    return torch.sigmoid(torch.matmul(torch.matmul(x, y), y)) * y
+
+context_fn1 = functools.partial(create_selective_checkpoint_contexts, CustomPolicy())
+
+def context_fn2():
+    return create_selective_checkpoint_contexts(CustomPolicy())
+
+@torch.compile(backend="aot_eager_decomp_partition", fullgraph=True)
+def g(x, y):
+    return torch.utils.checkpoint.checkpoint(
+        f, x, y,
+        use_reentrant=False,
+        context_fn=context_fn1,
+    )
+
+a = torch.randn(4, 4, requires_grad=True, device="cpu")
+b = torch.randn(4, 4, requires_grad=True, device="cpu")
+g(a, b).sum().backward()
+
+Original API Under Test: torch.utils.checkpoint.checkpoint
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nn.DataParallel
+Similarity score: 0.9936701059341431
+
+Similar API information:
+# Extracted call chain for torch.nn.DataParallel
+
+# --- torch.nn.parallel.data_parallel.DataParallel ---
+class DataParallel(Module, Generic[T]):
+    r"""Implements data parallelism at the module level.
+
+    This container parallelizes the application of the given :attr:`module` by
+    splitting the input across the specified devices by chunking in the batch
+    dimension (other objects will be copied once per device). In the forward
+    pass, the module is replicated on each device, and each replica handles a
+    portion of the input. During the backwards pass, gradients from each replica
+    are summed into the original module.
+
+    The batch size should be larger than the number of GPUs used.
+
+    .. warning::
+        It is recommended to use :class:`~torch.nn.parallel.DistributedDataParallel`,
+        instead of this class, to do multi-GPU training, even if there is only a single
+        node. See: :ref:`cuda-nn-ddp-instead` and :ref:`ddp`.
+
+    Arbitrary positional and keyword inputs are allowed to be passed into
+    DataParallel but some types are specially handled. tensors will be
+    **scattered** on dim specified (default 0). tuple, list and dict types will
+    be shallow c
+...
+
+Original Test Case:
+import torch
+import functools
+from torch.utils.checkpoint import CheckpointPolicy
+
+class CustomPolicy:
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, ctx, out, func, *args, **kwargs):
+        return CheckpointPolicy.MUST_SAVE
+
+from torch.utils.checkpoint import (
+    CheckpointPolicy,
+    create_selective_checkpoint_contexts,
+)
+
+def f(x, y):
+    return torch.sigmoid(torch.matmul(torch.matmul(x, y), y)) * y
+
+context_fn1 = functools.partial(create_selective_checkpoint_contexts, CustomPolicy())
+
+def context_fn2():
+    return create_selective_checkpoint_contexts(CustomPolicy())
+
+@torch.compile(backend="aot_eager_decomp_partition", fullgraph=True)
+def g(x, y):
+    return torch.utils.checkpoint.checkpoint(
+        f, x, y,
+        use_reentrant=False,
+        context_fn=context_fn1,
+    )
+
+a = torch.randn(4, 4, requires_grad=True, device="cpu")
+b = torch.randn(4, 4, requires_grad=True, device="cpu")
+g(a, b).sum().backward()
+
+The API torch.nn.DataParallel is identified as same-library similar to the original PyTorch API torch.utils.checkpoint.checkpoint.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

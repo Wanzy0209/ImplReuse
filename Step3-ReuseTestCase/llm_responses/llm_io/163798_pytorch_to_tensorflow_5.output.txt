@@ -1,0 +1,67 @@
+```python
+import tensorflow as tf
+
+# Disable eager execution to simulate the graph-based behavior of torch.compile
+tf.compat.v1.disable_eager_execution()
+
+def test_add_queue_runner_graph_behavior():
+    """
+    Adapts the PyTorch test case for tolist() behavior to TensorFlow's 
+    tf.compat.v1.train.add_queue_runner.
+    
+    Original Logic:
+    Input: [1, 2]
+    Ops: Split into scalars (tolist), multiply tensor by scalars.
+    Expected: Graph handles scalar extraction correctly without breaking.
+    """
+    with tf.compat.v1.Session() as sess:
+        # 1. Setup Input Data via Queue (mimicking the input tensor)
+        # We use a FIFOQueue to hold the input tensor [1, 2]
+        queue = tf.compat.v1.FIFOQueue(capacity=2, dtypes=[tf.int32], shapes=[(2,)])
+        
+        # Enqueue the initial data
+        enqueue_op = queue.enqueue([1, 2])
+        
+        # 2. Create and Add Queue Runner
+        # This is the API under test. We add the runner to the graph collection.
+        qr = tf.compat.v1.train.QueueRunner(queue, [enqueue_op])
+        tf.compat.v1.train.add_queue_runner(qr)
+        
+        # 3. Define Graph Operations (mimicking the function body)
+        # Dequeue the tensor 'a'
+        a = queue.dequeue()
+        
+        # Mimic 'u0, u1 = a.tolist()'
+        # In TF, unstack splits a tensor into a list of tensors (scalars in this context)
+        u0, u1 = tf.unstack(a)
+        
+        # Mimic 'return a * u0 * u1'
+        # Perform element-wise multiplication
+        result = a * u0 * u1
+        
+        # 4. Execute Graph
+        # Initialize local variables (required for queue runners)
+        sess.run(tf.compat.v1.local_variables_initializer())
+        
+        # Start the queue runners (threads)
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+        
+        try:
+            # Run the graph and fetch the result
+            output = sess.run(result)
+            
+            # 5. Assertions
+            # Original PyTorch: [1, 2] * 1 * 2 = [2, 4]
+            expected = [2, 4]
+            assert list(output) == expected, f"Expected {expected}, but got {list(output)}"
+            print("Test passed: Graph handled scalar extraction and multiplication correctly.")
+            
+        finally:
+            # Stop threads
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_add_queue_runner_graph_behavior()
+```

@@ -1,0 +1,51 @@
+```python
+import torch
+import torch.nn.functional as F
+import unittest
+
+class TestNormalizeNumericalStability(unittest.TestCase):
+    def test_normalize_with_compile_cuda(self):
+        """
+        Test that torch.nn.functional.normalize does not output vectors with norm > 1
+        when using torch.compile on CUDA.
+        
+        This test leverages the code pattern from the similar API 
+        (tf.keras.losses.categorical_hinge), which uses sum(y_true * y_pred) 
+        to calculate dot products, to manually verify the norm of the normalized vector.
+        """
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available, skipping test")
+
+        device = 'cuda'
+        
+        # Input vector from the bug report that triggers the precision issue
+        input_tensor = torch.tensor([[3.799999, 0.0, 0.0]], device=device, dtype=torch.float32)
+
+        # Function to be compiled
+        @torch.compile()
+        def normalize_func(x):
+            return F.normalize(x)
+
+        # Execute compiled function
+        normalized_vector = normalize_func(input_tensor)
+
+        # Leverage the pattern from the similar API (categorical_hinge) which uses
+        # sum(y_true * y_pred) for dot product calculations.
+        # We calculate the squared norm using sum(x * x).
+        squared_norm = torch.sum(normalized_vector * normalized_vector, dim=-1)
+        norm = torch.sqrt(squared_norm)
+
+        # The bug report indicates the norm becomes 1.0000001192092896 (> 1.0)
+        # This causes torch.acos to fail (return nan) because acos(x) is undefined for x > 1.
+        # We assert that the norm is <= 1.0 to ensure mathematical validity.
+        self.assertTrue(torch.all(norm <= 1.0), 
+                        f"Norm > 1 detected: {norm}. This breaks mathematical constraints for operations like acos.")
+
+        # Verify that torch.acos does not produce NaN (as seen in the bug report)
+        acos_val = torch.acos(normalized_vector[0, 0])
+        self.assertFalse(torch.isnan(acos_val), 
+                         f"acos returned NaN, likely due to input > 1. Value: {normalized_vector[0, 0]}")
+
+if __name__ == '__main__':
+    unittest.main()
+```

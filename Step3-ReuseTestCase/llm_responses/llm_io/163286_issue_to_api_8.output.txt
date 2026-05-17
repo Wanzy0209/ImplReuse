@@ -1,0 +1,67 @@
+```python
+import torch
+import torch._inductor
+import pytest
+
+# Test case for Issue: [inductor] as_strided lowering throws away .view(dtype)
+# The bug occurs when a tensor is viewed to a different dtype (e.g., float8 -> uint8)
+# and then as_strided is applied. The lowering should preserve the dtype view.
+
+def test_as_strided_preserves_dtype_view():
+    """
+    Tests that torch.compile correctly lowers a sequence of .view(dtype) followed by
+    torch.as_strided, ensuring the dtype view is not discarded during Inductor lowering.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    
+    # Use float8_e4m3fn as a proxy for float8 types involved in the bug
+    # (float8_e8m0fnu might not be available on all hardware/runners)
+    dtype = torch.float8_e4m3fn
+    if not hasattr(torch, 'float8_e4m3fn'):
+        pytest.skip("float8_e4m3fn not supported")
+
+    device = "cuda"
+    
+    # Create a tensor with a specific dtype
+    x = torch.randn(16, 16, dtype=dtype, device=device)
+
+    def fn(x):
+        # 1. View the tensor as a different dtype (uint8)
+        # This mimics the 'output_scales_ptr' logic in the bug report
+        x_view = x.view(torch.uint8)
+        
+        # 2. Apply as_strided
+        # The bug is that the lowering of as_strided might ignore x_view's dtype
+        # and revert to the original tensor's dtype (float8)
+        y = torch.as_strided(x_view, size=(8, 32), stride=(32, 1))
+        return y
+
+    # Compile with Inductor (default backend)
+    compiled_fn = torch.compile(fn)
+    
+    # Run compiled function
+    res_compiled = compiled_fn(x)
+    
+    # Run eager function for comparison
+    res_eager = fn(x)
+    
+    # Assertions
+    # The primary bug symptom is that the dtype is incorrect (float8 instead of uint8)
+    assert res_compiled.dtype == torch.uint8, (
+        f"Compiled output dtype should be uint8, but got {res_compiled.dtype}. "
+        "This indicates the .view(dtype) was thrown away during lowering."
+    )
+    
+    assert res_eager.dtype == torch.uint8, "Eager output dtype should be uint8"
+    
+    # Check values to ensure the memory layout and interpretation are correct
+    assert torch.equal(res_compiled, res_eager), (
+        "Compiled output values should match eager output. "
+        "Mismatch indicates incorrect lowering of as_strided or view."
+    )
+
+if __name__ == "__main__":
+    test_as_strided_preserves_dtype_view()
+    print("Test passed.")
+```

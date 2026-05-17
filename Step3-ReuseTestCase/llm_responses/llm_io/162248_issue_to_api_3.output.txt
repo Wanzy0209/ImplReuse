@@ -1,0 +1,63 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+import sys
+
+def setup_environment():
+    """Sets up the environment variables required for distributed initialization."""
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
+
+def run_test(rank, world_size):
+    """
+    Worker function that attempts to run all_to_all with the Gloo backend.
+    This test verifies that the operation raises a RuntimeError, consistent
+    with the behavior of unsupported operations (similar to 
+    tf.errors.OperatorNotAllowedInGraphError in TensorFlow).
+    """
+    try:
+        # Initialize the process group with the 'gloo' backend
+        dist.init_process_group(
+            backend='gloo',
+            rank=rank,
+            world_size=world_size
+        )
+
+        # Prepare input and output tensors as per the original bug report
+        output = list(torch.empty([world_size], dtype=torch.int64).chunk(world_size))
+        input = list((torch.arange(world_size) + rank * world_size).chunk(world_size))
+
+        # Attempt the operation that is documented but not supported
+        # We expect this to fail, mirroring how TF raises specific errors for 
+        # unsupported operators in specific contexts.
+        dist.all_to_all(output, input)
+
+        # If we reach here, the bug is not reproduced (operation succeeded unexpectedly)
+        print(f"Rank {rank}: Test FAILED - dist.all_to_all succeeded but was expected to raise RuntimeError.")
+        sys.exit(1)
+
+    except RuntimeError as e:
+        # Verify the error message matches the expected "not supported" behavior
+        if "does not support alltoall" in str(e):
+            print(f"Rank {rank}: Test PASSED - Caught expected RuntimeError: '{e}'")
+        else:
+            print(f"Rank {rank}: Test FAILED - Caught RuntimeError but with unexpected message: '{e}'")
+            sys.exit(1)
+            
+    except Exception as e:
+        print(f"Rank {rank}: Test FAILED - Caught unexpected exception type: {type(e).__name__}: {e}")
+        sys.exit(1)
+        
+    finally:
+        # Clean up the process group
+        dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    setup_environment()
+    
+    # Spawn processes to run the distributed test
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+```

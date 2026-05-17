@@ -1,0 +1,71 @@
+```python
+import tensorflow as tf
+
+def test_group_by_reducer_shape():
+    """
+    Adapted test case for tf.data.experimental.group_by_reducer.
+    
+    Original Bug Logic:
+    1. Create input data on a specific device/context.
+    2. Apply an operation (abs).
+    3. Verify the output tensor shape matches the input shape.
+    4. Failure mode: Output shape is [0] (empty) instead of the expected shape.
+    
+    Adapted Logic:
+    1. Create a dataset with specific structure (4 elements, vector size 4).
+    2. Apply group_by_reducer to group and reduce elements.
+    3. Verify the output dataset contains elements with the expected shapes.
+    4. Check for failure mode: Empty results or incorrect tensor shapes.
+    """
+
+    # 1. Setup Input Data
+    # Analogous to: t = torch.randn(4, 4, device='privateuse1')
+    # We create a dataset of 4 elements, each with a feature vector of size 4.
+    # Keys are [0, 0, 1, 1] to create 2 groups.
+    features = tf.constant([[1.0, 2.0, 3.0, 4.0]] * 4)
+    keys = tf.constant([0, 0, 1, 1])
+    dataset = tf.data.Dataset.from_tensor_slices((features, keys))
+
+    # 2. Define Reducer Logic
+    # We will sum the feature vectors for each group.
+    def init_func(_):
+        return tf.zeros((4,), dtype=tf.float32)
+
+    def reduce_func(state, value):
+        return state + value
+
+    def finalize_func(state):
+        return state
+
+    reducer = tf.data.experimental.Reducer(init_func, reduce_func, finalize_func)
+
+    # Define Key Function
+    def key_func(features, key):
+        return key
+
+    # 3. Apply Operation
+    # Analogous to: result = torch.abs(t)
+    grouped_dataset = dataset.apply(tf.data.experimental.group_by_reducer(key_func, reducer))
+
+    # 4. Verify Results
+    # Analogous to checking: result.shape == torch.Size([0])
+    # We iterate the dataset to check for empty results or shape mismatches.
+    results = list(grouped_dataset.as_numpy_iterator())
+
+    # Check 1: Ensure we didn't get an empty result (the core symptom of the PyTorch bug)
+    assert len(results) > 0, "Bug reproduction: Output dataset is empty (equivalent to shape [0])"
+
+    # Check 2: Verify the number of groups (2 groups expected)
+    assert len(results) == 2, f"Expected 2 groups, got {len(results)}"
+
+    # Check 3: Verify the tensor shapes within the groups
+    # The input vectors were size 4, so the reduced vectors should also be size 4.
+    # If the API behaved like the buggy PyTorch op, these might be empty or size 0.
+    for key, value in results:
+        assert value.shape == (4,), f"Bug reproduction: Expected shape (4,), got {value.shape}"
+
+    print("Test passed: group_by_reducer preserves shapes correctly.")
+
+if __name__ == "__main__":
+    test_group_by_reducer_shape()
+```

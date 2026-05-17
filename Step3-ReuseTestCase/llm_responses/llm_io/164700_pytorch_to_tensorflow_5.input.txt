@@ -1,0 +1,131 @@
+Issue ID: 164700
+Title: torch.compile generates illegal triton tl.broadcast_to and crashes from particular unsqueeze and torch.cat interleaving: 'constexpr_type' object has no attribute 'is_block'
+Bug Description:
+### 🐛 Describe the bug
+
+Here's a minimal-ish reproducer (while I will concede that it looks fairly nonsensical; I promise this was reduced from a genuine larger codebase):
+
+```python
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+
+device = "cuda"
+
+def f(x, y):
+    y2 = torch.cat(
+        [
+            x[:, 1:],
+            y[:, None] + 32 * 2048,
+        ],
+        dim=1,
+    )
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    return (
+        torch.cat([x2, y3], dim=1)
+        + torch.arange(-2048, 0, device=device)[None, None, :]
+    ).reshape(1, 32 * 2048)
+
+# This succeeds
+display(
+    f(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+
+# This crashes
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.train.add_queue_runner
+Similarity score: 0.9932515621185303
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.train.add_queue_runner
+
+# --- tensorflow.python.training.queue_runner_impl.add_queue_runner ---
+def add_queue_runner(qr, collection=ops.GraphKeys.QUEUE_RUNNERS):
+  """Adds a `QueueRunner` to a collection in the graph.
+
+  When building a complex model that uses many queues it is often difficult to
+  gather all the queue runners that need to be run.  This convenience function
+  allows you to add a queue runner to a well known collection in the graph.
+
+  The companion method `start_queue_runners()` can be used to start threads for
+  all the collected queue runners.
+
+  @compatibility(TF2)
+  QueueRunners are not compatible with eager execution. Instead, please
+  use [tf.data](https://www.tensorflow.org/guide/data) to get data into your
+  model.
+  @end_compatibility
+
+  Args:
+    qr: A `QueueRunner`.
+    collection: A `GraphKey` specifying the graph collection to add
+      the queue runner to.  Defaults to `GraphKeys.QUEUE_RUNNERS`.
+  """
+  ops.add_to_collection(collection, qr)
+
+# --- tensorflow.python.util.deprecation.deprecated ---
+def deprecated(date, instructions, warn_once=True):
+  """Decorator for marking functions or methods deprecated.
+
+Original Test Case:
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+
+device = "cuda"
+
+def f(x, y):
+    y2 = torch.cat(
+        [
+            x[:, 1:],
+            y[:, None] + 32 * 2048,
+        ],
+        dim=1,
+    )
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    return (
+        torch.cat([x2, y3], dim=1)
+        + torch.arange(-2048, 0, device=device)[None, None, :]
+    ).reshape(1, 32 * 2048)
+
+# This succeeds
+display(
+    f(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+
+# This crashes
+display(
+    torch.compile(f)(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+
+The API tf.compat.v1.train.add_queue_runner is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

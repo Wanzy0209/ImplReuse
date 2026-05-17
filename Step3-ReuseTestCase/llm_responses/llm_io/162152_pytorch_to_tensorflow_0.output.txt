@@ -1,0 +1,77 @@
+```python
+import tensorflow as tf
+import json
+import os
+
+# Define SimpleModel equivalent to the PyTorch version
+class SimpleModel(tf.keras.Model):
+    def __init__(self, input_size=10, hidden_size=20, output_size=5):
+        super(SimpleModel, self).__init__()
+        self.linear1 = tf.keras.layers.Dense(hidden_size, input_shape=(input_size,))
+        self.relu = tf.keras.layers.ReLU()
+        self.linear2 = tf.keras.layers.Dense(output_size)
+
+    def call(self, x):
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.linear2(x)
+        return x
+
+# Check for available devices (mimicking torch.<mybackend>.device_count())
+# Note: ClusterCoordinator requires a specific setup, usually with ParameterServerStrategy.
+gpus = tf.config.list_physical_devices('GPU')
+
+if len(gpus) > 1:
+    print(f"检测到 {len(gpus)} 个GPU")
+
+    # Setup TF_CONFIG for ParameterServerStrategy
+    # This is required for ClusterCoordinator to initialize.
+    # In a real distributed environment, these addresses would point to actual running tasks.
+    tf_config = {
+        'cluster': {
+            'worker': ["localhost:12345"],
+            'ps': ["localhost:12346"],
+            'chief': ["localhost:12347"]
+        },
+        'task': {'type': 'chief', 'index': 0}
+    }
+    os.environ['TF_CONFIG'] = json.dumps(tf_config)
+
+    try:
+        # Initialize Strategy
+        # ClusterCoordinator currently only works with ParameterServerStrategy
+        strategy = tf.distribute.experimental.ParameterServerStrategy()
+
+        # Initialize Coordinator (Equivalent to DataParallel wrapper logic)
+        coordinator = tf.distribute.experimental.coordinator.ClusterCoordinator(strategy)
+
+        # Define Model within strategy scope
+        with strategy.scope():
+            model = SimpleModel()
+
+        # Define the execution function (equivalent to model(input_data))
+        @tf.function
+        def inference_step(batch):
+            return model(batch)
+
+        # Create input data
+        batch_size = 20
+        input_data = tf.random.normal((batch_size, 10))
+
+        # Schedule the execution
+        # This is the non-blocking equivalent of output = model(input_data)
+        remote_value = coordinator.schedule(inference_step, args=(input_data,))
+
+        # Wait for result (blocking fetch)
+        output = remote_value.fetch()
+
+        print("success")
+        
+    except Exception as e:
+        # Handling potential runtime errors if the cluster is not actually running
+        print(f"Execution failed (expected if cluster processes are not running): {e}")
+        raise
+else:
+    print("需要多于1个GPU来运行此测试")
+    raise RuntimeError("Insufficient GPUs")
+```

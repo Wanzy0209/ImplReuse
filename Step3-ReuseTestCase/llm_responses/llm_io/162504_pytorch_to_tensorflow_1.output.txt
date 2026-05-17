@@ -1,0 +1,58 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Set the global seed for reproducibility
+tf.random.set_seed(42)
+
+# Define the condition and body for the while_loop
+# To mimic the PyTorch example where 'fn' is called once, we loop once.
+def cond(i, x):
+    return i < 1
+
+def body(i, x):
+    # Mimic the PyTorch function: x * sigmoid(randn)
+    # tf.random.normal is the stateful RNG op similar to torch.randn
+    r = tf.random.normal(shape=[1], dtype=tf.float32)
+    return i + 1, x * tf.sigmoid(r)
+
+# Initialize device state / warm-up (similar to fn(torch.ones(...)) in PyTorch)
+# This ensures RNG state is initialized on the device
+_, _ = tf.compat.v1.while_loop(cond, body, [tf.constant(0), tf.ones(1, dtype=tf.float32)])
+
+# --- Eager Execution ---
+tf.random.set_seed(42)
+eager_in = tf.ones(1, dtype=tf.float32)
+
+with tf.GradientTape() as tape:
+    # Run the while_loop in eager mode
+    _, eager_out = tf.compat.v1.while_loop(cond, body, [tf.constant(0), eager_in])
+
+eager_in_grad = tape.gradient(eager_out, eager_in)
+
+# --- Graph Execution (tf.function) ---
+# In TensorFlow, tf.function is the equivalent of capturing a CUDA graph
+tf.random.set_seed(42)
+
+@tf.function
+def graph_fn(x):
+    i = tf.constant(0)
+    # Run the while_loop inside the traced graph
+    _, out = tf.compat.v1.while_loop(cond, body, [i, x])
+    return out
+
+graph_in = tf.ones(1, dtype=tf.float32)
+
+with tf.GradientTape() as tape:
+    graph_out = graph_fn(graph_in)
+
+graph_in_grad = tape.gradient(graph_out, graph_in)
+
+# --- Verification ---
+# Check if gradients match between eager and graph execution
+print("Eager Gradient:", eager_in_grad.numpy())
+print("Graph Gradient:", graph_in_grad.numpy())
+
+assert np.allclose(eager_in_grad.numpy(), graph_in_grad.numpy(), rtol=1e-5, atol=1e-5), \
+    "Mismatch in gradient outputs between eager and graph execution"
+```

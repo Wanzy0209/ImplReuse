@@ -1,0 +1,45 @@
+```python
+import torch
+import unittest
+
+class TestAsStridedViewDtype(unittest.TestCase):
+    """
+    Test case to verify that as_strided lowering in Inductor preserves 
+    the dtype from a .view() operation.
+    
+    This relates to the issue where `output_scales_ptr` viewed as `uint8` 
+    was being passed as `float8_e8m0fnu` to the Triton kernel.
+    """
+
+    def test_as_strided_preserves_view_dtype(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available")
+
+        # Create a tensor and view it as a different dtype (e.g., uint8)
+        # This mimics the scenario in the bug report where scales are viewed as uint8
+        x = torch.randn(16, 16, device='cuda')
+        x_viewed = x.view(torch.uint8)
+
+        # Define a function that applies as_strided on the viewed tensor
+        # The bug occurs during the lowering of this operation
+        def func(t):
+            return t.as_strided((8, 32), (32, 1))
+
+        # Compile the function
+        compiled_func = torch.compile(func)
+
+        # Execute compiled and eager versions
+        res_compiled = compiled_func(x_viewed)
+        res_eager = func(x_viewed)
+
+        # Assert that the dtype is preserved (uint8) and not lost/reverted
+        self.assertEqual(res_compiled.dtype, torch.uint8, 
+                         "Compiled result dtype mismatched: view(dtype) was lost during lowering")
+        
+        # Assert that the values are correct
+        self.assertTrue(torch.equal(res_compiled, res_eager), 
+                        "Compiled result values mismatched")
+
+if __name__ == '__main__':
+    unittest.main()
+```

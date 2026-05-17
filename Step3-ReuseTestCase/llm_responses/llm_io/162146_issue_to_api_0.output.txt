@@ -1,0 +1,56 @@
+```python
+import torch
+
+def test_compile_index_put_with_inplace_ops():
+    """
+    Test case for Issue 162146: index_put_ not working as expected under torch.compile.
+    
+    The bug involves in-place operations on tensor slices followed by assignments
+    to another tensor, which under torch.compile results in incorrect values 
+    (double application of the in-place operation).
+    
+    This test leverages the 'size' API (similar to the provided similar API 
+    torch.backends.cuda.cufft_plan_cache.size) to verify tensor dimensions 
+    and ensure the logic handles the tensor shape correctly.
+    """
+    torch.manual_seed(2025)
+
+    def foo(x):
+        # Use the size API to verify dimensions, reflecting the pattern of the similar API
+        # which involves checking or calculating the size/numel of the array.
+        if x.size(0) < 4:
+            raise ValueError("Tensor first dimension must be at least 4")
+        
+        # The core bug reproduction logic:
+        # 1. In-place modification of slices
+        x[0].sin_()
+        x[1].sin_()
+        
+        # 2. Assignment to a new tensor (index_put_ behavior)
+        y = torch.zeros_like(x)
+        y[2] = x[0]
+        y[3] = x[1]
+        
+        return y
+
+    # Compile the function
+    cfoo = torch.compile(foo)
+    
+    # Create input tensors
+    x = torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]], dtype=torch.float32)
+    cx = x.clone()
+    
+    # Execute eager and compiled versions
+    res = foo(x)
+    cres = cfoo(cx)
+    
+    # Verify output dimensions using the size API
+    assert res.size() == torch.Size([4, 3]), "Eager output size mismatch"
+    assert cres.size() == torch.Size([4, 3]), "Compiled output size mismatch"
+    
+    # Check for value correctness (this will fail with the bug)
+    torch.testing.assert_close(res, cres)
+
+if __name__ == "__main__":
+    test_compile_index_put_with_inplace_ops()
+```

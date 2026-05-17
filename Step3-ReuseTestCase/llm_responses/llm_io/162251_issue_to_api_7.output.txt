@@ -1,0 +1,56 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_tf_control_dependencies_with_fuzzer_inputs():
+    """
+    Test case adapted from the PyTorch PixelShuffle fuzzer crash (Issue 162251).
+    This test checks if tf.control_dependencies handles malformed inputs 
+    (large integers, complex tensors) gracefully without causing a Floating Point Exception.
+    """
+    print("TensorFlow Version:", tf.__version__)
+
+    # Mimic the input structure from the original bug report
+    # Original: t = torch.zeros((5, 5, 9, 3), dtype=torch.complex32)
+    # Note: TensorFlow does not have complex32, using complex64 as the closest equivalent.
+    t = tf.zeros((5, 5, 9, 3), dtype=tf.complex64)
+    
+    # Original input structure: [args_for_init, kwargs_for_init, args_for_call, kwargs_for_call]
+    # The large integer 545460846592 caused the FPE in PixelShuffle shape checking.
+    input_data = [
+        [545460846592], 
+        {}, 
+        [t], 
+        {}
+    ]
+
+    try:
+        # Original logic: r1 = torch.nn.PixelShuffle(*input[0],**input[1])
+        # Adaptation: Attempt to initialize control_dependencies with the large integer.
+        # tf.control_dependencies expects an iterable of ops/tensors, not a raw large int.
+        # We test if this raises a clean error or crashes.
+        ctx = tf.control_dependencies(*input_data[0], **input_data[1])
+
+        # Original logic: r2 = r1(*input[2],**input[3])
+        # Adaptation: Attempt to use the context manager with the complex tensor.
+        with ctx:
+            # Perform an operation to trigger execution
+            result = t + 1
+            # Force evaluation to ensure any backend logic is executed
+            _ = result.numpy()
+
+        print("Test Passed: No crash occurred with malformed inputs.")
+
+    except (TypeError, ValueError, AttributeError) as e:
+        # These are expected exceptions for invalid arguments.
+        # The original bug resulted in a Floating Point Exception (FPE), which is a crash.
+        # Catching standard Python exceptions means the API is robust against this input.
+        print(f"Test Passed: Caught expected exception instead of crashing: {type(e).__name__}")
+    except Exception as e:
+        # Check for system-level signals or unexpected crashes
+        print(f"Test Failed: Unexpected exception: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_tf_control_dependencies_with_fuzzer_inputs()
+```

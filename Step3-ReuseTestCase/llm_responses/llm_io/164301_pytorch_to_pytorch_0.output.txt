@@ -1,0 +1,77 @@
+```python
+import torch
+import time
+
+def dim0_mxfp8_quantize(x: torch.Tensor) -> torch.Tensor:
+    """
+    Simulates the dim0_mxfp8_floor operation described in the bug report.
+    Performs row-wise quantization (scaling along dim 0) to float8.
+    """
+    # Calculate scale per row (dim 0)
+    # Using max-abs scaling strategy common in MX formats
+    scale = x.abs().max(dim=1, keepdim=True).values
+    
+    # Avoid division by zero
+    scale = torch.clamp(scale, min=1e-12)
+    
+    # Perform scaling and cast to float8_e4m3fn (standard MX format)
+    # Note: 'floor' rounding mode is specific to torchao, 
+    # standard .to() uses round-to-nearest-even, but this exercises the same codegen path.
+    return (x / scale).to(torch.float8_e4m3fn)
+
+def test_torch_compile_regression():
+    """
+    Test case to verify torch.compile performance and correctness 
+    for row-wise mxfp8 quantization.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        return
+
+    device = torch.device("cuda")
+    M, K = 16384, 16384 # Dimensions from the bug report
+    
+    # Use float16 or bfloat16 as input, typical for quantization workflows
+    x = torch.randn(M, K, device=device, dtype=torch.float16)
+
+    print(f"Testing torch.compile for dim0 mxfp8 quantization on {x.shape} tensor...")
+
+    # 1. Eager execution for correctness baseline
+    eager_output = dim0_mxfp8_quantize(x)
+
+    # 2. Compile the function using torch.compile
+    # The bug report mentions 'inductor' codegen, which is the default backend.
+    compiled_fn = torch.compile(dim0_mxfp8_quantize)
+
+    # 3. Warmup runs
+    for _ in range(10):
+        compiled_fn(x)
+    torch.cuda.synchronize()
+
+    # 4. Benchmark run (mimicking the cast_bench.py logic)
+    num_iters = 100
+    start_time = time.time()
+    
+    for _ in range(num_iters):
+        compiled_output = compiled_fn(x)
+        
+    torch.cuda.synchronize()
+    end_time = time.time()
+
+    avg_time_us = (end_time - start_time) * 1e6 / num_iters
+    print(f"Average time per iteration: {avg_time_us:.2f} us")
+
+    # 5. Correctness check
+    # Convert back to float16 for comparison as float8 ops can have slight numerical differences
+    assert torch.allclose(
+        eager_output.to(torch.float16), 
+        compiled_output.to(torch.float16), 
+        atol=1e-2, 
+        rtol=1e-2
+    ), "Compiled output differs from eager output"
+
+    print("Test passed: Output matches eager execution.")
+
+if __name__ == "__main__":
+    test_torch_compile_regression()
+```

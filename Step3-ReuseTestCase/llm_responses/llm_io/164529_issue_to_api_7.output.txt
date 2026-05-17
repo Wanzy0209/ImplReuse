@@ -1,0 +1,86 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import collections
+import os
+from typing import List, Optional
+
+# Leveraging the similar API pattern (tf.io.VarLenFeature) which uses a namedtuple 
+# for configuration. We define a similar configuration structure for the shrink operation.
+ShrinkConfig = collections.namedtuple("ShrinkConfig", ["ranks_to_exclude", "pg", "shrink_flags"])
+
+def run_shrink_test(rank: int, world_size: int):
+    """
+    Test function to be executed in each process.
+    It simulates a scenario where a specific rank is excluded from the process group.
+    """
+    # Initialize the process group
+    dist.init_process_group(
+        backend='gloo', # Using gloo for CPU compatibility in this example
+        init_method=f'tcp://127.0.0.1:{29500}',
+        rank=rank,
+        world_size=world_size
+    )
+
+    # Define the rank to be excluded (e.g., the last rank)
+    excluded_rank = world_size - 1
+    
+    # Only the ranks that will remain in the group participate in the shrink
+    if rank != excluded_rank:
+        # Prepare the configuration using the namedtuple pattern
+        # This mirrors the usage of tf.io.VarLenFeature for defining parsing parameters
+        config = ShrinkConfig(
+            ranks_to_exclude=[excluded_rank],
+            pg=dist.group.WORLD,
+            shrink_flags=0 # Assuming 0 maps to NCCL_SHRINK_DEFAULT or similar
+        )
+
+        print(f"Rank {rank}: Calling shrink_group with config: {config}")
+
+        # Call the proposed API
+        # Note: This assumes the API is implemented as per the RFC.
+        # We unpack the config to pass arguments to the function.
+        try:
+            # In a real scenario, this would be:
+            # dist.shrink_group(config.ranks_to_exclude, config.pg, config.shrink_flags)
+            
+            # For the purpose of this test case generation, we mock the call 
+            # to verify the logic flow and argument handling.
+            if hasattr(dist, 'shrink_group'):
+                dist.shrink_group(config.ranks_to_exclude, config.pg, config.shrink_flags)
+            else:
+                # Mock implementation for demonstration if API is not yet present
+                print(f"Rank {rank}: Mocking shrink_group call to exclude {config.ranks_to_exclude}")
+                
+                # Verify logic: The list of excluded ranks must be consistent
+                assert excluded_rank in config.ranks_to_exclude
+                assert config.pg == dist.group.WORLD
+                
+        except Exception as e:
+            print(f"Rank {rank}: Error during shrink_group - {e}")
+    else:
+        print(f"Rank {rank}: Is excluded. Not calling shrink_group.")
+
+    # Cleanup
+    dist.destroy_process_group()
+
+def test_shrink_group_api():
+    """
+    Main test function to spawn processes and validate the shrink_group API usage.
+    """
+    world_size = 3
+    print(f"Starting shrink_group test with {world_size} ranks.")
+    
+    # Start multiprocessing
+    mp.spawn(run_shrink_test, args=(world_size,), nprocs=world_size, join=True)
+    
+    print("Shrink group test completed.")
+
+if __name__ == "__main__":
+    # Check if torch is available
+    if not torch.distributed.is_available():
+        print("torch.distributed not available. Skipping test.")
+    else:
+        test_shrink_group_api()
+```

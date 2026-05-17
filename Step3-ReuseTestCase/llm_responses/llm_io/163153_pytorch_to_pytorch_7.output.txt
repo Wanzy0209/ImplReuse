@@ -1,0 +1,62 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def verify_min_gpu_count(min_gpus: int = 2) -> bool:
+    """Verification that we have at least 2 gpus to run dist examples"""
+    if not torch.cuda.is_available():
+        return False
+    return torch.cuda.device_count() >= min_gpus
+
+def run_test(rank, world_size):
+    # Setup similar to the original example
+    if verify_min_gpu_count():
+        device = torch.device(f"cuda:{rank}")
+        backend = "nccl"
+    else:
+        device = torch.device("cpu")
+        backend = "gloo"
+
+    # Initialize process group (Required dependency for the similar API)
+    dist.init_process_group(
+        backend=backend, 
+        rank=rank, 
+        world_size=world_size,
+        init_method=f"tcp://127.0.0.1:29500"
+    )
+
+    # --- Testing Similar API: torch.distributed.scatter_object_list ---
+    
+    # Prepare data structures
+    # scatter_object_output_list must be a list of size 1 to store the result
+    scatter_output = [None] 
+    scatter_input = None
+
+    if rank == 0:
+        # Source rank prepares the list of objects to scatter
+        # These objects can be any picklable Python object
+        scatter_input = [f"object_for_rank_{i}" for i in range(world_size)]
+
+    # Call the similar API
+    # This scatters the objects from rank 0 to all other ranks
+    dist.scatter_object_list(scatter_output, scatter_input, src=0)
+
+    # Verify the result
+    expected_object = f"object_for_rank_{rank}"
+    assert scatter_output[0] == expected_object, \
+        f"Rank {rank} failed: expected '{expected_object}', got '{scatter_output[0]}'"
+
+    print(f"Rank {rank} successfully received: {scatter_output[0]}")
+
+    dist.destroy_process_group()
+
+def main():
+    world_size = 2
+    # Use spawn to launch processes for distributed testing
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()
+```

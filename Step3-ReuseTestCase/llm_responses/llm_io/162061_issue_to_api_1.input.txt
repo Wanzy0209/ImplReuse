@@ -1,0 +1,129 @@
+Issue ID: 162061
+Title: Dynamo-based ONNX exporter adds seemingly unnecessary operations to the graph
+Bug Description:
+### 🐛 Describe the bug
+
+Exporting an ONNX model through the new Dynamo-based exporter adds some unnecessary operations around pixel shuffle.
+
+Code to reproduce:
+
+```python
+import torch
+import torch.nn as nn
+import onnx
+from torchsummary import summary
+
+
+class Model(nn.Module):
+    def __init__(self, kernel_size=3, upscale_factor=2):
+        super(Model, self).__init__()
+        self.conv = nn.Conv2d(1, 4, kernel_size=kernel_size, padding="same")
+        self.pixel_shuffle = nn.PixelShuffle(upscale_factor)
+
+    def forward(self, input):
+        x = self.conv(input)
+        x = self.pixel_shuffle(x)
+        return x
+
+
+model = Model()
+summary(model.cuda(), (1, 128, 128))
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+x = torch.ones((1, 1, 128, 128))
+x = x.to(device)
+torch.onnx.export(
+    model,
+    x,
+    f"dynamo.onnx",
+    dynamo=True,
+    external_data=False,
+    opset_version=20,
+
+Original API Under Test: torch.onnx.export
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.raw_ops.ExtractImagePatches
+Similarity score: 0.9908322095870972
+
+Similar API information:
+# Extracted call chain for tf.raw_ops.ExtractImagePatches
+
+# --- tensorflow.compiler.tests.extract_image_patches_op_test.ExtractImagePatches ---
+class ExtractImagePatches(xla_test.XLATestCase):
+  """Functional tests for ExtractImagePatches op."""
+
+  def _VerifyValues(self, image, ksizes, strides, rates, padding, patches):
+    """Tests input-output pairs for the ExtractImagePatches op.
+
+    Args:
+      image: Input tensor with shape: [batch, in_rows, in_cols, depth].
+      ksizes: Patch size specified as: [ksize_rows, ksize_cols].
+      strides: Output strides, specified as [stride_rows, stride_cols].
+      rates: Atrous rates, specified as [rate_rows, rate_cols].
+      padding: Padding type.
+      patches: Expected output.
+    """
+    ksizes = [1] + ksizes + [1]
+    strides = [1] + strides + [1]
+    rates = [1] + rates + [1]
+
+    with self.session():
+      image_placeholder = array_ops.placeholder(dtypes.float32)
+      with self.test_scope():
+        out_tensor = array_ops.extract_image_patches(
+            image_placeholder,
+            ksizes=ksizes,
+            strides=strides,
+            rates=rates,
+            padding=padding,
+
+Original Test Case:
+import torch
+import torch.nn as nn
+import onnx
+from torchsummary import summary
+
+
+class Model(nn.Module):
+    def __init__(self, kernel_size=3, upscale_factor=2):
+        super(Model, self).__init__()
+        self.conv = nn.Conv2d(1, 4, kernel_size=kernel_size, padding="same")
+        self.pixel_shuffle = nn.PixelShuffle(upscale_factor)
+
+    def forward(self, input):
+        x = self.conv(input)
+        x = self.pixel_shuffle(x)
+        return x
+
+
+model = Model()
+summary(model.cuda(), (1, 128, 128))
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+x = torch.ones((1, 1, 128, 128))
+x = x.to(device)
+torch.onnx.export(
+    model,
+    x,
+    f"dynamo.onnx",
+    dynamo=True,
+    external_data=False,
+    opset_version=20,
+    input_names=["input"],
+    output_names=["output"],
+    dynamic_shapes={"input": {0: "batch", 2: "width", 3: "height"}},
+)
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

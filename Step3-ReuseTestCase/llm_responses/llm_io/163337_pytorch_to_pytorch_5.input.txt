@@ -1,0 +1,71 @@
+Issue ID: 163337
+Title: Compilation error withstatic_castfromfloatto__halfwhen building PyTorch extension with rocWMMA on ROCm
+Bug Description:
+### 🐛 Describe the bug
+
+
+When attempting to build a PyTorch C++ extension that utilizes rocWMMA kernels on a ROCm-based system (AMD GPU), the compilation fails. The error message indicates a problem with `static_cast` from `float` to `rocwmma::hfloat16_t` (which is an alias for `__half`). This issue seems to originate from within the rocWMMA header files (`vector.hpp`) when they are included and compiled in the context of a PyTorch extension.
+
+The compilation command is executed by `torch.utils.cpp_extension.load`. The error suggests that the compiler cannot find a suitable constructor to convert a `float` literal (like `0.0f`) to a `__half` type, which is required by some rocWMMA vector initialization templates.
+
+Here is the core error message from the build process:
+```
+/opt/rocm-7.0.1/include/rocwmma/internal/layout/../vector.hpp:446:1148: error: no matching conversion for static_cast from 'float' to 'rocwmma::hfloat16_t' (aka '__half')
+  446 | ... constexpr explicit HIP_vector_base(rocwmma::hfloat16_t val) noexcept : HIP_vector_base(rocwmma::detail::template bCast<HIP_vector_base>( static_cast<rocwmma::hfloat16_t>(0.0f), rocwmma::detail::Seq<1>{})) { data[0] = val; } ...
+      |
+...
+
+Original API Under Test: torch.utils.cpp_extension.load
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.utils.checkpoint.checkpoint_sequential
+Similarity score: 0.9945421814918518
+
+Similar API information:
+# Extracted call chain for torch.utils.checkpoint.checkpoint_sequential
+
+# --- torch.utils.checkpoint.checkpoint_sequential ---
+def checkpoint_sequential(functions, segments, input, use_reentrant=None, **kwargs):
+    r"""Checkpoint a sequential model to save memory.
+
+    Sequential models execute a list of modules/functions in order
+    (sequentially). Therefore, we can divide such a model in various segments
+    and checkpoint each segment. All segments except the last will not store
+    the intermediate activations. The inputs of each checkpointed segment will
+    be saved for re-running the segment in the backward pass.
+
+    .. warning::
+        The ``use_reentrant`` parameter should be passed explicitly. In version
+        2.4 we will raise an exception if ``use_reentrant`` is not passed.
+        If you are using the ``use_reentrant=True` variant, please see
+        :func:`~torch.utils.checkpoint.checkpoint` for
+        the important considerations and limitations of this variant. It is
+        recommended that you use ``use_reentrant=False``.
+
+    .. warning:
+        Since PyTorch 1.4, it allows only one Tensor as the input and
+        intermediate outputs, just like :class:`t
+...
+
+Original Test Case:
+# In rocwmma_fattn/FlashAttn.py
+import torch
+...
+flash_attn_wmma = torch.utils.cpp_extension.load(
+    name="flash_attn_wmma",
+    sources=[
+        "rocwmma_fattn/host.cpp",
+        "rocwmma_fattn/kernel_fp16.hip",
+        "rocwmma_fattn/kernel_bf16.hip",
+    ],
+    extra_hip_cflags=hip_flags,
+    ...
+)
+
+The API torch.utils.checkpoint.checkpoint_sequential is identified as same-library similar to the original PyTorch API torch.utils.cpp_extension.load.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

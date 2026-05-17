@@ -1,0 +1,64 @@
+```python
+import tensorflow as tf
+import gc
+
+def test_name_scope_memory_leak():
+    """
+    Adapted test case to check for memory leaks in tf.keras.name_scope.
+    
+    The original PyTorch issue (Issue 165407) demonstrated that torch.compile
+    was holding onto tensor references, causing the number of live tensors to 
+    increase indefinitely during a training loop. This test replicates that 
+    scenario by repeatedly entering a tf.keras.name_scope context, creating 
+    tensors, and verifying that the number of live tensors does not grow 
+    unbounded.
+    """
+    print("Starting memory leak test for tf.keras.name_scope...")
+
+    # Helper function to count live TensorFlow tensors in Python memory
+    def count_live_tensors():
+        gc.collect()
+        return sum(1 for obj in gc.get_objects() if isinstance(obj, tf.Tensor))
+
+    # Establish baseline
+    initial_count = count_live_tensors()
+    print(f"Initial Tensors: {initial_count}")
+
+    steps = 300
+    for step in range(1, steps + 1):
+        # Use the API under test: tf.keras.name_scope
+        # We use a unique name for each step to prevent potential caching collisions
+        with tf.keras.name_scope(f"memory_leak_test_step_{step}"):
+            # Simulate operations similar to a forward pass
+            # Creating random tensors to mimic activation/attention outputs
+            x = tf.random.normal((32, 128), name="input")
+            y = tf.random.normal((128, 128), name="weight")
+            z = tf.matmul(x, y, name="output")
+            
+            # Explicitly delete the local variable to ensure it should go out of scope
+            del z
+
+        # Periodically check the number of tensors, similar to the bug report output
+        if step % 50 == 0:
+            current_count = count_live_tensors()
+            # Calculate growth relative to initial state
+            growth = current_count - initial_count
+            
+            print(f"Step {step:4d} | Tensors: {current_count:4d} | Growth: {growth:4d}")
+            
+            # Assertion to detect the leak.
+            # In the PyTorch bug, tensors grew by hundreds every 50 steps.
+            # We allow a small buffer for internal TensorFlow caching, but 
+            # linear growth with steps indicates a leak.
+            assert growth < 100, (
+                f"Potential memory leak detected at step {step}. "
+                f"Tensor count grew by {growth} (Expected < 100)."
+            )
+
+    final_count = count_live_tensors()
+    print(f"Final Tensors: {final_count}")
+    print("Test passed: No significant memory leak detected in tf.keras.name_scope.")
+
+if __name__ == "__main__":
+    test_name_scope_memory_leak()
+```

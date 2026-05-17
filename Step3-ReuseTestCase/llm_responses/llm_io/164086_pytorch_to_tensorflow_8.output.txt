@@ -1,0 +1,101 @@
+```python
+import tensorflow as tf
+import numpy as np
+import sys
+
+def test_lecun_normal_compilation():
+    """
+    Adapted test case for tf.keras.initializers.LecunNormal based on the 
+    PyTorch bug report involving torch.tanh and mixed precision compilation.
+    
+    The original bug involved a divergence between eager and compiled modes 
+    when handling mixed precision (float16) and specific tensor operations.
+    This test verifies that LecunNormal initializes tensors correctly within
+    a compiled graph (tf.function) using mixed precision.
+    """
+    
+    # Enable mixed precision to match the environment of the original bug
+    # The original bug used emulate_precision_casts and float16
+    policy = tf.keras.mixed_precision.Policy('mixed_float16')
+    tf.keras.mixed_precision.set_global_policy(policy)
+
+    # Inputs mimicking the original bug report
+    # arg0: size=(42, 56), dtype=int64
+    arg0 = tf.constant(np.random.randint(0, 1000, (42, 56)), dtype=tf.int64)
+    
+    # arg1: size=(50000, 128), dtype=float16
+    arg1 = tf.random.uniform((50000, 128), dtype=tf.float16)
+    
+    # arg2: size=(46, 128), dtype=float16 (Linear weights)
+    # We will generate this using LecunNormal inside the function
+    
+    # arg3: size=(50000, 4, 46), dtype=float16
+    arg3 = tf.random.uniform((50000, 4, 46), dtype=tf.float16)
+
+    # The API under test: tf.keras.initializers.LecunNormal
+    initializer = tf.keras.initializers.LecunNormal()
+
+    def model_fn(idx_arg, data_arg, extra_arg):
+        # 1. Mimic the original logic: tanh on int64
+        # PyTorch allows tanh on int64 (implicit cast). TF requires explicit cast.
+        # t0 = arg0
+        # t1 = torch.tanh(t0)
+        t1 = tf.math.tanh(tf.cast(idx_arg, tf.float16))
+        
+        # t2 = t1.clone(); t2.zero_()
+        t2 = tf.zeros_like(t1)
+        
+        # 2. Use LecunNormal to generate weights (replacing manual initialization)
+        # t4 (Linear weights): size=(46, 128)
+        t4 = initializer(shape=(46, 128), dtype=tf.float16)
+        
+        # t5 = linear(t3, t4) -> matmul(data, weights.T)
+        t5 = tf.linalg.matmul(data_arg, t4, transpose_b=True)
+        
+        # 3. Mimic the max operation
+        # t7 = t6.max(dim=1).values
+        t7 = tf.reduce_max(extra_arg, axis=1)
+        
+        # 4. Use LecunNormal to generate embedding weights (replacing the complex pow chain)
+        # t11: size=(50000, 46)
+        # In the original bug, t11 was created via pow operations. Here we use the Similar API.
+        t11 = initializer(shape=(50000, 46), dtype=tf.float16)
+        
+        # 5. Embedding lookup
+        # t12 = embedding(clamp(t2), t11)
+        # Clamp indices to valid range [0, 50000)
+        indices = tf.clip_by_value(tf.cast(t2, tf.int32), 0, 49999)
+        t12 = tf.gather(t11, indices)
+        
+        return t12
+
+    print("Running Eager Execution...")
+    try:
+        # Run eager
+        out_eager = model_fn(arg0, arg1, arg3)
+        print('Eager Success! ✅')
+    except Exception as e:
+        print(f'Eager Failed: {e}')
+        return
+
+    print("\nRunning Compiled Execution (tf.function)...")
+    try:
+        # Run compiled (equivalent to torch.compile)
+        compiled_fn = tf.function(model_fn, jit_compile=True)
+        out_compiled = compiled_fn(arg0, arg1, arg3)
+        print('Compile Success! ✅')
+    except Exception as e:
+        print(f'Compile Failed: {e}')
+        return
+
+    print("\nVerifying Consistency...")
+    # Check if results are close
+    if tf.reduce_all(tf.abs(out_eager - out_compiled) < 1e-3).numpy():
+        print('Results Match! ✅')
+    else:
+        print('Results Diverge! ❌')
+        print(f"Max diff: {tf.reduce_max(tf.abs(out_eager - out_compiled)).numpy()}")
+
+if __name__ == '__main__':
+    test_lecun_normal_compilation()
+```

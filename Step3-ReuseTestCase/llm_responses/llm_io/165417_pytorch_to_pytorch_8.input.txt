@@ -1,0 +1,79 @@
+Issue ID: 165417
+Title: [torch.compile][fullgraph][dynamic shapes]torch.unique(aten._unique2.default) rejected as “Dynamic shape operator” in fullgraph mode (eager OK)
+Bug Description:
+### 🐛 Describe the bug
+
+A tiny model that calls torch.unique(sorted=True, return_inverse=True) and returns a tuple (unique_values, inverse_indices) runs fine in eager, but fails under torch.compile(fullgraph=True) with:
+```
+torch._dynamo.exc.Unsupported: Dynamic shape operator
+Explanation: Operator `aten._unique2.default`'s output shape depends on input Tensor data.
+Hint: Enable tracing of dynamic shape operators with `torch._dynamo.config.capture_dynamic_output_shape_ops = True`
+```
+This blocks full-graph compilation for a very common data-dependent op (unique) used in tokenization / indexing pipelines.
+
+### Minimal Repro
+```python
+import torch, time
+from torch import nn
+
+class MyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        # _unique2.default under the hood
+        _x, _i = torch.unique(x, sorted=True, return_inverse=True)
+        _x = _x.clone().detach()   # keep it simple
+        return self.relu(_x), _i   # tuple output
+
+def GetInput():
+    return torch.randn(8)         # CPU or CUDA; same failure in front-end
+
+def run_once(model, x, label):
+    model.eval()
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        y = model(x)
+    print(f"[{label}] ok, types={[type(t) for t in (y if isinstance(y, (tuple, list)) else [y])]} "
+          f"time={(time.perf_counter()-t0)*1000:.3f}ms")
+    return y
+
+def main():
+    print("torch.__version__ =", torch.__version__)
+
+Original API Under Test: torch.unique
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.absolute
+Similarity score: 0.9741207361221313
+
+Similar API information:
+# Extracted call chain for torch.absolute
+
+# --- torch._numpy._unary_ufuncs_impl.absolute ---
+def absolute(x):
+    # work around torch.absolute not impl for bools
+    if x.dtype == torch.bool:
+        return x
+    return torch.absolute(x)
+
+# --- torch.absolute ---
+def absolute(x):
+    # work around torch.absolute not impl for bools
+    if x.dtype == torch.bool:
+        return x
+    return torch.absolute(x)
+
+Original Test Case:
+torch._dynamo.exc.Unsupported: Dynamic shape operator
+Explanation: Operator `aten._unique2.default`'s output shape depends on input Tensor data.
+Hint: Enable tracing of dynamic shape operators with `torch._dynamo.config.capture_dynamic_output_shape_ops = True`
+
+The API torch.absolute is identified as same-library similar to the original PyTorch API torch.unique.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

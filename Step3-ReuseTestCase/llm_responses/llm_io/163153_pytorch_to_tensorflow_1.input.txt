@@ -1,0 +1,170 @@
+Issue ID: 163153
+Title: FSDP2 implicit prefetch does not work
+Bug Description:
+### 🐛 Describe the bug
+
+I'm using official [example of FSDP2](https://github.com/pytorch/examples/blob/acc295dc7b90714f1bf47f06004fc19a7fe235c4/distributed/FSDP2/example.py) with some small modifcations:
+
+
+```python
+# distributed/FSDP2/example.py
+import argparse
+import os
+
+import torch
+from checkpoint import Checkpointer
+from model import ModelArgs, Transformer
+from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
+from utils import inspect_mixed_precision, inspect_model
+from torch.profiler import profile, record_function, ProfilerActivity
+
+def verify_min_gpu_count(min_gpus: int = 2) -> bool:
+    """ verification that we have at least 2 gpus to run dist examples """
+    has_gpu = torch.accelerator.is_available()
+    gpu_count = torch.accelerator.device_count()
+    return has_gpu and gpu_count >= min_gpus
+
+def set_modules_to_forward_prefetch(model, num_to_forward_prefetch):
+    for i, layer in enumerate(model.layers):
+        if i >= len(model.layers) - num_to_forward_prefetch:
+            break
+        layers_to_prefetch = [
+            model.layers[i + j] for j in range(1, num_to_forward_prefetch + 1)
+        ]
+        layer.set_modules_to_forward_prefetch(layers_to_prefetch)
+
+
+def set_modules_to_backward_prefetch(model, num_to_backward_prefetch):
+    for i, layer in enumerate(model.layers):
+        if i < num_to_backward_prefetch:
+            continue
+        layers_to_prefetch = [
+            model.layers[i - j] for j in range(1, num_to_backward_prefetch + 1)
+...
+
+Original API Under Test: torch.distributed.init_process_group
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.dtensor.create_tpu_mesh
+Similarity score: 0.994024395942688
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.create_tpu_mesh
+
+# --- tensorflow.dtensor.python.tpu_util.create_tpu_mesh ---
+def create_tpu_mesh(
+    mesh_dim_names: List[str],
+    mesh_shape: List[int],
+    mesh_name: str,
+    ring_dims: Optional[int] = None,
+    ring_axes: Optional[List[str]] = None,
+    ring_bounds: Optional[List[int]] = None,
+    can_split_host_across_rings: bool = True,
+    build_ring_across_rings: bool = False,
+    rotate_ring_across_rings: bool = False,
+    use_xla_spmd: bool = layout_lib.USE_XLA_SPMD) -> layout_lib.Mesh:
+  """Returns a distributed TPU mesh optimized for AllReduce ring reductions.
+
+  Only as many as leading axes specified by `ring_axes` as necessary will be
+  used to build rings, as long as the subslice formed by these axes have enough
+  cores to contain a ring of the required size. The leftover axes in `ring_axes`
+  won't affect results.
+
+  This function always uses all TPU devices, and offers more customization than
+  `tf.experimental.dtensor.create_distributed_mesh`.
+
+  Args:
+    mesh_dim_names: List of mesh dimension names.
+    mesh_shape: Shape of the mesh.
+    mesh_name: A unique name for the mesh. If empty, internally generate one
+...
+
+Original Test Case:
+# distributed/FSDP2/example.py
+import argparse
+import os
+
+import torch
+from checkpoint import Checkpointer
+from model import ModelArgs, Transformer
+from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
+from utils import inspect_mixed_precision, inspect_model
+from torch.profiler import profile, record_function, ProfilerActivity
+
+def verify_min_gpu_count(min_gpus: int = 2) -> bool:
+    """ verification that we have at least 2 gpus to run dist examples """
+    has_gpu = torch.accelerator.is_available()
+    gpu_count = torch.accelerator.device_count()
+    return has_gpu and gpu_count >= min_gpus
+
+def set_modules_to_forward_prefetch(model, num_to_forward_prefetch):
+    for i, layer in enumerate(model.layers):
+        if i >= len(model.layers) - num_to_forward_prefetch:
+            break
+        layers_to_prefetch = [
+            model.layers[i + j] for j in range(1, num_to_forward_prefetch + 1)
+        ]
+        layer.set_modules_to_forward_prefetch(layers_to_prefetch)
+
+
+def set_modules_to_backward_prefetch(model, num_to_backward_prefetch):
+    for i, layer in enumerate(model.layers):
+        if i < num_to_backward_prefetch:
+            continue
+        layers_to_prefetch = [
+            model.layers[i - j] for j in range(1, num_to_backward_prefetch + 1)
+        ]
+        layer.set_modules_to_backward_prefetch(layers_to_prefetch)
+
+
+def main(args):
+    _min_gpu_count = 2
+    if not verify_min_gpu_count(min_gpus=_min_gpu_count):
+        print(f"Unable to locate sufficient {_min_gpu_count} gpus to run this example. Exiting.")
+        exit()
+    rank = int(os.environ["LOCAL_RANK"])
+    if torch.accelerator.is_available():
+        device_type = torch.accelerator.current_accelerator()
+        device = torch.device(f"{device_type}:{rank}")
+        torch.accelerator.set_device_index(rank)
+        print(f"Running on rank {rank} on device {device}")
+    else:
+        device = torch.device("cpu")
+        print(f"Running on device {device}")
+
+    backend = torch.distributed.get_default_backend_for_device(device)
+    torch.distributed.init_process_group(backend=backend, device_id=device)
+
+    torch.manual_seed(0)
+    vocab_size = 1024
+    batch_size = 4
+    seq_len = 1024
+    model_args = ModelArgs(
+        n_layers=10,
+        n_heads=8,
+        dim=4096,
+        vocab_size=vocab_size,
+        max_seq_len=seq_len,
+        dropout_p=0,
+    )
+    with torch.device("meta"):
+        model = Transformer(model_args)
+    fsdp_kwargs = {}
+    if args.mixed_precision:
+        fsdp_kwargs["mp_policy"] = MixedPrecisionPolicy(
+            param_dtype=torch.bfloat16,
+            reduce_dtype=torch.float32,
+        )
+    for layer in model.layers:
+        fully_shard(layer, **fsdp_kwargs)
+    fully_shard(model, **fsdp_kwargs)
+
+    inspect_model(model)
+
+The API tf.experimental.dtensor.create_tpu_mesh is identified as cross-library similar to the original PyTorch API torch.distributed.init_process_group.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,77 @@
+```python
+import tensorflow as tf
+from tensorflow.experimental import dtensor
+
+# Check for device availability (analogous to torch.backends.mps.is_available)
+physical_devices = tf.config.list_physical_devices()
+assert len(physical_devices) > 0, "No devices available"
+
+# Original API Under Test: torch.device("mps")
+# Similar API: tf.experimental.dtensor.create_mesh
+# Create a mesh representing the device topology.
+# We use CPU here to ensure the test is runnable on all environments, 
+# analogous to how the original code targets the specific 'mps' device.
+mesh = dtensor.create_mesh(
+    mesh_dims=[('x', 1)],  # Single dimension mesh
+    devices=['CPU:0'],     # Use CPU:0 for the mesh
+    device_type='CPU'
+)
+
+# Wrapper over the custom DTensor soft shrink kernel.
+# Original: class MPSSoftshrink(nn.Module)
+class DTensorSoftshrink(tf.keras.layers.Layer):
+    __constants__ = ["lambd"]
+    lambd: float
+
+    def __init__(self, lambd: float = 0.5, name=None) -> None:
+        super().__init__(name=name)
+        self.lambd = lambd
+
+    def call(self, input):
+        # Original: return compiled_lib.mps_softshrink(input, self.lambd)
+        # Adapted: Implement soft shrink logic using TensorFlow ops
+        # f(x) = x - lambda if x > lambda, x + lambda if x < -lambda, 0 otherwise
+        return tf.where(
+            input > self.lambd,
+            input - self.lambd,
+            tf.where(
+                input < -self.lambd,
+                input + self.lambd,
+                tf.zeros_like(input)
+            )
+        )
+
+    def get_config(self):
+        return {'lambd': self.lambd}
+
+# Wrapper over the Sequential layer, using the custom DTensor kernel soft shrink implementation.
+# Original: class CustomMPSSoftshrinkModel(nn.Module)
+class CustomDTensorSoftshrinkModel(tf.keras.Model):
+    def __init__(
+        self,
+        input_size: int = 784,
+        lin1_size: int = 256,
+        lin2_size: int = 256,
+        lin3_size: int = 256,
+        output_size: int = 10,
+    ):
+        super().__init__()
+
+        self.model = tf.keras.Sequential([
+            tf.keras.layers.Dense(lin1_size, input_shape=(input_size,)),
+            DTensorSoftshrink(),
+            tf.keras.layers.Dense(lin2_size),
+            DTensorSoftshrink(),
+            tf.keras.layers.Dense(lin3_size),
+            DTensorSoftshrink(),
+            tf.keras.layers.Dense(output_size)
+        ])
+
+    def call(self, x):
+        return self.model(x)
+
+# Verify the model and mesh are instantiated correctly
+model = CustomDTensorSoftshrinkModel()
+print(f"Mesh created: {mesh}")
+print(f"Model created: {model}")
+```

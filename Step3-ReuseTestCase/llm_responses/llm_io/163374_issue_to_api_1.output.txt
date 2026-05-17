@@ -1,0 +1,70 @@
+```python
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.utils.debug_mode import DebugMode
+
+def test_sync_batchnorm(rank, world_size):
+    """
+    Test case for torch.nn.SyncBatchNorm inspired by the DTensor inplace ops bug.
+    
+    The original bug (Issue 163374) demonstrated that an inplace operation (clamp_)
+    on a distributed tensor (DTensor with Partial placement) resulted in incorrect
+    placement and value due to flawed redistribution logic.
+    
+    This test adapts that logic to torch.nn.SyncBatchNorm. SyncBatchNorm performs
+    distributed synchronization (all_reduce) internally and updates running statistics
+    (running_mean, running_var) inplace. We verify that these inplace updates occur
+    correctly and that the distributed synchronization happens as expected.
+    """
+    
+    # Setup distributed environment
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
+    # Create input tensor
+    # We add 'rank' to the tensor to ensure data differs per rank, 
+    # making the synchronization meaningful.
+    tensor = torch.randn(10, 5, 4, 4, device="cuda") + rank
+    
+    # Initialize SyncBatchNorm
+    # process_group=None uses the default world group
+    sbn = nn.SyncBatchNorm(5).cuda()
+    
+    # Capture debug information to inspect distributed calls
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        # Forward pass
+        # This triggers:
+        # 1. Calculation of local batch stats
+        # 2. all_reduce to sync stats across processes
+        # 3. Inplace update of running_mean and running_var
+        output = sbn(tensor)
+        
+        # Verify inplace updates happened
+        # running_mean and running_var should have moved away from their initial values (0 and 1)
+        assert not torch.allclose(sbn.running_mean, torch.zeros(5, device="cuda"))
+        assert not torch.allclose(sbn.running_var, torch.ones(5, device="cuda"))
+
+    if rank == 0:
+        debug_str = debug_mode.debug_string()
+        print(debug_str)
+        
+        # Verify that the debug trace contains the expected distributed operations
+        # Similar to the bug report checking for _c10d_functional::all_reduce
+        assert "all_reduce" in debug_str, "Expected all_reduce operation in SyncBatchNorm forward pass"
+        
+        print("SyncBatchNorm running_mean:", sbn.running_mean)
+        print("SyncBatchNorm running_var:", sbn.running_var)
+        print("Test Passed.")
+
+    dist.destroy_process_group()
+
+if __name__ == '__main__':
+    world_size = 2
+    # Check if CUDA is available before running
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+    else:
+        mp.spawn(test_sync_batchnorm, args=(world_size,), nprocs=world_size, join=True)
+```

@@ -1,0 +1,98 @@
+```python
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+import numpy as np
+
+def test_dtensor_copy_to_mesh_dim0_performance_regression():
+    """
+    Adapts the torch.compile regression test for mxfp8 quantization along rows (dim0).
+    
+    Original Bug Context:
+    - API: torch.compile
+    - Issue: Performance regression in inductor codegen for mxfp8 quantization 
+             with (1 x block_size) scaling granularity (dim0).
+    - Setup: Large tensor (16384x16384) on B200 GPU.
+    
+    Target API Context:
+    - API: tf.experimental.dtensor.copy_to_mesh
+    - Adaptation: Verify the behavior of copying a large tensor to a mesh 
+                  with a layout sharded along dimension 0 (rows). 
+                  This mimics the "dim0" granularity of the original bug.
+    """
+    
+    # 1. Setup Device
+    # Attempt to use GPU as per the original bug report (B200 GPU), fallback to CPU.
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        try:
+            # Restrict to the first GPU to mimic CUDA_VISIBLE_DEVICES=7
+            tf.config.set_visible_devices(gpus[0], 'GPU')
+            device_id = gpus[0].name
+            print(f"Running on GPU: {device_id}")
+        except RuntimeError as e:
+            print(f"GPU setup failed: {e}, falling back to CPU.")
+            device_id = '/CPU:0'
+    else:
+        device_id = '/CPU:0'
+        print("Running on CPU.")
+
+    # 2. Define Mesh
+    # Create a single-device mesh to match the single-GPU repro environment.
+    # 'batch' dimension represents the dimension we might shard over.
+    mesh = dtensor.Mesh(
+        mesh_dims=['batch'],
+        device_ids=[device_id]
+    )
+
+    # 3. Define Layout
+    # The original bug involves "dim0_mxfp8_floor" (row-wise scaling).
+    # We map this to a DTensor layout sharded along the first dimension (dim 0).
+    layout_dim0 = dtensor.Layout(
+        sharding_specs=[dtensor.SHARD('batch'), dtensor.UNSHARDED], 
+        mesh=mesh
+    )
+
+    # 4. Create Tensor
+    # Replicate the tensor size from the original benchmark: M=16384, K=16384
+    M, K = 16384, 16384
+    # Use float32 to match standard precision before quantization/casting
+    local_tensor = tf.random.normal((M, K), dtype=tf.float32)
+
+    # 5. Execute API
+    # Copy the local tensor to the DTensor mesh with the dim0 layout.
+    # This operation involves data movement and layout enforcement, analogous 
+    # to the kernel compilation issues in the original bug.
+    try:
+        dtensor_result = dtensor.copy_to_mesh(local_tensor, layout_dim0)
+        
+        # 6. Verification
+        # Check Shape: The global shape should remain unchanged.
+        assert dtensor_result.shape == (M, K), \
+            f"Shape mismatch. Expected {(M, K)}, got {dtensor_result.shape}"
+            
+        # Check Layout: Verify the result respects the dim0 sharding.
+        assert dtensor_result.layout == layout_dim0, \
+            "Layout mismatch. Result does not have the expected dim0 sharding."
+            
+        # Check Data Integrity: Ensure values are preserved during the copy/layout op.
+        # Since we are on a single device mesh, to_local() should return the full tensor.
+        result_local = dtensor_result.to_local()
+        
+        # Allow for small floating point differences
+        np.testing.assert_allclose(
+            local_tensor.numpy(), 
+            result_local.numpy(), 
+            rtol=1e-5, 
+            atol=1e-5,
+            err_msg="Data mismatch after copy_to_mesh"
+        )
+        
+        print("Test Passed: copy_to_mesh handled dim0 layout correctly.")
+
+    except Exception as e:
+        print(f"Test Failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_dtensor_copy_to_mesh_dim0_performance_regression()
+```

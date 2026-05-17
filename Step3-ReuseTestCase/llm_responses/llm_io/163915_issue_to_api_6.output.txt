@@ -1,0 +1,70 @@
+```python
+import torch
+import triton
+import triton.language as tl
+import torch.symm_mem._nvshmem_triton as nvshmem
+
+def test_nvshmem_triton_kernel_naming_convention():
+    """
+    Test case to reproduce the issue where NVSHMEM Triton kernels
+    silently hit IMA if the kernel name does not contain 'nvshmem'.
+    
+    The bug report indicates that enable_triton() relies on the kernel name
+    to perform initialization. This test verifies the behavior for both
+    compliant and non-compliant kernel names.
+    """
+    
+    # Enable NVSHMEM support for Triton
+    nvshmem.enable_triton()
+
+    # Setup data
+    size = 128
+    x = torch.randn(size, device='cuda')
+    y = torch.zeros(size, device='cuda')
+
+    # Case 1: Kernel name does NOT contain "nvshmem"
+    # Expected behavior (Bug): Misses NVSHMEM init, hits CUDA IMA silently.
+    @triton.jit
+    def generic_kernel(x_ptr, y_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        tl.store(y_ptr + offsets, x, mask=mask)
+
+    # Case 2: Kernel name DOES contain "nvshmem"
+    # Expected behavior (Fix): Correctly initializes and executes.
+    @triton.jit
+    def nvshmem_compliant_kernel(x_ptr, y_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        tl.store(y_ptr + offsets, x, mask=mask)
+
+    # Attempt to launch the non-compliant kernel
+    # In the buggy version, this might cause a silent IMA.
+    # In a fixed version, this might raise a clear error or handle it gracefully.
+    print("Testing kernel without 'nvshmem' in name...")
+    try:
+        generic_kernel[(1,)](x, y, size, BLOCK_SIZE=128)
+        torch.cuda.synchronize()
+        print("Non-compliant kernel executed (or failed silently).")
+    except Exception as e:
+        print(f"Non-compliant kernel failed with error: {e}")
+
+    # Attempt to launch the compliant kernel
+    # This should work correctly.
+    print("Testing kernel with 'nvshmem' in name...")
+    try:
+        nvshmem_compliant_kernel[(1,)](x, y, size, BLOCK_SIZE=128)
+        torch.cuda.synchronize()
+        print("Compliant kernel executed successfully.")
+    except Exception as e:
+        print(f"Compliant kernel failed with error: {e}")
+
+if __name__ == "__main__":
+    test_nvshmem_triton_kernel_naming_convention()
+```

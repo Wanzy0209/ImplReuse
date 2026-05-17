@@ -1,0 +1,124 @@
+Issue ID: 162683
+Title: torch.matmul regression on CPU
+Bug Description:
+### 🐛 Describe the bug
+
+The matmul got at least 5x slower from torch==2.10.0.dev20250910+cpu to torch==2.9.0.dev20250809+cpu
+
+Run
+```
+export LD_PRELOAD=:/opt/venv/lib/libiomp5.so:/usr/lib/x86_64-linux-gnu/libtcmalloc.so.4
+export KMP_AFFINITY=granularity=fine,compact,1,0
+```
+Run `OMP_NUM_THREADS=32 numactl -C 0-31 --membind 0 python test_matmul.py` for the following codes.
+
+```python
+import torch
+import time
+
+torch.manual_seed(0)
+shapes = [
+     ((1, 12, 10, 64), (1, 12, 64, 10)),
+     ((1, 12, 10, 10), (1, 12, 10, 64)),
+]
+
+
+def benchmark_matmul(a_shape, b_shape, dtype=torch.float16, device="cpu", repeat=500):
+    A = torch.empty(a_shape, dtype=dtype, device=device).uniform_(0,1) * 2 - 1
+    B = torch.empty(b_shape, dtype=dtype, device=device).uniform_(0,1) * 2 - 1
+    # warm up
+    for _ in range(5000):
+        _ = torch.matmul(A, B)
+    # run
+    times = []
+    for i in range(repeat):
+        start = time.time()
+        _ = torch.matmul(A, B)
+        end = time.time()
+        if i > 100:
+            times.append(round((end - start) * 1000 * 1000))
+    times.sort()
+    print(times)
+    avg_time_ms = sum(times) / len(times)
+    return avg_time_ms
+
+Original API Under Test: torch.matmul
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.linalg.lu_matrix_inverse
+Similarity score: 0.9811103343963623
+
+Similar API information:
+# Extracted call chain for tf.linalg.lu_matrix_inverse
+
+# --- tensorflow.python.ops.linalg.linalg_impl.lu_matrix_inverse ---
+def lu_matrix_inverse(lower_upper, perm, validate_args=False, name=None):
+  """Computes the inverse given the LU decomposition(s) of one or more matrices.
+
+  This op is conceptually identical to,
+
+  ```python
+  inv_X = tf.lu_matrix_inverse(*tf.linalg.lu(X))
+  tf.assert_near(tf.matrix_inverse(X), inv_X)
+  # ==> True
+  ```
+
+  Note: this function does not verify the implied matrix is actually invertible
+  nor is this condition checked even when `validate_args=True`.
+
+  Args:
+    lower_upper: `lu` as returned by `tf.linalg.lu`, i.e., if `matmul(P,
+      matmul(L, U)) = X` then `lower_upper = L + U - eye`.
+    perm: `p` as returned by `tf.linag.lu`, i.e., if `matmul(P, matmul(L, U)) =
+      X` then `perm = argmax(P)`.
+    validate_args: Python `bool` indicating whether arguments should be checked
+      for correctness. Note: this function does not verify the implied matrix is
+        actually invertible, even when `validate_args=True`.
+      Default value: `False` (i.e., don't validate arguments).
+    name: Python `str` name given to ops managed by this object.
+..
+...
+
+Original Test Case:
+import torch
+import time
+
+torch.manual_seed(0)
+shapes = [
+     ((1, 12, 10, 64), (1, 12, 64, 10)),
+     ((1, 12, 10, 10), (1, 12, 10, 64)),
+]
+
+
+def benchmark_matmul(a_shape, b_shape, dtype=torch.float16, device="cpu", repeat=500):
+    A = torch.empty(a_shape, dtype=dtype, device=device).uniform_(0,1) * 2 - 1
+    B = torch.empty(b_shape, dtype=dtype, device=device).uniform_(0,1) * 2 - 1
+    # warm up
+    for _ in range(5000):
+        _ = torch.matmul(A, B)
+    # run
+    times = []
+    for i in range(repeat):
+        start = time.time()
+        _ = torch.matmul(A, B)
+        end = time.time()
+        if i > 100:
+            times.append(round((end - start) * 1000 * 1000))
+    times.sort()
+    print(times)
+    avg_time_ms = sum(times) / len(times)
+    return avg_time_ms
+
+if __name__ == "__main__":
+    for a_shape, b_shape in shapes:
+        t = benchmark_matmul(a_shape, b_shape)
+        print(f"{a_shape} x {b_shape}  ->  {t:.3f} us")
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

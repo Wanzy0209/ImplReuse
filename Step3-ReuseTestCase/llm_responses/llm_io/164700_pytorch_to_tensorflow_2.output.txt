@@ -1,0 +1,66 @@
+```python
+import tensorflow as tf
+import tf.experimental.dtensor as dt
+
+# Setup a basic mesh for DTensor operations
+# Using CPU to ensure the test runs in most environments
+devices = tf.config.list_physical_devices('CPU')
+if not devices:
+    # Fallback for environments without explicit CPU listing
+    devices = [tf.DeviceSpec(device_type="CPU", device_index=0)]
+
+mesh = dt.Mesh(['batch'], devices)
+layout = dt.Layout([dt.UNSHARDED], mesh)
+
+def f(x, y):
+    # TensorFlow requires matching dtypes for concat, unlike PyTorch which promotes.
+    # We cast y to match x's dtype (int64) to preserve the logic of the original reproducer.
+    y_casted = tf.cast(y, x.dtype)
+
+    # y2 = torch.cat([x[:, 1:], y[:, None] + 32 * 2048], dim=1)
+    y2 = tf.concat(
+        [
+            x[:, 1:],
+            tf.expand_dims(y_casted, axis=1) + 32 * 2048,
+        ],
+        axis=1,
+    )
+
+    # x2 = x[:, 1:, None]
+    x2 = tf.expand_dims(x[:, 1:], axis=2)
+    
+    # y3 = y2[:, -1:, None]
+    y3 = tf.expand_dims(y2[:, -1:], axis=2)
+
+    # arange part: torch.arange(-2048, 0, device=device)[None, None, :]
+    arange_part = tf.range(-2048, 0, dtype=x.dtype)
+    arange_part = arange_part[tf.newaxis, tf.newaxis, :]
+
+    # return (torch.cat([x2, y3], dim=1) + arange_part).reshape(1, 32 * 2048)
+    concat_res = tf.concat([x2, y3], axis=1)
+    added_res = concat_res + arange_part
+    return tf.reshape(added_res, (1, 32 * 2048))
+
+# Define inputs matching the original reproducer
+x = tf.zeros((1, 32), dtype=tf.int64)
+y = tf.zeros((1,), dtype=tf.int32)
+
+# 1. Standard execution (This succeeds in the original report)
+print("Running standard execution...")
+result_standard = f(x, y)
+print(f"Standard result shape: {result_standard.shape}")
+
+# 2. Execution using the similar API (tf.experimental.dtensor.copy_to_mesh)
+# The original bug was triggered by torch.compile. Here we test the
+# robustness of copy_to_mesh with the resulting tensor of this complex op.
+print("Running copy_to_mesh execution...")
+try:
+    # We perform the op, then copy the result to the mesh using the target API
+    result_dtensor = dt.copy_to_mesh(result_standard, layout)
+
+    # Verify shape and basic properties
+    assert result_dtensor.shape == (1, 32 * 2048), f"Shape mismatch: {result_dtensor.shape}"
+    print("Test passed: copy_to_mesh handled the complex tensor manipulation result successfully.")
+except Exception as e:
+    print(f"Test failed with error: {e}")
+```

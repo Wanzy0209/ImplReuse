@@ -1,0 +1,85 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def example_function():
+    """
+    Translates the PyTorch logp logic to TensorFlow.
+    Original PyTorch logic:
+        p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+        p_mat_sqrt_inv = p_mat_sqrt.inverse()
+        val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+        return -val/2
+    """
+    def logp(x, matrix):
+        # TensorFlow equivalent of torch.linalg.cholesky
+        p_mat_sqrt = tf.linalg.cholesky(matrix)
+        
+        # TensorFlow equivalent of .inverse()
+        p_mat_sqrt_inv = tf.linalg.inv(p_mat_sqrt)
+        
+        # TensorFlow equivalent of matrix multiplication and sum
+        # x is expected to be (5, 3) inside the map, so x[0, :] is (3,)
+        # p_mat_sqrt_inv is (3, 3)
+        val = tf.reduce_sum(tf.matmul(p_mat_sqrt_inv, x[0, :]) ** 2)
+        
+        return -val / 2
+
+    """
+    Translates the PyTorch vmap and grad logic.
+    Original PyTorch logic:
+        score_func = torch.vmap(torch.func.grad(logp, 0), (0, None))
+    """
+    def score_func(x_batch, matrix):
+        # Define the gradient function for a single element
+        def grad_fn(x):
+            with tf.GradientTape() as tape:
+                tape.watch(x)
+                loss = logp(x, matrix)
+            return tape.gradient(loss, x)
+        
+        # Use tf.vectorized_map to mimic torch.vmap
+        return tf.vectorized_map(grad_fn, x_batch)
+
+    return score_func
+
+if __name__ == "__main__":
+    # Check for TPU availability to ensure the test case is runnable in the right environment
+    # This is necessary because tf.compat.v1.tpu.rewrite targets TPU hardware.
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        tpu_available = True
+    except ValueError:
+        tpu_available = False
+        print("TPU not available. This test case requires a TPU environment to execute tf.compat.v1.tpu.rewrite.")
+
+    if tpu_available:
+        # Setup inputs matching the PyTorch test case
+        # data: torch.zeros((2, 5, 3), device=device, dtype=dtype)
+        data = tf.zeros((2, 5, 3), dtype=tf.float32)
+        
+        # p: torch.diag(torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)**2)
+        p_diag_vals = np.array([20., 0.5, 5.], dtype=np.float32) ** 2
+        p = tf.linalg.diag(tf.constant(p_diag_vals))
+
+        # Get the function
+        func = example_function()
+
+        # Define the computation wrapper for tf.compat.v1.tpu.rewrite
+        # The API expects a computation function that takes a list of inputs.
+        def computation(inputs):
+            x, matrix = inputs
+            return func(x, matrix)
+
+        # Execute the rewrite
+        # This mimics: compiled_function = torch.compile(example_function()); res = compiled_function(data, p)
+        try:
+            res = tf.compat.v1.tpu.rewrite(computation, inputs=[data, p])
+            print("Computation executed successfully on TPU.")
+            # Verify output shape matches expectations (2, 5, 3)
+            assert res.shape == (2, 5, 3), f"Expected shape (2, 5, 3), got {res.shape}"
+        except Exception as e:
+            print(f"Error during TPU rewrite execution: {e}")
+```

@@ -1,0 +1,62 @@
+```python
+import torch
+import torch.nn
+
+def test_compile_miscompilation_race_condition():
+    """
+    Test for torch.compile miscompilation when copying from and saving to 
+    a state tensor in the same fused kernel.
+    
+    The bug manifests as a race condition where the compiled function 
+    incorrectly updates the state tensor, leaving non-zero values in 
+    regions that should remain zero.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    device = "cuda"
+
+    def slide_to_the_left2(state, new_events, arange, dev_null):
+        batch_size, _, _ = new_events.shape
+
+        concatenated = torch.cat([state, new_events], dim=1)
+
+        # these three lines are a very complicated identity transformation:
+        batch_idx = torch.arange(batch_size, dtype=torch.int32, device=device)[:, None]
+        arange = arange[None, :]
+        concatenated = concatenated[batch_idx, arange]
+
+        state[:, :, :] = concatenated[:, -2048:, :]
+        dev_null[:, :, :] = concatenated[:, :, :]
+
+    # Compile the function using torch.compile
+    slide_to_the_left3 = torch.compile(slide_to_the_left2)
+
+    # Initialize inputs
+    # state is initialized to zeros. We expect only the last 2 rows to change.
+    state = torch.zeros([4, 2048, 1024], device=device)
+    new_events = torch.arange(start=1, end=3, device=device)[None, :, None].expand(4, 2, 1024).contiguous()
+    arange = torch.arange(2050, dtype=torch.int32, device=device)
+    dev_null = torch.zeros([4, 2050, 1024], device=device)
+
+    # The bug is a race condition that may not occur on every run.
+    # We loop to increase the probability of triggering the miscompilation.
+    max_attempts = 1000
+    for attempt in range(max_attempts):
+        # Reset state and dev_null for each attempt
+        state.zero_()
+        dev_null.zero_()
+
+        slide_to_the_left3(state, new_events, arange, dev_null)
+
+        # Verify that the first 2046 rows of state are still zero.
+        # Only the last 2 rows (where new_events were copied) should be non-zero.
+        if not (state[:, :-2, :] == 0).all():
+            print(f"Miscomplication detected on attempt {attempt}")
+            print("Non-zero indices found in state[:, :-2, :]:", torch.nonzero(state[:, :-2, :]))
+            assert False, "torch.compile miscompilation: state tensor contains unexpected non-zero values."
+
+if __name__ == "__main__":
+    test_compile_miscompilation_race_condition()
+```

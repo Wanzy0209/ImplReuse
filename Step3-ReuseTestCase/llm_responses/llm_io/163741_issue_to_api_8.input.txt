@@ -1,0 +1,129 @@
+Issue ID: 163741
+Title: Unexpected cuda context after dist.destroy_process_group
+Bug Description:
+### 🐛 Describe the bug
+
+During experimentation, I observed unexpected 320MB GPU0(maybe default cuda device) memory allocations in each subprocess that persist after process group destruction. I've constructed a minimal reproducible example demonstrating this issue.
+```python
+import torch
+import os
+import glob
+import time
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+def worker(rank, world_size):
+    torch.cuda.set_device(rank)
+    dist.init_process_group(
+        backend="nccl", 
+        init_method="tcp://127.0.0.1:29500",
+        world_size=world_size,
+        rank=rank
+    )
+    dist.barrier()
+
+    device = f"cuda:{rank}"
+    # do something
+    print("to sleep")
+    time.sleep(5)
+    
+    dist.destroy_process_group()
+
+    # sleep for observing nvidia-smi
+    time.sleep(100)
+
+def test_nccl():
+    world_size = torch.cuda.device_count()
+    mp.spawn(
+        worker,
+        args=(world_size,),
+        nprocs=world_size,
+        join=True,
+    )
+
+Original API Under Test: torch.distributed.destroy_process_grouptorch.distributed.destroy_process_group
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.autograd.graph.get_gradient_edge
+Similarity score: 0.988603949546814
+
+Similar API information:
+# Extracted call chain for torch.autograd.graph.get_gradient_edge
+
+# --- torch.autograd.graph.get_gradient_edge ---
+def get_gradient_edge(tensor: torch.Tensor) -> GradientEdge:
+    """Get the gradient edge for computing the gradient of the given Tensor.
+
+    In particular, it is equivalent to call
+    ``g = autograd.grad(loss, input)`` and ``g = autograd.grad(loss, get_gradient_edge(input))``.
+    """
+    if not tensor.requires_grad:
+        raise RuntimeError(
+            "It is not possible to get the gradient edge for a Tensor "
+            "that does not require gradients",
+        )
+    grad_fn = _get_grad_fn_or_grad_acc(tensor)
+
+    # Note that output_nr default to 0 which is the right value
+    # for the AccumulateGrad node.
+    return GradientEdge(grad_fn, tensor.output_nr)
+
+# --- torch.autograd.graph.GradientEdge ---
+class GradientEdge(NamedTuple):
+    """Object representing a given gradient edge within the autograd graph.
+
+    To get the gradient edge where a given Tensor gradient will be computed,
+    you can do ``edge = autograd.graph.get_gradient_edge(tensor)``.
+    """
+
+    node: Node
+    output_nr: int
+
+Original Test Case:
+import torch
+import os
+import glob
+import time
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+def worker(rank, world_size):
+    torch.cuda.set_device(rank)
+    dist.init_process_group(
+        backend="nccl", 
+        init_method="tcp://127.0.0.1:29500",
+        world_size=world_size,
+        rank=rank
+    )
+    dist.barrier()
+
+    device = f"cuda:{rank}"
+    # do something
+    print("to sleep")
+    time.sleep(5)
+    
+    dist.destroy_process_group()
+
+    # sleep for observing nvidia-smi
+    time.sleep(100)
+
+def test_nccl():
+    world_size = torch.cuda.device_count()
+    mp.spawn(
+        worker,
+        args=(world_size,),
+        nprocs=world_size,
+        join=True,
+    )
+
+if __name__ == '__main__':
+    test_nccl()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

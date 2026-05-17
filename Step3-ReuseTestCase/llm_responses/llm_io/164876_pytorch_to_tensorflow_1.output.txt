@@ -1,0 +1,79 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Configure TensorFlow to mimic the behavior of the original test
+# The original bug was related to dynamic shape inference in torch.compile (dynamo).
+# In TensorFlow, tf.function with jit_compile=True is the equivalent for graph compilation/XLA.
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    # Replicate input processing
+    # arg_0: size=(2, 10), dtype=float64
+    # arg_1: size=(10, 3), dtype=float64
+    var_node_2 = tf.matmul(tf.cast(arg_0, tf.float64), tf.cast(arg_1, tf.float64)) # size=(2, 3)
+
+    # Original: _inp_unique_wide = torch.arange(1, ...); _uniq_wide = torch.unique(...)
+    # Adapted: Use tf.concat to produce a tensor of size (1,)
+    # tf.range(1) produces [0]. Concatenating [0] with [] results in [0].
+    # This replaces torch.unique with the requested similar API tf.concat.
+    _inp_concat_wide = tf.range(1, dtype=tf.int64)
+    _concat_wide = tf.concat([_inp_concat_wide, tf.constant([], dtype=tf.int64)], axis=0)
+
+    var_node_1 = tf.cast(_concat_wide, var_node_2.dtype) # size=(1,), dtype=float64
+
+    # var_node_5: size=(1, 18), dtype=float64
+    var_node_5 = tf.fill((1, 18), tf.cast(0.40330381448978797, tf.float64))
+
+    # var_node_0 = torch.matmul(var_node_1, var_node_5)
+    # Input shapes: (1,) and (1, 18) -> Output shape: (18,)
+    var_node_0 = tf.matmul(tf.cast(var_node_1, tf.float64), tf.cast(var_node_5, tf.float64))
+
+    # Ensure gradient computation logic
+    result = var_node_0 * sentinel
+    
+    # Check for complex type
+    if result.dtype == tf.complex64 or result.dtype == tf.complex128:
+        result = tf.math.real(result)
+        
+    return result
+
+# Set seeds for reproducibility
+tf.random.set_seed(1012969)
+np.random.seed(1012969)
+
+# Sentinel tensor to ensure gradient computation
+sentinel = tf.Variable(1.0, dtype=tf.float64)
+
+# Create inputs
+# torch.as_strided(torch.randn(20), (2, 10), (10, 1)) -> roughly random tensor of shape (2, 10)
+arg_0 = tf.random.normal((2, 10), dtype=tf.float64)
+arg_1 = tf.random.normal((10, 3), dtype=tf.float64)
+
+args = (arg_0, arg_1, sentinel)
+
+# 1. Test Eager Execution
+print("Running Eager Execution...")
+try:
+    result_eager = fuzzed_program(*args)
+    print(f'✅ eager success, result shape: {result_eager.shape}')
+except Exception as e:
+    print(f'❌ eager failed: {e}')
+
+# 2. Test Compiled Execution (tf.function with XLA)
+print("\nRunning Compiled Execution (tf.function)...")
+try:
+    # jit_compile=True forces XLA compilation, similar to torch.compile
+    compiled_program = tf.function(fuzzed_program, jit_compile=True)
+    result_compiled = compiled_program(*args)
+    print(f'✅ compile success, result shape: {result_compiled.shape}')
+
+    # Verify divergence
+    if np.allclose(result_eager.numpy(), result_compiled.numpy()):
+        print("✅ Results match between eager and compiled modes.")
+    else:
+        print("❌ Divergence detected between eager and compiled modes!")
+        print(f"Eager: {result_eager.numpy()}")
+        print(f"Compiled: {result_compiled.numpy()}")
+except Exception as e:
+    print(f'❌ compile failed: {e}')
+```

@@ -1,0 +1,68 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_tf_random_fold_in_correctness():
+    """
+    Test case for tf.random.fold_in inspired by the distributed context of the 
+    PyTorch DTensor inplace op bug (Issue 163374).
+    
+    The original bug involved incorrect results (wrong value/placement) when 
+    performing operations in a distributed context. Similarly, tf.random.fold_in 
+    is designed to handle distributed training scenarios by folding replica IDs 
+    into a master seed. This test ensures that the folding operation produces 
+    correct, distinct, and deterministic results, preventing a "wrong result" 
+    bug in a distributed setting.
+    """
+    
+    # Setup: Define a master seed and a set of "replica" IDs
+    # Analogous to setting up the device mesh and tensor in the PyTorch bug.
+    master_seed = [1, 2]
+    replica_ids = [0, 1, 2, 3]
+    
+    folded_seeds = []
+    
+    # Operation: Fold in the replica ID to the master seed
+    # Analogous to the reduction and inplace operation in the PyTorch bug.
+    for rid in replica_ids:
+        # We use int32 as per the docstring recommendation for XLA compatibility
+        seed_tensor = tf.constant(master_seed, dtype=tf.int32)
+        rid_tensor = tf.constant(rid, dtype=tf.int32)
+        
+        folded_seed = tf.random.fold_in(seed_tensor, rid_tensor)
+        folded_seeds.append(folded_seed)
+
+    # Verification 1: Ensure different replica IDs produce different seeds.
+    # In the PyTorch bug, the output value was wrong (144 instead of 2).
+    # Here, we ensure the output seeds are actually distinct based on input.
+    print("Checking uniqueness of folded seeds...")
+    for i in range(len(folded_seeds)):
+        for j in range(i + 1, len(folded_seeds)):
+            # Assert that seeds are not identical
+            diff = tf.reduce_any(tf.not_equal(folded_seeds[i], folded_seeds[j]))
+            assert diff.numpy(), f"Seeds for replica {replica_ids[i]} and {replica_ids[j]} are identical (Wrong Result)."
+
+    # Verification 2: Ensure determinism.
+    # The same input (master seed + replica ID) must yield the same output.
+    print("Checking determinism...")
+    seed_0_repeat = tf.random.fold_in(tf.constant(master_seed, dtype=tf.int32), tf.constant(0, dtype=tf.int32))
+    assert tf.reduce_all(tf.equal(folded_seeds[0], seed_0_repeat)).numpy(), \
+        "Folding in the same replica ID produced a different seed (Non-deterministic)."
+
+    # Verification 3: Verify functional correctness in random generation.
+    # The ultimate goal of fold_in is to generate different random numbers per replica.
+    print("Checking random number generation...")
+    generated_tensors = [tf.random.stateless_normal(shape=[2], seed=s) for s in folded_seeds]
+    for i in range(len(generated_tensors)):
+        for j in range(i + 1, len(generated_tensors)):
+            # It is statistically impossible for two stateless random calls with different seeds 
+            # to produce the exact same float tensor values.
+            diff = tf.reduce_any(tf.not_equal(generated_tensors[i], generated_tensors[j]))
+            assert diff.numpy(), \
+                f"Random generation for replica {replica_ids[i]} and {replica_ids[j]} produced identical tensors."
+
+    print("All assertions passed.")
+
+if __name__ == '__main__':
+    test_tf_random_fold_in_correctness()
+```

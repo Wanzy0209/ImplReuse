@@ -1,0 +1,77 @@
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+# Check for MPS availability to ensure the test runs on the correct backend
+if torch.backends.mps.is_available():
+    device = 'mps'
+else:
+    # Fallback to CPU if MPS is not available, though the bug is specific to MPS
+    device = 'cpu'
+    print("MPS device not found. Falling back to CPU. This test targets the MPS backend.")
+
+# Constants
+BATCH_SIZE = 4
+VOCAB_SIZE = 1000  # Simulating the vocabulary size
+EMBED_DIM = 128    # Dimension of the embedding vectors
+NUM_CLASSES = 10
+LEARNING_RATE = 0.01
+
+# Define a model that leverages a Lookup Table (Embedding) similar to tf.lookup.StaticVocabularyTable
+# This replaces the ResNet-18 from the original bug report with a model architecture
+# that shares semantic similarity with the provided Similar API (Lookup operations).
+class LookupModel(nn.Module):
+    def __init__(self, vocab_size, embed_dim, num_classes):
+        super(LookupModel, self).__init__()
+        # nn.Embedding is the PyTorch equivalent of a static vocabulary lookup table
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.fc = nn.Linear(embed_dim, num_classes)
+
+    def forward(self, x):
+        # Lookup operation
+        x = self.embedding(x)
+        # Aggregate embeddings (simple mean pooling)
+        x = torch.mean(x, dim=1)
+        return self.fc(x)
+
+# Initialize model, criterion, and optimizer
+model = LookupModel(VOCAB_SIZE, EMBED_DIM, NUM_CLASSES)
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+
+# Move model to the target device
+model = model.to(device)
+model.train()
+
+# Preserve the original bug reproduction logic: @torch.compile wrapping the training step
+@torch.compile
+def train_step(inputs, labels):
+    inputs = inputs.to(device)
+    labels = labels.to(device)
+    
+    optimizer.zero_grad()
+    
+    outputs = model(inputs)
+    loss = criterion(outputs, labels)
+    
+    # The bug specifically manifests here during the backward pass on MPS
+    loss.backward()
+    
+    optimizer.step()
+    return loss
+
+# Generate dummy data
+# Inputs are integer indices representing keys in the vocabulary table
+images = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE, 20)) 
+labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,))
+
+# Execute the test
+try:
+    loss = train_step(images, labels)
+    assert isinstance(loss.item(), float), "Loss should be a scalar float"
+    print(f"Test passed. Loss: {loss.item()}")
+except RuntimeError as e:
+    print(f"Test failed with RuntimeError: {e}")
+    raise
+```

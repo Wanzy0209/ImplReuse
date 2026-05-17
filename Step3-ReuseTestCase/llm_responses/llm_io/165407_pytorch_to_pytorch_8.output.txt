@@ -1,0 +1,59 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import gc
+import os
+
+def get_tensor_count():
+    """
+    Helper function to count the number of live PyTorch tensors.
+    This mimics the 'Tensors: X' metric shown in the original bug report.
+    """
+    return len([obj for obj in gc.get_objects() if isinstance(obj, torch.Tensor)])
+
+def run_test(rank, world_size):
+    # Initialize the process group
+    dist.init_process_group(
+        backend='gloo', # Using gloo for CPU compatibility
+        init_method=f'tcp://127.0.0.1:{29500}',
+        world_size=world_size,
+        rank=rank
+    )
+
+    if rank == 0:
+        # Rank 0 acts as the sender
+        for step in range(100):
+            # Create a list of tensors to send
+            # Simulating data that might be passed in a training loop
+            tensor_list = [torch.randn(10, 10) for _ in range(5)]
+            dist.send_object_list(tensor_list, dst=1)
+    else:
+        # Rank 1 acts as the receiver and tests torch.distributed.recv_object_list
+        # We look for a memory leak similar to the torch.compile issue
+        print(f"Rank {rank} starting memory leak test for torch.distributed.recv_object_list")
+        
+        for step in range(100):
+            # Prepare a list to receive objects
+            recv_list = [None] * 5
+            
+            # Call the API under test
+            dist.recv_object_list(recv_list, src=0)
+            
+            # Monitor memory usage
+            tensor_count = get_tensor_count()
+            
+            # Print status similar to the original bug report
+            # If tensor_count grows indefinitely, there is a leak
+            print(f"Step {step:3d} | Tensors: {tensor_count}")
+            
+            # Explicit cleanup to ensure we aren't holding references manually
+            del recv_list
+            gc.collect()
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+```

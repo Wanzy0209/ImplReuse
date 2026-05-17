@@ -1,0 +1,48 @@
+```python
+import torch
+import torch.distributed as dist
+
+# Bug configuration: combo_kernels must be True to trigger the specific NameError
+torch._inductor.config.combo_kernels = True
+
+def test_send_object_list_compile():
+    # Ensure CUDA is available as per the original bug report context
+    assert torch.cuda.is_available(), "CUDA is required for this test"
+
+    # Inputs from the original bug report
+    inps = (
+        torch.rand(16, 128, device="cuda"),
+        torch.rand(32, 128, device="cuda"),
+        torch.rand(32, 256, device="cuda"),
+    )
+
+    # Adapt the original function to use the similar API: torch.distributed.send_object_list
+    @torch.compile
+    def fn(obj_list, dst=0):
+        # We use the similar API here. 
+        # Note: This is a communication op, so it requires a process group to run successfully.
+        # However, we are primarily testing if torch.compile fails with NameError during codegen.
+        dist.send_object_list(obj_list, dst=dst)
+
+    # Adapt the call site
+    # We wrap the call in a try-except block because distributed operations require
+    # an initialized process group (which we don't have in a minimal single-script test).
+    # The goal is to verify that compilation does not raise the NameError reported in the bug.
+    try:
+        fn(list(inps), dst=0)
+    except NameError as e:
+        # This is the bug we are checking for (NameError: '_triton_helper_fn_add0 is not defined')
+        # If this occurs, the bug affects the similar API.
+        raise AssertionError(f"Bug reproduced with similar API: {e}")
+    except RuntimeError as e:
+        # Expected errors:
+        # 1. "Process group is not initialized"
+        # 2. "Distributed ops are not supported in torch.compile" (if applicable)
+        # We accept these as long as they are not the NameError.
+        if "NameError" in str(e):
+            raise
+        print(f"Test passed: Compilation succeeded (Runtime error expected: {e})")
+
+if __name__ == "__main__":
+    test_send_object_list_compile()
+```

@@ -1,0 +1,66 @@
+```python
+import torch
+import torch.nn as nn
+from torch.distributions.constraints import interval
+
+def test_maxunpool3d_segfault_with_invalid_dtypes():
+    """
+    Test case for Issue 163409: Segmentation fault in torch.nn.MaxUnpool3d.
+    
+    This test reproduces the crash logic using complex128 and uint32 inputs,
+    and leverages torch.distributions.constraints.interval to demonstrate
+    input validation concepts.
+    """
+    # Check for CUDA availability as the original bug occurred on 'cuda'
+    if not torch.cuda.is_available():
+        print("CUDA not available. Skipping test.")
+        return
+
+    # --- Original Bug Reproduction Logic ---
+    # The input structure is designed to unpack arguments for __init__ and forward
+    bug_input = [
+        [()],  # args for MaxUnpool3d.__init__
+        {},    # kwargs for MaxUnpool3d.__init__
+        [      # args for MaxUnpool3d.forward
+            torch.empty((9, 6, 3, 6, 9), dtype=torch.complex128, device='cuda'),
+            torch.empty((5, 7, 9, 8, 5), dtype=torch.uint32, device='cuda')
+        ],
+        {}     # kwargs for MaxUnpool3d.forward
+    ]
+
+    # Initialize the layer
+    layer = nn.MaxUnpool3d(*bug_input[0], **bug_input[1])
+
+    # --- Leveraging the Similar API: torch.distributions.constraints.interval ---
+    # We use 'interval' to define the valid range for indices in a correct scenario.
+    # This reuses the constraint logic to show what valid inputs should look like,
+    # contrasting with the invalid inputs in the bug report.
+    
+    # Create a valid scenario to demonstrate the constraint usage
+    valid_input = torch.randn((1, 1, 4, 4, 4), device='cuda')
+    pool = nn.MaxPool3d(kernel_size=2, return_indices=True)
+    _, valid_indices = pool(valid_input)
+    
+    # Define a constraint for valid indices: [0, input_dimension_size)
+    # For a 4x4x4 input, indices should be in the range [0, 4)
+    index_constraint = interval(0, 4)
+    
+    # Check if the valid indices satisfy the constraint
+    # This demonstrates the intended usage of the similar API for validation
+    assert index_constraint.check(valid_indices).all(), "Valid indices should be within the interval"
+
+    # --- Execute the Buggy Call ---
+    # We expect this to raise a RuntimeError (or similar) due to invalid types/shapes,
+    # rather than causing a Segmentation Fault.
+    try:
+        # The bug report indicates this line causes a crash
+        result = layer(*bug_input[2], **bug_input[3])
+        print("Test passed (no crash), but input validation might be missing for complex128/uint32.")
+    except RuntimeError as e:
+        print(f"Caught expected RuntimeError: {e}")
+    except Exception as e:
+        print(f"Caught unexpected exception: {type(e).__name__}: {e}")
+
+if __name__ == "__main__":
+    test_maxunpool3d_segfault_with_invalid_dtypes()
+```

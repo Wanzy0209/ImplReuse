@@ -1,0 +1,80 @@
+```python
+import unittest
+import torch
+import sys
+
+class TestMaxUnpool3dInvalidInputs(unittest.TestCase):
+    """
+    Test case for Issue 163409: Segmentation fault in torch.nn.MaxUnpool3d
+    when provided with invalid tensor types and shapes.
+    """
+    
+    def setUp(self):
+        # Check for CUDA availability as the original bug report specifies 'cuda' device
+        self.cuda_available = torch.cuda.is_available()
+        if not self.cuda_available:
+            self.skipTest("CUDA is not available. This test requires a GPU.")
+
+    def test_segfault_with_invalid_types_and_shapes(self):
+        """
+        Reproduces the segmentation fault reported in the issue.
+        
+        The bug occurs when:
+        1. MaxUnpool3d is initialized (potentially with default/invalid args).
+        2. The forward pass is called with:
+           - Input tensor of dtype complex128
+           - Indices tensor of dtype uint32
+           - Mismatched shapes between input and indices
+        """
+        device = 'cuda'
+        
+        # Replicate the exact input structure from the bug report
+        # input[0] = [()] -> Empty positional arguments for constructor
+        # input[1] = {} -> Empty keyword arguments for constructor
+        # input[2] = [tensor1, tensor2] -> Arguments for forward pass
+        # input[3] = {} -> Empty keyword arguments for forward pass
+        
+        # Note: In standard PyTorch, MaxUnpool3d requires kernel_size.
+        # If the constructor raises TypeError, the segfault in forward is avoided.
+        # However, we reproduce the exact sequence to verify behavior.
+        
+        try:
+            # Step 1: Initialize the layer
+            # Original code: r1 = torch.nn.MaxUnpool3d(*input[0],**input[1])
+            # This expands to torch.nn.MaxUnpool3d()
+            # We expect this might raise TypeError in fixed versions, 
+            # but we execute it to be sure.
+            layer = torch.nn.MaxUnpool3d(*(), **{})
+            
+            # Step 2: Prepare inputs
+            # Original code: [torch.empty((9, 6, 3, 6, 9), dtype=torch.complex128, device='cuda'),
+            #                 torch.empty((5, 7, 9, 8, 5), dtype=torch.uint32, device='cuda')]
+            input_tensor = torch.empty((9, 6, 3, 6, 9), dtype=torch.complex128, device=device)
+            indices_tensor = torch.empty((5, 7, 9, 8, 5), dtype=torch.uint32, device=device)
+            
+            # Step 3: Forward pass
+            # Original code: r2 = r1(*input[2],**input[3])
+            # This expands to r1(input_tensor, indices_tensor)
+            # This is where the segmentation fault was reported to occur.
+            output = layer(input_tensor, indices_tensor)
+            
+            # If we reach here, the library handled the invalid inputs gracefully 
+            # (likely by raising an error or returning garbage, but not crashing).
+            # We can assert that an error *should* have been raised for these invalid inputs,
+            # but the primary goal of this test is to ensure no Segmentation Fault occurs.
+            
+        except TypeError as e:
+            # Expected behavior if constructor arguments are strictly validated
+            print(f"Caught expected TypeError during initialization: {e}")
+        except RuntimeError as e:
+            # Expected behavior if input validation happens during forward pass
+            print(f"Caught expected RuntimeError during forward pass: {e}")
+        except Exception as e:
+            # Catch any other exception to prevent the test suite from crashing 
+            # if it's not a segfault but another unexpected error.
+            print(f"Caught unexpected exception: {type(e).__name__}: {e}")
+            raise
+
+if __name__ == '__main__':
+    unittest.main()
+```

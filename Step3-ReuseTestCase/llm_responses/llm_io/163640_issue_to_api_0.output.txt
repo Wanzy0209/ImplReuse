@@ -1,0 +1,49 @@
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class TinyEnc(nn.Module):
+    def __init__(self, d_model=512, nhead=8, num_layers=1):
+        super().__init__()
+        layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, batch_first=True, dropout=0.1
+        )
+        self.enc = nn.TransformerEncoder(layer, num_layers=num_layers)
+        self.proj = nn.Linear(d_model, 10)
+
+    def forward(self, x, pad_mask):
+        # Passing src_key_padding_mask triggers torch._nested_tensor_from_mask_left_aligned
+        y = self.enc(x, mask=None, src_key_padding_mask=pad_mask)
+        y = self.proj(y)
+        # Leveraging the similar API: torch.nn.functional.sigmoid
+        return F.sigmoid(y)
+
+def test_transformer_encoder_compile_with_sigmoid():
+    torch.manual_seed(0)
+    m = TinyEnc().eval()
+
+    B, T, C = 1, 41, 512
+    x = torch.randn(B, T, C, dtype=torch.float32)
+    pad_mask = (torch.rand(B, T) > 0.5)
+    pad_mask[..., 0] = True
+
+    # Eager execution should work fine
+    with torch.inference_mode():
+        y_eager = m(x, pad_mask)
+    print("eager ok:", tuple(y_eager.shape))
+    assert y_eager.shape == (B, T, 10)
+
+    # Compile with fullgraph=True
+    # This is expected to fail with torch._dynamo.exc.Unsupported
+    # due to the bug in torch._nested_tensor_from_mask_left_aligned returning bool instead of Tensor
+    cm = torch.compile(m, backend="inductor", fullgraph=True)
+    with torch.inference_mode():
+        y_compiled = cm(x, pad_mask)
+    
+    print("compile ok:", tuple(y_compiled.shape))
+    assert y_compiled.shape == (B, T, 10)
+
+if __name__ == "__main__":
+    test_transformer_encoder_compile_with_sigmoid()
+```

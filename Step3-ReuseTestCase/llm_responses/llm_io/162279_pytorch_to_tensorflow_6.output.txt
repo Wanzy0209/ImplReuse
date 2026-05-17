@@ -1,0 +1,77 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# QueueRunner is part of the TF1 graph execution mode, so we disable eager execution.
+tf.compat.v1.disable_eager_execution()
+
+class QueueRunnerEmptyDim:
+    """
+    Analogous to AnyDimsModelEmpty.
+    Uses an empty shape list (scalar) for the queue.
+    """
+    def __init__(self):
+        # Define a queue that holds scalars (empty shape list)
+        self.queue = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.float32], shapes=[])
+        # Enqueue a scalar value
+        self.enqueue_op = self.queue.enqueue(1.0)
+        # Create the QueueRunner
+        self.runner = tf.compat.v1.train.QueueRunner(self.queue, [self.enqueue_op])
+
+    def run(self, sess, coord):
+        # Start the queue runner threads
+        self.runner.create_threads(sess, coord=coord, start=True)
+        # Dequeue to verify output
+        val = sess.run(self.queue.dequeue())
+        print(f'EmptyDimRunner output shape: {val.shape}')
+        return val
+
+class QueueRunnerNullDim:
+    """
+    Analogous to AnyDimsModelNull.
+    Uses a non-empty shape list (vector) for the queue to simulate the 'None' or full dim behavior.
+    """
+    def __init__(self):
+        # Define a queue that holds vectors (shape [1])
+        self.queue = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.float32], shapes=[1])
+        # Enqueue a vector value
+        self.enqueue_op = self.queue.enqueue([2.0])
+        # Create the QueueRunner
+        self.runner = tf.compat.v1.train.QueueRunner(self.queue, [self.enqueue_op])
+
+    def run(self, sess, coord):
+        # Start the queue runner threads
+        self.runner.create_threads(sess, coord=coord, start=True)
+        # Dequeue to verify output
+        val = sess.run(self.queue.dequeue())
+        print(f'NullDimRunner output shape: {val.shape}')
+        return val
+
+def process(runner_instance, name):
+    print(f'Processing model: {name}')
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables and the specific queue for this runner
+        sess.run(tf.compat.v1.global_variables_initializer())
+        sess.run(runner_instance.queue.initializer)
+
+        coord = tf.compat.v1.train.Coordinator()
+        try:
+            # Run the eager equivalent (dequeue)
+            runner_instance.run(sess, coord)
+        finally:
+            # Clean up threads
+            coord.request_stop()
+            coord.join(runner_instance.runner._threads)
+    print()
+
+# Reproduce the bug scenario: processing two models sequentially
+# 1. Process the Empty Dim model
+runner1 = QueueRunnerEmptyDim()
+process(runner1, "EmptyDimModel")
+
+# 2. Process the Null Dim model
+# In the PyTorch bug, the output shape here would be incorrect due to caching.
+# We verify here that the TensorFlow QueueRunner handles the distinct shapes correctly.
+runner2 = QueueRunnerNullDim()
+process(runner2, "NullDimModel")
+```

@@ -1,0 +1,56 @@
+```python
+import torch
+from torch import nn
+
+class CholeskySolveWrapper(nn.Module):
+    def __init__(
+        self,
+        A: torch.Tensor,
+    ) -> None:
+        super().__init__()
+        assert A.ndim >= 2
+        self.A = nn.Parameter(A, requires_grad=False)
+
+    def forward(self, b: torch.Tensor) -> torch.Tensor:
+        return torch.cholesky_solve(b, self.A)
+
+def test_device(device, b, A):
+    b = b.to(device)
+    A = A.to(device)
+    model = CholeskySolveWrapper(A).to(device)
+    model_compiled = torch.compile(CholeskySolveWrapper(A).to(device), fullgraph=True)
+
+    # warm up
+    with torch.no_grad():
+        y_original = model(b)
+        y_compiled = model_compiled(b)
+
+    # proper inference
+    with torch.no_grad():
+        y_original = model(b)
+        y_compiled = model_compiled(b)
+
+    print(f'device: {device}, diff: {torch.max(torch.abs(y_original - y_compiled)).item()}')
+    print('original', y_original[:5, :5, :5])
+    print('compiled', y_compiled[:5, :5, :5])
+
+def main():
+    batch_size = 32
+    n = 10
+    nrhs = 5
+    torch.manual_seed(42)
+
+    # Generate a positive definite matrix to get a valid Cholesky factor
+    M = torch.randn(batch_size, n, n, dtype=torch.float32)
+    PD = M @ M.transpose(-1, -2) + torch.eye(n).unsqueeze(0) * 0.1
+    A = torch.linalg.cholesky(PD) # Upper triangular by default
+
+    b = torch.randn(batch_size, n, nrhs, dtype=torch.float32)
+
+    test_device('cpu', b, A)
+    if torch.cuda.is_available():
+        test_device('cuda', b, A)
+
+if __name__ == "__main__":
+    main()
+```

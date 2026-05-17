@@ -1,0 +1,132 @@
+Issue ID: 164700
+Title: torch.compile generates illegal triton tl.broadcast_to and crashes from particular unsqueeze and torch.cat interleaving: 'constexpr_type' object has no attribute 'is_block'
+Bug Description:
+### 🐛 Describe the bug
+
+Here's a minimal-ish reproducer (while I will concede that it looks fairly nonsensical; I promise this was reduced from a genuine larger codebase):
+
+```python
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+
+device = "cuda"
+
+def f(x, y):
+    y2 = torch.cat(
+        [
+            x[:, 1:],
+            y[:, None] + 32 * 2048,
+        ],
+        dim=1,
+    )
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    return (
+        torch.cat([x2, y3], dim=1)
+        + torch.arange(-2048, 0, device=device)[None, None, :]
+    ).reshape(1, 32 * 2048)
+
+# This succeeds
+display(
+    f(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+
+# This crashes
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.all
+Similarity score: 0.9942798018455505
+
+Similar API information:
+# Extracted call chain for torch.all
+
+# --- torch._dynamo.polyfills.builtins.all ---
+def all(iterable: Iterable[object], /) -> bool:
+    for elem in iterable:
+        if not elem:
+            return False
+    return True
+
+# --- torch._dynamo.decorators.substitute_in_graph ---
+def substitute_in_graph(
+    original_fn: Callable[_P, _R],
+    *,
+    can_constant_fold_through: bool = False,
+    skip_signature_check: bool = False,
+    # type that is embedded in the Python interpreter
+    is_embedded_type: bool = False,  # internal use only
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """
+    Register a polyfill handler for a function, usually a C function from the C extension, to be
+    used in place of the original function when inlining the original function in the graph.
+
+    .. note::
+
+        The polyfill handler is only used when inlining the original function. It is not used when
+        the original function is called directly. In the eager mode, the decorated function calls
+        the performant C function rather than the polyfill handler.
+
+    The polyfill handler is a function that will be called in place of the original function when
+    inlining the original fun
+
+Original Test Case:
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+
+device = "cuda"
+
+def f(x, y):
+    y2 = torch.cat(
+        [
+            x[:, 1:],
+            y[:, None] + 32 * 2048,
+        ],
+        dim=1,
+    )
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    return (
+        torch.cat([x2, y3], dim=1)
+        + torch.arange(-2048, 0, device=device)[None, None, :]
+    ).reshape(1, 32 * 2048)
+
+# This succeeds
+display(
+    f(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+
+# This crashes
+display(
+    torch.compile(f)(
+        torch.zeros(1, 32, dtype=torch.int64, device=device),
+        torch.zeros(1, dtype=torch.int32, device=device),
+    )
+)
+
+The API torch.all is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

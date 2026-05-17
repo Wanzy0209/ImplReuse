@@ -1,0 +1,56 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+class M(tf.Module):
+    def __init__(self):
+        super().__init__()
+        # Introduce parameter for broadcasting / stride ops
+        # Mimics nn.Parameter(torch.tensor(2.0))
+        self.p = tf.Variable(2.0, dtype=tf.float32)
+
+    def __call__(self, x: tf.Tensor) -> tf.Tensor:
+        # PyTorch logic: S = stft(x) -> R/I -> complex(R, I)
+        # Adaptation: Use tf.random.uniform which internally handles broadcasting
+        # of minval/maxval (as seen in the provided similar API info).
+        
+        # We use the input tensor x as the 'minval' and the parameter p as 'maxval'.
+        # This mimics the broadcasting behavior (S.imag / self.p) in the original bug.
+        # The shape is derived from the input x.
+        
+        shape = tf.shape(x)
+        
+        # Call the API: tf.random.uniform
+        # This triggers the broadcast_dynamic_shape logic mentioned in the similar API info.
+        Z = tf.random.uniform(
+            shape=shape, 
+            minval=x, 
+            maxval=self.p, 
+            dtype=tf.float32
+        )
+        return Z
+
+def main():
+    # Setup device (TensorFlow handles device placement automatically, usually GPU if available)
+    tf.random.set_seed(0)
+
+    # Mimic input: torch.randn(1, 16000)
+    x = tf.random.normal((1, 16000), dtype=tf.float32)
+    m = M()
+
+    # Eager: works fine
+    z_eager = m(x)
+    print("eager mode OK:", z_eager.shape, z_eager.dtype)
+
+    # Compile: tf.function (equivalent to torch.compile)
+    # We verify that the broadcasting logic inside the API works correctly in graph mode.
+    m_c = tf.function(m)
+    z_compiled = m_c(x)
+    
+    # Verify execution completed and shapes match
+    assert z_eager.shape == z_compiled.shape
+    print("compiled mode OK:", z_compiled.shape, z_compiled.dtype)
+
+if __name__ == "__main__":
+    main()
+```

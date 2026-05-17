@@ -1,0 +1,78 @@
+```python
+import tensorflow as tf
+import numpy as np
+import sys
+
+def test_tpu_rewrite_compilation():
+    """
+    Adapts the torch.compile regression test for mxfp8 quantization to
+    tf.compat.v1.tpu.rewrite.
+
+    The original bug involves a performance regression in compiling
+    heavy quantization/matmul operations (dim0_mxfp8_floor). This test 
+    verifies that tf.compat.v1.tpu.rewrite can successfully compile and 
+    execute a similar workload (Cast + MatMul) on TPU, ensuring the 
+    compilation path functions correctly.
+    """
+    
+    # Attempt to resolve TPU
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        strategy = tf.distribute.TPUStrategy(resolver)
+        print("TPU system initialized.")
+    except (ValueError, tf.errors.NotFoundError) as e:
+        print(f"TPU not available: {e}. This test requires a TPU runtime to execute fully.")
+        print("Skipping execution.")
+        return
+
+    # Dimensions from the original bug report (M=16384, K=16384)
+    M, K, N = 16384, 16384, 16384
+
+    # Define the computation function
+    # Mimics the 'dim0_mxfp8_floor' workload: casting to low precision and matmul.
+    # We use bfloat16 as the standard TPU low-precision equivalent for this test.
+    def computation(x, w):
+        # Cast to lower precision (simulating quantization)
+        x_fp = tf.cast(x, tf.bfloat16)
+        w_fp = tf.cast(w, tf.bfloat16)
+
+        # Perform the heavy computation (Matrix Multiplication)
+        # This corresponds to the kernel that regressed in PyTorch.
+        y = tf.matmul(x_fp, w_fp)
+
+        return y
+
+    with strategy.scope():
+        # Create input tensors
+        # Using random normal data to simulate the benchmark input
+        x = tf.random.normal([M, K])
+        w = tf.random.normal([K, N])
+
+        # The API under test: tf.compat.v1.tpu.rewrite
+        # This compiles 'computation' for TPU execution.
+        # 'inputs' is a list of tensors passed to 'computation'.
+        print("Compiling computation with tf.compat.v1.tpu.rewrite...")
+        compiled_result = tf.compat.v1.tpu.rewrite(
+            computation,
+            inputs=[x, w]
+        )
+
+        # Verify behavior
+        # 1. Check that the operation completed and returned a Tensor
+        assert isinstance(compiled_result, tf.Tensor), "Result is not a Tensor"
+        
+        # 2. Check output shape matches expected dimensions
+        assert compiled_result.shape == (M, N), \
+            f"Shape mismatch: expected {(M, N)}, got {compiled_result.shape}"
+
+        # 3. Check dtype (should match the computation logic)
+        assert compiled_result.dtype == tf.bfloat16, \
+            f"Dtype mismatch: expected tf.bfloat16, got {compiled_result.dtype}"
+
+        print("Test passed: tf.compat.v1.tpu.rewrite successfully compiled and executed the workload.")
+
+if __name__ == "__main__":
+    test_tpu_rewrite_compilation()
+```

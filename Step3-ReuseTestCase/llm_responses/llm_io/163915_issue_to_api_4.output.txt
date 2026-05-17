@@ -1,0 +1,71 @@
+```python
+import torch
+import triton
+import torch.symm_mem._nvshmem_triton as nvshmem
+import pytest
+
+# Helper function inspired by tf.linalg.LinearOperatorBlockDiag's argument handling.
+# The LinearOperatorBlockDiag API allows arguments to be single Tensors or lists of Tensors.
+# We reuse this pattern to test the execution of single or multiple NVSHMEM kernels.
+def execute_kernels(kernels_or_kernel, *args):
+    """
+    Executes one or more Triton kernels.
+    Mimics the single/list argument flexibility of tf.linalg.LinearOperatorBlockDiag.
+    """
+    if isinstance(kernels_or_kernel, list):
+        for kernel in kernels_or_kernel:
+            kernel[(1,)](*args)
+    else:
+        kernels_or_kernel[(1,)](*args)
+
+def test_nvshmem_kernel_naming_convention():
+    """
+    Test case for Issue 163915: nvshmem triton kernels IMA silently.
+    
+    The bug occurs when a user-defined Triton kernel does not have "nvshmem" in its name.
+    Previously, this caused a silent CUDA IMA. The fix should enforce this requirement
+    explicitly or handle the initialization gracefully.
+    
+    This test leverages the pattern from tf.linalg.LinearOperatorBlockDiag by accepting
+    both single kernels and lists of kernels for execution.
+    """
+    # Enable NVSHMEM for Triton
+    nvshmem.enable_triton()
+
+    # Setup dummy data for kernel execution
+    x = torch.randn(10, device='cuda')
+    output = torch.zeros(10, device='cuda')
+    
+    # Case 1: Kernel with 'nvshmem' in the name (Correct usage)
+    @triton.jit
+    def nvshmem_kernel_good(x_ptr, output_ptr, BLOCK_SIZE: tl.constexpr):
+        tl.store(output_ptr, tl.load(x_ptr) + 1)
+
+    # Case 2: Kernel without 'nvshmem' in the name (Incorrect usage)
+    @triton.jit
+    def generic_kernel_bad(x_ptr, output_ptr, BLOCK_SIZE: tl.constexpr):
+        tl.store(output_ptr, tl.load(x_ptr) + 1)
+
+    # Test 1: Verify that a single kernel with a bad name raises an error (or fails gracefully)
+    # instead of hitting a silent IMA.
+    with pytest.raises(RuntimeError, match="nvshmem"):
+        execute_kernels(generic_kernel_bad, x, output)
+
+    # Test 2: Verify that a list of kernels containing a bad name raises an error.
+    # This checks the robustness of the execution logic similar to how LinearOperatorBlockDiag
+    # validates its list of operators.
+    with pytest.raises(RuntimeError, match="nvshmem"):
+        execute_kernels([nvshmem_kernel_good, generic_kernel_bad], x, output)
+
+    # Test 3: Verify that a single correctly named kernel runs successfully.
+    try:
+        execute_kernels(nvshmem_kernel_good, x, output)
+    except Exception as e:
+        pytest.fail(f"Correctly named kernel failed unexpectedly: {e}")
+
+    # Test 4: Verify that a list of correctly named kernels runs successfully.
+    try:
+        execute_kernels([nvshmem_kernel_good, nvshmem_kernel_good], x, output)
+    except Exception as e:
+        pytest.fail(f"List of correctly named kernels failed unexpectedly: {e}")
+```

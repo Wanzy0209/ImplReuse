@@ -1,0 +1,64 @@
+```python
+import torch
+import torch.distributed as dist
+import multiprocessing as mp
+import os
+import tempfile
+
+def test_gather_object(rank, world_size, temp_file):
+    """
+    Test case for torch.distributed.gather_object.
+    Adapted from the context of the original bug report (memory leak in a loop),
+    this test verifies that gather_object functions correctly over multiple steps
+    without accumulating errors or leaking references excessively.
+    """
+    # Initialize the process group
+    dist.init_process_group(
+        backend="gloo",
+        init_method=f"file://{temp_file}",
+        rank=rank,
+        world_size=world_size
+    )
+
+    # Loop to simulate the training steps mentioned in the original bug report
+    for step in range(10):
+        # Create a tensor object to gather. 
+        # Using a tensor makes it relevant to the original bug's context of tensor management.
+        obj = torch.tensor([rank, step], dtype=torch.float32)
+        
+        if rank == 0:
+            gather_list = [None] * world_size
+        else:
+            gather_list = None
+
+        # Call the similar API: torch.distributed.gather_object
+        dist.gather_object(obj, gather_list, dst=0)
+
+        # Verification on the destination rank
+        if rank == 0:
+            assert len(gather_list) == world_size, f"Step {step}: Gather list size mismatch"
+            for r in range(world_size):
+                expected = torch.tensor([r, step], dtype=torch.float32)
+                assert torch.equal(gather_list[r], expected), \
+                    f"Step {step}: Mismatch for rank {r}. Got {gather_list[r]}, expected {expected}"
+            
+            # Explicitly clear the list to help garbage collection, 
+            # checking if the API holds onto references unnecessarily
+            gather_list.clear()
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Create a temporary file for process group initialization
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        temp_file = tmp.name
+    
+    try:
+        # Spawn processes to run the distributed test
+        mp.spawn(test_gather_object, args=(world_size, temp_file), nprocs=world_size, join=True)
+    finally:
+        # Clean up the temporary file
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+```

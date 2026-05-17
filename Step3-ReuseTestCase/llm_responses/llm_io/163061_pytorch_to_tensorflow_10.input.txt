@@ -1,0 +1,133 @@
+Issue ID: 163061
+Title: GIL is not released when calling torch.compile kernels
+Bug Description:
+### 🐛 Describe the bug
+
+In most cases, PyTorch releases GIL when calling CUDA APIs, but I found the GIL is held when calling torch.compile kernels, is this expected? Is it possible to release GIL when calling torch.compile kernels?
+
+To reproduce, script `torch_compile.py`:
+```python
+import torch
+import triton
+import triton.language as tl
+
+def torch_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@torch.compile
+def torch_compile_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@triton.jit
+def add_kernel(x_ptr,
+               y_ptr,
+               output_ptr,
+               n_elements,
+               BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+def triton_add(x: torch.Tensor, y: torch.Tensor):
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    return output
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.train.range_input_producer
+Similarity score: 0.9930681586265564
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.train.range_input_producer
+
+# --- tensorflow.python.training.input.range_input_producer ---
+def range_input_producer(limit, num_epochs=None, shuffle=True, seed=None,
+                         capacity=32, shared_name=None, name=None):
+  """Produces the integers from 0 to limit-1 in a queue.
+
+  Note: if `num_epochs` is not `None`, this function creates local counter
+  `epochs`. Use `local_variables_initializer()` to initialize local variables.
+
+  Args:
+    limit: An int32 scalar tensor.
+    num_epochs: An integer (optional). If specified, `range_input_producer`
+      produces each integer `num_epochs` times before generating an
+      OutOfRange error. If not specified, `range_input_producer` can cycle
+      through the integers an unlimited number of times.
+    shuffle: Boolean. If true, the integers are randomly shuffled within each
+      epoch.
+    seed: An integer (optional). Seed used if shuffle == True.
+    capacity: An integer. Sets the queue capacity.
+    shared_name: (optional). If set, this queue will be shared under the given
+      name across multiple sessions.
+    name: A name for the operations (optional).
+
+  Returns:
+    A Queue w
+...
+
+Original Test Case:
+import torch
+import triton
+import triton.language as tl
+
+def torch_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@torch.compile
+def torch_compile_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@triton.jit
+def add_kernel(x_ptr,
+               y_ptr,
+               output_ptr,
+               n_elements,
+               BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+def triton_add(x: torch.Tensor, y: torch.Tensor):
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    return output
+
+
+def main():
+    x = torch.randn(4096, 4096, device='cuda')
+    y = torch.randn(4096, 4096, device='cuda')
+    for _ in range(10):
+        torch_add(x, y)
+        torch_compile_add(x, y)
+        triton_add(x, y)
+        
+
+if __name__ == "__main__":
+    main()
+
+The API tf.compat.v1.train.range_input_producer is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

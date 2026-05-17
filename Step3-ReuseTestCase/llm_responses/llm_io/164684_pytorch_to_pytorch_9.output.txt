@@ -1,0 +1,59 @@
+```python
+import torch
+
+# Configure Dynamo to capture scalar outputs and dynamic shape operations
+# to ensure the test environment matches the conditions of the original bug.
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(19990)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = arg_0 # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_1 = torch.squeeze(var_node_2) # size=(), stride=(), dtype=bool, device=cuda
+    var_node_0 = var_node_1.item() # dtype=bool (becomes SymBool in compile)
+    
+    # Adaptation: Replace the original mul operation with torch.unique.
+    # We apply torch.unique to the input tensor arg_0.
+    # We cast to float to maintain a similar output type context as the original sentinel.
+    result = torch.unique(arg_0).float()
+    
+    # Keep var_node_0 in the graph to ensure the dynamic scalar context is preserved,
+    # which is crucial for reproducing similar eager/compile divergences.
+    if var_node_0:
+        pass
+        
+    return result
+
+# Sentinel tensor to ensure gradient computation context is present
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+# Input argument: a boolean tensor on CUDA
+arg_0 = torch.randint(0, 2, (1,), dtype=torch.bool, device='cuda') > 0
+
+args = (arg_0,) + (sentinel,)
+
+# Test in eager mode
+try:
+    result_original = fuzzed_program(*args)
+    print('✅ eager success')
+except Exception as e:
+    print(f'❌ eager failed: {e}')
+
+# Test in compiled mode
+try:
+    compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+    result_compiled = compiled_program(*args)
+    print('✅ compile success')
+except Exception as e:
+    print(f'❌ compile failed: {e}')
+
+# Optional: Check if results match if both succeeded
+if 'result_original' in locals() and 'result_compiled' in locals():
+    # Note: torch.unique output order might not be guaranteed to be stable across runs
+    # without sorting, but for a single element or deterministic seed it should match.
+    if torch.equal(result_original, result_compiled):
+        print('✅ results match')
+    else:
+        print(f'❌ results mismatch: eager={result_original}, compile={result_compiled}')
+```

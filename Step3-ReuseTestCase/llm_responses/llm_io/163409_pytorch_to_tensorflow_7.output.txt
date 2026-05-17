@@ -1,0 +1,49 @@
+```python
+import tensorflow as tf
+
+# Adapted from PyTorch bug report for torch.nn.MaxUnpool3d (Issue ID: 163409)
+# The original bug involved passing mismatched tensor shapes and incompatible dtypes 
+# (complex128 and uint32) to the layer, causing a segmentation fault.
+# This test case attempts to trigger similar behavior in tf.compat.v1.metrics.precision_at_k
+# by passing complex and unsigned integer tensors with mismatched dimensions.
+
+# Note: tf.compat.v1.metrics.precision_at_k is a legacy API. 
+# We disable eager execution to ensure it runs in graph mode as intended.
+tf.compat.v1.disable_eager_execution()
+
+# Recreate the specific input characteristics from the PyTorch bug:
+# 1. Complex tensor (mimicking torch.complex128)
+#    Shape: (9, 6, 3, 6, 9)
+labels = tf.complex(tf.random.normal((9, 6, 3, 6, 9)), tf.random.normal((9, 6, 3, 6, 9)))
+
+# 2. Unsigned integer tensor (mimicking torch.uint32)
+#    TF does not support uint32 directly, using uint64 as the closest equivalent.
+#    Shape: (5, 7, 9, 8, 5) - Note the shape mismatch with labels.
+predictions = tf.random.uniform((5, 7, 9, 8, 5), maxval=100, dtype=tf.uint64)
+
+k = 1
+
+print("Testing tf.compat.v1.metrics.precision_at_k with invalid inputs...")
+
+try:
+    # Call the API with the malformed inputs
+    precision, update_op = tf.compat.v1.metrics.precision_at_k(
+        labels=labels,
+        predictions=predictions,
+        k=k
+    )
+
+    # Execute the graph to trigger the backend calculation
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.local_variables_initializer())
+        # Running the update op is where the tensor operations actually occur
+        result = sess.run(update_op)
+        print(f"Update op result: {result}")
+        
+        final_precision = sess.run(precision)
+        print(f"Precision: {final_precision}")
+
+except Exception as e:
+    # We expect an exception (e.g., InvalidArgumentError, ValueError) rather than a crash.
+    print(f"Caught exception (expected behavior for robust API): {type(e).__name__}: {e}")
+```

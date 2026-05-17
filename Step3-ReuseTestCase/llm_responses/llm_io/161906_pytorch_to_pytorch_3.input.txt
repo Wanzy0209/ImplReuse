@@ -1,0 +1,129 @@
+Issue ID: 161906
+Title: torch.compilefails withaten.complex.defaultsize/stride assertion when using STFT output recombined into complex tensor
+Bug Description:
+### 🐛 Describe the bug
+
+## Issue Description
+A simple model using `torch.stft` followed by recombination of real/imag parts into a complex tensor works fine in eager mode.
+However, when compiled with `torch.compile` (Inductor backend), runtime fails with a stride assertion inside `aten.complex.default`.
+
++ Eager execution: ok! produces correct complex tensor
+
++ Compiled execution: error! AssertionError in assert_size_stride for torch.ops.aten.complex.default
+
+## Minimal Reproduction Script
+```python
+import torch
+import torch.nn as nn
+
+class M(nn.Module):
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft, self.hop, self.win = n_fft, hop, win
+        # Register window as buffer so it moves with .to(device)
+        self.register_buffer("window", torch.hann_window(win))
+        # Introduce parameter for broadcasting / stride ops
+        self.p = nn.Parameter(torch.tensor(2.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        S = torch.stft(
+            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,
+            return_complex=True, window=self.window, pad_mode="constant"
+        )
+        R = torch.abs(S.real)   # unary op on real
+        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)
+        Z = torch.complex(R, I) # recombine -> triggers aten.complex.default
+        return Z
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(0)
+...
+
+Original API Under Test: torch.complex
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.renorm
+Similarity score: 0.9956239461898804
+
+Similar API information:
+# Extracted call chain for torch.renorm
+
+# --- torch._refs.renorm ---
+def renorm(
+    input: TensorLikeType, p: RealNumberType, dim: int, maxnorm: RealNumberType
+) -> TensorLikeType:
+    torch._check(not isinstance(p, complex), lambda: "renorm: p must be real-valued")
+    torch._check(p > 0, lambda: "renorm: non-positive norm not supported")
+    torch._check(
+        not isinstance(maxnorm, complex), lambda: "renorm: maxnorm must be real-valued"
+    )
+    torch._check(
+        maxnorm >= 0, lambda: f"renorm: expected maxnorm to be >= 0 but got {maxnorm}"
+    )
+    ndim = input.ndim
+    torch._check(
+        ndim > 1,
+        lambda: f"renorm: input needs at least 2 dimensions, got {ndim} dimensions",
+    )
+
+    dim = utils.canonicalize_dim(ndim, dim)
+    reduce_dims = list(range(ndim))
+    del reduce_dims[dim]
+
+    # For half and bfloat16, calculate norm in float precision then cast
+    # normalization factor to half
+    acc_type = utils.get_computation_dtype(input.dtype)
+    if acc_type != input.dtype:
+        norm = torch.linalg.vector_norm(
+            input, p, reduce_dims, keepdim=True, dtype=acc_type
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+class M(nn.Module):
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft, self.hop, self.win = n_fft, hop, win
+        # Register window as buffer so it moves with .to(device)
+        self.register_buffer("window", torch.hann_window(win))
+        # Introduce parameter for broadcasting / stride ops
+        self.p = nn.Parameter(torch.tensor(2.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        S = torch.stft(
+            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,
+            return_complex=True, window=self.window, pad_mode="constant"
+        )
+        R = torch.abs(S.real)   # unary op on real
+        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)
+        Z = torch.complex(R, I) # recombine -> triggers aten.complex.default
+        return Z
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(0)
+
+    x = torch.randn(1, 16000, device=device)
+    m = M().to(device)
+
+    # Eager: works fine
+    z_eager = m(x)
+    assert z_eager.is_complex()
+    print("eager mode OK:", z_eager.shape, z_eager.is_complex())
+
+    # Compile: runtime stride assertion in aten.complex.default
+    m_c = torch.compile(m)
+    z_compiled = m_c(x)
+
+if __name__ == "__main__":
+    main()
+
+The API torch.renorm is identified as same-library similar to the original PyTorch API torch.complex.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

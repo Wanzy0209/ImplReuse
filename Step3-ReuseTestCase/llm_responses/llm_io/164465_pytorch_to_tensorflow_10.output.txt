@@ -1,0 +1,61 @@
+```python
+import tensorflow as tf
+
+# Disable eager execution to use tf.compat.v1 queues and sessions
+tf.compat.v1.disable_eager_execution()
+
+def test_range_input_producer_int64_max():
+    """
+    Adapts the PyTorch bug reproduction logic (int64 range + view + max) 
+    to tf.compat.v1.train.range_input_producer.
+    """
+    with tf.compat.v1.Session() as sess:
+        # Parameters from the original bug report
+        limit = 36
+        
+        # 1. Generate range using the specific API
+        # range_input_producer creates a queue with integers 0 to limit-1
+        queue = tf.compat.v1.train.range_input_producer(
+            limit, 
+            num_epochs=1, 
+            shuffle=False, 
+            capacity=32
+        )
+        
+        # 2. Retrieve data (equivalent to prims.iota)
+        # Dequeue all elements to get the full range tensor
+        # Default dtype is int32, cast to int64 to match the bug report's specific type trigger
+        data = tf.cast(queue.dequeue_many(limit), tf.int64)
+        
+        # 3. Apply view (reshape) logic
+        # Original: view_3 = torch.ops.aten.view.default(iota, [1, 36])
+        data_view = tf.reshape(data, [1, limit])
+        
+        # 4. Apply max logic
+        # Original: max_1 = torch.ops.aten.max.default(view_3)
+        max_val = tf.reduce_max(data_view)
+        
+        # Initialize local variables (required for num_epochs counter)
+        sess.run(tf.compat.v1.local_variables_initializer())
+        
+        # Start queue runners to populate the queue
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+        
+        try:
+            # Execute the graph
+            result = sess.run(max_val)
+            
+            # Verify the result
+            # The max of [0, ..., 35] should be 35
+            expected = limit - 1
+            assert result == expected, f"Expected {expected}, got {result}"
+            print(f"Test Passed: Max value is {result}")
+            
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_range_input_producer_int64_max()
+```

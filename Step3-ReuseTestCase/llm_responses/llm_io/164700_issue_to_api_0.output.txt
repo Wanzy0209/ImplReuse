@@ -1,0 +1,71 @@
+```python
+import torch
+import unittest
+
+class TestCompileWithSimilarAPI(unittest.TestCase):
+    def test_compile_cat_unsqueeze_with_solve(self):
+        """
+        Test case based on Issue 164700 (torch.compile crash with unsqueeze/cat)
+        and the similar API torch.solve (deprecated, using torch.linalg.solve).
+        
+        This test preserves the original bug reproduction logic (interleaving 
+        unsqueeze and torch.cat) and leverages the similar API (solve) to 
+        verify that torch.compile handles the specific tensor shapes correctly 
+        even when passed to linear algebra operations.
+        """
+        device = "cuda"
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available")
+
+        # Original bug reproduction logic
+        def original_logic(x, y):
+            y2 = torch.cat(
+                [
+                    x[:, 1:],
+                    y[:, None] + 32 * 2048,
+                ],
+                dim=1,
+            )
+
+            x2 = x[:, 1:, None]
+            y3 = y2[:, -1:, None]
+
+            return (
+                torch.cat([x2, y3], dim=1)
+                + torch.arange(-2048, 0, device=device)[None, None, :]
+            ).reshape(1, 32 * 2048)
+
+        # Function combining original logic with the similar API pattern
+        # Note: torch.solve is deprecated/removed, so we use torch.linalg.solve
+        # as the semantic equivalent to leverage the API pattern.
+        def combined_function(x, y):
+            # 1. Execute the original bug reproduction logic
+            res = original_logic(x, y)
+            
+            # 2. Leverage the similar API (torch.solve -> torch.linalg.solve)
+            # We take a slice of the result to create a manageable matrix size for the solve operation.
+            # The original logic produces int64, so we cast to float for the linear algebra op.
+            B = res[:, :10].float()
+            A = torch.eye(10, device=device, dtype=torch.float32).unsqueeze(0).expand(1, 10, 10)
+            
+            # Solve A * X = B
+            X = torch.linalg.solve(A, B)
+            return X
+
+        # Setup inputs
+        x = torch.zeros(1, 32, dtype=torch.int64, device=device)
+        y = torch.zeros(1, dtype=torch.int32, device=device)
+
+        # Run in eager mode
+        expected = combined_function(x, y)
+
+        # Run with torch.compile
+        compiled_fn = torch.compile(combined_function)
+        actual = compiled_fn(x, y)
+
+        # Assert results are close
+        self.assertTrue(torch.allclose(expected, actual))
+
+if __name__ == "__main__":
+    unittest.main()
+```

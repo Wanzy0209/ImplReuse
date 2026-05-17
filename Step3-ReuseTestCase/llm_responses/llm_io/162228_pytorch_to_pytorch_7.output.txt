@@ -1,0 +1,72 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use 'gloo' backend for CPU compatibility in this minimal example
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+@torch.compile()
+def test_send(x, y, rank):
+    # Materialize a bias matrix (Logic from the original bug report)
+    B, L, device = x.shape[0], x.shape[1], x.device
+    b = torch.arange(B, device=device, dtype=torch.long).view(B, 1, 1)
+    q_idx = torch.arange(L, device=device, dtype=torch.long).view(1, L, 1)
+    kv_idx = torch.arange(L, device=device, dtype=torch.long).view(1, 1, L)
+    bias_mat = y[b, q_idx] + y[b, kv_idx] # (B, L, L)
+
+    # torch._dynamo.graph_break() # Mimic the graph break condition from the original bug
+
+    # Adaptation: Use torch.distributed.send_object_list instead of flex_attention
+    if rank == 0:
+        # send_object_list sends a list of picklable objects
+        dist.send_object_list([bias_mat], dst=1)
+    
+    return None
+
+def run(rank, world_size):
+    setup(rank, world_size)
+    
+    B, L, D = 2, 16, 64
+    # Using CPU for portability in this snippet, but logic applies to CUDA
+    device = torch.device("cpu") 
+    
+    x = torch.randn(B, L, D, device=device)
+    y = torch.randn(B, L, device=device)
+
+    # Execute the compiled function
+    test_send(x, y, rank)
+
+    # Verification logic (receiving side)
+    if rank == 1:
+        received_list = [None]
+        dist.recv_object_list(received_list, src=0)
+        received_tensor = received_list[0]
+        
+        # Verify that the object was received and matches the expected computation
+        assert received_tensor is not None
+        
+        # Recompute expected value to verify correctness
+        b = torch.arange(B, device=device, dtype=torch.long).view(B, 1, 1)
+        q_idx = torch.arange(L, device=device, dtype=torch.long).view(1, L, 1)
+        kv_idx = torch.arange(L, device=device, dtype=torch.long).view(1, 1, L)
+        expected_bias = y[b, q_idx] + y[b, kv_idx]
+        
+        assert torch.allclose(received_tensor, expected_bias)
+        print(f"Rank {rank}: Test passed. Object received and verified inside compiled context.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn 2 processes to simulate the distributed environment
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)
+```

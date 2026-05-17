@@ -1,0 +1,69 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Use TF1 compatibility mode as the API is in compat.v1
+tf.compat.v1.disable_eager_execution()
+
+def test_string_input_producer_state_integrity():
+    """
+    Adapted from torch.compile miscompilation test.
+    Original bug: State tensor was not updated correctly when copying from
+    and saving to it in the same kernel.
+    TF Adaptation: Verify that the string_input_producer maintains the
+    correct state (epoch counter and order) when producing strings,
+    ensuring no data corruption or incorrect ordering occurs.
+    """
+    # Define a set of strings representing the "state" of data
+    # In the original bug, this was a tensor of shape [4, 2048, 1024]
+    # Here we use a list of strings to represent data chunks.
+    initial_data = ["data_chunk_0", "data_chunk_1", "data_chunk_2"]
+    string_tensor = tf.constant(initial_data)
+
+    # Create the input producer
+    # num_epochs=2 simulates the "sliding" or "repeating" nature of the state update
+    # shuffle=False ensures we can verify the exact order
+    producer = tf.compat.v1.train.string_input_producer(
+        string_tensor,
+        num_epochs=2,
+        shuffle=False,
+        capacity=32
+    )
+
+    # Dequeue operation
+    dequeue_op = producer.dequeue()
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize local variables (epochs counter)
+        sess.run(tf.compat.v1.local_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        # Start queue runners
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord)
+
+        results = []
+        try:
+            # We expect 3 items * 2 epochs = 6 items
+            # This loop mimics the "attempt" loop in the original test
+            for i in range(6):
+                val = sess.run(dequeue_op)
+                results.append(val.decode('utf-8'))
+        except tf.errors.OutOfRangeError:
+            print("Reached end of epochs (expected).")
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+    # Verify the "state" of the output
+    # The original test checked if state[:, :-2, :] == 0.
+    # Here we check if the sequence matches the expected state progression.
+    expected_sequence = initial_data + initial_data
+    assert results == expected_sequence, \
+        f"State integrity check failed. Expected {expected_sequence}, got {results}"
+
+    print("Test passed: string_input_producer maintained correct state.")
+
+if __name__ == "__main__":
+    test_string_input_producer_state_integrity()
+```

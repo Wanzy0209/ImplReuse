@@ -1,0 +1,91 @@
+Issue ID: 164102
+Title: [Fuzzer][Eager/Compile Divergence] cannot determine truth value of Relational
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, sentinel):
+    t0 = arg0 # size=(93, 62, 23), stride=(1426, 23, 1), dtype=bfloat16, device=cuda
+    t1 = arg1 # size=(93, 62, 11), stride=(682, 11, 1), dtype=bfloat16, device=cuda
+    t2 = arg2 # size=(93, 62, 10), stride=(620, 10, 1), dtype=bfloat16, device=cuda
+    t3 = arg3 # size=(93, 62, 81), stride=(5022, 81, 1), dtype=bfloat16, device=cuda
+    t4 = arg4 # size=(93, 62, 2), stride=(124, 2, 1), dtype=bfloat16, device=cuda
+    t5 = torch.cat([t0, t1, t2, t3, t4], dim=2) # size=(93, 62, 127), stride=(23622, 635, 4), dtype=bfloat16, device=cuda
+    t6 = t5.contiguous() # size=(93, 62, 127), stride=(7874, 127, 1), dtype=bfloat16, device=cuda
+    t7 = arg5 # size=(93, 62, 8), stride=(5766, 62, 1), dtype=bfloat16, device=cuda
+    t8 = torch.exp(t7) # size=(93, 62, 8), stride=(5766, 62, 1), dtype=bfloat16, device=cuda
+    t9 = torch.rms_norm(t8, (62, 8)) # size=(93, 62, 8), stride=(496, 8, 1), dtype=bfloat16, device=cuda
+    t10 = arg6 # size=(77, 8, 127), stride=(1016, 127, 1), dtype=bfloat16, device=cuda
+    t11 = torch.exp(t10) # size=(77, 8, 127), stride=(1016, 127, 1), dtype=bfloat16, device=cuda
+    t12 = arg7 # size=(16, 8, 15), stride=(128, 8, 1), dtype=bfloat16, device=cuda
+    t13 = torch.nn.functi
+...
+
+Original API Under Test: torch.rms_norm
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.backends.cuda.cudnn_sdp_enabled
+Similarity score: 0.9786818027496338
+
+Similar API information:
+# Extracted call chain for torch.backends.cuda.cudnn_sdp_enabled
+
+# --- torch.backends.cuda.cudnn_sdp_enabled ---
+def cudnn_sdp_enabled():
+    r"""
+    .. warning:: This flag is beta and subject to change.
+
+    Returns whether cuDNN scaled dot product attention is enabled or not.
+    """
+    return torch._C._get_cudnn_sdp_enabled()
+
+Original Test Case:
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, sentinel):
+    t0 = arg0 # size=(93, 62, 23), stride=(1426, 23, 1), dtype=bfloat16, device=cuda
+    t1 = arg1 # size=(93, 62, 11), stride=(682, 11, 1), dtype=bfloat16, device=cuda
+    t2 = arg2 # size=(93, 62, 10), stride=(620, 10, 1), dtype=bfloat16, device=cuda
+    t3 = arg3 # size=(93, 62, 81), stride=(5022, 81, 1), dtype=bfloat16, device=cuda
+    t4 = arg4 # size=(93, 62, 2), stride=(124, 2, 1), dtype=bfloat16, device=cuda
+    t5 = torch.cat([t0, t1, t2, t3, t4], dim=2) # size=(93, 62, 127), stride=(23622, 635, 4), dtype=bfloat16, device=cuda
+    t6 = t5.contiguous() # size=(93, 62, 127), stride=(7874, 127, 1), dtype=bfloat16, device=cuda
+    t7 = arg5 # size=(93, 62, 8), stride=(5766, 62, 1), dtype=bfloat16, device=cuda
+    t8 = torch.exp(t7) # size=(93, 62, 8), stride=(5766, 62, 1), dtype=bfloat16, device=cuda
+    t9 = torch.rms_norm(t8, (62, 8)) # size=(93, 62, 8), stride=(496, 8, 1), dtype=bfloat16, device=cuda
+    t10 = arg6 # size=(77, 8, 127), stride=(1016, 127, 1), dtype=bfloat16, device=cuda
+    t11 = torch.exp(t10) # size=(77, 8, 127), stride=(1016, 127, 1), dtype=bfloat16, device=cuda
+    t12 = arg7 # size=(16, 8, 15), stride=(128, 8, 1), dtype=bfloat16, device=cuda
+    t13 = torch.nn.functional.interpolate(t12, size=(127,), mode='nearest') # size=(16, 8, 127), stride=(1016, 127, 1), dtype=bfloat16, device=cuda
+    t14 = torch.cat([t11, t13], dim=0) # size=(93, 8, 127), stride=(1016, 127, 1), dtype=bfloat16, device=cuda
+    t15 = torch.baddbmm(t6, t9, t14) # size=(93, 62, 127), stride=(7874, 127, 1), dtype=bfloat16, device=cuda
+    output = t15 + sentinel  # output tensor with sentinel for gradient flow
+    return output
+
+arg0 = torch.rand([93, 62, 23], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(93, 62, 23), stride=(1426, 23, 1), dtype=bfloat16, device=cuda
+arg1 = torch.rand([93, 62, 11], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(93, 62, 11), stride=(682, 11, 1), dtype=bfloat16, device=cuda
+arg2 = torch.rand([93, 62, 10], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(93, 62, 10), stride=(620, 10, 1), dtype=bfloat16, device=cuda
+arg3 = torch.rand([93, 62, 81], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(93, 62, 81), stride=(5022, 81, 1), dtype=bfloat16, device=cuda
+arg4 = torch.rand([93, 62, 2], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(93, 62, 2), stride=(124, 2, 1), dtype=bfloat16, device=cuda
+arg5 = torch.rand([93, 62, 8], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(93, 62, 8), stride=(5766, 62, 1), dtype=bfloat16, device=cuda
+arg6 = torch.rand([77, 8, 127], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(77, 8, 127), stride=(1016, 127, 1), dty
+...
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

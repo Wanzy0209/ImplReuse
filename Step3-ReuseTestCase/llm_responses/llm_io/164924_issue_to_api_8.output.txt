@@ -1,0 +1,61 @@
+```python
+import torch
+import triton
+import triton.language as tl
+from torch.library import triton_op, wrap_triton
+
+# Define a simple Triton kernel for element-wise addition
+@triton.jit
+def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    tl.store(output_ptr + offsets, x + y, mask=mask)
+
+# Register the custom op using torch.library.triton_op.
+# This API utilizes torch.library.wrap_triton internally to allow
+# the kernel to be captured by torch.compile.
+@triton_op("test_ns::custom_add", mutates_args={"out"})
+def custom_add(x: torch.Tensor, y: torch.Tensor, out: torch.Tensor):
+    grid = lambda meta: (triton.cdiv(out.numel(), meta['BLOCK_SIZE']), )
+    add_kernel[grid](x, y, out, out.numel(), BLOCK_SIZE=1024)
+
+class CustomOpModel(torch.nn.Module):
+    def __init__(self, device):
+        super().__init__()
+        self.device = device
+        # Setup inputs: one 1D tensor and one SCALAR (0-d tensor)
+        # This mimics the bug report's setup where one input is a scalar
+        self.x = torch.randint(0, 10, (4,), dtype=torch.int64, device=device)
+        self.y = torch.randint(0, 10, (), dtype=torch.int64, device=device)
+
+    def forward(self):
+        out = torch.empty_like(self.x)
+        custom_add(self.x, self.y, out)
+        return out
+
+def test_wrap_triton_scalar_compile():
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = CustomOpModel(device)
+
+    # Eager execution
+    eager_out = model.forward()
+    print("Eager output:", eager_out)
+
+    # Compiled execution (Inductor)
+    # This tests if the wrapped triton kernel handles scalar inputs correctly
+    # during the compilation process, similar to the torch.isin issue.
+    compiled_model = torch.compile(model, backend='inductor')
+    compiled_out = compiled_model.forward()
+    print("Compiled output:", compiled_out)
+
+    # Verify results match
+    assert torch.equal(eager_out, compiled_out), "Mismatch between eager and compiled outputs"
+    print("Test passed: torch.library.wrap_triton handles scalar inputs correctly in compile.")
+
+if __name__ == "__main__":
+    test_wrap_triton_scalar_compile()
+```

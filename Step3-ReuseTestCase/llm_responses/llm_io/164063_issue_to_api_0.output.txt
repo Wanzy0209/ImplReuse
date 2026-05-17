@@ -1,0 +1,80 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_resize_volumes_bfloat16_precision():
+    """
+    Test case for tf.keras.backend.resize_volumes inspired by PyTorch Issue 164063.
+    
+    The original issue involves a TypeError('unexpected type fp32') when using 
+    torch.var with bfloat16 tensors under torch.compile (emulating precision casts).
+    
+    This test verifies that the similar API, tf.keras.backend.resize_volumes,
+    handles bfloat16 dtypes correctly without type divergence between eager 
+    and compiled (tf.function) execution.
+    """
+    
+    # Setup: Create a 5D tensor with bfloat16 dtype, similar to the problematic input in the issue.
+    # The PyTorch issue used shapes like (36, 7112, 1, 1) and (28, 24, 3, 127).
+    # resize_volumes requires 5D input. We use a shape that exercises the resizing logic.
+    # Shape: (Batch, Channels, Depth, Height, Width)
+    input_shape = (2, 16, 4, 5, 6)
+    x = tf.random.normal(input_shape, dtype=tf.bfloat16)
+
+    # Define factors for resizing
+    depth_factor = 2
+    height_factor = 3
+    width_factor = 2
+
+    # 1. Eager Execution
+    # This corresponds to the 'Eager Success' step in the original bug report.
+    try:
+        out_eager = tf.keras.backend.resize_volumes(
+            x, 
+            depth_factor, 
+            height_factor, 
+            width_factor, 
+            data_format='channels_first'
+        )
+        print(f"Eager execution success. Output shape: {out_eager.shape}, dtype: {out_eager.dtype}")
+    except Exception as e:
+        print(f"Eager execution failed: {e}")
+        raise
+
+    # 2. Compiled Execution (tf.function)
+    # This corresponds to the 'Compile Success' step in the original bug report.
+    # We wrap the call in tf.function to simulate the compilation context where the bug occurred.
+    @tf.function
+    def compiled_resize_volumes(input_tensor):
+        return tf.keras.backend.resize_volumes(
+            input_tensor, 
+            depth_factor, 
+            height_factor, 
+            width_factor, 
+            data_format='channels_first'
+        )
+
+    try:
+        out_compiled = compiled_resize_volumes(x)
+        print(f"Compiled execution success. Output shape: {out_compiled.shape}, dtype: {out_compiled.dtype}")
+    except Exception as e:
+        print(f"Compiled execution failed: {e}")
+        raise
+
+    # 3. Validation
+    # Check for divergence in shape and dtype (the core of the original bug).
+    assert out_eager.shape == out_compiled.shape, "Shape divergence between eager and compiled modes."
+    assert out_eager.dtype == out_compiled.dtype, "Dtype divergence between eager and compiled modes."
+    
+    # Ensure the dtype is preserved as bfloat16 (or handled consistently).
+    # The original bug complained about 'unexpected type fp32' appearing where it shouldn't.
+    assert out_eager.dtype == tf.bfloat16, f"Expected bfloat16, got {out_eager.dtype}"
+
+    # Check numerical consistency
+    np.testing.assert_allclose(out_eager.numpy(), out_compiled.numpy(), rtol=1e-5, atol=1e-5)
+
+    print("Test Passed: No divergence or type errors detected.")
+
+if __name__ == '__main__':
+    test_resize_volumes_bfloat16_precision()
+```

@@ -1,0 +1,82 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+from typing import List, Optional
+
+# Constants proposed in the RFC
+NCCL_SHRINK_DEFAULT = 0
+NCCL_SHRINK_ABORT = 1
+
+def get_pg_state(pg: Optional[dist.ProcessGroup] = None) -> str:
+    """
+    Helper function to verify the state of the ProcessGroup.
+    This leverages the pattern from the similar API 'tf.keras.backend.backend',
+    which returns a string representing the current environment state.
+    """
+    if pg is None:
+        pg = dist.group.WORLD
+    return f"Backend: {dist.get_backend()}, Size: {dist.get_world_size(pg)}"
+
+def run_shrink_test(rank: int, world_size: int):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    
+    # Using 'gloo' for CPU compatibility in this test case
+    dist.init_process_group(
+        backend='gloo', 
+        rank=rank, 
+        world_size=world_size
+    )
+
+    # 1. Verify initial state using the helper pattern
+    initial_state = get_pg_state()
+    print(f"Rank {rank}: Initial State - {initial_state}")
+    assert dist.get_world_size() == world_size
+
+    # Define ranks to exclude (simulating a fault or removal)
+    # We exclude the last rank in this test
+    ranks_to_exclude = [world_size - 1]
+
+    # 2. Execute the shrink logic
+    # The RFC states: "Only group members of the updated ProcessGroup need to enter this function."
+    if rank not in ranks_to_exclude:
+        try:
+            # Call the proposed API
+            # Note: This assumes the implementation is available in the environment.
+            # If running on standard PyTorch without the patch, this would raise AttributeError.
+            new_pg = dist.shrink_group(
+                ranks_to_exclude=ranks_to_exclude,
+                Pg=None,  # Use default process group
+                shrink_flags=NCCL_SHRINK_DEFAULT
+            )
+
+            # 3. Verify the state after shrinking
+            final_state = get_pg_state(new_pg)
+            print(f"Rank {rank}: Final State - {final_state}")
+
+            # Assertions to ensure the API behaved as expected
+            expected_size = world_size - len(ranks_to_exclude)
+            actual_size = dist.get_world_size(new_pg)
+            
+            assert actual_size == expected_size, \
+                f"Rank {rank}: Expected group size {expected_size}, but got {actual_size}"
+            
+            # Verify that the excluded rank is not in the new group
+            # (Implementation specific, but generally ranks are remapped 0..N-1)
+            print(f"Rank {rank}: Successfully shrunk group to size {actual_size}")
+
+        except AttributeError:
+            print(f"Rank {rank}: shrink_group API not found (RFC pending implementation).")
+    else:
+        print(f"Rank {rank}: Excluded from shrink operation.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Run a minimal test with 4 processes
+    world_size = 4
+    mp.spawn(run_shrink_test, args=(world_size,), nprocs=world_size, join=True)
+```

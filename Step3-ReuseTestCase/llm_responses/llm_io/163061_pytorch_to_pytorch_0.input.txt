@@ -1,0 +1,134 @@
+Issue ID: 163061
+Title: GIL is not released when calling torch.compile kernels
+Bug Description:
+### 🐛 Describe the bug
+
+In most cases, PyTorch releases GIL when calling CUDA APIs, but I found the GIL is held when calling torch.compile kernels, is this expected? Is it possible to release GIL when calling torch.compile kernels?
+
+To reproduce, script `torch_compile.py`:
+```python
+import torch
+import triton
+import triton.language as tl
+
+def torch_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@torch.compile
+def torch_compile_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@triton.jit
+def add_kernel(x_ptr,
+               y_ptr,
+               output_ptr,
+               n_elements,
+               BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+def triton_add(x: torch.Tensor, y: torch.Tensor):
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    return output
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.compile
+Similarity score: 1.0
+
+Similar API information:
+# Extracted call chain for torch.compile
+
+# --- torch.compile ---
+def compile(
+    model: _Optional[_Callable] = None,
+    *,
+    fullgraph: builtins.bool = False,
+    dynamic: _Optional[builtins.bool] = None,
+    backend: _Union[str, _Callable] = "inductor",
+    mode: _Union[str, None] = None,
+    options: _Optional[dict[str, _Union[str, builtins.int, builtins.bool]]] = None,
+    disable: builtins.bool = False,
+) -> _Union[
+    _Callable[[_Callable[_InputT, _RetT]], _Callable[_InputT, _RetT]],
+    _Callable[_InputT, _RetT],
+]:
+    """
+    Optimizes given model/function using TorchDynamo and specified backend.
+    If you are compiling an :class:`torch.nn.Module`, you can also use :meth:`torch.nn.Module.compile`
+    to compile the module inplace without changing its structure.
+
+    Concretely, for every frame executed within the compiled region, we will attempt
+    to compile it and cache the compiled result on the code object for future
+    use.  A single frame may be compiled multiple times if previous compiled
+    results are not applicable for subsequent calls (this is called a "guard
+    failure), you can use TORCH_LOGS=guards to debug these situations.
+    Multiple compiled re
+...
+
+Original Test Case:
+import torch
+import triton
+import triton.language as tl
+
+def torch_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@torch.compile
+def torch_compile_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@triton.jit
+def add_kernel(x_ptr,
+               y_ptr,
+               output_ptr,
+               n_elements,
+               BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+def triton_add(x: torch.Tensor, y: torch.Tensor):
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    return output
+
+
+def main():
+    x = torch.randn(4096, 4096, device='cuda')
+    y = torch.randn(4096, 4096, device='cuda')
+    for _ in range(10):
+        torch_add(x, y)
+        torch_compile_add(x, y)
+        triton_add(x, y)
+        
+
+if __name__ == "__main__":
+    main()
+
+The API torch.compile is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

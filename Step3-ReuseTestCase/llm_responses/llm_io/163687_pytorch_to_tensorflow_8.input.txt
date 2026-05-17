@@ -1,0 +1,105 @@
+Issue ID: 163687
+Title: [Fuzzer][Eager/Compile Divergence] flexattention works in eager but ooms in compile
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+import sys
+from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10):
+    t0 = arg0 # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t1 = arg1 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t2 = arg2 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t3 = flex_attention(t0, t1, t2) # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t4 = arg3 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t5 = arg4 # size=(27, 26, 248, 122), stride=(174096, 6448, 248, 1), dtype=float32, device=cuda
+    t6 = arg5 # size=(27, 26, 248, 122), stride=(174096, 6448, 248, 1), dtype=float32, device=cuda
+    t7 = flex_attention(t4, t5, t6) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t8 = flex_attention(t3, t7, t7) # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t9 = arg6 # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t10 = arg7 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32,
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.keras.name_scope
+Similarity score: 0.9931139349937439
+
+Similar API information:
+# Extracted call chain for tf.keras.name_scope
+
+# --- tensorflow.python.framework.ops.name_scope ---
+def name_scope(
+    name, default_name=None, values=None, skip_on_eager=True,
+) -> ContextManager[Optional[str]]:
+  """Internal-only entry point for `name_scope*`.
+
+  Internal ops do not use the public API and instead rely on
+  `ops.name_scope` regardless of the execution mode. This function
+  dispatches to the correct `name_scope*` implementation based on
+  the arguments provided and the current mode. Specifically,
+
+  * if `values` contains a graph tensor `Graph.name_scope` is used;
+  * `name_scope_v1` is used in graph mode;
+  * `name_scope_v2` -- in eager mode.
+
+  Args:
+    name: The name argument that is passed to the op function.
+    default_name: The default name to use if the `name` argument is `None`.
+    values: The list of `Tensor` arguments that are passed to the op function.
+    skip_on_eager: Indicates to return NullContextmanager if executing eagerly.
+      By default this is True since naming tensors and operations in eager mode
+      have little use and cause unnecessary performance overhead. However, it is
+      important to preserve variable names since they are oft
+...
+
+Original Test Case:
+import torch
+import sys
+from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10):
+    t0 = arg0 # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t1 = arg1 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t2 = arg2 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t3 = flex_attention(t0, t1, t2) # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t4 = arg3 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t5 = arg4 # size=(27, 26, 248, 122), stride=(174096, 6448, 248, 1), dtype=float32, device=cuda
+    t6 = arg5 # size=(27, 26, 248, 122), stride=(174096, 6448, 248, 1), dtype=float32, device=cuda
+    t7 = flex_attention(t4, t5, t6) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t8 = flex_attention(t3, t7, t7) # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t9 = arg6 # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t10 = arg7 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t11 = flex_attention(t9, t7, t10) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t12 = flex_attention(t11, t8, t3) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t13 = arg8 # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t14 = arg9 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t15 = flex_attention(t13, t2, t14) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t16 = arg10 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t17 = t16.clone(); t17.zero_() # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t18 = flex_attention(t17, t8, t3) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t19 = flex_attention(t15, t17, t18) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t20 = flex_attention(t8, t12, t19) # size=(27, 26, 62, 122), stride=(196664, 7564, 122, 1), dtype=float32, device=cuda
+    output = t20  # output tensor
+    return output
+
+arg0 = torch.rand([27, 26, 62, 122], dtype=torch.float32, device='cuda', requires_grad=True) # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+arg1 = torch.rand([27, 26, 124, 122], dtype=torch.float32, device='cuda', requires_grad=True) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1)
+...
+
+The API tf.keras.name_scope is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

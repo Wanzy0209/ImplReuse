@@ -1,0 +1,105 @@
+Issue ID: 163569
+Title: [Fuzzer][Eager/Compile Divergence] torch.nn.functional.conv1d works in eager but fails compile
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0 # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda
+    t1 = t0.max(dim=0).values # size=(261, 17, 358), stride=(358, 93438, 1), dtype=bfloat16, device=cuda
+    t2 = t1.transpose(1, 0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=bfloat16, device=cuda
+    t3 = arg1 # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+    t4 = torch.exp(t3) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+    t5 = arg2 # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda
+    t6 = t5.transpose(2, 1) # size=(261, 64, 1), stride=(16704, 64, 1), dtype=float32, device=cuda
+    t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    t8 = t7.clone(); t8.zero_() # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    t9 = t2 * t7 * t8 # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    output = t9  # output tensor
+    return output
+
+arg0 = torch.rand([2, 261, 17, 358], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda
+arg1 = tor
+...
+
+Original API Under Test: torch.nn.functional.conv1d
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.extract_image_patches
+Similarity score: 0.994826078414917
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.extract_image_patches
+
+# --- tensorflow.python.ops.array_ops.extract_image_patches ---
+def extract_image_patches(  # pylint: disable=missing-docstring
+    images,
+    ksizes=None,
+    strides=None,
+    rates=None,
+    padding=None,
+    name=None,
+    sizes=None):
+  """Extract patches from images and put them in the "depth" output dimension.
+
+  Args:
+    `images`: A `Tensor`. Must be one of the following types: `float32`,
+      `float64`, `int32`, `uint8`, `int16`, `int8`, `int64`, `bfloat16`,
+      `uint16`, `half`, `uint32`, `uint64`. 4-D Tensor with shape
+    `[batch, in_rows, in_cols, depth]`. `ksizes`: A list of `ints` that has
+      length `>= 4`. The size of the sliding window for each
+    dimension of `images`. `strides`: A list of `ints` that has length `>= 4`.
+      1-D of length 4. How far the centers of two consecutive
+    patches are in the images. Must be:
+    `[1, stride_rows, stride_cols, 1]`. `rates`: A list of `ints`
+    that has length `>= 4`. 1-D of length 4. Must be: `[1, rate_rows, rate_cols,
+      1]`. This is the input stride, specifying how far two consecutive patch
+      samples are in the input. Equivalent to extract
+...
+
+Original Test Case:
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0 # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda
+    t1 = t0.max(dim=0).values # size=(261, 17, 358), stride=(358, 93438, 1), dtype=bfloat16, device=cuda
+    t2 = t1.transpose(1, 0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=bfloat16, device=cuda
+    t3 = arg1 # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+    t4 = torch.exp(t3) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+    t5 = arg2 # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda
+    t6 = t5.transpose(2, 1) # size=(261, 64, 1), stride=(16704, 64, 1), dtype=float32, device=cuda
+    t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    t8 = t7.clone(); t8.zero_() # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    t9 = t2 * t7 * t8 # size=(17, 261, 358), stride=(93438, 358, 1), dtype=float32, device=cuda
+    output = t9  # output tensor
+    return output
+
+arg0 = torch.rand([2, 261, 17, 358], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda
+arg1 = torch.rand([17, 64, 358], dtype=torch.float32, device='cuda', requires_grad=True) # size=(17, 64, 358), stride=(1088, 64, 1), dtype=float32, device=cuda
+arg2 = torch.rand([261, 1, 64], dtype=torch.float32, device='cuda', requires_grad=True) # size=(261, 1, 64), stride=(16704, 1, 64), dtype=float32, device=cuda
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+
+The API tf.compat.v1.extract_image_patches is identified as cross-library similar to the original PyTorch API torch.nn.functional.conv1d.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

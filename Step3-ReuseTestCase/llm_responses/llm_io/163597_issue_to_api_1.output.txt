@@ -1,0 +1,73 @@
+```python
+import torch
+import torch.nn.functional as F
+
+def test_sdpa_mps_non_contiguous_regression():
+    """
+    Test case for Issue 163597: SDPA MPS regression on 2.8.0.
+    
+    This test leverages the concept of 'data_format' handling found in 
+    tf.keras.layers.UpSampling3D. In Keras, layers handle switching between
+    'channels_first' and 'channels_last'. Similarly, SDPA inputs often require
+    transposing between (Batch, Seq, Heads, Dim) and (Batch, Heads, Seq, Dim).
+    
+    The bug occurs when the MPS backend receives non-contiguous tensors resulting
+    from such a 'data_format' switch (transpose), causing incorrect outputs
+    compared to the CPU implementation or contiguous inputs.
+    """
+    if not torch.backends.mps.is_available():
+        print("MPS device not available. Skipping test.")
+        return
+
+    batch_size, seq_len, num_heads, head_dim = 1, 8, 12, 64
+
+    # Initialize tensors in a "channels_last" style layout (Batch, Seq, Heads, Dim)
+    # This mimics the default data format often used in model definitions.
+    q = torch.randn(batch_size, seq_len, num_heads, head_dim, device="mps")
+    k = torch.randn(batch_size, seq_len, num_heads, head_dim, device="mps")
+    v = torch.randn(batch_size, seq_len, num_heads, head_dim, device="mps")
+
+    # Switch to "channels_first" style layout (Batch, Heads, Seq, Dim)
+    # This is analogous to setting data_format='channels_first' in Keras.
+    # The transpose operation creates non-contiguous tensors, triggering the bug.
+    q_cf = q.transpose(1, 2)
+    k_cf = k.transpose(1, 2)
+    v_cf = v.transpose(1, 2)
+
+    # 1. Run SDPA on non-contiguous tensors (The regression case)
+    out_mps_non_contig = F.scaled_dot_product_attention(q_cf, k_cf, v_cf)
+
+    # 2. Run SDPA on contiguous tensors (Baseline for MPS)
+    out_mps_contig = F.scaled_dot_product_attention(
+        q_cf.contiguous(), k_cf.contiguous(), v_cf.contiguous()
+    )
+
+    # 3. Run SDPA on CPU (Ground truth)
+    out_cpu = F.scaled_dot_product_attention(q_cf.cpu(), k_cf.cpu(), v_cf.cpu())
+
+    # Calculate differences
+    diff_mps_cpu = torch.norm(out_mps_non_contig.cpu() - out_cpu)
+    diff_mps_contig = torch.norm(out_mps_non_contig - out_mps_contig)
+
+    print(f"--- Test Results for SDPA on MPS ---")
+    print(f"MPS (Non-Contiguous) vs CPU Norm: {diff_mps_cpu.item():.6f}")
+    print(f"MPS (Non-Contiguous) vs MPS (Contiguous) Norm: {diff_mps_contig.item():.6f}")
+
+    # Assertions
+    # The bug causes the non-contiguous MPS path to diverge significantly.
+    # We use a tolerance suitable for float32 operations across different backends.
+    tolerance = 1e-4
+    assert diff_mps_cpu < tolerance, (
+        f"Regression detected: MPS non-contiguous output differs from CPU. "
+        f"Norm: {diff_mps_cpu.item()}"
+    )
+    assert diff_mps_contig < tolerance, (
+        f"Regression detected: MPS non-contiguous output differs from MPS contiguous. "
+        f"Norm: {diff_mps_contig.item()}"
+    )
+
+    print("Test passed: MPS handles non-contiguous tensors correctly.")
+
+if __name__ == "__main__":
+    test_sdpa_mps_non_contiguous_regression()
+```

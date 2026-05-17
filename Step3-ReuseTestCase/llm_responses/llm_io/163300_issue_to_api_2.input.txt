@@ -1,0 +1,143 @@
+Issue ID: 163300
+Title: [torch.compile][FlexAttention] Inductor failure with custom score_mod (FlexibleLayout / NoValidChoicesError)
+Bug Description:
+### 🐛 Describe the bug
+Compiling a module that wraps `torch.nn.attention.flex_attention` with a custom `score_mod` fails under `torch.compile` (Inductor).  
+- Eager execution works correctly.  
+- With `torch.compile(dynamic=False)` I get:
+```
+
+BackendCompilerFailed: backend='inductor' raised:
+LoweringException: AssertionError: convert FlexibleLayout to FixedLayout first
+
+```
+- With `torch.compile(dynamic=False, mode="max-autotune-no-cudagraphs")` I get:
+```
+
+BackendCompilerFailed: backend='inductor' raised:
+LoweringException: NoValidChoicesError
+
+````
+- Tried with both `bfloat16` (autocast) and `float16` — same errors.  
+
+### Minimal repro
+```python
+import torch
+import torch.nn as nn
+from torch.nn.attention.flex_attention import flex_attention
+from torch.nn.attention import SDPBackend
+
+class FlexAttentionCPB(nn.Module):
+    def __init__(self, N: int, R: int, H: int = 6, hidden: int = 32):
+        super().__init__()
+        self.mlp = nn.Sequential(nn.Linear(2, hidden), nn.GELU(), nn.Linear(hidden, H, bias=False))
+        self.gamma = nn.Parameter(torch.zeros(H))
+        self.H = H
+        self.init_tables(N, R)
+        self.register_buffer("r_cutoff", torch.tensor(R, dtype=torch.long), persistent=False)
+
+    def init_tables(self, N: int, R: int):
+        # continuous position bias –  SwinV2
+        P = N - R
+        S = int(P**0.5)
+        assert S * S == P
+
+Original API Under Test: torch.nn.attention.flex_attention
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.backends.nnpack.is_available
+Similarity score: 0.9668828248977661
+
+Similar API information:
+# Extracted call chain for torch.backends.nnpack.is_available
+
+# --- torch.backends.nnpack.is_available ---
+def is_available():
+    r"""Return whether PyTorch is built with NNPACK support."""
+    return torch._nnpack_available()
+
+Original Test Case:
+import torch
+import torch.nn as nn
+from torch.nn.attention.flex_attention import flex_attention
+from torch.nn.attention import SDPBackend
+
+class FlexAttentionCPB(nn.Module):
+    def __init__(self, N: int, R: int, H: int = 6, hidden: int = 32):
+        super().__init__()
+        self.mlp = nn.Sequential(nn.Linear(2, hidden), nn.GELU(), nn.Linear(hidden, H, bias=False))
+        self.gamma = nn.Parameter(torch.zeros(H))
+        self.H = H
+        self.init_tables(N, R)
+        self.register_buffer("r_cutoff", torch.tensor(R, dtype=torch.long), persistent=False)
+
+    def init_tables(self, N: int, R: int):
+        # continuous position bias –  SwinV2
+        P = N - R
+        S = int(P**0.5)
+        assert S * S == P
+        rng = torch.arange(-(S - 1), S, dtype=torch.float32)
+        dY, dX = torch.meshgrid(rng, rng, indexing="ij")
+        rel = torch.stack([dY / max(S - 1, 1), dX / max(S - 1, 1)], dim=-1).reshape(-1, 2)
+        rel_table = torch.sign(rel) * torch.log1p(rel.abs())
+        self.register_buffer("rel_table", rel_table, persistent=False)
+
+        yy, xx = torch.arange(S), torch.arange(S)
+        Y, X = torch.meshgrid(yy, xx, indexing="ij")
+        flat = torch.stack([Y, X], 0).flatten(1)
+        d = flat[:, :, None] - flat[:, None, :]
+        d = d.permute(1, 2, 0).contiguous()
+        d[:, :, 0] += S - 1; d[:, :, 1] += S - 1
+        d[:, :, 0] *= 2 * S - 1
+        l_idx = d.sum(-1).to(torch.long)
+
+        idx = torch.full((N, N), 0, dtype=torch.long)
+        idx[R:, R:] = l_idx
+        self.register_buffer("idx_table", idx, persistent=False)
+
+    def _score_mod(self, mu: torch.Tensor):
+        bt = self.mlp(self.rel_table)
+        idx = self.idx_table
+        mu_q, mu_k = mu.unbind(2)
+        gam_sig = torch.sigmoid(self.gamma)
+
+        def score_mod(score, b, h, q, kv):
+            has_bias = (q >= self.r_cutoff) & (kv >= self.r_cutoff)
+            l2 = idx[q, kv]
+            bias = bt[l2, h]
+            w_gate = gam_sig[h] * (mu_q[b, h, q] + mu_k[b, h, kv])
+            return score + has_bias.to(score.dtype) * w_gate * bias
+
+        return score_mod
+
+    def forward(self, q, k, v, mu):
+        return flex_attention(q, k, v, score_mod=self._score_mod(mu))
+
+def main():
+    device = "cuda"
+    B, N, R, d, H = 2, 18, 2, 32, 4
+    mod = FlexAttentionCPB(N, R, H).to(device)
+    mod = torch.compile(mod, dynamic=False)  # also tested "max-autotune-no-cudagraphs"
+
+    q = torch.randn(B, H, N, d, device=device)
+    k = torch.randn_like(q)
+    v = torch.randn_like(q)
+    mu = torch.randn(B, H, 2, N, device=device)
+
+    with torch.nn.attention.sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            out = mod(q, k, v, mu)
+            out.norm().backward()
+    print("done")
+
+if __name__ == "__main__":
+    main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

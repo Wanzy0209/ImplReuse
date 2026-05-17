@@ -1,0 +1,54 @@
+```python
+import torch
+import unittest
+
+class TestMPSCompileContiguity(unittest.TestCase):
+    def test_mps_compile_contiguity_issue_161969(self):
+        """
+        Test case for Issue 161969: Inconsistency/Strange behaviour with 
+        claimed lack of contiguousness in compiled function on MPS.
+        
+        The bug manifests as a RuntimeError: A_t.is_contiguous() INTERNAL ASSERT FAILED
+        when running a compiled function involving vmap, grad, and linear algebra 
+        operations on the MPS device.
+        """
+        # Skip if MPS is not available
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS backend is not available")
+
+        device = torch.device("mps")
+        dtype = torch.float32
+
+        def logp(x, matrix):
+            # The original bug report noted that uncommenting a print statement
+            # here would fix the crash. This test verifies that the function
+            # runs correctly without the print statement (relying on the fix).
+            # print(matrix.is_contiguous())
+            
+            p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+            p_mat_sqrt_inv = p_mat_sqrt.inverse()
+            val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+            return -val / 2
+
+        score_func = torch.vmap(torch.func.grad(logp, 0), (0, None))
+        compiled_function = torch.compile(score_func)
+
+        data = torch.zeros((2, 5, 3), device=device, dtype=dtype)
+        p = torch.diag(torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)**2)
+
+        # Run the compiled function. 
+        # If the bug is present, this raises:
+        # RuntimeError: A_t.is_contiguous() INTERNAL ASSERT FAILED
+        try:
+            res = compiled_function(data, p)
+        except RuntimeError as e:
+            if "is_contiguous() INTERNAL ASSERT FAILED" in str(e):
+                self.fail(f"Issue 161969 reproduced: {e}")
+            raise
+
+        # Verify the result shape is as expected
+        self.assertEqual(res.shape, (2, 5, 3))
+
+if __name__ == "__main__":
+    unittest.main()
+```

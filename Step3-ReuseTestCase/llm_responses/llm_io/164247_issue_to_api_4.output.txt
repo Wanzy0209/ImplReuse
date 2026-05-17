@@ -1,0 +1,87 @@
+```python
+import torch
+import torch.nn as nn
+from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+
+# Reusing the pattern from tf.compat.as_text for input validation
+# The similar API (as_text) checks types and converts/raises errors.
+# We adapt this pattern to ensure tensor inputs are valid before processing.
+def as_tensor_like(input_val, device=None):
+    """
+    Validates and ensures the input is a torch.Tensor on the correct device.
+    Structure mimics tf.compat.as_text (isinstance check -> return/convert -> raise).
+    """
+    if isinstance(input_val, torch.Tensor):
+        if device is not None and input_val.device != device:
+            return input_val.to(device)
+        return input_val
+    else:
+        raise TypeError(f"Expected torch.Tensor, got {type(input_val)}")
+
+class MixedFakeModeModel(nn.Module):
+    def __init__(self, dim=64):
+        super().__init__()
+        self.dim = dim
+        self.lin = torch.nn.Linear(64, 64)
+
+    def forward(self, x):
+        # Apply the similar API pattern to validate input
+        x = as_tensor_like(x, device=x.device)
+        
+        batch_size, seq_len, _ = x.shape
+
+        # Process input first - this creates fake tensors in export's fake mode
+        processed = self.lin(x)
+
+        # Create some computation that depends on processed tensor
+        intermediate = processed.sum(dim=-1).detach()  # Shape: (batch, seq_len)
+
+        def dynamic_mask_function(batch_idx, head_idx, q_idx, kv_idx):
+            threshold = intermediate[
+                batch_idx, q_idx % seq_len
+            ]  # Access the captured tensor
+            return (kv_idx <= q_idx) & (threshold > 0)
+
+        block_mask = create_block_mask(
+            mask_mod=dynamic_mask_function,
+            B=batch_size,
+            H=None,
+            Q_LEN=seq_len,
+            KV_LEN=seq_len,
+            device=x.device,
+            _compile=False,  # HF sets this to True, which runs into the issue
+        )
+        
+        q = processed.view(batch_size, 1, seq_len, self.dim)
+        k = processed.view(batch_size, 1, seq_len, self.dim)
+        v = processed.view(batch_size, 1, seq_len, self.dim)
+
+        # The bug context: interaction with torch.compile
+        out = flex_attention(q, k, v, block_mask=block_mask)
+        return out
+
+def test_flex_attention_dynamo_graph_break():
+    """
+    Test case for Issue 164247: Dynamo graph break on flex attention code.
+    Verifies that the model runs under torch.compile with fullgraph=True
+    without triggering graph breaks related to create_block_mask.
+    """
+    model = MixedFakeModeModel()
+    input_data = torch.randn(2, 128, 64)
+    
+    # Compile with fullgraph to expose the Dynamo graph break issue
+    compiled_model = torch.compile(model, fullgraph=True)
+    
+    try:
+        output = compiled_model(input_data)
+        # Basic assertion to ensure execution
+        assert output is not None
+        assert output.shape == (2, 1, 128, 64)
+        print("Test Passed: Model executed successfully with torch.compile(fullgraph=True).")
+    except Exception as e:
+        print(f"Test Failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_flex_attention_dynamo_graph_break()
+```

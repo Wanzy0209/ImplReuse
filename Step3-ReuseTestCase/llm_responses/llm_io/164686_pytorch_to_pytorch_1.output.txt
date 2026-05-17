@@ -1,0 +1,81 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+# Configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch.manual_seed(13653)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    # Original scalar arithmetic logic
+    var_node_3 = torch.full((), 1.0, dtype=torch.float32, device='cuda')
+    var_node_2 = var_node_3.item()
+    var_node_5 = -3
+    var_node_6 = arg_0
+    var_node_4 = var_node_5 + var_node_6
+    var_node_1 = var_node_2 + var_node_4
+    var_node_9 = 1
+    var_node_10 = -10
+    var_node_8 = var_node_9 / var_node_10
+    var_node_12 = arg_1
+    var_node_13 = -5
+    var_node_11 = var_node_12 / var_node_13
+    var_node_7 = var_node_8 + var_node_11
+    var_node_0 = var_node_1 * var_node_7
+    
+    # Adaptation: Use torch.distributed.reduce instead of returning the scalar directly
+    # We create a tensor from the result to perform the reduction
+    tensor_to_reduce = torch.tensor([var_node_0], device='cuda')
+    
+    # Perform the distributed reduce operation
+    # Note: This is an in-place operation on tensor_to_reduce
+    dist.reduce(tensor_to_reduce, dst=0)
+    
+    # Return the reduced tensor
+    return tensor_to_reduce
+
+def run_worker(rank, world_size):
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
+    # Sentinel tensor to ensure gradient computation context (if applicable)
+    sentinel = torch.tensor(1.0, requires_grad=True)
+
+    # Generate inputs similar to the original bug report
+    arg_0 = torch.tensor(torch.randn(()), dtype=torch.int64).item()
+    arg_1 = torch.tensor(torch.randn(()), dtype=torch.int64).item()
+
+    args = (arg_0, arg_1) + (sentinel,)
+    
+    # Run eager mode
+    result_original = fuzzed_program(*args)
+    if rank == 0:
+        print(f'Rank {rank}: ✅ eager success')
+
+    # Compile the program
+    compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+    
+    # Run compiled mode
+    result_compiled = compiled_program(*args)
+    if rank == 0:
+        print(f'Rank {rank}: ✅ compile success')
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Check for CUDA availability before attempting to run distributed code
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test as it requires CUDA for nccl backend.")
+    else:
+        world_size = torch.cuda.device_count()
+        if world_size < 2:
+            print(f"Need at least 2 GPUs to run this test, found {world_size}. Skipping.")
+        else:
+            mp.spawn(run_worker, args=(world_size,), nprocs=world_size, join=True)
+```

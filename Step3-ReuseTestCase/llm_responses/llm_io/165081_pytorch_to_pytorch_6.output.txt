@@ -1,0 +1,50 @@
+```python
+import torch
+
+# Reproduce the configuration from the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch.manual_seed(52676)
+
+# Check for CUDA availability as the original bug was device-specific
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+    
+    # Recreate specific tensors from the bug report's fuzzed_program
+    # var_node_23 = torch.full((156, 8), -0.5249394453404403, dtype=torch.float64)
+    # var_node_24 = torch.full((8, 9), 0.9331226188585692, dtype=torch.float64)
+    mat1 = torch.full((156, 8), -0.5249394453404403, dtype=torch.float64, device=device)
+    mat2 = torch.full((8, 9), 0.9331226188585692, dtype=torch.float64, device=device)
+    
+    # Create an input tensor for addmm. 
+    # The output of mat1 @ mat2 is (156, 9), so the input must be broadcastable to this shape.
+    input_tensor = torch.randn(156, 9, dtype=torch.float64, device=device)
+
+    def test_addmm(m1, m2, inp):
+        # Adapt the original matmul operation to use torch.addmm
+        # torch.addmm(input, mat1, mat2, beta=1, alpha=1) computes beta * input + alpha * (mat1 @ mat2)
+        return torch.addmm(inp, m1, m2)
+
+    # Compile the function using torch.compile (which uses torch._dynamo)
+    compiled_fn = torch.compile(test_addmm)
+
+    # Run the test
+    try:
+        result = compiled_fn(mat1, mat2, input_tensor)
+        
+        # Basic assertions to verify correctness
+        assert result.shape == (156, 9), f"Expected shape (156, 9), got {result.shape}"
+        assert result.dtype == torch.float64, f"Expected dtype float64, got {result.dtype}"
+        
+        # Verify the computation matches the definition
+        expected = input_tensor + torch.matmul(mat1, mat2)
+        assert torch.allclose(result, expected), "Computation result does not match expected value"
+        
+        print("Test passed successfully.")
+        
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        raise
+else:
+    print("CUDA is not available. Skipping test as it requires the device context from the bug report.")
+```

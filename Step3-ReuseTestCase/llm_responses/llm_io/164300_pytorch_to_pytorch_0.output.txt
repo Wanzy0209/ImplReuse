@@ -1,0 +1,44 @@
+```python
+import torch
+import functools
+from torch.utils.checkpoint import CheckpointPolicy, create_selective_checkpoint_contexts
+
+# Define a custom policy for selective activation checkpointing
+class CustomPolicy:
+    def __call__(self, ctx, out, func, *args, **kwargs):
+        return CheckpointPolicy.MUST_SAVE
+
+# Define a simple function to be checkpointed
+def f(x, y):
+    return torch.sigmoid(torch.matmul(torch.matmul(x, y), y)) * y
+
+# Create the context_fn using functools.partial, which is the subject of the bug report
+context_fn = functools.partial(create_selective_checkpoint_contexts, CustomPolicy())
+
+# Compile the function using the aot_eager_decomp_partition backend
+@torch.compile(backend="aot_eager_decomp_partition", fullgraph=True)
+def g(x, y):
+    return torch.utils.checkpoint.checkpoint(
+        f, x, y,
+        use_reentrant=False,
+        context_fn=context_fn,
+    )
+
+# Setup input tensors
+a = torch.randn(4, 4, requires_grad=True, device="cpu")
+b = torch.randn(4, 4, requires_grad=True, device="cpu")
+
+# Run the forward pass
+output = g(a, b)
+
+# Run the backward pass to ensure gradients are computed correctly
+output.sum().backward()
+
+# Basic assertions to verify the test ran successfully
+assert a.grad is not None, "Gradient for 'a' should not be None"
+assert b.grad is not None, "Gradient for 'b' should not be None"
+assert a.grad.shape == a.shape, "Gradient shape for 'a' mismatch"
+assert b.grad.shape == b.shape, "Gradient shape for 'b' mismatch"
+
+print("Test passed successfully.")
+```

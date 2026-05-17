@@ -1,0 +1,74 @@
+```python
+import torch
+import torch.nn as nn
+import unittest
+
+class SearchSortedModel(nn.Module):
+    """
+    Model mirroring the structure of the bug report.
+    This pattern is similar to the tf.Module definition found in the 
+    tf.saved_model.save example, adapted for PyTorch.
+    """
+    def __init__(self, quantiles: torch.Tensor) -> None:
+        super().__init__()
+        # Ensure quantiles are transposed and stored as a parameter
+        self.q = nn.Parameter(quantiles.T, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Reproduce the specific logic from the bug report
+        return torch.searchsorted(self.q, x.T).T
+
+class TestSearchSortedCompile(unittest.TestCase):
+    def setUp(self):
+        self.batch_size = 32
+        self.feature_dim = 10
+        self.quantile_size = 100
+        torch.manual_seed(42)
+
+        # Generate data
+        self.x = torch.randn(self.batch_size, self.feature_dim, dtype=torch.float32)
+        quantiles = torch.randn(self.quantile_size, self.feature_dim, dtype=torch.float32)
+        # Sort quantiles along dim 0 (required for searchsorted)
+        self.quantiles = torch.sort(quantiles, dim=0)[0]
+
+    def _run_test(self, device):
+        x = self.x.to(device)
+        quantiles = self.quantiles.to(device)
+
+        # Instantiate original model
+        model = SearchSortedModel(quantiles).to(device)
+        
+        # Instantiate compiled model
+        # This mirrors the graph compilation/tracing aspect seen in tf.saved_model.save usage
+        model_compiled = torch.compile(SearchSortedModel(quantiles).to(device), fullgraph=True)
+
+        # Warmup runs (necessary for torch.compile)
+        with torch.no_grad():
+            _ = model(x)
+            _ = model_compiled(x)
+
+        # Actual inference runs
+        with torch.no_grad():
+            y_original = model(x)
+            y_compiled = model_compiled(x)
+
+        # Verify that the compiled version produces the same result as the original
+        # This assertion will fail on GPU if the bug is present
+        diff = torch.max(torch.abs(y_original - y_compiled)).item()
+        self.assertTrue(
+            torch.allclose(y_original, y_compiled), 
+            f"Device {device}: Mismatch found between original and compiled output. Max diff: {diff}"
+        )
+
+    def test_searchsorted_cpu(self):
+        """Test searchsorted with torch.compile on CPU (Expected to pass)."""
+        self._run_test('cpu')
+
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_searchsorted_cuda(self):
+        """Test searchsorted with torch.compile on GPU (Reproduces the bug)."""
+        self._run_test('cuda')
+
+if __name__ == '__main__':
+    unittest.main()
+```

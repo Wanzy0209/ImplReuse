@@ -1,0 +1,128 @@
+Issue ID: 163374
+Title: [DTensor] Inplace ops preduces wrong result
+Bug Description:
+```
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import torch
+from torch import distributed as dist
+from torch.utils.debug_mode import DebugMode
+
+
+if __name__ == '__main__':
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    partial_dt = in_dtensor.sum()
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        out = partial_dt.clamp_(max=2)
+        full = out.full_tensor()
+
+    if rank == 0:
+        print(debug_mode.debug_string())
+        # redistribute_input(0, [P] -> [R])
+        #   _c10d_functional::all_reduce(t: f32[], sum, 0)
+        #   _c10d_functional::wait_tensor(t: f32[])
+        # aten::clamp_(t: f32[], None, 2)
+        # _c10d_functional::all_reduce(t: f32[], sum, 0)
+        # _c10d_functional::wait_tensor(t: f32[])
+        # aten::view(t: f32[], [])
+
+        print(out.placements)
+        # (Partial(sum),)
+        # Expected (Replicate(),)
+
+        print(full)
+        # tensor(144., device='cuda:0')
+        # Expected tensor(2., device='cuda:0')
+``` 
+
+Placement is wrong, it should be replicated, instead of Partial(sum)
+
+Original API Under Test: torch.clamp_
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.experimental.dtensor.barrier
+Similarity score: 0.9943897724151611
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.barrier
+
+# --- tensorflow.dtensor.python.mesh_util.barrier ---
+def barrier(mesh: layout.Mesh,
+            barrier_name: Optional[str] = None,
+            timeout_in_ms: Optional[int] = None):
+  """Runs a barrier on the mesh.
+
+  Upon returning from the barrier, all operations run before the barrier
+  would have completed across all clients. Currently we allocate a fully
+  sharded tensor with mesh shape and run an all_reduce on it.
+
+  Example:
+
+  A barrier can be used before application exit to ensure completion of pending
+  ops.
+
+  ```python
+
+  x = [1, 2, 3]
+  x = dtensor.relayout(x, dtensor.Layout.batch_sharded(mesh, 'batch', 1))
+  dtensor.barrier(mesh)
+
+  # At this point all devices on all clients in the mesh have completed
+  # operations before the barrier. Therefore it is OK to tear down the clients.
+  sys.exit()
+  ```
+
+  Args:
+    mesh: The mesh to run the barrier on.
+
+Original Test Case:
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import torch
+from torch import distributed as dist
+from torch.utils.debug_mode import DebugMode
+
+
+if __name__ == '__main__':
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    partial_dt = in_dtensor.sum()
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        out = partial_dt.clamp_(max=2)
+        full = out.full_tensor()
+
+    if rank == 0:
+        print(debug_mode.debug_string())
+        # redistribute_input(0, [P] -> [R])
+        #   _c10d_functional::all_reduce(t: f32[], sum, 0)
+        #   _c10d_functional::wait_tensor(t: f32[])
+        # aten::clamp_(t: f32[], None, 2)
+        # _c10d_functional::all_reduce(t: f32[], sum, 0)
+        # _c10d_functional::wait_tensor(t: f32[])
+        # aten::view(t: f32[], [])
+
+        print(out.placements)
+        # (Partial(sum),)
+        # Expected (Replicate(),)
+
+        print(full)
+        # tensor(144., device='cuda:0')
+        # Expected tensor(2., device='cuda:0')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

@@ -1,0 +1,115 @@
+Issue ID: 164157
+Title: [Fuzzer][Eager/Compile Divergence] IncompatibleTypeErrorImpl('invalid operands of type pointer<fp16> and triton.language.float64')
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+    t0 = arg0 # size=(47,), stride=(1,), dtype=int64, device=cuda
+    t1 = torch.tanh(t0) # size=(47,), stride=(1,), dtype=int64, device=cuda
+    t2 = arg1 # size=(), stride=(), dtype=int64, device=cuda
+    t3 = arg2 # size=(), stride=(), dtype=int64, device=cuda
+    t4 = t2 * t3 # size=(), stride=(), dtype=int64, device=cuda
+    t5 = t1.clone(); t5.fill_(t4.item()) # size=(47,), stride=(1,), dtype=int64, device=cuda
+    t6 = arg3 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t7 = arg4 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t8 = arg5 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t9 = torch.cat([t6, t6, t7, t8], dim=2) # size=(256, 88, 4), stride=(352, 4, 1), dtype=float16, device=cuda
+    t10 = t9.std(dim=2) # size=(256, 88), stride=(256, 1), dtype=float16, device=cuda
+    t11 = torch.nn.functional.embedding(torch.clamp(t5, 0, t10.size(0) - 1).to(torch.long), t10) # size=(47, 88), stride=(88, 1), dtype=float16, device=cuda
+    output = t11 + sentinel  # output tensor with sentinel for gradient flow
+    return output
+
+arg0 = torch.randint(0, 1000, [47], dtype=torch.int64, device='cuda') # size=(47,), stride=(1,), dtype=int64, d
+...
+
+Original API Under Test: torch.std
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.numpy.nextafter
+Similarity score: 0.9934027194976807
+
+Similar API information:
+# Extracted call chain for tf.experimental.numpy.nextafter
+
+# --- tensorflow.python.ops.numpy_ops.np_math_ops.nextafter ---
+def nextafter(x1, x2):
+  return _bin_op(math_ops.nextafter, x1, x2)
+
+# --- tensorflow.python.ops.numpy_ops.np_math_ops._bin_op ---
+def _bin_op(tf_fun, a, b, promote=True):
+  if promote:
+    a, b = np_array_ops._promote_dtype_binary(a, b)  # pylint: disable=protected-access
+  else:
+    a = np_array_ops.array(a)
+    b = np_array_ops.array(b)
+  return tf_fun(a, b)
+
+# --- tensorflow.python.ops.numpy_ops.np_array_ops._promote_dtype_binary ---
+def _promote_dtype_binary(t1, t2):
+  dtype = np_utils._result_type_binary(t1, t2)  # pylint: disable=protected-access
+  if not (
+      isinstance(t1, np_arrays.ndarray) and dtype == t1.dtype.as_numpy_dtype
+  ):
+    t1 = _array_internal(t1, dtype=dtype, copy=False)
+  if not (
+      isinstance(t2, np_arrays.ndarray) and dtype == t2.dtype.as_numpy_dtype
+  ):
+    t2 = _array_internal(t2, dtype=dtype, copy=False)
+  return t1, t2
+
+# --- tensorflow.python.ops.numpy_ops.np_array_ops._array_internal ---
+def _array_internal(val, dtype=None, copy=True, ndmin=0):  # pylint: disable=redefined-outer-name
+
+Original Test Case:
+import torch
+import sys
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+    t0 = arg0 # size=(47,), stride=(1,), dtype=int64, device=cuda
+    t1 = torch.tanh(t0) # size=(47,), stride=(1,), dtype=int64, device=cuda
+    t2 = arg1 # size=(), stride=(), dtype=int64, device=cuda
+    t3 = arg2 # size=(), stride=(), dtype=int64, device=cuda
+    t4 = t2 * t3 # size=(), stride=(), dtype=int64, device=cuda
+    t5 = t1.clone(); t5.fill_(t4.item()) # size=(47,), stride=(1,), dtype=int64, device=cuda
+    t6 = arg3 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t7 = arg4 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t8 = arg5 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t9 = torch.cat([t6, t6, t7, t8], dim=2) # size=(256, 88, 4), stride=(352, 4, 1), dtype=float16, device=cuda
+    t10 = t9.std(dim=2) # size=(256, 88), stride=(256, 1), dtype=float16, device=cuda
+    t11 = torch.nn.functional.embedding(torch.clamp(t5, 0, t10.size(0) - 1).to(torch.long), t10) # size=(47, 88), stride=(88, 1), dtype=float16, device=cuda
+    output = t11 + sentinel  # output tensor with sentinel for gradient flow
+    return output
+
+arg0 = torch.randint(0, 1000, [47], dtype=torch.int64, device='cuda') # size=(47,), stride=(1,), dtype=int64, device=cuda
+arg1 = torch.randint(0, 1000, [], dtype=torch.int64, device='cuda') # size=(), stride=(), dtype=int64, device=cuda
+arg2 = torch.randint(0, 1000, [], dtype=torch.int64, device='cuda') # size=(), stride=(), dtype=int64, device=cuda
+arg3 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True) # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+arg4 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True) # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+arg5 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True) # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+sentinel = torch.tensor(0.0, dtype=torch.float16, device='cuda', requires_grad=True) # Sentinel for gradient flow
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+
+The API tf.experimental.numpy.nextafter is identified as cross-library similar to the original PyTorch API torch.std.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

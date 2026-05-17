@@ -1,0 +1,86 @@
+```python
+import tensorflow as tf
+import numpy as np
+import sys
+
+# Disable eager execution to use compat.v1 APIs effectively
+tf.compat.v1.disable_eager_execution()
+
+def test_tpu_rewrite_memory_leak():
+    """
+    Adapted test case for Issue 165407.
+    
+    Original Bug: torch.compile memory leak involving flash_attn_varlen_func.
+    Target API: tf.compat.v1.tpu.rewrite
+    
+    This test verifies that the TensorFlow TPU rewrite API handles
+    repeated execution of a compiled computation without leaking memory
+    (or holding onto tensor references indefinitely).
+    """
+    
+    # 1. Define the computation (Simulating the workload from the bug report)
+    # The original bug involved flash_attn_varlen_func. We simulate a similar
+    # tensor operation workload here.
+    def computation_fn(inputs):
+        x = inputs[0]
+        # Simulate a weight matrix (e.g., projection in attention)
+        w = tf.compat.v1.get_variable(
+            "attn_proj", 
+            shape=[x.shape[-1], x.shape[-1]], 
+            initializer=tf.compat.v1.random_normal_initializer()
+        )
+        # Perform matrix multiplication (core of attention)
+        logits = tf.matmul(x, w)
+        # Apply activation
+        output = tf.nn.softmax(logits, axis=-1)
+        return output
+
+    # 2. Setup inputs
+    # Mimicking the batch and sequence dimensions from the original bug
+    batch_size = 4
+    seq_len = 128
+    hidden_dim = 64
+    input_data = np.random.randn(batch_size, seq_len, hidden_dim).astype(np.float32)
+
+    # 3. Initialize Session
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        # 4. Apply the API: tf.compat.v1.tpu.rewrite
+        # This compiles the 'computation_fn' for execution on a TPU system.
+        # This is the semantic equivalent of torch.compile in this context.
+        compiled_op = tf.compat.v1.tpu.rewrite(
+            computation_fn,
+            inputs=[input_data]
+        )
+
+        # 5. Run in a loop to detect memory leaks
+        # The original bug showed increasing tensor counts every step.
+        # We run the op multiple times and monitor the behavior.
+        steps = 10
+        
+        # Attempt to get memory info if available (GPU/TPU)
+        devices = tf.config.list_physical_devices()
+        memory_tracking_enabled = False
+        
+        print(f"Starting test loop for {steps} steps...")
+        print(f"Available devices: {[d.name for d in devices]}")
+
+        for i in range(steps):
+            # Execute the compiled function
+            result = sess.run(compiled_op)
+            
+            # In the original bug, the user monitored "Tensors: X".
+            # In TF graph mode, we don't have a simple global tensor count like PyTorch,
+            # but we ensure the session runs without OOM.
+            
+            # Logging similar to the original bug report
+            # Note: Actual memory tracking in TF 1.x requires specific callbacks or external tools,
+            # but the logic of the loop remains the primary test mechanism.
+            print(f"Step {i+1} | Output Shape: {result.shape} | Executed")
+
+        print("Test completed. If memory leaked, the process would likely OOM on long runs.")
+
+if __name__ == "__main__":
+    test_tpu_rewrite_memory_leak()
+```

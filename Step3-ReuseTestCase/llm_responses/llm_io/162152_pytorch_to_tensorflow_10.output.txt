@@ -1,0 +1,55 @@
+```python
+import tensorflow as tf
+
+# QueueRunner is only compatible with graph mode (TF 1.x style)
+tf.compat.v1.disable_eager_execution()
+
+# Define a simple operation to be run in parallel (analogous to SimpleModel)
+class SimpleEnqueueOp:
+    def __init__(self, queue, offset):
+        self.queue = queue
+        self.offset = offset
+
+    def get_op(self):
+        # Simulate some processing logic
+        data = tf.constant([float(i + self.offset) for i in range(10)], dtype=tf.float32)
+        return self.queue.enqueue(data)
+
+# Check if we are in the correct mode (analogous to backend check)
+if not tf.executing_eagerly():
+    print("Graph mode detected")
+
+    # Setup the Queue
+    queue = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.float32], shapes=[(10,)])
+
+    # Create a list of operations to run in parallel (analogous to device_ids)
+    # This represents the custom implementation logic
+    ops = [SimpleEnqueueOp(queue, i * 10).get_op() for i in range(4)]
+
+    # Wrap in QueueRunner (analogous to DataParallel)
+    qr = tf.compat.v1.train.QueueRunner(queue, ops)
+
+    # Coordinator to manage threads
+    coord = tf.compat.v1.train.Coordinator()
+
+    # Run the test
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
+        sess.run(tf.compat.v1.local_variables_initializer())
+
+        # Start the queue runner threads
+        threads = qr.create_threads(sess, coord=coord, start=True)
+
+        # Verify output (analogous to output = model(input_data))
+        # We try to dequeue data to ensure the parallel threads worked
+        try:
+            for _ in range(4):
+                output = sess.run(queue.dequeue())
+                assert output.shape == (10,), "Output shape mismatch"
+            print("success")
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+else:
+    raise RuntimeError("QueueRunner requires graph mode (TF 1.x compatibility).")
+```

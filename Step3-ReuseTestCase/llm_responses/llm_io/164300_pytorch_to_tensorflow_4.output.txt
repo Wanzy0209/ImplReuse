@@ -1,0 +1,56 @@
+```python
+import tensorflow as tf
+import functools
+
+# QueueRunner is part of the TF1 API, so we disable eager execution
+tf.compat.v1.disable_eager_execution()
+
+# Define a helper function to create an enqueue operation.
+# This is analogous to 'create_selective_checkpoint_contexts' in the PyTorch example.
+def create_enqueue_op(queue, tensor, multiplier):
+    return queue.enqueue(tensor * multiplier)
+
+# Define the main execution graph
+with tf.compat.v1.Session() as sess:
+    # Create a FIFO queue
+    queue = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.float32], shapes=[()])
+
+    # Create a tensor to be enqueued
+    data = tf.constant(5.0)
+
+    # Use functools.partial to bind arguments to the helper function.
+    # This mirrors the 'context_fn1 = functools.partial(...)' logic in the original bug report.
+    partial_enqueue = functools.partial(create_enqueue_op, queue, data, 2.0)
+
+    # Resolve the partial to get the TensorFlow operation.
+    # Note: Unlike PyTorch's checkpoint which accepts the callable directly,
+    # QueueRunner expects Operations. We use the partial to generate the op.
+    enqueue_op = partial_enqueue()
+
+    # Create the QueueRunner with the generated operation.
+    # This is analogous to the 'torch.utils.checkpoint.checkpoint' call.
+    qr = tf.compat.v1.train.QueueRunner(queue, [enqueue_op])
+
+    # Create a Coordinator to manage the threads
+    coord = tf.compat.v1.train.Coordinator()
+
+    # Add the QueueRunner to the graph's collection
+    tf.compat.v1.train.add_queue_runner(qr)
+
+    # Initialize variables (if any)
+    sess.run(tf.compat.v1.global_variables_initializer())
+
+    # Start the queue runner threads
+    threads = qr.create_threads(sess, coord, start=True)
+
+    # Dequeue an item to verify the operation worked.
+    # We expect 5.0 * 2.0 = 10.0
+    result = sess.run(queue.dequeue())
+    assert result == 10.0, f"Expected 10.0, got {result}"
+
+    # Clean up
+    coord.request_stop()
+    coord.join(threads)
+
+print("Test passed: QueueRunner handles operations created via functools.partial.")
+```

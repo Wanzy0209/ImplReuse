@@ -1,0 +1,59 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_distributed_values_access():
+    """
+    Test case for tf.distribute.DistributedValues inspired by the 
+    PyTorch NestedTensor share_memory_() segmentation fault issue.
+    
+    The original issue involves creating a container of tensors (NestedTensor)
+    and calling a method that interacts with memory/state (share_memory_()),
+    resulting in a crash.
+    
+    This test adapts the logic to TensorFlow's DistributedValues:
+    1. Create tensors of varying sizes (mimicking torch.randn).
+    2. Wrap them in a distributed container (DistributedValues).
+    3. Access the underlying values (mimicking the state interaction).
+    """
+    
+    # Setup distribution strategy to enable DistributedValues
+    strategy = tf.distribute.MirroredStrategy()
+
+    # Define a function that creates tensors, analogous to torch.randn(3) and torch.randn(5)
+    def create_tensors():
+        # Create tensors with different shapes to mimic the nested structure
+        a = tf.random.normal((3,))
+        b = tf.random.normal((5,))
+        return [a, b]
+
+    # Create DistributedValues by running the function within the strategy scope.
+    # This is analogous to torch.nested.nested_tensor([a, b], layout=torch.jagged)
+    distributed_values = strategy.run(create_tensors)
+
+    # The original bug triggers on nt.share_memory_().
+    # Since DistributedValues does not have share_memory_(), we test the primary
+    # interaction method shown in the similar API code: accessing the values (_get).
+    # We attempt to access the values to check for stability/crashes.
+    
+    try:
+        # Accessing the values property (which maps to self._values in the similar API)
+        # This is the critical operation that might reveal underlying issues similar to the segfault.
+        values = distributed_values.values
+        
+        # If we reach here, the operation did not crash.
+        # We perform a basic assertion to verify the structure.
+        assert values is not None
+        assert len(values) == strategy.num_replicas_in_sync
+        
+        print("Test passed: DistributedValues accessed without crashing.")
+        
+    except Exception as e:
+        # Catch standard exceptions, though a SegFault (like in the original bug) 
+        # would terminate the process immediately.
+        print(f"Test failed with exception: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_distributed_values_access()
+```

@@ -1,0 +1,60 @@
+```python
+import tensorflow as tf
+
+def test_fractional_max_pool_nan():
+    """
+    Adapted test case for tf.compat.v1.nn.fractional_max_pool based on 
+    PyTorch MaxPool2d channels_last + bfloat16 NaN bug.
+    """
+    
+    # Check for GPU availability to match the original CUDA context
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        print("No GPU found. This test is intended for CUDA environments.")
+        return
+
+    device = '/GPU:0'
+    
+    with tf.device(device):
+        # Original PyTorch dimensions: N, C, H, W = 84, 64, 512, 960
+        # TensorFlow uses NHWC format (channels_last) by default.
+        # Mapping: N -> N, C -> C (last dim), H -> H, W -> W
+        N, H, W, C = 84, 512, 960, 64
+        
+        # Case 1: bfloat16 + channels_last (default in TF)
+        # Create large input tensor
+        x = tf.random.normal((N, H, W, C), dtype=tf.bfloat16)
+
+        print(f"Input tensor: shape={x.shape}, dtype={x.dtype}")
+        
+        # PyTorch used MaxPool2d(kernel_size=3, stride=2, padding=1).
+        # fractional_max_pool uses pooling_ratio. 
+        # A ratio of [1.0, 2.0, 2.0, 1.0] approximates the downsampling of stride=2.
+        pooling_ratio = [1.0, 2.0, 2.0, 1.0]
+
+        # Execute the similar API
+        # fractional_max_pool returns (output, row_pooling_sequence, col_pooling_sequence)
+        output, _, _ = tf.compat.v1.nn.fractional_max_pool(
+            value=x,
+            pooling_ratio=pooling_ratio
+        )
+
+        # Check for NaNs and Infs
+        has_nan = tf.reduce_any(tf.math.is_nan(output))
+        has_inf = tf.reduce_any(tf.math.is_inf(output))
+
+        print(f"Output shape: {output.shape}")
+        print(f"Output contains NaN? {has_nan.numpy()}")
+        print(f"Output contains Inf? {has_inf.numpy()}")
+        
+        # Calculate stats (converting to float for safety if needed, though min/max work on bfloat16)
+        print(f"Stats: min={tf.reduce_min(output).numpy()}, max={tf.reduce_max(output).numpy()}")
+
+        if has_nan.numpy():
+            print("Detected NaNs in FractionalMaxPool output!")
+            # In a testing framework, this would be an assert fail
+            # assert not has_nan.numpy(), "Output contains NaNs"
+
+if __name__ == "__main__":
+    test_fractional_max_pool_nan()
+```

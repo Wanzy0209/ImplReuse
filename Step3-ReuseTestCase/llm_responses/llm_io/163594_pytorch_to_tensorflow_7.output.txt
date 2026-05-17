@@ -1,0 +1,72 @@
+```python
+import unittest
+import subprocess
+import sys
+import tempfile
+import os
+
+class TestNameScopeCompile(unittest.TestCase):
+    def test_name_scope_compile_stability(self):
+        """
+        Adapted from test_dtensor_compile_redistribute (Issue 163594).
+        
+        The original test involved torch.compile and distributed tensors, 
+        resulting in a subprocess timeout. This test adapts the logic to 
+        TensorFlow, verifying that tf.keras.backend.name_scope works 
+        correctly within a compiled graph context (tf.function) without 
+        hanging or timing out.
+        """
+        # Script content to be executed in a subprocess, mimicking the 
+        # isolation and execution flow of the original PyTorch test.
+        script_content = """
+import tensorflow as tf
+
+# Mimic torch.compile using tf.function
+@tf.function
+def compiled_model(x):
+    # Use the target API: tf.keras.backend.name_scope
+    # We nest scopes to add slight complexity to the graph construction
+    with tf.keras.backend.name_scope("outer_scope"):
+        with tf.keras.backend.name_scope("inner_scope"):
+            y = x * 2
+            z = tf.add(y, 1)
+    return z
+
+# Execute the compiled function
+input_tensor = tf.constant([1.0, 2.0, 3.0])
+result = compiled_model(input_tensor)
+
+# Basic assertion to ensure execution completed
+assert result.shape == (3,)
+print("SUCCESS")
+"""
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(script_content)
+            temp_file = f.name
+
+        try:
+            # Execute the script with a timeout.
+            # The original bug manifested as a TimeoutExpired after 30 seconds.
+            # We use the same timeout to check for similar hangs.
+            result = subprocess.run(
+                [sys.executable, temp_file],
+                timeout=30,
+                capture_output=True,
+                text=True
+            )
+
+            # Verify the script completed successfully
+            self.assertEqual(result.returncode, 0, f"Script failed with stderr: {result.stderr}")
+            self.assertIn("SUCCESS", result.stdout, "Script did not print success token")
+            
+        except subprocess.TimeoutExpired:
+            self.fail("Subprocess timed out after 30 seconds, reproducing the original hang behavior.")
+        finally:
+            # Clean up the temporary file
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+
+if __name__ == '__main__':
+    unittest.main()
+```

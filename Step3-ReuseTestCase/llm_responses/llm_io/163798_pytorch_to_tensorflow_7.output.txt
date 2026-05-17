@@ -1,0 +1,58 @@
+```python
+import tensorflow as tf
+
+# Adapted test case for tf.keras.backend.name_scope
+# based on PyTorch Issue 163798 (tolist() graphing behavior)
+
+def test_name_scope_with_scalar_ops():
+    """
+    Tests the behavior of tf.keras.backend.name_scope when performing
+    operations similar to the PyTorch bug report (scalar extraction and math).
+    """
+    # Input tensor
+    a = tf.constant([1, 2], dtype=tf.int64)
+
+    # Define the function using the similar API: tf.keras.backend.name_scope
+    # In PyTorch, the context was provided by @torch.compile.
+    # Here we use the name_scope context manager.
+    def func(a):
+        with tf.keras.backend.name_scope("test_scope"):
+            # PyTorch: u0, u1 = a.tolist()
+            # TensorFlow equivalent for extracting scalar tensors (graph-compatible):
+            u0 = a[0]
+            u1 = a[1]
+            
+            # PyTorch: return a*u0*u1
+            return a * u0 * u1
+
+    # Test 1: Eager Execution
+    print("Testing in Eager mode...")
+    result_eager = func(a)
+    expected = tf.constant([1, 4], dtype=tf.int64)
+    assert tf.reduce_all(result_eager == expected).numpy(), f"Eager test failed: {result_eager} != {expected}"
+    print(f"Eager result: {result_eager.numpy()}")
+
+    # Test 2: Graph Execution (tf.function)
+    # To properly test graphing behavior (similar to torch.compile), we wrap in tf.function.
+    print("\nTesting in Graph mode (tf.function)...")
+    @tf.function
+    def func_graph(a):
+        with tf.keras.backend.name_scope("graph_test_scope"):
+            u0 = a[0]
+            u1 = a[1]
+            return a * u0 * u1
+
+    result_graph = func_graph(a)
+    assert tf.reduce_all(result_graph == expected).numpy(), f"Graph test failed: {result_graph} != {expected}"
+    print(f"Graph result: {result_graph.numpy()}")
+
+    # Verify that the name_scope actually applied names in the graph
+    # This checks the internal structure similar to how the PyTorch issue checked the graph output.
+    graph = func_graph.get_concrete_function(a).graph
+    ops_in_scope = [op.name for op in graph.get_operations() if "graph_test_scope" in op.name]
+    assert len(ops_in_scope) > 0, "Name scope did not apply to operations in graph mode."
+    print(f"Found {len(ops_in_scope)} operations within 'graph_test_scope'.")
+
+if __name__ == "__main__":
+    test_name_scope_with_scalar_ops()
+```

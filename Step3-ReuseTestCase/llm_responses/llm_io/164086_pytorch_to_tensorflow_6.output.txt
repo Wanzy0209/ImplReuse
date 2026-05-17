@@ -1,0 +1,97 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Ensure reproducibility
+tf.random.set_seed(42)
+np.random.seed(42)
+
+# Enable XLA compilation to mimic torch.compile behavior
+# This is crucial for reproducing eager/compile divergence bugs
+tf.config.optimizer.set_jit(True)
+
+# Define the Similar API: HeUniform
+# This replaces the standard random initialization used in the PyTorch script
+# to test the behavior of this specific initializer in a complex graph.
+initializer = tf.keras.initializers.HeUniform()
+
+# Prepare inputs matching the PyTorch test case dimensions and dtypes
+# arg0: int64
+arg0 = tf.constant(np.random.randint(0, 1000, [42, 56]), dtype=tf.int64)
+# arg1: float16 (50000, 128) - Input to linear
+arg1 = tf.constant(np.random.rand(50000, 128), dtype=tf.float16)
+# arg3: float16 (50000, 4, 46)
+arg3 = tf.constant(np.random.rand(50000, 4, 46), dtype=tf.float16)
+# arg4: float16 (25786, 46)
+arg4 = tf.constant(np.random.rand(25786, 46), dtype=tf.float16)
+# arg5: float16 (24214, 46)
+arg5 = tf.constant(np.random.rand(24214, 46), dtype=tf.float16)
+
+# Initialize weights using HeUniform
+# In the PyTorch script, arg2 (t4) is the weight for the linear layer.
+# We use HeUniform here to initialize this weight, adapting the test to the target API.
+# Shape: (128, 46) to perform (50000, 128) @ (128, 46) -> (50000, 46)
+linear_weight = tf.Variable(initializer(shape=[128, 46], dtype=tf.float16), name='linear_weight')
+
+# Define the computational graph
+@tf.function(experimental_compile=True) # Force XLA compilation
+def foo(arg0, arg1, arg3, arg4, arg5):
+    # 1. Tanh on int64
+    # PyTorch allows tanh on int (implicit cast). TF requires explicit cast to float.
+    # We cast to float32 then back to float16 to maintain mixed precision context.
+    t0 = arg0
+    t1 = tf.tanh(tf.cast(t0, tf.float32))
+    
+    # 2. Clone and Zero
+    t2 = tf.zeros_like(t1)
+    
+    # 3. Linear Operation
+    # PyTorch: t5 = linear(t3, t4) -> t5 = t3 @ t4.T
+    # Here t3 is arg1. t4 is linear_weight.
+    t5 = tf.matmul(arg1, linear_weight)
+    
+    # 4. Max Operation
+    # PyTorch: t7 = t6.max(dim=1).values
+    t7 = tf.reduce_max(arg3, axis=1)
+    
+    # 5. Concat Operation
+    # PyTorch: t10 = torch.cat([t8, t9], dim=0)
+    t10 = tf.concat([arg4, arg5], axis=0)
+    
+    # 6. Power Operations
+    # PyTorch: t11 = pow(pow(pow(pow(t5, t7), t10), t5), t7)
+    # This chain of operations is likely to trigger type precision issues.
+    t11 = tf.pow(tf.pow(tf.pow(tf.pow(t5, t7), t10), t5), t7)
+    
+    # 7. Embedding Operation
+    # PyTorch: t12 = embedding(clamp(t2, 0, size-1), t11)
+    # t2 is (42, 56). t11 is (50000, 46).
+    # Indices must be int32 for embedding_lookup.
+    indices = tf.cast(tf.clip_by_value(t2, 0, 49999), tf.int32)
+    t12 = tf.nn.embedding_lookup(t11, indices)
+    
+    return t12
+
+# Run Eager
+print("Running Eager Mode...")
+try:
+    out_eager = foo(arg0, arg1, arg3, arg4, arg5)
+    print("Eager Success! ✅")
+except Exception as e:
+    print(f"Eager Failed: {e}")
+
+# Run Compiled (XLA)
+print("Running Compiled Mode (XLA)...")
+try:
+    out_compiled = foo(arg0, arg1, arg3, arg4, arg5)
+    print("Compile Success! ✅")
+    
+    # Verify consistency
+    if out_eager.shape != out_compiled.shape:
+        print("Shape Mismatch!")
+    else:
+        print("Shape Match.")
+        
+except Exception as e:
+    print(f"Compile Failed: {e}")
+```

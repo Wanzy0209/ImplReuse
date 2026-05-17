@@ -1,0 +1,90 @@
+Issue ID: 164301
+Title: torch.compile regression: mxfp8 quantization along rows
+Bug Description:
+### 🐛 Describe the bug
+
+## Summary
+- Sometime between 09/12 and 09/30, torch.compile has had a major regression in the performance of inductor codgen for mxfp8 quantization along rows- i.e., (1 x block_size) scaling granularity
+
+## Repro
+
+1. Use machine with B200 GPUs and cuda 12.8
+2. Install torch nightly build for cuda 12.8: `pip3 install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128` 
+2. Clone torchao `git clone git@github.com:pytorch/ao.git`
+3. Run benchmark: `cd ao/benchmarks/mx_formats`
+4. `CUDA_VISIBLE_DEVICES=7 python cast_bench.py --mode dim0_mxfp8_floor`
+5. See ~1485gbps:
+```
+(torch) [danvm@devgpu007.snb3 ~/ao/benchmarks/mx_formats (mx-a2a-2)]$ CUDA_VISIBLE_DEVICES=7 python cast_bench.py --mode dim0_mxfp8_floor
+M 16384 K 16384 BLOCK_SIZE 32
+GPU: NVIDIA B200
+torch version: 2.10.0.[dev20250930](https://l.workplace.com/l.php?u=https%3A%2F%2Fwww.internalfb.com%2Fintern%2Fbunny%2F%3Fq%3Ddev20250930&h=AT3oNVz-GDTWsBu4uQV0JnkMocQLFmUI0vZFep5jacZOZsfQWFsUIunKLKusdxT9qpSa1BjidHVSCdH4ClhuNFQiqN7UJM_3tSoiRNyXK8YGz7Vd3FTiCoOhUeTFp4nT-72p4WKZTDnY7d8ok8i4Iw)+cu128
+triton version: 3.5.0
+mode: dim0_mxfp8_floor
+time_us 547.7439761161804
+mem_bw_gbps 1485.5388858305025
+```
+
+
+Now using older nightly from 09/12 and see ~5600gbps:
+
+```
+(torch) [danvm@devgpu007.snb3 ~/ao/benchmarks/mx_formats (mx-a2a-2)]$ CUDA_VISIBLE_DEVICES=7 python cast_bench.py --mode dim0_mxfp8_floor
+M 16384 K 16384 BLOCK_SIZE 32
+GPU: NVIDIA B200
+torch version: 2.10.0.dev20250912+cu128
+triton
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.tpu.rewrite
+Similarity score: 0.9947934746742249
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.tpu.rewrite
+
+# --- tensorflow.python.tpu.tpu.rewrite ---
+def rewrite(
+    computation: Callable[..., Any],
+    inputs: Optional[List[List[Optional[core_types.Tensor]]]] = None,
+    infeed_queue: Optional[tpu_feed.InfeedQueue] = None,
+    device_assignment: Optional[device_assignment_lib.DeviceAssignment] = None,
+    name: Optional[Text] = None,
+    xla_options: Optional[XLAOptions] = None) -> Any:
+  """Rewrites `computation` for execution on a TPU system.
+
+  Args:
+    computation: A Python function that builds a computation to apply to the
+      input. If the function takes n inputs, 'inputs' should be a list of n
+      tensors.
+
+      `computation` may return a list of operations and tensors. Tensors must
+      come before operations in the returned list.  The return value of
+      `rewrite` is a list of tensors corresponding to the tensors from the
+      output of `computation`.
+
+      All `Operation`s constructed during `computation` will be executed when
+      evaluating any of the returned output tensors, not just the ones returned.
+    inputs: A list of input tensors or `None` (equivalent to an empty list).
+      Each input can be a nes
+...
+
+Original Test Case:
+(torch) [danvm@devgpu007.snb3 ~/ao/benchmarks/mx_formats (mx-a2a-2)]$ CUDA_VISIBLE_DEVICES=7 python cast_bench.py --mode dim0_mxfp8_floor
+M 16384 K 16384 BLOCK_SIZE 32
+GPU: NVIDIA B200
+torch version: 2.10.0.[dev20250930](https://l.workplace.com/l.php?u=https%3A%2F%2Fwww.internalfb.com%2Fintern%2Fbunny%2F%3Fq%3Ddev20250930&h=AT3oNVz-GDTWsBu4uQV0JnkMocQLFmUI0vZFep5jacZOZsfQWFsUIunKLKusdxT9qpSa1BjidHVSCdH4ClhuNFQiqN7UJM_3tSoiRNyXK8YGz7Vd3FTiCoOhUeTFp4nT-72p4WKZTDnY7d8ok8i4Iw)+cu128
+triton version: 3.5.0
+mode: dim0_mxfp8_floor
+time_us 547.7439761161804
+mem_bw_gbps 1485.5388858305025
+
+The API tf.compat.v1.tpu.rewrite is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

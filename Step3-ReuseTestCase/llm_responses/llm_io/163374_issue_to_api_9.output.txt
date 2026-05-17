@@ -1,0 +1,65 @@
+```python
+import torch
+import torch.distributed as dist
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, Replicate
+
+def run_dtensor_inplace_test():
+    """
+    Test case for Issue 163374: [DTensor] Inplace ops produces wrong result.
+    
+    This test adapts the distributed coordination pattern observed in 
+    tf.profiler.experimental.server.start (identifying worker ID and conditional 
+    execution on the primary worker) to verify the correctness of inplace operations
+    on DTensors.
+    """
+    # Initialize distributed process group
+    # Mirrors the setup phase in tf.profiler.experimental.server.start
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl")
+
+    # Identify the current worker
+    # Corresponds to task_id = config.client_id() in the similar API
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+
+    # Initialize device mesh
+    mesh = init_device_mesh('cuda', (world_size,))
+
+    # Create a sharded tensor
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)])
+
+    # Perform reduction (results in Partial placement)
+    partial_dt = in_dtensor.sum()
+
+    # Apply inplace operation
+    # Bug: This resulted in Partial placement and value 144 instead of 2
+    out = partial_dt.clamp_(max=2)
+
+    # --- Assertions ---
+
+    # 1. Check Placement
+    # Expected: Replicate() because the result of a reduction (scalar) should be replicated
+    # Bug: Placement remained Partial(sum)
+    expected_placement = (Replicate(),)
+    assert out.placements == expected_placement, (
+        f"Placement mismatch. Expected {expected_placement}, got {out.placements}"
+    )
+
+    # 2. Check Value
+    # Sum of 12x12 ones is 144. Clamping max=2 should result in 2.
+    # Bug: Value remained 144
+    full = out.full_tensor()
+    expected_value = 2.0
+    assert torch.allclose(full, torch.tensor(expected_value, device="cuda")), (
+        f"Value mismatch. Expected {expected_value}, got {full.item()}"
+    )
+
+    # Conditional execution on rank 0
+    # Corresponds to 'if task_id == 0:' in the similar API
+    if rank == 0:
+        print("Test Passed: Inplace op correctly updated placement and value.")
+
+if __name__ == '__main__':
+    run_dtensor_inplace_test()
+```

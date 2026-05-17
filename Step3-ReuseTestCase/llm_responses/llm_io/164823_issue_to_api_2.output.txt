@@ -1,0 +1,48 @@
+```python
+import torch
+import torch.nn as nn
+
+# This test case reproduces the issue where torch.compile with the Inductor backend
+# fails with NotImplementedError for models using to_sparse().
+# It adapts the validation pattern seen in the similar API (tf.linalg.lu_matrix_inverse),
+# where the result of a specific operation path is compared against a reference (eager) result.
+
+class SparseModel(nn.Module):
+    def forward(self, x):
+        # Transformation: Convert to sparse
+        x_sparse = x.to_sparse()
+        # Operation: Perform arithmetic (mimicking the processing step)
+        result = x_sparse * 2
+        # Transformation: Convert back to dense
+        return result.to_dense()
+
+def test_torch_compile_sparse_conversion():
+    # Setup input data
+    x = torch.randn(10, 10)
+    model = SparseModel()
+
+    # 1. Get Reference Output (Eager mode)
+    # This acts as the ground truth, similar to tf.matrix_inverse(X) in the similar API example.
+    eager_output = model(x)
+    print("Eager output computed successfully.")
+
+    # 2. Get Target Output (Compiled mode)
+    # The bug report indicates this raises NotImplementedError with the Inductor backend.
+    try:
+        compiled_model = torch.compile(model)
+        compiled_output = compiled_model(x)
+
+        # 3. Validation
+        # Similar to tf.assert_near, we verify the compiled output matches the eager output.
+        # This ensures the compilation preserves semantics.
+        assert torch.allclose(eager_output, compiled_output), "Compiled output does not match eager output"
+        print("Test Passed: Compiled output matches eager output.")
+
+    except NotImplementedError as e:
+        # Handling the specific error mentioned in the bug report
+        print(f"Bug Reproduced: NotImplementedError raised - {e}")
+        raise
+
+if __name__ == "__main__":
+    test_torch_compile_sparse_conversion()
+```

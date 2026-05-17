@@ -1,0 +1,106 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_tf_conv3d_transpose_divergence():
+    """
+    Test case for tf.nn.conv3d_transpose based on the structure of the 
+    PyTorch bug report (Issue 163569).
+    
+    The original bug involves eager/compile divergence in a function 
+    performing tensor manipulations, a convolution, and element-wise operations.
+    This test adapts the logic to TensorFlow, using conv3d_transpose as the 
+    core operation and tf.function to simulate compilation.
+    """
+    
+    # Define inputs
+    # arg0: Used to generate t2 (multiplier). 
+    # Shape adjusted to match the output spatial dimensions of the conv_transpose for broadcasting.
+    # Batch=2, D=7, H=7, W=7, C=16
+    arg0 = tf.random.normal([2, 7, 7, 7, 16], dtype=tf.float32)
+    
+    # arg1: Input to the transposed convolution.
+    # Input spatial size 5, Kernel 3, Stride 1, Padding VALID -> Output spatial size 7.
+    # Batch=2, D=5, H=5, W=5, InChannels=16
+    arg1 = tf.random.normal([2, 5, 5, 5, 16], dtype=tf.float32)
+    
+    # arg2: Filter for the transposed convolution.
+    # Filter: [Depth, Height, Width, OutChannels, InChannels]
+    # Kernel=3, OutChannels=16, InChannels=16
+    arg2 = tf.random.normal([3, 3, 3, 16, 16], dtype=tf.float32)
+
+    def foo(arg0, arg1, arg2):
+        # t0 = arg0
+        t0 = arg0
+        
+        # t1 = t0.max(dim=0).values
+        # Reduces over the batch dimension (axis 0)
+        t1 = tf.reduce_max(t0, axis=0)
+        
+        # t2 = t1.transpose(1, 0)
+        # t1 shape: [D, H, W, C]. Transpose(1, 0) -> [H, D, W, C]
+        t2 = tf.transpose(t1, [1, 0, 2, 3])
+
+        # t3 = arg1
+        t3 = arg1
+        
+        # t4 = torch.exp(t3)
+        t4 = tf.exp(t3)
+
+        # t5 = arg2
+        t5 = arg2
+        
+        # t6 = t5.transpose(2, 1)
+        # t5 shape: [D, H, W, OutC, InC]. Transpose(2, 1) -> [D, W, H, OutC, InC]
+        t6 = tf.transpose(t5, [0, 2, 1, 3, 4])
+
+        # t7 = torch.nn.functional.conv1d(...)
+        # Adapted to tf.nn.conv3d_transpose
+        # Input t4: [B, D, H, W, InC]
+        # Filter t6: [D, H, W, OutC, InC] (Note: TF filter is [d, h, w, out, in])
+        # Output shape calculation for VALID padding: o = i + k - 1 => 5 + 3 - 1 = 7
+        output_shape = [2, 7, 7, 7, 16]
+        t7 = tf.nn.conv3d_transpose(
+            t4,
+            t6,
+            output_shape=output_shape,
+            strides=[1, 1, 1, 1, 1],
+            padding='VALID'
+        )
+
+        # t8 = t7.clone(); t8.zero_()
+        # In TF, we create a new tensor of zeros with the same shape/type
+        t8 = tf.zeros_like(t7)
+
+        # t9 = t2 * t7 * t8
+        # t2 is [H, D, W, C] (4D). t7 is [B, D, H, W, C] (5D).
+        # To ensure broadcasting works as intended (mimicking the original logic where shapes aligned),
+        # we align t2's dimensions to t7's spatial dimensions.
+        # t2 is [H, D, W, C]. t7 spatial is [D, H, W, C].
+        # We transpose t2 to [D, H, W, C] and expand dims to [1, D, H, W, C].
+        t2_aligned = tf.transpose(t2, [1, 0, 2, 3]) # [D, H, W, C]
+        t2_aligned = tf.expand_dims(t2_aligned, 0)   # [1, D, H, W, C]
+        
+        t9 = t2_aligned * t7 * t8
+        return t9
+
+    # 1. Run Eager
+    out_eager = foo(arg0, arg1, arg2)
+
+    # 2. Run Compiled (tf.function)
+    compiled_foo = tf.function(foo)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+
+    # 3. Check for Divergence
+    # Since t8 is all zeros, t9 should be all zeros. 
+    # We check if eager and compiled produce identical results.
+    try:
+        np.testing.assert_allclose(out_eager.numpy(), out_compiled.numpy(), rtol=1e-5, atol=1e-5)
+        print("Test Passed: Eager and Compiled results match.")
+    except AssertionError as e:
+        print(f"Test Failed: Divergence detected between Eager and Compiled execution.\n{e}")
+        raise
+
+if __name__ == '__main__':
+    test_tf_conv3d_transpose_divergence()
+```

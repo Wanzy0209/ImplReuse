@@ -1,0 +1,80 @@
+```python
+import tensorflow as tf
+import sys
+
+def foo(arg0, arg1, arg2):
+    # Adaptation: 
+    # The original test used conv1d on (17, 64, 358).
+    # The similar API tf.image.rgb_to_yiq requires the last dimension to be 3 (RGB).
+    # We adapt the tensor shapes and flow to accommodate this constraint while 
+    # preserving the original operations (max, transpose, exp, dtype changes).
+    
+    # t0: size=(2, 261, 17, 3), dtype=bfloat16
+    # (Changed last dim from 358 to 3 to satisfy rgb_to_yiq input requirements)
+    t0 = arg0 
+    
+    # t1: size=(261, 17, 3), dtype=bfloat16
+    t1 = tf.reduce_max(t0, axis=0)
+    
+    # t2: size=(17, 261, 3), dtype=bfloat16
+    t2 = tf.transpose(t1, perm=[1, 0, 2])
+    
+    # Mimic the mixed precision flow: cast to float32 and exp
+    # t3: size=(17, 261, 3), dtype=float32
+    t3 = tf.cast(t2, tf.float32)
+    
+    # t4: size=(17, 261, 3), dtype=float32
+    t4 = tf.exp(t3)
+    
+    # Call the similar API: tf.image.rgb_to_yiq
+    # This replaces the torch.nn.functional.conv1d call.
+    # Input t4 has last dim 3, which is valid.
+    # t7: size=(17, 261, 3), dtype=float32
+    t7 = tf.image.rgb_to_yiq(t4)
+    
+    # Mimic the clone/zero and multiply logic from the original test
+    # t8: size=(17, 261, 3), dtype=float32
+    t8 = tf.identity(t7)
+    # Note: rgb_to_yiq output is float32. 
+    # The original multiplied t2 (bfloat16) * t7 (float32). 
+    # We cast t2 to float32 to allow multiplication.
+    t2_float = tf.cast(t2, tf.float32)
+    
+    # t9: size=(17, 261, 3), dtype=float32
+    t9 = t2_float * t7 * t8
+    
+    output = t9
+    return output
+
+# Setup inputs
+# Original arg0: (2, 261, 17, 358) bfloat16
+# Adapted arg0: (2, 261, 17, 3) bfloat16 (Last dim 3 for RGB)
+arg0 = tf.random.uniform((2, 261, 17, 3), minval=0.0, maxval=1.0, dtype=tf.bfloat16)
+
+# Original arg1: (17, 64, 358) float32
+# We keep this to match the function signature, though it is unused in the adapted logic
+# because rgb_to_yiq does not take separate weights like conv1d.
+arg1 = tf.random.uniform((17, 64, 358), dtype=tf.float32)
+
+# Original arg2: (261, 1, 64) float32
+arg2 = tf.random.uniform((261, 1, 64), dtype=tf.float32)
+
+if __name__ == '__main__':
+    # Eager Execution
+    out_eager = foo(arg0, arg1, arg2)
+    print('Eager Success! ✅')
+    
+    # Compiled Execution
+    # tf.function is the TensorFlow equivalent of torch.compile
+    compiled_foo = tf.function(foo, jit_compile=True) # jit_compile=True forces XLA compilation
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    print('Compile Success! ✅')
+    
+    # Verify behavior (Check for divergence)
+    # Using a small tolerance for float32 comparison
+    diff = tf.reduce_max(tf.abs(out_eager - out_compiled))
+    if diff < 1e-5:
+        print(f"Results match! Max diff: {diff.numpy()} ✅")
+    else:
+        print(f"Results DIVERGE! Max diff: {diff.numpy()} ❌")
+```

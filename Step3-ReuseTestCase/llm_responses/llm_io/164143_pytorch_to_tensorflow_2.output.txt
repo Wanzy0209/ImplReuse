@@ -1,0 +1,51 @@
+```python
+import tensorflow as tf
+from tensorflow.experimental import dtensor
+from tensorflow.experimental.dtensor import layout as layout_lib
+
+def test_copy_to_mesh_inside_tf_function():
+    """
+    Adapted from PyTorch Issue 164143.
+    
+    Original Bug: torch.compile silently skips compilation when DebugMode is active.
+    Adapted Logic: Verify that tf.experimental.dtensor.copy_to_mesh does not silently 
+    fail or skip the layout transformation when called inside a tf.function 
+    (TensorFlow's compilation/execution mode context).
+    """
+    
+    # Setup: Create a mesh and a layout
+    # Using a single device mesh for simplicity in a test environment
+    mesh = dtensor.create_mesh([("x", 1)], devices=["CPU:0"])
+    layout = layout_lib.Layout([layout_lib.UNSHARDED], mesh)
+    
+    # Input tensor
+    tensor = tf.constant([1.0, 2.0, 3.0, 4.0])
+    
+    # The "Mode" context: tf.function
+    # In PyTorch, the bug occurred inside a specific dispatch mode (DebugMode).
+    # In TensorFlow, tf.function changes the execution mode (Graph mode).
+    # We ensure the API works correctly or errors explicitly, rather than silently 
+    # returning the wrong type or skipping the operation.
+    @tf.function
+    def copy_in_compiled_context(t):
+        return dtensor.copy_to_mesh(t, layout)
+
+    # Execute
+    result = copy_in_compiled_context(tensor)
+    
+    # Verification
+    # 1. Check that the result is indeed a DTensor (not a regular Tensor).
+    #    If the API "silently skipped" like the PyTorch bug, it might return 
+    #    the original tensor or a non-DTensor result.
+    assert isinstance(result, dtensor.DTensor), \
+        "copy_to_mesh silently failed to return a DTensor inside tf.function"
+    
+    # 2. Check that the data integrity is maintained
+    assert tf.reduce_all(result == tensor).numpy(), \
+        "Data mismatch after copy_to_mesh"
+        
+    print("Test passed: copy_to_mesh works correctly inside tf.function context.")
+
+if __name__ == "__main__":
+    test_copy_to_mesh_inside_tf_function()
+```

@@ -1,0 +1,60 @@
+```python
+import tensorflow as tf
+import functools
+
+# Adapt the test case for tf.compat.v1.nn.ctc_loss
+# The original bug involves using functools.partial with a function argument
+# inside a compiled context (torch.compile). 
+# Here we test the equivalent: using functools.partial with ctc_loss 
+# inside a tf.function (TensorFlow's graph compilation).
+
+def test_ctc_loss_with_partial():
+    # Setup input data
+    batch_size = 2
+    num_classes = 5
+    max_time = 4
+
+    # Logits: [max_time, batch_size, num_classes]
+    logits = tf.random.normal([max_time, batch_size, num_classes])
+    
+    # Sequence length: [batch_size]
+    sequence_length = tf.constant([max_time, max_time - 1], dtype=tf.int32)
+
+    # Labels: SparseTensor
+    # indices: [batch_index, time_index]
+    indices = tf.constant([[0, 0], [0, 1], [1, 0]], dtype=tf.int64)
+    values = tf.constant([1, 2, 3], dtype=tf.int32)
+    dense_shape = tf.constant([batch_size, max_time], dtype=tf.int64)
+    labels = tf.sparse.SparseTensor(indices, values, dense_shape)
+
+    # Create a functools.partial of the target API
+    # In the original bug, context_fn was a partial. Here we make ctc_loss a partial
+    # to test if the compiler (tf.function) handles the partial object correctly.
+    partial_ctc_loss = functools.partial(
+        tf.compat.v1.nn.ctc_loss,
+        labels=labels,
+        sequence_length=sequence_length,
+        preprocess_collapse_repeated=False,
+        ctc_merge_repeated=True,
+        ignore_longer_outputs_than_inputs=False,
+        time_major=True
+    )
+
+    # Define the compiled function (equivalent to @torch.compile)
+    @tf.function
+    def compute_loss_fn(inputs):
+        # Call the partial inside the graph context
+        return partial_ctc_loss(inputs=inputs)
+
+    # Execute the function
+    loss = compute_loss_fn(logits)
+
+    # Verify the output is valid
+    assert loss.shape == (batch_size,), f"Expected shape ({batch_size},), got {loss.shape}"
+    assert tf.reduce_all(tf.math.is_finite(loss)), "Loss contains NaN or Inf values"
+    
+    print("Test passed successfully.")
+
+if __name__ == "__main__":
+    test_ctc_loss_with_partial()
+```

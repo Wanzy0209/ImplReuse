@@ -1,0 +1,50 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Adapt the original PyTorch test case to TensorFlow.
+# The original bug involved torch.compile mishandling in-place operations and indexing.
+# Here we use tf.name_scope (the requested similar API) to group operations,
+# and tf.function to simulate the compilation/graph context where name_scope is relevant.
+
+def foo(x_var):
+    # Use tf.name_scope to group the operations, mirroring the structure of the original test.
+    with tf.name_scope("inplace_and_index"):
+        # x[0].sin_()
+        # In TensorFlow, in-place operations on tensors are typically done via tf.Variable.assign.
+        # We update the variable at index 0 and 1 with their sine values.
+        x_var[0].assign(tf.math.sin(x_var[0]))
+        x_var[1].assign(tf.math.sin(x_var[1]))
+
+        # y = torch.zeros_like(x)
+        y = tf.Variable(tf.zeros_like(x_var))
+
+        # y[2] = x[0]
+        # y[3] = x[1]
+        # Assign the values from the mutated x_var to y.
+        y[2].assign(x_var[0])
+        y[3].assign(x_var[1])
+        
+        return y
+
+# Prepare data
+# PyTorch: torch.tensor([[1,2,3],[4,5,6],[7,8,9],[10,11,12]], dtype=torch.float32)
+data = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]], dtype=np.float32)
+x = tf.Variable(data)
+cx = tf.Variable(data.copy())
+
+# Execute
+# We use tf.function to compile the function, which is the TensorFlow equivalent
+# to torch.compile, ensuring the operations inside tf.name_scope are executed in graph mode.
+cfoo = tf.function(foo)
+
+res = foo(x)
+cres = cfoo(cx)
+
+# Verify
+# The original PyTorch bug caused cres[2] to be sin(sin(x[0])) instead of sin(x[0])).
+# We assert that the eager execution (res) and graph execution (cres) produce the same results.
+np.testing.assert_allclose(res.numpy(), cres.numpy(), rtol=1e-5, atol=1e-5)
+
+print("Test passed. Results match between eager and graph execution.")
+```

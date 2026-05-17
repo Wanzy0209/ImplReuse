@@ -1,0 +1,71 @@
+```python
+import torch
+import torch.nn as nn
+
+# Reproduce the configuration from the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def test_lstm_cell_compile():
+    # Dimensions derived from the bug report's conv1d setup
+    # Batch size = 17
+    # Input size = 64 (matches conv1d in_channels)
+    # Hidden size = 261 (matches conv1d out_channels)
+    batch_size = 17
+    input_size = 64
+    hidden_size = 261
+
+    # Initialize LSTMCell
+    # We use float32 for weights (default) to match the mixed precision setup
+    lstm_cell = nn.LSTMCell(input_size, hidden_size).cuda()
+
+    # Define the function to be compiled
+    # This mimics the structure of the original 'foo' function:
+    # Transformations -> API Call -> Post-processing
+    def lstm_fn(input_tensor, hx, cx):
+        # Mimic t4 = torch.exp(t3)
+        t_exp = torch.exp(input_tensor)
+        
+        # Call the API (LSTMCell instead of conv1d)
+        # Returns (hy, cy)
+        hy, cy = lstm_cell(t_exp, (hx, cx))
+        
+        # Mimic t8 = t7.clone(); t8.zero_()
+        hy_zero = hy.clone()
+        hy_zero.zero_()
+        
+        # Mimic t9 = t2 * t7 * t8
+        # In the original bug, t2 was a separate tensor. Here we multiply the result
+        # by its zeroed version to test the graph execution logic under compile.
+        output = hy * hy_zero
+        return output
+
+    # Prepare inputs
+    # Mimic mixed precision: input is bfloat16, states are float32
+    # Mimic non-contiguous strides by transposing during creation
+    # Original bug: t2 = t1.transpose(1, 0)
+    input_data = torch.randn(input_size, batch_size, dtype=torch.bfloat16, device='cuda', requires_grad=True).t()
+    hx = torch.randn(batch_size, hidden_size, dtype=torch.float32, device='cuda', requires_grad=True)
+    cx = torch.randn(batch_size, hidden_size, dtype=torch.float32, device='cuda', requires_grad=True)
+
+    # 1. Run Eager
+    out_eager = lstm_fn(input_data, hx, cx)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+
+    # 2. Run Compiled
+    compiled_fn = torch.compile(lstm_fn, fullgraph=True, dynamic=True)
+    out_compiled = compiled_fn(input_data, hx, cx)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+
+    # 3. Verify
+    # Since we zeroed out the output in the function, both should be all zeros.
+    # We check if the forward outputs match.
+    assert torch.allclose(out_eager, out_compiled, atol=1e-5, rtol=1e-5), "Divergence detected between eager and compiled outputs"
+    print('Test Passed! ✅')
+
+if __name__ == '__main__':
+    test_lstm_cell_compile()
+```

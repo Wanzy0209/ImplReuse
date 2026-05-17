@@ -1,0 +1,171 @@
+Issue ID: 161904
+Title: ZeroBubble and DualPipeV pipeline parallel schedules fail with torch.compiled model
+Bug Description:
+### 🐛 Describe the bug
+
+The ZeroBubble and DualPipeV schedules don't seem to be compatible with models that are `torch.compiled`. Following the TorchTitan code base, I reduced the problem into a minimal repro example:
+
+```py
+"""
+Run:
+
+torchrun --nproc_per_node=2 repro.py
+"""
+
+import torch
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.pipelining import PipelineStage
+from torch.distributed.pipelining.schedules import get_schedule_class
+import torch.nn as nn
+from torchtitan.distributed.pipeline_parallel import pipeline_module_split
+
+PP_DEGREE = 2
+SCHEDULE_NAME = "ZBVZeroBubble"  # or "DualPipeV"
+
+
+class Transformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.tok_embeddings = nn.Embedding(128, 32)
+        self.layers = torch.nn.ModuleDict()
+        for layer_id in range(4):
+            self.layers[str(layer_id)] = nn.Linear(32, 32, bias=False)
+        self.output = nn.Linear(32, 128, bias=False)
+
+    def forward(self, x):
+        x = self.tok_embeddings(x) if self.tok_embeddings else x
+        for layer in self.layers.values():
+            x = layer(x)
+        return self.output(x) if self.output else x
+
+
+def main() -> None:
+    local_rank = torch.distributed.get_node_local_rank()
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.any
+Similarity score: 0.9942690134048462
+
+Similar API information:
+# Extracted call chain for torch.any
+
+# --- torch._dynamo.polyfills.builtins.any ---
+def any(iterable: Iterable[object], /) -> bool:
+    for elem in iterable:
+        if elem:
+            return True
+    return False
+
+# --- torch._dynamo.decorators.substitute_in_graph ---
+def substitute_in_graph(
+    original_fn: Callable[_P, _R],
+    *,
+    can_constant_fold_through: bool = False,
+    skip_signature_check: bool = False,
+    # type that is embedded in the Python interpreter
+    is_embedded_type: bool = False,  # internal use only
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """
+    Register a polyfill handler for a function, usually a C function from the C extension, to be
+    used in place of the original function when inlining the original function in the graph.
+
+    .. note::
+
+        The polyfill handler is only used when inlining the original function. It is not used when
+        the original function is called directly. In the eager mode, the decorated function calls
+        the performant C function rather than the polyfill handler.
+
+    The polyfill handler is a function that will be called in place of the original function when
+    inlining the original functio
+
+Original Test Case:
+"""
+Run:
+
+torchrun --nproc_per_node=2 repro.py
+"""
+
+import torch
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.pipelining import PipelineStage
+from torch.distributed.pipelining.schedules import get_schedule_class
+import torch.nn as nn
+from torchtitan.distributed.pipeline_parallel import pipeline_module_split
+
+PP_DEGREE = 2
+SCHEDULE_NAME = "ZBVZeroBubble"  # or "DualPipeV"
+
+
+class Transformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.tok_embeddings = nn.Embedding(128, 32)
+        self.layers = torch.nn.ModuleDict()
+        for layer_id in range(4):
+            self.layers[str(layer_id)] = nn.Linear(32, 32, bias=False)
+        self.output = nn.Linear(32, 128, bias=False)
+
+    def forward(self, x):
+        x = self.tok_embeddings(x) if self.tok_embeddings else x
+        for layer in self.layers.values():
+            x = layer(x)
+        return self.output(x) if self.output else x
+
+
+def main() -> None:
+    local_rank = torch.distributed.get_node_local_rank()
+    device = torch.device("cuda", local_rank)
+    torch.distributed.init_process_group("nccl")
+    mesh = init_device_mesh("cuda", (2,), mesh_dim_names=("pp",))
+
+    with torch.device("meta"):
+        model = Transformer()
+
+    pp_schedule, model_parts, has_first_stage, has_last_stage = pipeline_transformer(
+        model,
+        mesh,
+        device,
+        parallelize_transformer,
+        loss_fn,
+    )
+    for m in model_parts:
+        m.to_empty(device=device)
+        m.train()
+
+    input_ids = torch.randint(0, 128, (8, 4096), device=device)
+    labels = input_ids.clone()
+
+    losses: list[torch.Tensor] | None
+    targets, losses = (labels, []) if has_last_stage else (None, None)
+    if has_first_stage:
+        pp_schedule.step(
+            input_ids,
+            target=targets,
+            losses=losses,
+        )
+    else:
+        pp_schedule.step(
+            target=targets,
+            losses=losses,
+        )
+
+
+def pipeline_transformer(
+    model: nn.Module,
+    world_mesh,
+    device: torch.device,
+    parallelize_fn,
+    loss_fn,
+):
+    pp_mesh = world_mesh["pp"]
+    module_names_per_stage = [
+
+The API torch.any is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

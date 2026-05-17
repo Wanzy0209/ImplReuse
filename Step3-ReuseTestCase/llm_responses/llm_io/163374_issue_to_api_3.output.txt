@@ -1,0 +1,86 @@
+```python
+import torch
+import torch.distributed as dist
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import tensorflow as tf
+
+def test_dtensor_inplace_clamp_with_tf_assert():
+    """
+    Test case for Issue 163374: [DTensor] Inplace ops produces wrong result.
+    
+    This test reproduces the bug where an inplace operation (clamp_) on a partial 
+    DTensor results in incorrect placement and value. It leverages the similar API
+    tf.debugging.Assert to verify the correctness of the result.
+    """
+    
+    # Initialize PyTorch distributed process group
+    # Note: This script is intended to be run with torchrun, e.g.:
+    # torchrun --nproc_per_node=2 test_dtensor_clamp.py
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl")
+
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    
+    # Ensure we have the expected world size for the test
+    if world_size != 2:
+        print(f"Test requires world_size=2, but got {world_size}. Skipping.")
+        return
+
+    # Initialize device mesh
+    mesh = init_device_mesh('cuda', (2,))
+
+    # Create input tensor and distribute it
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    # Perform sum (results in Partial(sum) placement)
+    partial_dt = in_dtensor.sum()
+    
+    # Perform inplace clamp
+    # Bug: The placement remains Partial(sum) instead of becoming Replicate()
+    # Bug: The value is the sum (144.0) instead of the clamped value (2.0)
+    out = partial_dt.clamp_(max=2)
+
+    # --- Verification using PyTorch assertions ---
+    # Check placement
+    expected_placement = (Replicate(),)
+    assert out.placements == expected_placement, \
+        f"[Rank {rank}] Placement mismatch: Expected {expected_placement}, got {out.placements}"
+
+    # Get full tensor for value checking
+    full = out.full_tensor()
+    expected_value = 2.0
+
+    # --- Leverage Similar API: tf.debugging.Assert ---
+    # We translate the PyTorch tensor to a TensorFlow tensor to use the similar API
+    # for verification, satisfying the cross-library reuse requirement.
+    
+    # Convert PyTorch tensor to numpy, then to TensorFlow tensor
+    # Note: We move to CPU to avoid potential device conflicts with TF
+    tf_full = tf.constant(full.cpu().numpy())
+    tf_expected = tf.constant(expected_value)
+    
+    # Define the condition for the assertion
+    condition = tf.equal(tf_full, tf_expected)
+    
+    # Use tf.debugging.Assert to verify the result.
+    # If the condition is False, it will raise an InvalidArgumentError with the provided data.
+    try:
+        # We wrap this in a tf.function or just execute eagerly (TF2 default)
+        # The data argument allows us to print the actual and expected values if assertion fails.
+        tf.debugging.Assert(
+            condition, 
+            [tf.strings.join(["Expected: ", tf.as_string(tf_expected)]),
+             tf.strings.join(["Got: ", tf.as_string(tf_full)])],
+            summarize=2
+        )
+        print(f"[Rank {rank}] Test passed. tf.debugging.Assert succeeded.")
+    except tf.errors.InvalidArgumentError as e:
+        raise AssertionError(
+            f"[Rank {rank}] tf.debugging.Assert failed: {e.message}"
+        )
+
+if __name__ == '__main__':
+    test_dtensor_inplace_clamp_with_tf_assert()
+```

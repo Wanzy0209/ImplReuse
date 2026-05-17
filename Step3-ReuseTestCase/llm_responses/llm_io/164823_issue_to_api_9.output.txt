@@ -1,0 +1,55 @@
+```python
+import torch
+import torch.nn as nn
+
+# Model definition from the bug report
+class SparseModel(nn.Module):
+    def forward(self, x):
+        x_sparse = x.to_sparse()
+        result = x_sparse * 2
+        return result.to_dense()
+
+# Helper function to abstract execution modes, inspired by
+# tf.compat.v1.train.global_step which handles eager vs graph contexts.
+def execute_model(model, x, backend='eager'):
+    """
+    Executes the model in the specified backend mode.
+    This mirrors the logic in tf.compat.v1.train.global_step where
+    execution paths diverge based on the context (eager vs compiled).
+    """
+    if backend == 'eager':
+        # Corresponds to: if context.executing_eagerly(): ...
+        return model(x)
+    elif backend == 'inductor':
+        # Corresponds to the graph/compiled execution path
+        return torch.compile(model, backend='inductor')(x)
+    else:
+        raise ValueError(f"Unknown backend: {backend}")
+
+def test_compile_sparse_tensor():
+    """
+    Test case for Issue 164823: torch.compile with Inductor fails with
+    NotImplementedError for models using to_sparse().
+    """
+    x = torch.randn(10, 10)
+    model = SparseModel()
+
+    # 1. Test Eager Mode (Expected to succeed)
+    try:
+        output_eager = execute_model(model, x, backend='eager')
+        print("Eager execution succeeded.")
+    except Exception as e:
+        print(f"Eager execution failed: {e}")
+
+    # 2. Test Inductor Backend (Expected to fail with NotImplementedError per Issue 164823)
+    try:
+        output_compiled = execute_model(model, x, backend='inductor')
+        print("Compiled execution succeeded.")
+    except NotImplementedError as e:
+        print(f"Compiled execution failed as expected (Bug 164823): {e}")
+    except Exception as e:
+        print(f"Compiled execution failed with unexpected error: {e}")
+
+if __name__ == "__main__":
+    test_compile_sparse_tensor()
+```

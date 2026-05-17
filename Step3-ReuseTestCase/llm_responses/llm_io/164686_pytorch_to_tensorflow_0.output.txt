@@ -1,0 +1,109 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Set seed for reproducibility
+tf.random.set_seed(13653)
+np.random.seed(13653)
+
+def computation_fn(arg_0, arg_1, sentinel):
+    """
+    Translated logic from the PyTorch fuzzed_program.
+    Preserves the specific data types and operation order to test
+    compiler handling of mixed-type scalar operations.
+    """
+    # var_node_3 = torch.full((), 1.0, dtype=torch.float32)
+    var_node_3 = tf.constant(1.0, dtype=tf.float32)
+
+    # var_node_2 = var_node_3.item() -> treated as tensor in graph
+    var_node_2 = var_node_3
+
+    # var_node_5 = -3 (int32)
+    var_node_5 = tf.constant(-3, dtype=tf.int32)
+    # var_node_6 = arg_0 (int64)
+    var_node_6 = tf.cast(arg_0, tf.int64)
+
+    # var_node_4 = var_node_5 + var_node_6 (Result int32 per PyTorch comment)
+    # Explicitly casting to int32 to match the type logic of the bug report
+    var_node_4 = tf.cast(var_node_5, tf.int32) + tf.cast(var_node_6, tf.int32)
+
+    # var_node_1 = var_node_2 + var_node_4 (Result float32)
+    var_node_1 = tf.cast(var_node_2, tf.float32) + tf.cast(var_node_4, tf.float32)
+
+    # var_node_9 = 1 (int64)
+    var_node_9 = tf.constant(1, dtype=tf.int64)
+    # var_node_10 = -10 (int32)
+    var_node_10 = tf.constant(-10, dtype=tf.int32)
+
+    # var_node_8 = var_node_9 / var_node_10 (Result int64 per PyTorch comment)
+    # Using truediv then cast to int64 to mimic the potential float->int conversion path
+    var_node_8 = tf.cast(var_node_9, tf.float32) / tf.cast(var_node_10, tf.float32)
+    var_node_8 = tf.cast(var_node_8, tf.int64)
+
+    # var_node_12 = arg_1 (int64)
+    var_node_12 = tf.cast(arg_1, tf.int64)
+    # var_node_13 = -5 (int32)
+    var_node_13 = tf.constant(-5, dtype=tf.int32)
+
+    # var_node_11 = var_node_12 / var_node_13 (Result int32 per PyTorch comment)
+    var_node_11 = tf.cast(var_node_12, tf.float32) / tf.cast(var_node_13, tf.float32)
+    var_node_11 = tf.cast(var_node_11, tf.int32)
+
+    # var_node_7 = var_node_8 + var_node_11 (Result int32 per PyTorch comment)
+    var_node_7 = tf.cast(var_node_8, tf.int32) + var_node_11
+
+    # var_node_0 = var_node_1 * var_node_7 (Result float32)
+    var_node_0 = var_node_1 * tf.cast(var_node_7, tf.float32)
+
+    # result = var_node_0 * sentinel
+    result = var_node_0 * sentinel
+
+    # Handle complex numbers if any
+    if result.dtype.is_complex:
+        result = tf.math.real(result)
+
+    return result
+
+# Prepare inputs
+# Simulating torch.randn(()).item() with random integers
+arg_0 = tf.random.uniform(shape=[], minval=-100, maxval=100, dtype=tf.int64)
+arg_1 = tf.random.uniform(shape=[], minval=-100, maxval=100, dtype=tf.int64)
+sentinel = tf.constant(1.0, dtype=tf.float32)
+
+# Run eager execution
+result_eager = computation_fn(arg_0, arg_1, sentinel)
+print('✅ eager success')
+
+# Run compiled execution using tf.compat.v1.tpu.rewrite
+# Note: This API is specific to TPU execution.
+try:
+    # Initialize TPU system (required for tpu.rewrite)
+    resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(resolver)
+    tf.tpu.experimental.initialize_tpu_system(resolver)
+    
+    # tf.compat.v1.tpu.rewrite expects the computation function and a list of input tensors
+    compiled_program = tf.compat.v1.tpu.rewrite(computation_fn, [arg_0, arg_1, sentinel])
+    
+    # The rewrite function executes the computation on the TPU
+    result_compiled = compiled_program
+    print('✅ compile success')
+    
+    # Verify results match
+    assert np.allclose(result_eager.numpy(), result_compiled.numpy()), "Divergence detected!"
+    print("✅ Results match.")
+
+except (ValueError, tf.errors.NotFoundError, tf.errors.InternalError) as e:
+    # Fallback for environments without TPU, attempting to use XLA compilation
+    # to verify the graph construction logic if the specific TPU hardware is missing.
+    print(f"⚠️ TPU environment not detected: {e}")
+    print("Attempting XLA compilation fallback to verify graph logic...")
+    
+    # Use tf.xla.experimental.compile as a functional equivalent for testing compilation
+    # on non-TPU hardware (CPU/GPU).
+    xla_result = tf.xla.experimental.compile(computation_fn, [arg_0, arg_1, sentinel])
+    print('✅ xla compile success')
+    
+    assert np.allclose(result_eager.numpy(), xla_result[0].numpy()), "Divergence detected!"
+    print("✅ Results match.")
+```

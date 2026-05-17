@@ -1,0 +1,109 @@
+Issue ID: 162725
+Title: conv_transpose3d output and Inconsistent inference results after compilation
+Bug Description:
+### 🐛 Describe the bug
+
+```python
+import torch
+from torch.testing._internal.common_methods_invocations import op_db
+
+def fn(x,w):
+    result = torch.nn.functional.conv_transpose3d(input=x, weight=w)
+    return result
+
+
+op_dict = op_db[192]  # nn.functional.conv_transpose3d
+inputs = list(op_dict.sample_inputs("cuda", torch.float32, requires_grad=False))
+
+for sample in inputs:
+    eager_args = sample.input, *sample.args
+    (x,w,b) = eager_args
+    compiled = torch.compile(fn, backend="inductor", mode="max-autotune")
+    res1 = fn(x,w)
+    res2 = compiled(x,w)
+    torch.testing.assert_close(res1, res2)
+```
+
+```
+Traceback (most recent call last):
+  File "/share_container/learning/bug2.py", line 19, in <module>
+    torch.testing.assert_close(res1, res2)
+  File "/root/miniconda3/envs/triton/lib/python3.10/site-packages/torch/testing/_comparison.py", line 1530, in assert_close
+    raise error_metas[0].to_error(msg)
+AssertionError: Tensor-likes are not close!
+
+Mismatched elements: 1 / 2016 (0.0%)
+Greatest absolute difference: 2.288818359375e-05 at index (1, 0, 3, 1, 4) (up to 1e-05 allowed)
+Greatest relative difference: 1.4248430488805752e-05 at index (1, 0, 3, 1, 4) (up to 1.3e-06 allowed)
+
+```
+
+### Versions
+
+PyTorch version: 2.6.0+cu124
+
+Original API Under Test: torch.nn.functional.conv_transpose3d
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.addmv
+Similarity score: 0.9947594404220581
+
+Similar API information:
+# Extracted call chain for torch.addmv
+
+# --- torch._decomp.decompositions.addmv ---
+def addmv(self: Tensor, mat1: Tensor, vec: Tensor, beta: int = 1, alpha: int = 1):
+    if not self.is_floating_point() and not self.is_complex():
+        beta = int(beta)
+        alpha = int(alpha)
+    out = alpha * torch.mv(mat1, vec)
+    if beta == 0:
+        return out
+    if out.numel() == 0:  # handle empty matrix
+        return beta * self
+    return out + beta * self
+
+# --- out.numel ---
+def numel(sizes: list[int]):
+    numel = 1
+    for elem in sizes:
+        numel *= elem
+    return numel
+
+# --- torch._prims_common.wrappers.out_wrapper ---
+def out_wrapper(
+    *out_names: str,
+    exact_dtype: bool = False,
+    pass_is_out: bool = False,
+    preserve_memory_format: bool = False,
+) -> Callable[[Callable[_P, _T]], Callable[_P, _T]]:
+    # The wrapped function needs to convert the output parameters to ensure
+    # compatibility between the Python API (which always uses "out" as the
+
+Original Test Case:
+import torch
+from torch.testing._internal.common_methods_invocations import op_db
+
+def fn(x,w):
+    result = torch.nn.functional.conv_transpose3d(input=x, weight=w)
+    return result
+
+
+op_dict = op_db[192]  # nn.functional.conv_transpose3d
+inputs = list(op_dict.sample_inputs("cuda", torch.float32, requires_grad=False))
+
+for sample in inputs:
+    eager_args = sample.input, *sample.args
+    (x,w,b) = eager_args
+    compiled = torch.compile(fn, backend="inductor", mode="max-autotune")
+    res1 = fn(x,w)
+    res2 = compiled(x,w)
+    torch.testing.assert_close(res1, res2)
+
+The API torch.addmv is identified as same-library similar to the original PyTorch API torch.nn.functional.conv_transpose3d.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

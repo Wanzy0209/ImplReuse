@@ -1,0 +1,57 @@
+```python
+import torch
+import pytest
+
+def test_torch_compile_unsqueeze_cat_interleaving():
+    """
+    Test case for Issue 164700.
+    
+    Verifies that torch.compile handles the interleaving of unsqueeze (via None indexing)
+    and torch.cat operations correctly without generating illegal Triton code.
+    
+    The original bug caused a crash with the error:
+    'constexpr_type' object has no attribute 'is_block'
+    """
+    # Skip if CUDA is not available, as the bug is specific to the Triton backend
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available, skipping Triton-related test")
+
+    device = "cuda"
+
+    def f(x, y):
+        # The specific pattern of operations that triggered the bug
+        y2 = torch.cat(
+            [
+                x[:, 1:],
+                y[:, None] + 32 * 2048,
+            ],
+            dim=1,
+        )
+
+        x2 = x[:, 1:, None]
+        y3 = y2[:, -1:, None]
+
+        return (
+            torch.cat([x2, y3], dim=1)
+            + torch.arange(-2048, 0, device=device)[None, None, :]
+        ).reshape(1, 32 * 2048)
+
+    # Setup inputs matching the bug report
+    x = torch.zeros(1, 32, dtype=torch.int64, device=device)
+    y = torch.zeros(1, dtype=torch.int32, device=device)
+
+    # Run in eager mode to establish the expected result
+    expected = f(x, y)
+
+    # Run with torch.compile
+    # This is where the crash occurred in the original issue
+    compiled_f = torch.compile(f)
+    result = compiled_f(x, y)
+
+    # Assert that the compiled version produces the same result as the eager version
+    assert torch.equal(expected, result), "torch.compile output differs from eager execution"
+
+if __name__ == "__main__":
+    test_torch_compile_unsqueeze_cat_interleaving()
+    print("Test passed.")
+```

@@ -1,0 +1,62 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_linear_operator_adjoint_matmul():
+    """
+    Test case based on Issue #164491: _scaled_mm and _int_mm slow with row-major rhs matrix.
+    
+    The original issue highlights performance and correctness issues when performing matrix
+    multiplication with a right-hand side (rhs) matrix that is in row-major layout (effectively
+    a transposed view of the stored column-major weights).
+    
+    In TensorFlow, tf.linalg.LinearOperatorAdjoint represents the adjoint (transpose) of an
+    operator. This test verifies that matrix multiplication works correctly when the matrix
+    is logically transposed, ensuring the framework handles the implicit layout transformation
+    without errors, analogous to the expected behavior for the PyTorch internal functions.
+    """
+    
+    # Use complex numbers to strictly test "Adjoint" (conjugate transpose),
+    # though the layout issue applies to real matrices as well.
+    dtype = tf.complex64
+    
+    # Dimensions: Base matrix (M, N)
+    M, N, K = 4, 6, 5
+    
+    # Create a base matrix representing the weights
+    # In the PyTorch issue, the weights might be stored transposed.
+    matrix_data = tf.random.normal((M, N), dtype=dtype)
+    
+    # Create the LinearOperator for the base matrix
+    base_op = tf.linalg.LinearOperatorFullMatrix(matrix_data)
+    
+    # Create the Adjoint operator. This represents the matrix in its transposed state
+    # (N, M), similar to how the PyTorch issue deals with row-major (transposed) RHS.
+    adjoint_op = tf.linalg.LinearOperatorAdjoint(base_op)
+    
+    # Input tensor x (M, K) to multiply with the adjoint (N, M)
+    # The operation is: Adjoint(A) @ x
+    x = tf.random.normal((M, K), dtype=dtype)
+    
+    # Perform matmul using the Adjoint operator
+    # This tests the framework's ability to handle the transposed matrix logic
+    result = adjoint_op.matmul(x)
+    
+    # Calculate expected result using standard dense operations
+    # Adjoint of matrix_data is (N, M)
+    # (N, M) @ (M, K) -> (N, K)
+    expected = tf.linalg.matmul(tf.linalg.adjoint(matrix_data), x)
+    
+    # Assert correctness to ensure the operation handles the transposition correctly
+    np.testing.assert_allclose(result.numpy(), expected.numpy(), rtol=1e-5)
+    
+    # Verify the property: operator_adjoint.matmul(x) == operator.matmul(x, adjoint=True)
+    # This ensures the internal logic for handling the adjoint is consistent.
+    expected_via_property = base_op.matmul(x, adjoint_arg=True)
+    np.testing.assert_allclose(result.numpy(), expected_via_property.numpy(), rtol=1e-5)
+
+    print("Test passed: LinearOperatorAdjoint handles transposed matrix multiplication correctly.")
+
+if __name__ == "__main__":
+    test_linear_operator_adjoint_matmul()
+```

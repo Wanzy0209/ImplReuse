@@ -1,0 +1,58 @@
+```python
+import torch
+from torch.ao.nn.quantized.modules.activation import Softmax
+
+def test_quantized_softmax_with_floordiv_constants():
+    """
+    Test case for torch.nn.Softmax (quantized) based on Issue 164385.
+    
+    The issue involves FloorDiv generating a sympy rational when handling
+    specific constants (24, 672, 2016, 21, 22). This test verifies that the
+    quantized Softmax module handles these specific arithmetic constants
+    correctly in its scale and zero_point parameters, ensuring that the
+    underlying division logic (which might relate to the FloorDiv issue)
+    does not cause runtime errors or incorrect type handling.
+    """
+    
+    # Constants extracted from the bug report:
+    # FloorDiv((24*s37 + 672)*(((s14*s46)//2016)) + 21, 22)
+    # Denominator 22 is used for the output scale.
+    # Offset 21 is used for the zero_point.
+    # Divisor 2016 is used for the input scale.
+    
+    output_scale = 1.0 / 22.0
+    output_zero_point = 21
+    input_scale = 1.0 / 2016.0
+    input_zero_point = 0
+    
+    # Create a dummy float tensor
+    # Shape (batch, seq_len, features) to allow dim=1 softmax
+    float_input = torch.tensor([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]])
+    
+    # Quantize the input tensor
+    quantized_input = torch.quantize_per_tensor(
+        float_input, 
+        scale=input_scale, 
+        zero_point=input_zero_point, 
+        dtype=torch.qint32
+    )
+    
+    # Instantiate the quantized Softmax module with the problematic constants
+    # The API is torch.ao.nn.quantized.modules.activation.Softmax
+    softmax_module = Softmax(dim=1, scale=output_scale, zero_point=output_zero_point)
+    
+    # Execute the forward pass
+    # This operation internally uses the scale/zero_point which involve the
+    # division logic related to the bug.
+    result = softmax_module(quantized_input)
+    
+    # Assertions to verify correct behavior
+    assert result.is_quantized, "Output should be a quantized tensor."
+    assert result.q_scale() == output_scale, f"Output scale mismatch: {result.q_scale()} != {output_scale}"
+    assert result.q_zero_point() == output_zero_point, f"Output zero_point mismatch: {result.q_zero_point()} != {output_zero_point}"
+    
+    print("Test passed: Quantized Softmax handles FloorDiv-related constants correctly.")
+
+if __name__ == "__main__":
+    test_quantized_softmax_with_floordiv_constants()
+```

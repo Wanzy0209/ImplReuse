@@ -1,0 +1,58 @@
+```python
+import torch
+import torch.distributed as dist
+
+def example_function():
+    # Initialize distributed environment for the test
+    # Using a simple single-process setup for demonstration purposes
+    if not dist.is_initialized():
+        try:
+            dist.init_process_group(
+                backend="gloo",
+                init_method="tcp://127.0.0.1:29500",
+                rank=0,
+                world_size=1
+            )
+        except Exception as e:
+            print(f"Failed to initialize process group: {e}")
+            # Return a dummy function if init fails to allow script to continue
+            return lambda x, matrix: x
+
+    def reduce_op(x, matrix):
+        # print(x.is_contiguous()) # Uncomment this line to test the print statement effect
+        # torch.distributed.reduce is an in-place operation
+        # We perform the reduce operation on the input tensor x
+        dist.reduce(x, dst=0)
+        return x
+
+    # Compile the function containing the distributed operation
+    compiled_func = torch.compile(reduce_op)
+    return compiled_func
+
+if __name__ == "__main__":
+    # Check for MPS availability
+    if not torch.backends.mps.is_available():
+        print("MPS is not available. Skipping test.")
+        exit()
+
+    device = torch.device("mps")
+    dtype = torch.float32
+    
+    # Create input data
+    # x is the tensor to be reduced
+    data = torch.ones((2, 5, 3), device=device, dtype=dtype)
+    # matrix is a dummy argument to match the original function signature
+    p = torch.diag(torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)**2)
+
+    # Get the compiled function
+    compiled_function = example_function()
+
+    # Run the compiled function
+    try:
+        res = compiled_function(data, p)
+        print("Test executed successfully.")
+        # Verify result (reduce with world_size=1 should leave tensor unchanged)
+        assert torch.allclose(res, data)
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+```

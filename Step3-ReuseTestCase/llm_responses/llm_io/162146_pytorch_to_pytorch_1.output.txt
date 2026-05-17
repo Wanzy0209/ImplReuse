@@ -1,0 +1,46 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use 'gloo' backend for CPU compatibility
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_reduce(rank, world_size):
+    setup(rank, world_size)
+
+    # Create a tensor specific to the rank
+    # Rank 0: [1.0, 2.0], Rank 1: [3.0, 4.0]
+    x = torch.tensor([float(rank * 2 + 1), float(rank * 2 + 2)], dtype=torch.float32)
+
+    # Apply an in-place operation, similar to the context of the original bug report
+    x.sin_()
+
+    # Perform distributed reduce (Sum) to rank 0
+    # This operation modifies the tensor in-place at the destination
+    dist.reduce(x, dst=0, op=dist.ReduceOp.SUM)
+
+    if rank == 0:
+        # Verify the result
+        # Expected: sin(1) + sin(3), sin(2) + sin(4)
+        expected = torch.tensor([
+            torch.sin(torch.tensor(1.0)) + torch.sin(torch.tensor(3.0)),
+            torch.sin(torch.tensor(2.0)) + torch.sin(torch.tensor(4.0))
+        ])
+        torch.testing.assert_close(x, expected)
+        print("Test passed successfully.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_reduce, args=(world_size,), nprocs=world_size, join=True)
+```

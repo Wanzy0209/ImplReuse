@@ -1,0 +1,47 @@
+```python
+import torch
+import sys
+
+# Reproduce the configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0):
+    # The original bug involved 'divmod(SymInt, int)'.
+    # torch.arange calculates the number of elements based on start, stop, and step.
+    # When 'stop' is a SymInt (derived from a dynamic tensor shape) and 'step' is a Python int,
+    # the internal arithmetic (e.g., (stop - start) / step) can trigger the same type error
+    # if SymInt is not handled correctly in the implementation or lowering.
+    # Here, arg0.size(0) becomes a SymInt under dynamic=True compilation.
+    return torch.arange(arg0.size(0))
+
+# Create a tensor on CUDA as per the original issue
+# Using a simple size, but dynamic=True implies the graph should handle symbolic sizes
+arg0 = torch.randn([10], dtype=torch.float32, device='cuda')
+
+if __name__ == '__main__':
+    # Test Eager mode
+    out_eager = foo(arg0)
+    print('Eager Success! ✅')
+
+    # Test Compiled mode
+    # fullgraph=True and dynamic=True are used to trigger the SymInt path
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    
+    try:
+        out_compiled = compiled_foo(arg0)
+        print('Compile Success! ✅')
+
+        # Verify outputs match
+        if not torch.equal(out_eager, out_compiled):
+            print('❌ Outputs differ!')
+            print('Eager:', out_eager)
+            print('Compiled:', out_compiled)
+            sys.exit(1)
+    except Exception as e:
+        print(f'❌ Compile Failed: {e}')
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+```

@@ -1,0 +1,116 @@
+Issue ID: 164685
+Title: [Fuzzer][Eager/Compile Divergence] KeyError: u0
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(19989)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = -6 # dtype=int64
+    var_node_3 = arg_0 # dtype=int32
+    var_node_1 = var_node_2 * var_node_3 # dtype=int32
+    var_node_5 = torch.full((), 1, dtype=torch.int64) # size=(), stride=(), dtype=int64, device=cuda
+    var_node_4 = var_node_5.item() # dtype=int64
+    var_node_0 = var_node_1 / var_node_4 # dtype=int64
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.tensor(torch.randn(()), dtype=torch.int32).item()
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+```
+
+```
+   ✅ eager success                                                                                                                                                                                                                                                                                
+   /tmp/torchfuzz/fuzz_9080a984.py:23: UserWarning
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.name_scope
+Similarity score: 0.9931139349937439
+
+Similar API information:
+# Extracted call chain for tf.name_scope
+
+# --- tensorflow.python.framework.ops.name_scope ---
+def name_scope(
+    name, default_name=None, values=None, skip_on_eager=True,
+) -> ContextManager[Optional[str]]:
+  """Internal-only entry point for `name_scope*`.
+
+  Internal ops do not use the public API and instead rely on
+  `ops.name_scope` regardless of the execution mode. This function
+  dispatches to the correct `name_scope*` implementation based on
+  the arguments provided and the current mode. Specifically,
+
+  * if `values` contains a graph tensor `Graph.name_scope` is used;
+  * `name_scope_v1` is used in graph mode;
+  * `name_scope_v2` -- in eager mode.
+
+  Args:
+    name: The name argument that is passed to the op function.
+    default_name: The default name to use if the `name` argument is `None`.
+    values: The list of `Tensor` arguments that are passed to the op function.
+    skip_on_eager: Indicates to return NullContextmanager if executing eagerly.
+      By default this is True since naming tensors and operations in eager mode
+      have little use and cause unnecessary performance overhead. However, it is
+      important to preserve variable names since they are often use
+...
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(19989)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = -6 # dtype=int64
+    var_node_3 = arg_0 # dtype=int32
+    var_node_1 = var_node_2 * var_node_3 # dtype=int32
+    var_node_5 = torch.full((), 1, dtype=torch.int64) # size=(), stride=(), dtype=int64, device=cuda
+    var_node_4 = var_node_5.item() # dtype=int64
+    var_node_0 = var_node_1 / var_node_4 # dtype=int64
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.tensor(torch.randn(()), dtype=torch.int32).item()
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+The API tf.name_scope is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,70 @@
+```python
+import torch
+from torch import nn
+
+class Foo(nn.Module):
+    """
+    Module wrapping torch.nn.CosineSimilarity to test behavior with torch.compile.
+    Structure mirrors the original searchsorted bug report.
+    """
+    def __init__(
+        self,
+        reference: torch.Tensor,
+    ) -> None:
+        super().__init__()
+        # Store reference tensor as a parameter, similar to the original bug's quantiles
+        self.ref = nn.Parameter(reference, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Use CosineSimilarity instead of searchsorted
+        cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+        return cos(x, self.ref)
+
+def test_device(device, x, reference):
+    x = x.to(device)
+    reference = reference.to(device)
+    
+    foo = Foo(reference).to(device)
+    # Compile the model with fullgraph=True, mirroring the original bug's setup
+    foo_compiled = torch.compile(Foo(reference).to(device), fullgraph=True)
+
+    # warm up
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    # proper inference
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    diff = torch.max(torch.abs(y_original - y_compiled)).item()
+    print(f'device: {device}, diff: {diff}')
+    print('original', y_original[:5])
+    print('compiled', y_compiled[:5])
+    
+    # Assert that the compiled version produces the same result as the original
+    assert torch.allclose(y_original, y_compiled, atol=1e-5), \
+        f"Discrepancy between eager and compiled modes on {device}"
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    
+    torch.manual_seed(42)
+    # Generate random inputs
+    x = torch.randn(batch_size, feature_dim, dtype=torch.float32)
+    reference = torch.randn(batch_size, feature_dim, dtype=torch.float32)
+    
+    # Test on CPU
+    test_device('cpu', x, reference)
+    
+    # Test on CUDA if available
+    if torch.cuda.is_available():
+        test_device('cuda', x, reference)
+    else:
+        print("CUDA not available, skipping GPU test")
+
+if __name__ == "__main__":
+    main()
+```

@@ -1,0 +1,70 @@
+```python
+import torch
+from torch.distributions import constraints
+
+# This test case is generated based on the structural similarity between 
+# the FSDP TestModule and the _IndependentConstraint API.
+# It adapts the logic of wrapping a module and running a forward pass
+# to wrapping a constraint and running a check.
+
+class TestConstraint(constraints.Constraint):
+    """
+    Mimics the structure of TestModule from the original bug report.
+    Instead of a forward pass, it implements a check method.
+    """
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.d_model = d_model
+
+    def check(self, value: torch.Tensor) -> torch.Tensor:
+        # Simple logic to mimic a module processing a tensor
+        # Checks if the last dimension matches d_model
+        if value.dim() == 0:
+            return torch.tensor(False)
+        
+        # Check shape compatibility similar to how Linear/RMSNorm expect specific shapes
+        valid_dim = value.shape[-1] == self.d_model
+        
+        # Broadcast the result to the batch dimensions
+        if value.dim() > 1:
+            return valid_dim.expand(value.shape[:-1])
+        return torch.tensor(valid_dim)
+
+def test_independent_constraint():
+    # Setup parameters similar to the original bug report
+    d_model = 128
+    
+    # Instantiate the custom constraint (similar to TestModule)
+    base_constraint = TestConstraint(d_model)
+    
+    # Wrap the constraint using 'independent' (similar to fully_shard)
+    # This aggregates over the reinterpreted_batch_ndims, similar to how 
+    # FSDP might aggregate or shard parameters.
+    reinterpreted_batch_ndims = 1
+    independent_constraint = constraints.independent(
+        base_constraint, 
+        reinterpreted_batch_ndims=reinterpreted_batch_ndims
+    )
+    
+    # Create input tensor (similar to the forward pass input)
+    x = torch.randn(16, d_model)
+    
+    # Perform the check (similar to forward/backward pass execution)
+    # The original bug involved a KeyError during backward. Here we verify
+    # that the check method handles the wrapping logic correctly.
+    result = independent_constraint.check(x)
+    
+    # Assertions
+    # The result should be aggregated over the last dimension (d_model)
+    # resulting in a shape of (16,)
+    assert result.shape == torch.Size([16]), f"Expected shape (16,), got {result.shape}"
+    assert result.all().item(), "Expected all checks to pass for correct dimensions"
+    
+    # Test with incorrect dimensions to ensure robustness
+    x_wrong = torch.randn(16, d_model + 1)
+    result_wrong = independent_constraint.check(x_wrong)
+    assert not result_wrong.all().item(), "Expected checks to fail for incorrect dimensions"
+
+if __name__ == "__main__":
+    test_independent_constraint()
+```

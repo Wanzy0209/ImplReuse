@@ -1,0 +1,71 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+# Use the internal API as specified in the bug report
+from torch.distributed.device_mesh import init_device_mesh, _mesh_resources
+
+def test_get_root_mesh_state_isolation(rank, world_size):
+    """
+    Test case to verify that get_root_mesh returns the correct parent mesh
+    even after multiple meshes have been initialized.
+    
+    This reproduces the bug where creating a second mesh (mesh2) causes
+    get_root_mesh to return mesh2 when queried with a sub-mesh of mesh1.
+    """
+    # Initialize process group using 'gloo' for CPU compatibility (replaces 'nccl'/'cuda' for portability)
+    dist.init_process_group(
+        backend="gloo",
+        init_method=f"tcp://127.0.0.1:{29500}",
+        world_size=world_size,
+        rank=rank
+    )
+
+    try:
+        # 1. Create the first global mesh (mesh1)
+        # Using 'cpu' instead of 'cuda' to ensure the test runs without GPU requirements
+        mesh1 = init_device_mesh(
+            "cpu", (1, 4, 2), mesh_dim_names=("a", "b", "c")
+        )
+        
+        # Get a sub-mesh of mesh1
+        mesh1_c = mesh1["c"]
+        
+        # Verify initial state: root of mesh1_c should be mesh1
+        root1_initial = _mesh_resources.get_root_mesh(mesh1_c)
+        assert root1_initial is mesh1, \
+            f"[Rank {rank}] Initial check failed: Expected root of mesh1_c to be mesh1, got {root1_initial.shape}"
+
+        # 2. Create a second global mesh (mesh2)
+        mesh2 = init_device_mesh(
+            "cpu", (2, 2, 2), mesh_dim_names=("a", "b", "c")
+        )
+        
+        # Get a sub-mesh of mesh2
+        mesh2_c = mesh2["c"]
+        
+        # Verify state for mesh2: root of mesh2_c should be mesh2
+        root2 = _mesh_resources.get_root_mesh(mesh2_c)
+        assert root2 is mesh2, \
+            f"[Rank {rank}] Check failed: Expected root of mesh2_c to be mesh2, got {root2.shape}"
+
+        # 3. THE BUG CHECK: Verify that root of mesh1_c is STILL mesh1
+        # Bug report indicates this returns mesh2 instead
+        root1_after = _mesh_resources.get_root_mesh(mesh1_c)
+        
+        assert root1_after is mesh1, \
+            f"[Rank {rank}] BUG REPRODUCED: Expected root of mesh1_c to remain mesh1, but got {root1_after.shape} (likely mesh2)."
+
+        if rank == 0:
+            print("Test passed: get_root_mesh correctly identifies parent meshes after multiple initializations.")
+
+    finally:
+        dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 8
+    # Use spawn to simulate torchrun behavior in a single script
+    mp.spawn(test_get_root_mesh_state_isolation, args=(world_size,), nprocs=world_size, join=True)
+```

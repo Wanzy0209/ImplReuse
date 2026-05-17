@@ -1,0 +1,46 @@
+```python
+import torch
+
+
+def repro_with_swapaxes():
+    """
+    Reproduces the compile problem using torch.swapaxes instead of .mH.
+    The .mH operation is semantically equivalent to conjugating the tensor
+    and then swapping the last two axes.
+    """
+    n = 8
+
+    dtype = torch.complex64
+
+    A = torch.randn(4, n, n, dtype=dtype, requires_grad=True)
+    A = A.clone(memory_format=torch.contiguous_format)
+
+    I0 = torch.eye(n, dtype=A.dtype, device=A.device)
+    I = I0.unsqueeze(0).expand(A.shape[0], n, n).contiguous()
+
+    # Original code: A = I + 0.5 * (A @ A.mH)
+    # Adapted code: Replace .mH with .conj().swapaxes(-2, -1)
+    # to leverage the similar API torch.swapaxes.
+    A_H = A.conj().swapaxes(-2, -1)
+
+    A = I + 0.5 * (A @ A_H)
+
+    R = torch.linalg.cholesky(A, upper=True)
+    loss = R.abs().sum()
+    loss.backward()
+    
+    # Assertion to ensure the graph executed correctly
+    assert R.grad_fn is not None
+
+
+if __name__ == '__main__':
+    # Compile with the backend that triggered the original bug
+    compiled_repro = torch.compile(repro_with_swapaxes, backend="inductor")
+    
+    try:
+        compiled_repro()
+        print("Test passed successfully.")
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        raise
+```

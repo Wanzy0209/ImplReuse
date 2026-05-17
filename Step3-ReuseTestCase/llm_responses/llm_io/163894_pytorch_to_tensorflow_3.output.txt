@@ -1,0 +1,74 @@
+```python
+import tensorflow as tf
+import json
+
+# Note: TensorFlow does not have direct equivalents for torch._dynamo.config,
+# but we will test the equivalent behavior: Eager execution vs Graph (tf.function) execution.
+
+tf.random.set_seed(9)
+
+def fuzzed_program(keras_obj):
+    """
+    Adapted from the PyTorch fuzzed_program.
+    Original logic: Perform arithmetic -> torch.nonzero -> arithmetic.
+    Adapted logic: Since serialize_keras_object returns a dict (not a tensor),
+    we cannot perform tensor arithmetic on the result. We focus on the 
+    serialization operation itself and its behavior in different modes.
+    """
+    # Original API: torch.nonzero(var_node_9)
+    # Similar API: tf.keras.legacy.saving.serialize_keras_object(keras_obj)
+    serialized_obj = tf.keras.legacy.saving.serialize_keras_object(keras_obj)
+    
+    return serialized_obj
+
+# Create a Keras object to act as the input (replacing arg_0)
+# We use a Dense layer to provide a structured object for serialization.
+# This mimics the "fuzzed" input creation in the original test.
+arg_0 = tf.keras.layers.Dense(units=2, activation='relu', name='fuzzed_layer')
+
+# 1. Test Eager Execution
+print("Testing Eager mode...")
+try:
+    result_eager = fuzzed_program(arg_0)
+    print('✅ eager success')
+    print(f'Eager result type: {type(result_eager)}')
+except Exception as e:
+    print(f"❌ Eager mode failed: {e}")
+    result_eager = None
+
+# 2. Test Compiled Execution (tf.function)
+# This is the TensorFlow equivalent to torch.compile.
+print("\nTesting Compiled mode (tf.function)...")
+try:
+    # We use tf.function to compile the logic
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(arg_0)
+    print('✅ compile success')
+    print(f'Compiled result type: {type(result_compiled)}')
+except Exception as e:
+    print(f"❌ Compiled mode failed: {e}")
+    result_compiled = None
+
+# 3. Compare Results
+# The original bug was about divergence between eager and compiled modes.
+# We check if the serialization output is consistent.
+if result_eager is not None and result_compiled is not None:
+    print("\nComparing results...")
+    if result_eager == result_compiled:
+        print("✅ Results match: Eager and Compiled modes produced identical serialization.")
+    else:
+        print("❌ Divergence detected: Eager and Compiled modes produced different results.")
+        print(f"Eager: {result_eager}")
+        print(f"Compiled: {result_compiled}")
+        
+        # Attempt to print specific differences if they are dicts
+        if isinstance(result_eager, dict) and isinstance(result_compiled, dict):
+            eager_keys = set(result_eager.keys())
+            compiled_keys = set(result_compiled.keys())
+            if eager_keys != compiled_keys:
+                print(f"Key mismatch: Eager {eager_keys} vs Compiled {compiled_keys}")
+            else:
+                for key in eager_keys:
+                    if result_eager[key] != result_compiled[key]:
+                        print(f"Value mismatch for key '{key}': {result_eager[key]} vs {result_compiled[key]}")
+```

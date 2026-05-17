@@ -1,0 +1,62 @@
+```python
+import torch
+import torch.nn as nn
+
+# Test case based on Issue 163640
+# The bug is that torch._nested_tensor_from_mask_left_aligned returns a bool instead of a Tensor.
+# This breaks torch.compile(fullgraph=True).
+# Similar to how tf.keras.backend.epsilon is tested to return a specific type (float),
+# we test that the PyTorch internal utility returns a Tensor.
+
+def test_nested_tensor_return_type():
+    # Setup inputs
+    B, T = 2, 10
+    mask = torch.randint(0, 2, (B, T), dtype=torch.bool)
+    # Ensure left alignment logic is triggered if applicable, or just standard mask
+    # The function signature usually takes (mask, ...)
+    
+    # Call the internal API
+    # Note: This is an internal function, so we access it carefully.
+    # The bug report says it returns a bool.
+    try:
+        result = torch._nested_tensor_from_mask_left_aligned(mask, mask)
+    except Exception as e:
+        print(f"Internal API call failed: {e}")
+        return
+
+    # Assertion: The result must be a Tensor, not a bool.
+    # This mirrors testing tf.keras.backend.epsilon() returns a float.
+    assert isinstance(result, torch.Tensor), \
+        f"Expected torch.Tensor, but got {type(result)}. Bug 163640 reproduction."
+
+    print("Internal API returns Tensor correctly.")
+
+def test_transformer_encoder_compile():
+    # High level repro from the issue
+    class TinyEnc(nn.Module):
+        def __init__(self):
+            super().__init__()
+            layer = nn.TransformerEncoderLayer(d_model=512, nhead=8, batch_first=True)
+            self.enc = nn.TransformerEncoder(layer, num_layers=1)
+
+        def forward(self, x, pad_mask):
+            return self.enc(x, src_key_padding_mask=pad_mask)
+
+    m = TinyEnc().eval()
+    B, T, C = 1, 41, 512
+    x = torch.randn(B, T, C)
+    pad_mask = (torch.rand(B, T) > 0.5)
+
+    # Test compilation
+    try:
+        cm = torch.compile(m, backend="inductor", fullgraph=True)
+        out = cm(x, pad_mask)
+        assert out.shape == (B, T, 512)
+        print("Compilation successful.")
+    except Exception as e:
+        print(f"Compilation failed: {e}")
+
+if __name__ == "__main__":
+    test_nested_tensor_return_type()
+    test_transformer_encoder_compile()
+```

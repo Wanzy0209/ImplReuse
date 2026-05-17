@@ -1,0 +1,142 @@
+Issue ID: 164663
+Title: FSDPMemTracker fails with KeyError for RMSNorm during backward
+Bug Description:
+### 🐛 Describe the bug
+
+When sharding a model that uses nn.RMSNorm, FSDPMemTracker raises KeyError during pre-backward. The failure happens when RMSNorm is wrapped with another Linear module in a single fully_sharded().
+
+Repro
+```
+import os
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.tensor.experimental import implicit_replication
+from torch.distributed._tools.fsdp2_mem_tracker import FSDPMemTracker
+
+
+class TestModule(nn.Module):
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.norm = nn.RMSNorm(d_model)
+        self.output = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = self.output(x)
+        return x
+
+
+def main():
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+
+    dist.init_process_group(backend="nccl")
+
+    d_model = 128
+
+    model = TestModule(d_model)
+    model = model.to('cuda:0')
+    mesh = init_device_mesh("cuda", (dist.get_world_size(),))
+
+Original API Under Test: FSDPMemTracker
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.data.experimental.copy_to_device
+Similarity score: 0.9889410138130188
+
+Similar API information:
+# Extracted call chain for tf.data.experimental.copy_to_device
+
+# --- tensorflow.python.data.experimental.ops.prefetching_ops.copy_to_device ---
+def copy_to_device(target_device, source_device="/cpu:0"):
+  """A transformation that copies dataset elements to the given `target_device`.
+
+  Args:
+    target_device: The name of a device to which elements will be copied.
+    source_device: The original device on which `input_dataset` will be placed.
+
+  Returns:
+    A `Dataset` transformation function, which can be passed to
+    `tf.data.Dataset.apply`.
+  """
+
+  def _apply_fn(dataset):
+    return _CopyToDeviceDataset(
+        dataset, target_device=target_device, source_device=source_device)
+
+  return _apply_fn
+
+# --- tensorflow.python.data.experimental.ops.prefetching_ops._CopyToDeviceDataset ---
+class _CopyToDeviceDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  """A `Dataset` that copies elements to another device."""
+
+  def __init__(self, input_dataset, target_device, source_device="/cpu:0"):
+    """Constructs a _CopyToDeviceDataset.
+
+    Args:
+      input_dataset: `Dataset` to be copied
+
+Original Test Case:
+import os
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.tensor.experimental import implicit_replication
+from torch.distributed._tools.fsdp2_mem_tracker import FSDPMemTracker
+
+
+class TestModule(nn.Module):
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.norm = nn.RMSNorm(d_model)
+        self.output = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = self.output(x)
+        return x
+
+
+def main():
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+
+    dist.init_process_group(backend="nccl")
+
+    d_model = 128
+
+    model = TestModule(d_model)
+    model = model.to('cuda:0')
+    mesh = init_device_mesh("cuda", (dist.get_world_size(),))
+
+    fully_shard([model.norm, model.output], mesh=mesh)   # shards the RMSNorm's parameters/state across ranks
+    fully_shard(model, mesh=mesh)  # shards the Linear's parameters/state across ranks
+    print(model)
+
+    tracker = FSDPMemTracker(model)
+
+    with tracker, implicit_replication():
+        x = torch.randn(16, d_model, device='cuda:0')
+        y = model(x)
+        loss = y.sum()
+        loss.backward()
+
+
+if __name__ == "__main__":
+    main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

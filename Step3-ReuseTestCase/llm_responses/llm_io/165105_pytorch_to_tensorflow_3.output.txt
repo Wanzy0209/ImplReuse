@@ -1,0 +1,79 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_resize_volumes_divergence():
+    """
+    Adapted test case for tf.keras.backend.resize_volumes based on the 
+    PyTorch Matmul decomposition Divergence bug.
+    
+    The original bug highlights an Eager/Compile Divergence with float16 tensors.
+    This test verifies that tf.keras.backend.resize_volumes produces consistent
+    results between Eager execution and Graph (tf.function) execution using float16.
+    """
+    
+    # Use float16 as in the original bug report
+    dtype = tf.float16
+    
+    # Construct a 5D tensor required by resize_volumes.
+    # We loosely adapt the dimensions found in the fuzzer output (e.g., 14, 6, 13).
+    # Shape: (Batch, Depth, Height, Width, Channels)
+    # Using (1, 14, 6, 13, 1) to incorporate the fuzzer's dimensionality.
+    input_shape = (1, 14, 6, 13, 1)
+    
+    # Use a specific float value from the original fuzzer (var_node_4)
+    fill_value = 1.2255859375
+    
+    # Create the input tensor
+    x = tf.fill(input_shape, tf.cast(fill_value, dtype))
+    
+    # Define resize factors
+    depth_factor = 2
+    height_factor = 2
+    width_factor = 2
+    data_format = 'channels_last'
+    
+    # 1. Eager Execution
+    result_eager = tf.keras.backend.resize_volumes(
+        x, depth_factor, height_factor, width_factor, data_format
+    )
+    
+    # 2. Compiled Execution (Graph Mode via tf.function)
+    # This mimics the "Compile" part of the "Eager/Compile Divergence" issue.
+    @tf.function
+    def compiled_resize(x):
+        return tf.keras.backend.resize_volumes(
+            x, depth_factor, height_factor, width_factor, data_format
+        )
+    
+    result_compiled = compiled_resize(x)
+    
+    # 3. Verify Consistency
+    # We check for divergence. For float16, we allow for very small numerical differences,
+    # but the shapes and values should generally match.
+    try:
+        # assert_equal is strict; assert_near allows for floating point epsilon.
+        # Given the bug is about divergence, strict check is often preferred to catch logic errors,
+        # but float16 accumulation can vary. We use assert_near with a small tolerance.
+        tf.debugging.assert_near(result_eager, result_compiled, message="Eager/Compile Divergence detected!")
+        print("Test Passed: No divergence between Eager and Compiled modes.")
+        return True
+    except tf.errors.InvalidArgumentError as e:
+        print(f"Test Failed: Divergence detected.\n{e}")
+        return False
+
+if __name__ == "__main__":
+    # Check for GPU availability as float16 behavior is often GPU-specific
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            print(f"Running on GPU: {gpus[0].name}")
+        except RuntimeError as e:
+            print(e)
+    else:
+        print("No GPU found. Running on CPU.")
+
+    test_resize_volumes_divergence()
+```

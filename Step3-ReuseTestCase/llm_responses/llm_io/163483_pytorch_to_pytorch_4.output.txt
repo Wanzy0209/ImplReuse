@@ -1,0 +1,51 @@
+```python
+import torch
+
+# Adapted test case for torch.baddbmm based on the memory ordering bug report.
+# The original bug highlights that all_gather changes the memory ordering (channels_last) of the output.
+# Here we test if baddbmm preserves the memory ordering of the input tensor when it is effectively passed through.
+
+if torch.cuda.is_available():
+    torch.cuda.set_device(0)
+
+# Create a 4D tensor with channels_last memory format, similar to the original bug report.
+# We then reshape it to 3D because baddbmm requires 3D tensors (Batch, M, N).
+x_4d = torch.arange(0, 16, dtype=torch.float32).reshape(2, 2, 2, 2)
+if torch.cuda.is_available():
+    x_4d = x_4d.cuda()
+
+x_4d = x_4d.to(memory_format=torch.channels_last)
+x = x_4d.reshape(2, 2, 4) # Shape (B, M, P)
+
+# Create batch1 and batch2 for baddbmm.
+# batch1: (B, M, N), batch2: (B, N, P)
+# We set batch2 to zeros so that the matrix multiplication result is zero.
+# This allows us to isolate the behavior on the 'input' tensor (x).
+batch1 = torch.ones(2, 2, 2, dtype=torch.float32)
+batch2 = torch.zeros(2, 2, 4, dtype=torch.float32)
+
+if torch.cuda.is_available():
+    batch1 = batch1.cuda()
+    batch2 = batch2.cuda()
+
+# Call baddbmm with alpha=0 and beta=1.
+# Mathematically: output = 1 * input + 0 * (batch1 @ batch2) = input
+# This mimics the "input vs output" comparison in the original bug.
+output = torch.baddbmm(x, batch1, batch2, beta=1, alpha=0)
+
+# Verify results
+print(f'Input is_contiguous: {x.is_contiguous()}')
+print(f'Output is_contiguous: {output.is_contiguous()}')
+print(f'Input stride: {x.stride()}')
+print(f'Output stride: {output.stride()}')
+print(f'Values equal: {torch.equal(x, output)}')
+
+# The original bug reported that the memory ordering changed, causing misalignment.
+# We check if the strides (memory ordering) are preserved in the output.
+if x.stride() != output.stride():
+    print("WARNING: Memory ordering (strides) changed between input and output!")
+else:
+    print("Memory ordering preserved.")
+
+assert torch.equal(x, output), "Values should be equal when alpha=0"
+```

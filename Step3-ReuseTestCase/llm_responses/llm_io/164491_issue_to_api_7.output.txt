@@ -1,0 +1,91 @@
+```python
+import torch
+import torch.utils.cpp_extension as cpp_ext
+import unittest
+import time
+
+class TestMatmulLayoutAndExtension(unittest.TestCase):
+    """
+    Test case addressing Issue #164491: _scaled_mm and _int_mm slow with row-major rhs matrix.
+    
+    This test reproduces the logic of the bug report where matrix multiplication 
+    performance or correctness varies based on the memory layout (row-major vs column-major) 
+    of the right-hand side (rhs) matrix. It also demonstrates the usage of 
+    torch.utils.cpp_extension.CUDAExtension as a candidate for reusing the pattern 
+    of integrating custom kernels (like the Triton kernel provided in the issue) 
+    to handle specific layout optimizations.
+    """
+
+    def setUp(self):
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available, required for layout/performance testing")
+
+    def test_row_major_rhs_matmul(self):
+        """
+        Tests torch.matmul with a row-major RHS matrix.
+        The issue reports that internal ops (_scaled_mm, _int_mm) are slow or error 
+        with row-major RHS. We verify the behavior with the standard torch.matmul API.
+        """
+        M, K, N = 1024, 1024, 1024
+        
+        # Create LHS (Row-major)
+        lhs = torch.randn(M, K, device=self.device)
+        
+        # Create RHS in Row-major (Standard C-contiguous)
+        rhs_row_major = torch.randn(K, N, device=self.device)
+        
+        # Create RHS in Column-major (F-contiguous, often preferred for GPU GEMM)
+        rhs_col_major = rhs_row_major.T.contiguous()
+
+        # Perform MatMul with Row-major RHS
+        start = time.time()
+        res_row = torch.matmul(lhs, rhs_row_major)
+        torch.cuda.synchronize()
+        time_row = time.time() - start
+
+        # Perform MatMul with Column-major RHS (Transposed back for logic)
+        start = time.time()
+        res_col = torch.matmul(lhs, rhs_col_major.T)
+        torch.cuda.synchronize()
+        time_col = time.time() - start
+
+        # Verify correctness
+        self.assertTrue(torch.allclose(res_row, res_col, atol=1e-3))
+        
+        # Note: In the context of the bug, we might expect time_row >> time_col 
+        # for the specific internal ops mentioned. For standard matmul, this 
+        # serves as a regression test to ensure layout handling remains robust.
+        print(f"Row-major RHS time: {time_row:.6f}s")
+        print(f"Column-major RHS time: {time_col:.6f}s")
+
+    def test_custom_cuda_extension_pattern(self):
+        """
+        Leverages torch.utils.cpp_extension.CUDAExtension to define a custom kernel setup.
+        This mirrors the user's workaround of providing a Triton kernel to handle 
+        row-major matrices efficiently, demonstrating how one would integrate a 
+        custom solution via the C++ extension API.
+        """
+        # Define the name and sources for a hypothetical custom kernel
+        # that optimizes for row-major RHS, similar to the user's attached Triton kernel.
+        extension_name = "row_major_optimized_mm"
+        sources = ["kernels/row_major_mm.cu"] # Placeholder for the custom kernel source
+
+        # Define the CUDAExtension
+        custom_ext = cpp_ext.CUDAExtension(
+            name=extension_name,
+            sources=sources,
+            extra_compile_args=["-O3", "--use_fast_math"],
+            extra_cxx_cflags=["-O3"]
+        )
+
+        # Verify the extension object is created correctly
+        self.assertEqual(custom_ext.name, extension_name)
+        self.assertIn("kernels/row_major_mm.cu", custom_ext.sources)
+        
+        # In a full implementation, this extension would be built and loaded
+        # using cpp_ext.load to replace the slow internal ops.
+
+if __name__ == '__main__':
+    unittest.main()
+```

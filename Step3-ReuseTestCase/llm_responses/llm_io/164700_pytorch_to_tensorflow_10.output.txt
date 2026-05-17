@@ -1,0 +1,91 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_tensorflow_equivalent():
+    """
+    Adapts the PyTorch torch.compile bug reproduction logic to TensorFlow.
+    
+    The original bug involves specific interleaving of unsqueeze (expand_dims),
+    concatenation, and broadcasting with a generated range.
+    
+    While the prompt identifies tf.compat.v1.train.range_input_producer as similar,
+    that API is a queue-based data pipeline operator and not a direct functional 
+    equivalent to the tensor manipulation logic or torch.compile. 
+    Here we use tf.range (functional equivalent of torch.arange) and tf.function 
+    (equivalent of torch.compile) to reproduce the logic and verify behavior.
+    """
+    
+    # Enable verbose logging to mimic TORCH_LOGS="output_code" if needed
+    # tf.debugging.set_log_device_placement(True)
+
+    # Define inputs
+    # Note: PyTorch uses int64 for x and int32 for y. We match dtypes.
+    x = tf.zeros([1, 32], dtype=tf.int64)
+    y = tf.zeros([1], dtype=tf.int32)
+
+    def f_tf(x, y):
+        # PyTorch: y2 = torch.cat([x[:, 1:], y[:, None] + 32 * 2048], dim=1)
+        # TensorFlow equivalent:
+        y_part = tf.expand_dims(y, 1) + 32 * 2048
+        y2 = tf.concat([x[:, 1:], y_part], axis=1)
+
+        # PyTorch: x2 = x[:, 1:, None]
+        # TensorFlow equivalent:
+        x2 = tf.expand_dims(x[:, 1:], -1)
+
+        # PyTorch: y3 = y2[:, -1:, None]
+        # TensorFlow equivalent:
+        y3 = tf.expand_dims(y2[:, -1:], -1)
+
+        # PyTorch: torch.arange(-2048, 0, device=device)[None, None, :]
+        # TensorFlow equivalent:
+        # We use tf.range here. tf.compat.v1.train.range_input_producer is a 
+        # queue-based op not suitable for this direct tensor arithmetic context.
+        range_tensor = tf.range(-2048, 0, dtype=x.dtype)
+        range_tensor = range_tensor[None, None, :]
+
+        # PyTorch: torch.cat([x2, y3], dim=1) + torch.arange(...)
+        # TensorFlow equivalent:
+        concat_result = tf.concat([x2, y3], axis=1)
+        added_result = concat_result + range_tensor
+
+        # PyTorch: .reshape(1, 32 * 2048)
+        # TensorFlow equivalent:
+        return tf.reshape(added_result, [1, 32 * 2048])
+
+    # 1. Test Eager Execution (Equivalent to the "This succeeds" part in PyTorch)
+    print("Testing Eager Execution...")
+    try:
+        result_eager = f_tf(x, y)
+        # Verify shape
+        assert result_eager.shape == (1, 32 * 2048), f"Shape mismatch in eager mode: {result_eager.shape}"
+        # Verify values (should be all -2048 to -1 added to 0, so -2048 to -1)
+        # Since x and y are zeros, x2 and y3 are zeros.
+        # result is 0 + range(-2048, 0).
+        expected_val = tf.range(-2048, 0, dtype=tf.int64)
+        expected_val = tf.reshape(expected_val, [1, 32 * 2048])
+        
+        # Check if values match expected
+        # Note: tf.debugging.assert_equal raises error if fail
+        tf.debugging.assert_equal(result_eager, expected_val)
+        print("Eager execution succeeded and values verified.")
+    except Exception as e:
+        print(f"Eager execution failed: {e}")
+
+    # 2. Test Compiled Execution (Equivalent to torch.compile)
+    # In TensorFlow, tf.function compiles the graph (similar to torch.compile)
+    print("\nTesting Compiled Execution (tf.function)...")
+    try:
+        f_compiled = tf.function(f_tf)
+        result_compiled = f_compiled(x, y)
+        
+        assert result_compiled.shape == (1, 32 * 2048), f"Shape mismatch in compiled mode: {result_compiled.shape}"
+        tf.debugging.assert_equal(result_compiled, expected_val)
+        print("Compiled execution succeeded and values verified.")
+    except Exception as e:
+        print(f"Compiled execution failed: {e}")
+
+if __name__ == "__main__":
+    test_tensorflow_equivalent()
+```

@@ -1,0 +1,66 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Ensure TF1 graph mode is used, as tf.compat.v1.train.add_queue_runner is graph-based
+tf.compat.v1.disable_eager_execution()
+
+# Mimic the logging setup from the original bug report
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
+
+# Define a simple data pipeline using queues to simulate the model pipeline
+# This replaces the FluxPipeline.from_pretrained(...) setup
+queue = tf.compat.v1.RandomShuffleQueue(
+    capacity=10, 
+    min_after_dequeue=1, 
+    dtypes=[tf.float32], 
+    shapes=[()]
+)
+
+# Define an operation to generate data (simulating the inference steps)
+enqueue_op = queue.enqueue(tf.random.normal(shape=()))
+
+# Create a QueueRunner to manage the enqueue threads
+# This replaces the pipe.transformer.compile_repeated_blocks() setup
+qr = tf.compat.v1.train.QueueRunner(queue, [enqueue_op] * 2)
+
+# --- API Under Test ---
+# Add the queue runner to the graph collection
+# This is the equivalent of registering the compiled model
+tf.compat.v1.train.add_queue_runner(qr)
+# -----------------------
+
+# Define the output operation (simulating the image generation)
+data_out = queue.dequeue_many(5)
+
+with tf.compat.v1.Session() as sess:
+    # Initialize variables
+    sess.run(tf.compat.v1.global_variables_initializer())
+    sess.run(tf.compat.v1.local_variables_initializer())
+    
+    # Start the queue runners
+    # This checks if the runner added via add_queue_runner is correctly picked up
+    coord = tf.train.Coordinator()
+    threads = tf.compat.v1.train.start_queue_runners(coord=coord, sess=sess)
+    
+    try:
+        # Run the pipeline
+        # This replaces the pipe(...) call
+        result = sess.run(data_out)
+        
+        # Verify the pipeline executed successfully
+        assert result is not None, "Pipeline output is None"
+        assert result.shape == (5,), f"Expected shape (5,), got {result.shape}"
+        
+        print(f"Pipeline execution successful. Output: {result}")
+        
+    except Exception as e:
+        print(f"Error during pipeline execution: {e}")
+        raise
+    finally:
+        # Stop the threads
+        coord.request_stop()
+        coord.join(threads)
+
+print("Test passed.")
+```

@@ -1,0 +1,93 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Replicate the structure of the PyTorch fuzzed_program
+# The original bug involves eager/compile divergence with torch.nonzero.
+# The similar API is tf.compat.v1.control_flow_v2_enabled, which checks the 
+# control flow state (often related to graph mode/compilation).
+
+def fuzzed_program(arg_0):
+    # var_node_1 = arg_0
+    # PyTorch: size=(1, 2), stride=(2, 1), dtype=int64
+    # TF: shape=(1, 2), dtype=int64
+    var_node_1 = arg_0
+
+    # var_node_5 = torch.full((1, 2), -66, dtype=torch.int32)
+    var_node_5 = tf.fill([1, 2], tf.constant(-66, dtype=tf.int32))
+
+    # var_node_6 = torch.full((1, 2), 77, dtype=torch.int64)
+    var_node_6 = tf.fill([1, 2], tf.constant(77, dtype=tf.int64))
+
+    # var_node_4 = torch.ops.aten.add(var_node_5, var_node_6)
+    # PyTorch result dtype is int32. TF requires matching types or casting.
+    var_node_6_int32 = tf.cast(var_node_6, tf.int32)
+    var_node_4 = tf.add(var_node_5, var_node_6_int32)
+
+    # var_node_7 = torch.full((1, 2), -64, dtype=torch.int32)
+    var_node_7 = tf.fill([1, 2], tf.constant(-64, dtype=tf.int32))
+
+    # var_node_3 = torch.ops.aten.mul(var_node_4, var_node_7)
+    var_node_3 = tf.multiply(var_node_4, var_node_7)
+
+    # var_node_9 = torch.full((3, 4), False, dtype=torch.bool)
+    var_node_9 = tf.fill([3, 4], False)
+
+    # var_node_8 = torch.nonzero(var_node_9)
+    # PyTorch nonzero returns indices of non-zero elements.
+    # TF equivalent is tf.where(condition).
+    # Since var_node_9 is all False, tf.where returns an empty tensor of shape (0, 2).
+    var_node_8 = tf.where(var_node_9)
+
+    # var_node_2 = torch.ops.aten.add(var_node_3, var_node_8)
+    # PyTorch adds (1, 2) and (0, 2) -> broadcasts to (1, 2).
+    # TF requires matching types. var_node_8 is int64 (indices), var_node_3 is int32.
+    var_node_8_int32 = tf.cast(var_node_8, tf.int32)
+    var_node_2 = tf.add(var_node_3, var_node_8_int32)
+
+    # var_node_0 = torch.ops.aten.div(var_node_1, var_node_2)
+    # PyTorch: int64 / int32 -> int64 (floor div) or float?
+    # The bug description says dtype=int64 for var_node_0.
+    # However, standard division usually produces floats. 
+    # We will use true division to match the likely intent of the fuzzer or cast appropriately.
+    # To ensure safety and similarity, we cast to float for division.
+    var_node_2_float = tf.cast(var_node_2, tf.float32)
+    var_node_1_float = tf.cast(var_node_1, tf.float32)
+    var_node_0 = tf.divide(var_node_1_float, var_node_2_float)
+
+    # --- LEVERAGING THE SIMILAR API ---
+    # Check if control flow v2 is enabled.
+    # In eager mode, this depends on global config.
+    # Inside tf.function (compiled mode), this should be True.
+    is_v2_enabled = tf.compat.v1.control_flow_v2_enabled()
+
+    return var_node_0, is_v2_enabled
+
+# Setup inputs
+# arg_0 = torch.randint(0, 3, (1, 2), dtype=torch.int64)
+arg_0 = tf.constant([[1, 2]], dtype=tf.int64)
+
+print("Running Eager Mode...")
+result_eager, v2_eager = fuzzed_program(arg_0)
+print(f"Eager Result: {result_eager.numpy()}")
+print(f"Eager V2 Enabled: {v2_eager}")
+
+# Test compilation with tf.function (analogous to torch.compile)
+print("\nRunning Compiled Mode (tf.function)...")
+compiled_program = tf.function(fuzzed_program)
+result_compiled, v2_compiled = compiled_program(arg_0)
+print(f"Compiled Result: {result_compiled.numpy()}")
+print(f"Compiled V2 Enabled: {v2_compiled}")
+
+# Assertions
+# 1. Check that the similar API behaves correctly in the compiled context.
+#    Inside tf.function, control flow v2 is expected to be enabled.
+assert v2_compiled == True, "control_flow_v2_enabled should be True inside tf.function"
+
+# 2. Check for eager/compile divergence (the core issue type in the bug report).
+#    The results should be numerically close.
+assert np.allclose(result_eager.numpy(), result_compiled.numpy()), \
+    f"Divergence detected: Eager={result_eager.numpy()}, Compiled={result_compiled.numpy()}"
+
+print("\n✅ Test Passed: No divergence and API state is correct.")
+```

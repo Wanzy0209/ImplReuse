@@ -1,0 +1,57 @@
+```python
+import torch
+import torch.nn as nn
+
+def test_syncbatchnorm_mps_contiguity():
+    """
+    Test case derived from Issue 161969 and the similar API torch.nn.SyncBatchNorm.
+    
+    The original issue describes a RuntimeError on MPS regarding contiguity when using
+    torch.compile with linear algebra operations. The similar API (SyncBatchNorm) 
+    explicitly handles non-contiguous inputs by checking is_contiguous() and calling 
+    .contiguous().
+    
+    This test verifies that torch.compile on MPS correctly handles the explicit 
+    contiguity checks found in SyncBatchNorm, ensuring the compiler does not 
+    introduce the assertion failures seen in the original bug report.
+    """
+    if not torch.backends.mps.is_available():
+        print("MPS not available, skipping test.")
+        return
+
+    device = torch.device("mps")
+    
+    # Create a non-contiguous tensor using channels_last memory format.
+    # This mimics the conditions that triggered the original bug.
+    input_tensor = torch.randn(4, 3, 10, 10, device=device).to(memory_format=torch.channels_last)
+
+    # Define a function using the similar API: torch.nn.SyncBatchNorm
+    def func(x):
+        # SyncBatchNorm implementation contains logic:
+        # if not input.is_contiguous(...): input = input.contiguous()
+        m = nn.SyncBatchNorm(x.size(1)).to(device)
+        return m(x)
+
+    # Compile the function, similar to the original bug report
+    compiled_func = torch.compile(func)
+
+    try:
+        # Run the compiled function with non-contiguous input
+        result = compiled_func(input_tensor)
+        
+        # Basic sanity checks
+        assert result.shape == input_tensor.shape
+        assert result.device == device
+        print("Test Passed: Compiled SyncBatchNorm handled non-contiguous input on MPS correctly.")
+        
+    except RuntimeError as e:
+        # Check for the specific internal assertion error from the original issue
+        if "is_contiguous() INTERNAL ASSERT FAILED" in str(e):
+            print(f"Bug Reproduced: {e}")
+        else:
+            # Re-raise other RuntimeErrors
+            raise
+
+if __name__ == "__main__":
+    test_syncbatchnorm_mps_contiguity()
+```

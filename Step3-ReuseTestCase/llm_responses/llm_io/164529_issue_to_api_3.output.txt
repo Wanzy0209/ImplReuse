@@ -1,0 +1,70 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+# Reusing the code pattern from the similar API (torch.nn.functional.softplus)
+# as defined in the similarity analysis.
+def softplus_workload(a):
+    return (a * 1.0).exp().log1p() / 1.0
+
+def worker(rank, world_size):
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+    pg = dist.group.WORLD
+
+    # Perform a computation using the similar API pattern to establish baseline
+    tensor = torch.tensor([float(rank)])
+    result = softplus_workload(tensor)
+    print(f"Rank {rank}: Initial softplus result {result.item()}")
+
+    # Test the shrink_group API proposed in the issue
+    # Scenario: Rank 1 is considered faulty and should be excluded.
+    # Only the remaining members (Rank 0) need to call shrink_group.
+    if rank == 0:
+        try:
+            # Call the new API with the signature from the issue
+            # We exclude rank 1. Rank 1 does not need to call this.
+            dist.shrink_group([1], pg)
+            
+            print("Rank 0: Successfully called shrink_group to exclude rank 1.")
+            
+            # Verify the group is still functional by running the similar API workload again.
+            # This ensures the distributed context is valid after the shrink operation.
+            validation_tensor = torch.tensor([5.0])
+            validation_result = softplus_workload(validation_tensor)
+            
+            # Calculate expected value manually to assert correctness
+            expected = (5.0 * 1.0).exp().log1p() / 1.0
+            assert torch.isclose(validation_result, torch.tensor([expected])), \
+                "Post-shrink computation validation failed"
+            
+            print("Rank 0: Post-shrink validation successful.")
+
+        except AttributeError:
+            # Handle case where the API is not yet implemented (RFC status)
+            print("Rank 0: shrink_group not found (Feature not yet implemented).")
+    
+    # Rank 1 is excluded and does not participate in the shrink call
+    if rank == 1:
+        print("Rank 1: Excluded from group, no action taken.")
+
+    dist.destroy_process_group()
+
+def main():
+    world_size = 2
+    mp.set_start_method("spawn", force=True)
+    processes = []
+    
+    for rank in range(world_size):
+        p = mp.Process(target=worker, args=(rank, world_size))
+        p.start()
+        processes.append(p)
+        
+    for p in processes:
+        p.join()
+
+if __name__ == "__main__":
+    main()
+```

@@ -1,0 +1,79 @@
+Issue ID: 165407
+Title: Specific torch compile memory leak involving flash_attn_varlen_func
+Bug Description:
+### 🐛 Describe the bug
+
+The following code causes a clear memory leak where the # of tensors increases every step. Inductor seems to be holding on to the memory incorrectly, keeping ghosts alive. 
+
+Example repro output:
+```python
+Step  150 | Loss: 2.3023 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2266 (130 w/grad) | AvgSeqLen: 35.8 | Time: 7.0s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  200 | Loss: 2.3037 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2602 (130 w/grad) | AvgSeqLen: 40.2 | Time: 9.0s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  250 | Loss: 2.3055 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3034 (130 w/grad) | AvgSeqLen: 40.6 | Time: 11.6s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  300 | Loss: 2.3029 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3514 (130 w/grad) | AvgSeqLen: 42.9 | Time: 14.4s
+``
+...
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.distributed.reduce
+Similarity score: 0.9944814443588257
+
+Similar API information:
+# Extracted call chain for torch.distributed.reduce
+
+# --- torch._dynamo.polyfills.functools.reduce ---
+def reduce(
+    function: Callable[[_U, _T], _U],
+    iterable: Iterable[_T],
+    initial: _U = _INITIAL_MISSING,  # type: ignore[assignment]
+    /,
+) -> _U:
+    it = iter(iterable)
+
+    value: _U
+    if initial is _INITIAL_MISSING:
+        try:
+            value = next(it)  # type: ignore[assignment]
+        except StopIteration:
+            raise TypeError(
+                "reduce() of empty iterable with no initial value",
+            ) from None
+    else:
+        value = initial
+
+    for element in it:
+        value = function(value, element)
+
+    return value
+
+# --- torch._dynamo.decorators.substitute_in_graph ---
+def substitute_in_graph(
+    original_fn: Callable[_P, _R],
+
+Original Test Case:
+Step  150 | Loss: 2.3023 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2266 (130 w/grad) | AvgSeqLen: 35.8 | Time: 7.0s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  200 | Loss: 2.3037 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2602 (130 w/grad) | AvgSeqLen: 40.2 | Time: 9.0s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  250 | Loss: 2.3055 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3034 (130 w/grad) | AvgSeqLen: 40.6 | Time: 11.6s
+/home/grail/Desktop/architectures/Architecture-Tversky-Most/.venv/lib/python3.13/site-packages/torch/__init__.py:1125: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  return isinstance(obj, torch.Tensor)
+Step  300 | Loss: 2.3029 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 3514 (130 w/grad) | AvgSeqLen: 42.9 | Time: 14.4s
+
+The API torch.distributed.reduce is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

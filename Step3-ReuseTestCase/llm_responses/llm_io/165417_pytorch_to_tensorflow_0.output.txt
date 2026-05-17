@@ -1,0 +1,58 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Note: The provided similar API 'tf.compat.v1.flags' is a utility for defining command-line flags
+# and is not semantically equivalent to the tensor operation 'torch.unique'.
+# To preserve the core bug reproduction logic (testing dynamic shape behavior of unique operations),
+# this test case uses the semantically correct TensorFlow equivalent: 'tf.unique'.
+
+class MyModel(tf.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu = tf.keras.layers.ReLU()
+
+    def forward(self, x):
+        # tf.unique returns (unique_values, inverse_indices)
+        # unique_values are sorted by default in TF, matching sorted=True in PyTorch
+        _x, _i = tf.unique(x)
+        _x = tf.identity(_x)   # Equivalent to clone().detach()
+        return self.relu(_x), _i   # tuple output
+
+def get_input():
+    return tf.random.normal((8,))         # CPU or CUDA
+
+def run_once(model, x, label, use_graph=False):
+    if use_graph:
+        # Equivalent to torch.compile
+        compiled_forward = tf.function(model.forward)
+        y = compiled_forward(x)
+    else:
+        # Eager mode
+        y = model.forward(x)
+
+    print(f"[{label}] ok, types={[type(t).__name__ for t in (y if isinstance(y, (tuple, list)) else [y])]}")
+    return y
+
+def main():
+    print("tf.__version__ =", tf.__version__)
+
+    model = MyModel()
+    x = get_input()
+
+    # Eager run
+    y_eager = run_once(model, x, "Eager")
+
+    # Graph run (compile)
+    # In PyTorch, this specific case fails with "Dynamic shape operator".
+    # In TensorFlow, tf.unique supports dynamic shapes, so we expect this to pass.
+    y_graph = run_once(model, x, "Graph", use_graph=True)
+
+    # Verify consistency
+    assert np.allclose(y_eager[0].numpy(), y_graph[0].numpy())
+    assert np.array_equal(y_eager[1].numpy(), y_graph[1].numpy())
+    print("Test passed: tf.unique handles dynamic shapes correctly in graph mode.")
+
+if __name__ == "__main__":
+    main()
+```

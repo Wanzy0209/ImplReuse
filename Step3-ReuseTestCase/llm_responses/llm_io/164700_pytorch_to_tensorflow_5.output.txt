@@ -1,0 +1,105 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use TF1 graph mode and QueueRunners
+tf.compat.v1.disable_eager_execution()
+
+def test_queue_runner_with_tensor_logic():
+    """
+    Adapts the PyTorch torch.compile bug reproduction logic to TensorFlow,
+    utilizing tf.compat.v1.train.add_queue_runner to manage the input flow.
+    """
+    
+    # 1. Define the Queue for inputs
+    # The original test uses x: (1, 32) int64 and y: (1) int32
+    queue = tf.compat.v1.FIFOQueue(
+        capacity=10,
+        dtypes=[tf.int64, tf.int32],
+        shapes=[[1, 32], [1]],
+        name="input_queue"
+    )
+
+    # 2. Prepare the specific test data from the original bug report
+    # Original: torch.zeros(1, 32, dtype=torch.int64)
+    x_data = np.zeros((1, 32), dtype=np.int64)
+    # Original: torch.zeros(1, dtype=torch.int32)
+    y_data = np.zeros((1,), dtype=np.int32)
+
+    # Enqueue operation
+    enqueue_op = queue.enqueue([x_data, y_data])
+
+    # 3. Create and add the QueueRunner (The API under test)
+    # This replaces the direct execution flow with a queue-based managed flow
+    qr = tf.compat.v1.train.QueueRunner(queue, [enqueue_op])
+    tf.compat.v1.train.add_queue_runner(qr)
+
+    # 4. Dequeue inputs to feed into the logic
+    x, y = queue.dequeue()
+
+    # 5. Reproduce the core logic from the PyTorch bug report
+    # Original: y2 = torch.cat([x[:, 1:], y[:, None] + 32 * 2048], dim=1)
+    slice_x = x[:, 1:]  # Shape (1, 31)
+    unsqueeze_y = tf.expand_dims(y, axis=1)  # Shape (1, 1)
+    
+    # PyTorch handles type promotion in cat, TF requires explicit casting
+    # y is int32, 32*2048 is int, result is int32. x is int64.
+    # We cast the y part to int64 to match PyTorch's promotion behavior.
+    offset = tf.constant(32 * 2048, dtype=tf.int32)
+    y_part = tf.cast(unsqueeze_y + offset, dtype=tf.int64)
+    
+    y2 = tf.concat([slice_x, y_part], axis=1)  # Shape (1, 32)
+
+    # Original: x2 = x[:, 1:, None]
+    x2 = tf.expand_dims(slice_x, axis=2)  # Shape (1, 31, 1)
+
+    # Original: y3 = y2[:, -1:, None]
+    y3 = tf.expand_dims(y2[:, -1:], axis=2)  # Shape (1, 1, 1)
+
+    # Original: torch.cat([x2, y3], dim=1)
+    concat_xy = tf.concat([x2, y3], axis=1)  # Shape (1, 32, 1)
+
+    # Original: torch.arange(-2048, 0, device=device)[None, None, :]
+    arange_tensor = tf.range(-2048, 0, dtype=tf.int64)
+    broadcast_arange = tf.expand_dims(tf.expand_dims(arange_tensor, 0), 0)  # Shape (1, 1, 2048)
+
+    # Original: ( ... + ... ).reshape(1, 32 * 2048)
+    added = concat_xy + broadcast_arange  # Shape (1, 32, 2048)
+    result = tf.reshape(added, [1, 32 * 2048])
+
+    # 6. Execute the Graph
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables
+        sess.run(tf.compat.v1.global_variables_initializer())
+        sess.run(tf.compat.v1.local_variables_initializer())
+
+        # Start the queue runners
+        coord = tf.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord)
+
+        try:
+            # Run the logic
+            output = sess.run(result)
+
+            # 7. Verification
+            # Calculate expected output:
+            # First 31 rows of the 32-dim are 0 + arange -> arange
+            # Last row is 65536 + arange
+            expected_arange = np.arange(-2048, 0, dtype=np.int64)
+            expected_part1 = np.tile(expected_arange, 31)
+            expected_part2 = expected_arange + (32 * 2048)
+            expected = np.concatenate([expected_part1, expected_part2]).reshape(1, -1)
+
+            assert np.array_equal(output, expected), "Logic output mismatch"
+            print("Test Passed: Logic preserved and executed via QueueRunner successfully.")
+
+        except Exception as e:
+            print(f"Test Failed: {e}")
+            raise
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_queue_runner_with_tensor_logic()
+```

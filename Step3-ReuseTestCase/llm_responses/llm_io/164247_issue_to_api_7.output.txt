@@ -1,0 +1,77 @@
+```python
+import torch
+import torch.nn as nn
+from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+
+def test_flex_attention_graph_break_with_captured_tensor():
+    """
+    Test case for Issue 164247: Dynamo graph break on flex attention code.
+    
+    This test verifies that create_block_mask and flex_attention work correctly
+    within a torch.compile context (fullgraph=True) when the mask function
+    captures a tensor derived from the model input.
+    """
+    
+    class MixedFakeModeModel(nn.Module):
+        def __init__(self, dim=64):
+            super().__init__()
+            self.dim = dim
+            self.lin = torch.nn.Linear(64, 64)
+
+        def forward(self, x):
+            batch_size, seq_len, _ = x.shape
+
+            # Process input first - this creates fake tensors in export's fake mode
+            processed = self.lin(x)
+
+            # Create some computation that depends on processed tensor
+            intermediate = processed.sum(dim=-1).detach()  # Shape: (batch, seq_len)
+
+            def dynamic_mask_function(batch_idx, head_idx, q_idx, kv_idx):
+                # Access the captured tensor 'intermediate'
+                threshold = intermediate[batch_idx, q_idx % seq_len]
+                return (kv_idx <= q_idx) & (threshold > 0)
+
+            block_mask = create_block_mask(
+                mask_mod=dynamic_mask_function,
+                B=batch_size,
+                H=None,
+                Q_LEN=seq_len,
+                KV_LEN=seq_len,
+                device=x.device,
+                _compile=False,
+            )
+            
+            q = processed.view(batch_size, 1, seq_len, self.dim)
+            k = processed.view(batch_size, 1, seq_len, self.dim)
+            v = processed.view(batch_size, 1, seq_len, self.dim)
+
+            return flex_attention(q, k, v, block_mask=block_mask)
+
+    # Instantiate the model
+    model = MixedFakeModeModel()
+    
+    # Compile with fullgraph=True to trigger the potential graph break
+    # described in the issue.
+    compiled_model = torch.compile(model, fullgraph=True)
+    
+    # Create dummy input
+    input_tensor = torch.randn(2, 128, 64)
+    
+    # Run the compiled model
+    try:
+        output = compiled_model(input_tensor)
+        
+        # Assertions to verify correctness
+        assert output is not None, "Output should not be None"
+        assert output.shape == (2, 1, 128, 64), f"Expected shape (2, 1, 128, 64), got {output.shape}"
+        
+        print("Test Passed: Flex attention with captured tensor executed successfully under torch.compile.")
+        
+    except Exception as e:
+        print(f"Test Failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_flex_attention_graph_break_with_captured_tensor()
+```

@@ -1,0 +1,99 @@
+Issue ID: 165549
+Title: Operations likeabs(dispatched via CompositeExplicitAutograd) return empty tensors when run through cpu_fallback
+Bug Description:
+### 🐛 Describe the bug
+
+When a custom device backend relies on CPU fallback for unimplemented operations, `CompositeExplicitAutograd` operations fail to return properly sized tensors. This affects operations like `abs`, `isfinite`, `isinf`, and `isnan`.
+
+assuming we have implemented the minimal set of ops as described: https://docs.pytorch.org/docs/main/accelerator/operators.html for a privateuse1 out-of-tree backend, and implementing the cpu fallback as described (just a call to `at::native::cpu_fallback(op, stack);`)
+
+```python
+# This fails - returns tensor with shape [0]
+t = torch.randn(4, 4, device='privateuse1')
+result = torch.abs(t)  # result.shape == torch.Size([0])
+
+# But these work correctly
+torch.abs(t, out=pre_allocated_tensor)  # Works
+t.abs_()  # Works (in-place)
+torch.neg(t)  # Works (uses structured_delegate)
+```
+
+## Possible Root Cause
+
+### 1. Implementation Pattern
+
+In `pytorch/aten/src/ATen/native/UnaryOps.cpp`:
+
+```cpp
+// Line 471-480
+template <typename OutImpl>
+static inline Tensor unary_op_impl_with_complex_to_float(const Tensor& self, OutImpl& out_impl) {
+  if (self.is_complex()) {
+    const auto float_type = c10::toRealValueType(self.scalar_type());
+    Tensor result = at::empty_like(self, self.options().dtype(float_type));
+    return out_impl(result, self);
+  }
+
+  Tensor result = at::empty({0}, self.options());  // Creates placeholder with shape [0]
+  return out_impl(result, self);  // Expects out_impl to resize
+}
+
+// Line 546-548
+Tensor abs(const Tens
+...
+
+Original API Under Test: torch.abs
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.sign
+Similarity score: 0.9999870657920837
+
+Similar API information:
+# Extracted call chain for torch.sign
+
+# --- torch._refs.sign ---
+def sign(a):
+    return prims.sign(a)
+
+# --- torch._refs._make_elementwise_unary_reference ---
+def _make_elementwise_unary_reference(
+    type_promotion_kind,
+    *,
+    aten_op=infer_aten_op,
+    extra_meta=None,
+    exact_dtype=False,
+) -> Callable:
+    def inner(prim: Callable):
+        nonlocal aten_op
+
+        @wraps(prim)
+        @out_wrapper(exact_dtype=exact_dtype)
+        @elementwise_unary_scalar_wrapper
+        @elementwise_type_promotion_wrapper(
+            type_promoting_args=("a",),
+            type_promotion_kind=type_promotion_kind,
+        )
+        def _ref(a: TensorLikeType) -> TensorLikeType:
+            if extra_meta is not None:
+                extra_meta(a)
+
+            output = prim(a)
+            return handle_noncontiguous_outputs([a], output)
+
+Original Test Case:
+# This fails - returns tensor with shape [0]
+t = torch.randn(4, 4, device='privateuse1')
+result = torch.abs(t)  # result.shape == torch.Size([0])
+
+# But these work correctly
+torch.abs(t, out=pre_allocated_tensor)  # Works
+t.abs_()  # Works (in-place)
+torch.neg(t)  # Works (uses structured_delegate)
+
+The API torch.sign is identified as same-library similar to the original PyTorch API torch.abs.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

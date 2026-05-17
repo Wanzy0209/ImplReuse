@@ -1,0 +1,99 @@
+Issue ID: 165549
+Title: Operations likeabs(dispatched via CompositeExplicitAutograd) return empty tensors when run through cpu_fallback
+Bug Description:
+### 🐛 Describe the bug
+
+When a custom device backend relies on CPU fallback for unimplemented operations, `CompositeExplicitAutograd` operations fail to return properly sized tensors. This affects operations like `abs`, `isfinite`, `isinf`, and `isnan`.
+
+assuming we have implemented the minimal set of ops as described: https://docs.pytorch.org/docs/main/accelerator/operators.html for a privateuse1 out-of-tree backend, and implementing the cpu fallback as described (just a call to `at::native::cpu_fallback(op, stack);`)
+
+```python
+# This fails - returns tensor with shape [0]
+t = torch.randn(4, 4, device='privateuse1')
+result = torch.abs(t)  # result.shape == torch.Size([0])
+
+# But these work correctly
+torch.abs(t, out=pre_allocated_tensor)  # Works
+t.abs_()  # Works (in-place)
+torch.neg(t)  # Works (uses structured_delegate)
+```
+
+## Possible Root Cause
+
+### 1. Implementation Pattern
+
+In `pytorch/aten/src/ATen/native/UnaryOps.cpp`:
+
+```cpp
+// Line 471-480
+template <typename OutImpl>
+static inline Tensor unary_op_impl_with_complex_to_float(const Tensor& self, OutImpl& out_impl) {
+  if (self.is_complex()) {
+    const auto float_type = c10::toRealValueType(self.scalar_type());
+    Tensor result = at::empty_like(self, self.options().dtype(float_type));
+    return out_impl(result, self);
+  }
+
+  Tensor result = at::empty({0}, self.options());  // Creates placeholder with shape [0]
+  return out_impl(result, self);  // Expects out_impl to resize
+}
+
+// Line 546-548
+Tensor abs(const Tens
+...
+
+Original API Under Test: torch.abs
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.distribute.DistributedIterator
+Similarity score: 0.9926363229751587
+
+Similar API information:
+# Extracted call chain for tf.distribute.DistributedIterator
+
+# --- tensorflow.python.distribute.input_lib.DistributedIterator ---
+class DistributedIterator(DistributedIteratorBase,
+                          composite_tensor.CompositeTensor):
+  """Input Iterator for a distributed dataset."""
+
+  def __init__(
+      self,
+      input_workers=None,
+      iterators=None,
+      strategy=None,
+      components=None,
+      element_spec=None,
+      cardinality=cardinality_lib.UNKNOWN,
+      enable_get_next_as_optional=False,
+      options=None,
+      replica_order=None,
+  ):
+    if input_workers is None:
+      raise ValueError("`input_workers` should be "
+                       "provided.")
+
+    error_message = ("Either `input_workers` or "
+                     "both `components` and `element_spec` need to be "
+                     "provided.")
+    self._options = options
+
+    if iterators is None:
+      if (components is None or element_spec is None):
+
+Original Test Case:
+# This fails - returns tensor with shape [0]
+t = torch.randn(4, 4, device='privateuse1')
+result = torch.abs(t)  # result.shape == torch.Size([0])
+
+# But these work correctly
+torch.abs(t, out=pre_allocated_tensor)  # Works
+t.abs_()  # Works (in-place)
+torch.neg(t)  # Works (uses structured_delegate)
+
+The API tf.distribute.DistributedIterator is identified as cross-library similar to the original PyTorch API torch.abs.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

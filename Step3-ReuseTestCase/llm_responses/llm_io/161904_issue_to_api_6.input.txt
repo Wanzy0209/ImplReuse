@@ -1,0 +1,172 @@
+Issue ID: 161904
+Title: ZeroBubble and DualPipeV pipeline parallel schedules fail with torch.compiled model
+Bug Description:
+### 🐛 Describe the bug
+
+The ZeroBubble and DualPipeV schedules don't seem to be compatible with models that are `torch.compiled`. Following the TorchTitan code base, I reduced the problem into a minimal repro example:
+
+```py
+"""
+Run:
+
+torchrun --nproc_per_node=2 repro.py
+"""
+
+import torch
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.pipelining import PipelineStage
+from torch.distributed.pipelining.schedules import get_schedule_class
+import torch.nn as nn
+from torchtitan.distributed.pipeline_parallel import pipeline_module_split
+
+PP_DEGREE = 2
+SCHEDULE_NAME = "ZBVZeroBubble"  # or "DualPipeV"
+
+
+class Transformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.tok_embeddings = nn.Embedding(128, 32)
+        self.layers = torch.nn.ModuleDict()
+        for layer_id in range(4):
+            self.layers[str(layer_id)] = nn.Linear(32, 32, bias=False)
+        self.output = nn.Linear(32, 128, bias=False)
+
+    def forward(self, x):
+        x = self.tok_embeddings(x) if self.tok_embeddings else x
+        for layer in self.layers.values():
+            x = layer(x)
+        return self.output(x) if self.output else x
+
+
+def main() -> None:
+    local_rank = torch.distributed.get_node_local_rank()
+
+Original API Under Test: torch.compile
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.backends.mha.get_fastpath_enabled
+Similarity score: 0.9883999824523926
+
+Similar API information:
+# Extracted call chain for torch.backends.mha.get_fastpath_enabled
+
+# --- torch.backends.mha.get_fastpath_enabled ---
+def get_fastpath_enabled() -> bool:
+    """Returns whether fast path for TransformerEncoder and MultiHeadAttention
+    is enabled, or ``True`` if jit is scripting.
+
+    .. note::
+        The fastpath might not be run even if ``get_fastpath_enabled`` returns
+        ``True`` unless all conditions on inputs are met.
+    """
+    if not torch.jit.is_scripting():
+        return _is_fastpath_enabled
+    return True
+
+# --- torch.jit.is_scripting ---
+def is_scripting() -> bool:
+    r"""
+    Function that returns True when in compilation and False otherwise. This
+    is useful especially with the @unused decorator to leave code in your
+    model that is not yet TorchScript compatible.
+    .. testcode::
+
+        import torch
+
+        @torch.jit.unused
+        def unsupported_linear_op(x):
+            return x
+
+        def linear(x):
+
+Original Test Case:
+"""
+Run:
+
+torchrun --nproc_per_node=2 repro.py
+"""
+
+import torch
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.pipelining import PipelineStage
+from torch.distributed.pipelining.schedules import get_schedule_class
+import torch.nn as nn
+from torchtitan.distributed.pipeline_parallel import pipeline_module_split
+
+PP_DEGREE = 2
+SCHEDULE_NAME = "ZBVZeroBubble"  # or "DualPipeV"
+
+
+class Transformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.tok_embeddings = nn.Embedding(128, 32)
+        self.layers = torch.nn.ModuleDict()
+        for layer_id in range(4):
+            self.layers[str(layer_id)] = nn.Linear(32, 32, bias=False)
+        self.output = nn.Linear(32, 128, bias=False)
+
+    def forward(self, x):
+        x = self.tok_embeddings(x) if self.tok_embeddings else x
+        for layer in self.layers.values():
+            x = layer(x)
+        return self.output(x) if self.output else x
+
+
+def main() -> None:
+    local_rank = torch.distributed.get_node_local_rank()
+    device = torch.device("cuda", local_rank)
+    torch.distributed.init_process_group("nccl")
+    mesh = init_device_mesh("cuda", (2,), mesh_dim_names=("pp",))
+
+    with torch.device("meta"):
+        model = Transformer()
+
+    pp_schedule, model_parts, has_first_stage, has_last_stage = pipeline_transformer(
+        model,
+        mesh,
+        device,
+        parallelize_transformer,
+        loss_fn,
+    )
+    for m in model_parts:
+        m.to_empty(device=device)
+        m.train()
+
+    input_ids = torch.randint(0, 128, (8, 4096), device=device)
+    labels = input_ids.clone()
+
+    losses: list[torch.Tensor] | None
+    targets, losses = (labels, []) if has_last_stage else (None, None)
+    if has_first_stage:
+        pp_schedule.step(
+            input_ids,
+            target=targets,
+            losses=losses,
+        )
+    else:
+        pp_schedule.step(
+            target=targets,
+            losses=losses,
+        )
+
+
+def pipeline_transformer(
+    model: nn.Module,
+    world_mesh,
+    device: torch.device,
+    parallelize_fn,
+    loss_fn,
+):
+    pp_mesh = world_mesh["pp"]
+    module_names_per_stage = [
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

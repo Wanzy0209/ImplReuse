@@ -1,0 +1,59 @@
+```python
+import torch
+import sys
+
+# Reproduce the specific configuration that triggered the bug in the original issue
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0):
+    # Original API: torch.nn.functional.group_norm
+    # Similar API: torch.linalg.svd (backend for torch.svd)
+    # We adapt the logic to perform SVD on the input tensor.
+    # SVD expects at least 2D input. We treat the input as a batch of matrices.
+    
+    # To mimic the original complexity, we ensure the tensor is on CUDA and bfloat16.
+    # The original issue involved specific strides, but torch.rand creates contiguous tensors.
+    # We stick to the dtype and device which are likely triggers for the divmod issue.
+    
+    U, S, Vh = torch.linalg.svd(arg0)
+    
+    # Return a result to ensure the graph is constructed
+    return U
+
+# Inputs adapted for SVD
+# Original shape: (3, 395, 202, 357)
+# SVD shape: (Batch, M, N). We use (3, 202, 357) to keep dimensions similar.
+arg0 = torch.rand([3, 202, 357], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+
+    # Compiled execution
+    # Using fullgraph=True and dynamic=True as in the original bug report
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    try:
+        out_compiled = compiled_foo(arg0)
+        out_compiled.sum().backward()
+        print('Compile Success! ✅')
+        
+        # Compare outputs
+        out_eager_sum = out_eager.sum()
+        out_compiled_sum = out_compiled.sum()
+        diff = (out_eager_sum - out_compiled_sum).abs().item()
+        rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100
+        print(f'Relative diff (sum): {rel_diff:.6f}%')
+        
+        if rel_diff > 5:
+            print(f'❌ Forward output sums differ significantly (relative)!')
+            print('out_eager_sum:', out_eager_sum.item())
+            print('out_compiled_sum:', out_compiled_sum.item())
+            sys.exit(1)
+    except Exception as e:
+        print(f'❌ Compile Failed with error: {e}')
+        sys.exit(1)
+```

@@ -1,0 +1,110 @@
+```python
+import torch
+from torch.nn.attention.flex_attention import create_block_mask
+from functools import partial
+import torch.backends.cuda
+
+# Helper function from the bug report
+def _score_mode_fn_visibility(batch, head, q_idx, kv_idx, lower_bound, upper_bound):
+    return (kv_idx >= lower_bound[q_idx]) & (kv_idx <= upper_bound[q_idx])
+
+def create_attn_visibility(batch_size, seq_len):
+    start = [x * seq_len for x in range(batch_size)]
+    end = [x + (seq_len - 1) for x in start]
+    attn_visibility = torch.tensor([start, end], dtype=torch.int32, device="cuda")
+    return attn_visibility.view(2, -1)
+
+def test_create_block_mask_dynamo_cache_reset():
+    """
+    Test case for Issue 164608: Dynamo cache bug create_block_mask.
+    
+    Verifies that torch.compile(create_block_mask) correctly handles state 
+    between runs with different batch sizes (and thus different total sequence lengths).
+    Leverages torch.backends.cuda.cudnn_sdp_enabled to ensure the CUDA context 
+    is checked, as the bug manifests in CUDA execution.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # Leverage the similar API: Check cuDNN SDP status
+    # This is relevant as the bug involves CUDA backend compilation and caching.
+    sdp_enabled = torch.backends.cuda.cudnn_sdp_enabled()
+    print(f"Running test with cuDNN SDP enabled: {sdp_enabled}")
+
+    torch.set_default_device("cuda")
+    torch.set_default_dtype(torch.bfloat16)
+    torch.cuda.manual_seed(10007)
+
+    seq_len = 1024
+    # The bug manifests when changing batch sizes (changing num_tokens)
+    batch_sizes = [1, 2]
+
+    # Compile the function once to simulate the user scenario
+    compiled_create_block_mask = torch.compile(create_block_mask)
+
+    # Run for the first batch size
+    batch_size_1 = batch_sizes[0]
+    attn_visibility_1 = create_attn_visibility(batch_size_1, seq_len)
+    _, num_tokens_1 = attn_visibility_1.view(2, -1).shape
+    kv_seqlen_1 = batch_size_1 * seq_len
+
+    mask_1 = compiled_create_block_mask(
+        partial(
+            _score_mode_fn_visibility,
+            lower_bound=attn_visibility_1.view(2, -1)[0],
+            upper_bound=attn_visibility_1.view(2, -1)[1],
+        ),
+        1,
+        None,
+        num_tokens_1,
+        kv_seqlen_1,
+        device=attn_visibility_1.device,
+    )
+
+    # Run for the second batch size
+    # The bug causes q_num_blocks to be garbage here due to cache not resetting/updating
+    batch_size_2 = batch_sizes[1]
+    attn_visibility_2 = create_attn_visibility(batch_size_2, seq_len)
+    _, num_tokens_2 = attn_visibility_2.view(2, -1).shape
+    kv_seqlen_2 = batch_size_2 * seq_len
+
+    compiled_mask_2 = compiled_create_block_mask(
+        partial(
+            _score_mode_fn_visibility,
+            lower_bound=attn_visibility_2.view(2, -1)[0],
+            upper_bound=attn_visibility_2.view(2, -1)[1],
+        ),
+        1,
+        None,
+        num_tokens_2,
+        kv_seqlen_2,
+        device=attn_visibility_2.device,
+    )
+
+    # Generate ground truth for the second run using eager mode
+    eager_mask_2 = create_block_mask(
+        partial(
+            _score_mode_fn_visibility,
+            lower_bound=attn_visibility_2.view(2, -1)[0],
+            upper_bound=attn_visibility_2.view(2, -1)[1],
+        ),
+        1,
+        None,
+        num_tokens_2,
+        kv_seqlen_2,
+        device=attn_visibility_2.device,
+    )
+
+    # Assertions to catch the "garbage" q_num_blocks
+    assert torch.equal(compiled_mask_2.q_num_blocks, eager_mask_2.q_num_blocks), \
+        f"Cache bug detected: q_num_blocks mismatch. Compiled: {compiled_mask_2.q_num_blocks}, Eager: {eager_mask_2.q_num_blocks}"
+    
+    assert torch.equal(compiled_mask_2.kv_num_blocks, eager_mask_2.kv_num_blocks), \
+        f"Cache bug detected: kv_num_blocks mismatch. Compiled: {compiled_mask_2.kv_num_blocks}, Eager: {eager_mask_2.kv_num_blocks}"
+
+    print("Test passed: Compiled cache correctly handled parameter changes.")
+
+if __name__ == "__main__":
+    test_create_block_mask_dynamo_cache_reset()
+```

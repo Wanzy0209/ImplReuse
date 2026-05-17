@@ -1,0 +1,125 @@
+Issue ID: 164300
+Title: [dynamo][sac] functools partial'ed context_fn is not supported
+Bug Description:
+### 🐛 Describe the bug
+
+Thanks to @soulitzer for the repro
+
+```
+import torch
+import functools
+from torch.utils.checkpoint import CheckpointPolicy
+
+class CustomPolicy:
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, ctx, out, func, *args, **kwargs):
+        return CheckpointPolicy.MUST_SAVE
+
+from torch.utils.checkpoint import (
+    CheckpointPolicy,
+    create_selective_checkpoint_contexts,
+)
+
+def f(x, y):
+    return torch.sigmoid(torch.matmul(torch.matmul(x, y), y)) * y
+
+context_fn1 = functools.partial(create_selective_checkpoint_contexts, CustomPolicy())
+
+def context_fn2():
+    return create_selective_checkpoint_contexts(CustomPolicy())
+
+@torch.compile(backend="aot_eager_decomp_partition", fullgraph=True)
+def g(x, y):
+    return torch.utils.checkpoint.checkpoint(
+        f, x, y,
+        use_reentrant=False,
+        context_fn=context_fn1,
+    )
+
+a = torch.randn(4, 4, requires_grad=True, device="cpu")
+b = torch.randn(4, 4, requires_grad=True, device="cpu")
+g(a, b).sum().backward()
+
+Original API Under Test: torch.utils.checkpoint.checkpoint
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.while_loop
+Similarity score: 0.9949305057525635
+
+Similar API information:
+# Extracted call chain for tf.while_loop
+
+# --- tensorflow.python.ops.while_loop.while_loop ---
+def while_loop(cond,
+               body,
+               loop_vars,
+               shape_invariants=None,
+               parallel_iterations=10,
+               back_prop=True,
+               swap_memory=False,
+               name=None,
+               maximum_iterations=None,
+               return_same_structure=False):
+  """Repeat `body` while the condition `cond` is true.
+
+  `cond` is a callable returning a boolean scalar tensor. `body` is a callable
+  returning a (possibly nested) tuple, namedtuple or list of tensors of the same
+  arity (length and structure) and types as `loop_vars`. `loop_vars` is a
+  (possibly nested) tuple, namedtuple or list of tensors that is passed to both
+  `cond` and `body`. `cond` and `body` both take as many arguments as there are
+  `loop_vars`.
+
+  In addition to regular Tensors or IndexedSlices, the body may accept and
+  return TensorArray objects.  The flows of the TensorArray objects will
+  be appropriately forwarded between loops and during gradient calculations.
+
+  Note that `while_loop` calls `cond` and `body` *exactly once* (inside the
+  call to `whil
+...
+
+Original Test Case:
+import torch
+import functools
+from torch.utils.checkpoint import CheckpointPolicy
+
+class CustomPolicy:
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, ctx, out, func, *args, **kwargs):
+        return CheckpointPolicy.MUST_SAVE
+
+from torch.utils.checkpoint import (
+    CheckpointPolicy,
+    create_selective_checkpoint_contexts,
+)
+
+def f(x, y):
+    return torch.sigmoid(torch.matmul(torch.matmul(x, y), y)) * y
+
+context_fn1 = functools.partial(create_selective_checkpoint_contexts, CustomPolicy())
+
+def context_fn2():
+    return create_selective_checkpoint_contexts(CustomPolicy())
+
+@torch.compile(backend="aot_eager_decomp_partition", fullgraph=True)
+def g(x, y):
+    return torch.utils.checkpoint.checkpoint(
+        f, x, y,
+        use_reentrant=False,
+        context_fn=context_fn1,
+    )
+
+a = torch.randn(4, 4, requires_grad=True, device="cpu")
+b = torch.randn(4, 4, requires_grad=True, device="cpu")
+g(a, b).sum().backward()
+
+The API tf.while_loop is identified as cross-library similar to the original PyTorch API torch.utils.checkpoint.checkpoint.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

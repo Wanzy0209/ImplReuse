@@ -1,0 +1,142 @@
+Issue ID: 163528
+Title: torch.compile don't work with searchsorted
+Bug Description:
+### 🐛 Describe the bug
+
+I discovered that torch.searchsorted is not working correctly when used with torch.compile on gpu. Everything looks like working fine on cpu.
+```python
+import torch
+from torch import nn
+
+class Foo(nn.Module):
+    def __init__(
+        self,
+        quantiles: torch.Tensor,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        self.q = nn.Parameter(quantiles, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.searchsorted(self.q, x.T).T
+    
+
+def test_device(device, x, quantiles):
+    x = x.to(device)
+    quantiles = quantiles.to(device)
+    foo = Foo(quantiles).to(device)
+    foo_compiled = torch.compile(Foo(quantiles).to(device), fullgraph=True)
+
+    # warm up
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+
+    # proper inference
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    print(f'device: {device}, diff: {torch.max(torch.abs(y_original - y_compiled)).item()}')
+    print('orignal',y_original[:5, :5])
+
+Original API Under Test: torch.searchsorted
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.searchsorted
+Similarity score: 1.000000238418579
+
+Similar API information:
+# Extracted call chain for torch.searchsorted
+
+# --- torch._inductor.lowering.searchsorted ---
+def searchsorted(
+    sorted_sequence: TensorBox,
+    self: TensorBox,
+    *,
+    out_int32: bool = False,
+    right: bool = False,
+    side: Optional[str] = None,
+    sorter: Optional[TensorBox] = None,
+) -> TensorBox:
+    validate_bucketize = lambda tb: V.graph.has_feature(  # noqa: E731
+        tb, BackendFeature.BUCKETIZE
+    )
+    if (
+        not validate_bucketize(sorted_sequence)
+        or not validate_bucketize(self)
+        or (sorter is not None and not validate_bucketize(sorter))
+    ):
+        return fallback_handler(aten.searchsorted.Tensor, add_to_fallback_set=False)(
+            sorted_sequence,
+            self,
+            out_int32=out_int32,
+            right=right,
+            side=side,
+            sorter=sorter,
+        )
+
+    # If side is present, override the value of right if needed.  This assumes that
+
+Original Test Case:
+import torch
+from torch import nn
+
+class Foo(nn.Module):
+    def __init__(
+        self,
+        quantiles: torch.Tensor,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        self.q = nn.Parameter(quantiles, requires_grad=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.searchsorted(self.q, x.T).T
+    
+
+def test_device(device, x, quantiles):
+    x = x.to(device)
+    quantiles = quantiles.to(device)
+    foo = Foo(quantiles).to(device)
+    foo_compiled = torch.compile(Foo(quantiles).to(device), fullgraph=True)
+
+    # warm up
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+
+    # proper inference
+    with torch.no_grad():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    print(f'device: {device}, diff: {torch.max(torch.abs(y_original - y_compiled)).item()}')
+    print('orignal',y_original[:5, :5])
+    print('compiled',y_compiled[:5, :5])
+    
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    quantile_size = 100
+    torch.manual_seed(42)
+    x = torch.randn(batch_size, feature_dim, dtype=torch.float32)
+    quantiles = torch.randn(quantile_size, feature_dim, dtype=torch.float32)
+    quantiles = torch.sort(quantiles, dim=0)[0]
+    test_device('cpu', x, quantiles)
+    test_device('cuda', x, quantiles)
+
+main()
+
+The API torch.searchsorted is identified as same-library similar to the original PyTorch API torch.searchsorted.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

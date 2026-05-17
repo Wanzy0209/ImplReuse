@@ -1,0 +1,44 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_gather_object(rank, world_size):
+    """
+    Test function to verify numerical consistency and data integrity 
+    of torch.distributed.gather_object.
+    """
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Create a unique tensor for each rank to verify data integrity
+    # This mimics the numerical checks required in the original Transformer bug
+    input_data = torch.tensor([float(rank), float(rank + 1), float(rank + 2)])
+    
+    # Prepare the gather list (only needed on the destination rank)
+    gather_list = None
+    if rank == 0:
+        gather_list = [None for _ in range(world_size)]
+
+    # Call the API under test
+    dist.gather_object(input_data, gather_list, dst=0)
+
+    # Verify results on the destination rank
+    if rank == 0:
+        for r in range(world_size):
+            expected_data = torch.tensor([float(r), float(r + 1), float(r + 2)])
+            # Assert numerical consistency
+            assert torch.equal(gather_list[r], expected_data), \
+                f"Numerical inconsistency detected for rank {r}. Expected {expected_data}, got {gather_list[r]}"
+        print("Test passed: Numerical consistency verified for torch.distributed.gather_object")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn processes to simulate a distributed environment
+    mp.spawn(test_gather_object, args=(world_size,), nprocs=world_size, join=True)
+```

@@ -1,0 +1,88 @@
+Issue ID: 163275
+Title: torch compile does not handle out_dtype argument in torch.mm (but succeeds with torch.bmm)
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+
+A = torch.rand((1024, 1024), device="cuda", dtype=torch.float16)
+B = torch.rand((1024, 1024), device="cuda", dtype=torch.float16)
+
+@torch.compile
+def linear(weight, input):
+    return torch.mm(input, weight, out_dtype=torch.float32)
+
+linear(A, B)
+```
+
+Output:
+```
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0] failed while attempting to run meta for aten.mm.dtype
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0] Traceback (most recent call last):
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0]   File "/usr/local/lib/python3.10/dist-packages/torch/_subclasses/fake_tensor.py", line 2717, in _dispatch_impl
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0]     r = func(*args, **kwargs)
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0]   File "/usr/local/lib/python3.10/dist-packages/torch/_ops.py", line 829, in __call__
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0]     return self._op(*args, **kwargs)
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0]   File "/usr/local/lib/python3.10/dist-packages/torch/_prims_common/wrappers.py", line 309, in _fn
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0]     result = fn(*args, **kwargs)
+E0918 18:39:52.630000 1234802 torch/_subclasses/fake_tensor.py:2721] [0/0] TypeError: meta_mm() takes 2 posi
+...
+
+Original API Under Test: torch.mm
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.numpy.diagonal
+Similarity score: 0.9936625957489014
+
+Similar API information:
+# Extracted call chain for tf.experimental.numpy.diagonal
+
+# --- tensorflow.python.ops.numpy_ops.np_array_ops.diagonal ---
+def diagonal(a, offset=0, axis1=0, axis2=1):  # pylint: disable=missing-docstring
+  a = asarray(a)
+
+  maybe_rank = a.shape.rank
+  if (
+      maybe_rank is not None
+      and offset == 0
+      and (axis1 == maybe_rank - 2 or axis1 == -2)
+      and (axis2 == maybe_rank - 1 or axis2 == -1)
+  ):
+    return array_ops.matrix_diag_part(a)
+
+  a = moveaxis(a, (axis1, axis2), (-2, -1))
+
+  a_shape = array_ops.shape(a)
+
+  def _zeros():  # pylint: disable=missing-docstring
+    return (
+        array_ops.zeros(
+            array_ops.concat([a_shape[:-1], [0]], 0), dtype=a.dtype
+        ),
+        0,
+    )
+
+  # All zeros since diag_part doesn't handle all possible k (aka offset).
+  # Written this way since cond will run shape inference on both branches,
+  # and diag_part shape inference will fail when offset is out of bounds.
+
+Original Test Case:
+import torch
+
+A = torch.rand((1024, 1024), device="cuda", dtype=torch.float16)
+B = torch.rand((1024, 1024), device="cuda", dtype=torch.float16)
+
+@torch.compile
+def linear(weight, input):
+    return torch.mm(input, weight, out_dtype=torch.float32)
+
+linear(A, B)
+
+The API tf.experimental.numpy.diagonal is identified as cross-library similar to the original PyTorch API torch.mm.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

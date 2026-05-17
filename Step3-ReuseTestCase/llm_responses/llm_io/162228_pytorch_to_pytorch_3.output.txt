@@ -1,0 +1,61 @@
+```python
+import torch
+from torch import Tensor
+from torch.library import impl_abstract, define, impl
+
+# Define a custom operator that mimics the behavior of flex_attention
+# where a bias tensor (y) is used to modify the input (x).
+# This allows us to test the interaction between torch.library.impl_abstract
+# and autograd within a compiled context.
+define("custom::flex_like_op", "(Tensor x, Tensor y) -> Tensor")
+
+# Register the abstract implementation (fake impl) for the custom operator.
+# This is the API requested to be tested. It is required for torch.compile
+# to trace the operator without executing it.
+@impl_abstract("custom::flex_like_op")
+def flex_like_op_abstract(x: Tensor, y: Tensor) -> Tensor:
+    # The abstract implementation must return a tensor with the correct shape/dtype.
+    # Here we assume the output shape matches the input x, similar to the original bug
+    # where x is the main input and y provides a bias.
+    return x.new_empty(x.shape)
+
+# Register the concrete implementation for the operator.
+# We use "CompositeExplicitAutograd" to ensure autograd is handled correctly.
+@impl("custom::flex_like_op", "CompositeExplicitAutograd")
+def flex_like_op_impl(x: Tensor, y: Tensor) -> Tensor:
+    # Mimic the logic in the bug: use y to create a bias and add it to x.
+    # In the original bug, y is used inside score_mod to create a bias matrix.
+    # Here we simplify: y is summed to create a scalar bias added to x.
+    # This creates a dependency that must be preserved in the autograd graph.
+    bias = y.sum()
+    return x + bias
+
+# Adapt the original test function to use the custom operator.
+# We keep torch.compile because the bug is specific to graph breaks/compilation,
+# and impl_abstract is primarily used to support compilation.
+@torch.compile()
+def test(x, y):
+    # Instead of flex_attention, we call our custom op.
+    # The abstract impl registered above will be used by the compiler.
+    return torch.ops.custom.flex_like_op(x, y)
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+B, L, D = 2, 16, 64
+
+x = torch.randn(B, L, D, device=DEVICE, requires_grad=True)
+y = torch.randn(B, L, device=DEVICE, requires_grad=True)
+
+# Run the forward and backward pass
+out = test(x, y).mean().backward()
+
+print(torch.__version__)
+print(f"x: {(x.grad is not None) and (x.grad.norm() > 0)}, y: {(y.grad is not None) and (y.grad.norm() > 0)}")
+
+# Assertions to verify gradients flow correctly to both inputs
+assert x.grad is not None, "Gradient for x is None"
+assert x.grad.norm() > 0, "Gradient for x is zero"
+assert y.grad is not None, "Gradient for y is None"
+assert y.grad.norm() > 0, "Gradient for y is zero"
+
+print("Test passed: Gradients propagated correctly through custom op with abstract impl.")
+```

@@ -1,0 +1,57 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_argmax_bfloat16_compile_divergence():
+    """
+    Test case for tf.compat.v1.argmax based on PyTorch Issue 164063.
+    
+    The original issue (Issue 164063) reported a divergence between eager and 
+    compiled modes (torch.compile) when performing a reduction operation (torch.var) 
+    on bfloat16 tensors, specifically related to type handling ('unexpected type fp32').
+    
+    This test adapts that logic to the similar API (tf.compat.v1.argmax) to verify
+    that the reduction operation behaves consistently in both eager and graph 
+    (compiled) modes when handling bfloat16 inputs.
+    """
+    
+    # Reproduce the tensor shape and dtype from the bug report
+    # Original: t1 = t0.reshape((28, 24, 3, 127)), dtype=bfloat16
+    shape = (28, 24, 3, 127)
+    
+    # Create random data and cast to bfloat16
+    np_data = np.random.rand(*shape).astype(np.float32)
+    input_tensor = tf.constant(np_data, dtype=tf.bfloat16)
+
+    # The operation in the bug was t1.var(dim=2)
+    # We map this reduction to the similar API: tf.compat.v1.argmax(..., axis=2)
+    axis = 2
+
+    # 1. Eager Execution
+    # This corresponds to the 'out_eager' in the original bug report
+    eager_result = tf.compat.v1.argmax(input_tensor, axis=axis)
+
+    # 2. Compiled Execution
+    # This corresponds to 'torch.compile' in the original bug report
+    @tf.function
+    def compiled_fn(x):
+        return tf.compat.v1.argmax(x, axis=axis)
+
+    compiled_result = compiled_fn(input_tensor)
+
+    # 3. Verification
+    # Check for divergence (Eager vs Compile)
+    # The original bug threw a TypeError; here we check for value consistency.
+    assert tf.reduce_all(tf.equal(eager_result, compiled_result)), \
+        "Divergence detected: Eager and Compiled results do not match for tf.compat.v1.argmax with bfloat16."
+
+    # Check output type consistency
+    # argmax typically returns int64, ensuring no unexpected type casting occurred
+    assert eager_result.dtype == tf.int64, f"Expected int64 output in eager mode, got {eager_result.dtype}"
+    assert compiled_result.dtype == tf.int64, f"Expected int64 output in compiled mode, got {compiled_result.dtype}"
+
+    print("Test Passed: tf.compat.v1.argmax is consistent between eager and compiled modes with bfloat16 input.")
+
+if __name__ == "__main__":
+    test_argmax_bfloat16_compile_divergence()
+```

@@ -1,0 +1,65 @@
+```python
+import torch
+from torch._inductor import config
+
+# Global counter to track how many times the custom pass is executed
+pass_invocation_count = 0
+
+def dummy_custom_pass(graph):
+    """
+    A dummy graph pass that increments a counter.
+    This simulates a user-defined custom pre-pass.
+    """
+    global pass_invocation_count
+    pass_invocation_count += 1
+    return graph
+
+def test_torch_any_joint_custom_pre_pass():
+    """
+    Test case to verify that joint_custom_pre_pass is executed exactly once
+    when compiling a function using torch.any.
+    This addresses Issue 165624 where the pass was executed twice due to a merge mistake.
+    """
+    global pass_invocation_count
+    pass_invocation_count = 0
+
+    # Backup the original config to restore later
+    original_pass = config.joint_custom_pre_pass
+
+    try:
+        # Configure the inductor to use our custom pass
+        # This triggers the code path in torch/_inductor/fx_passes/joint_graph.py
+        config.joint_custom_pre_pass = dummy_custom_pass
+
+        # Define a function using the similar API: torch.any
+        def func_to_compile(x):
+            return torch.any(x)
+
+        # Compile the function using torch.compile (Original API)
+        # This triggers the inductor backend where the bug resides
+        compiled_func = torch.compile(func_to_compile, backend="inductor")
+
+        # Create a non-constant input to ensure graph construction and execution
+        input_data = torch.tensor([False, True, False])
+
+        # Execute the compiled function
+        result = compiled_func(input_data)
+
+        # 1. Verify functional correctness of torch.any
+        assert result.item() == True, "torch.any result is incorrect"
+
+        # 2. Verify the bug fix: The custom pass should run exactly once.
+        # The bug (Issue 165624) caused it to run twice.
+        assert pass_invocation_count == 1, (
+            f"joint_custom_pre_pass was invoked {pass_invocation_count} times. "
+            "Expected 1. This indicates a regression of Issue 165624."
+        )
+
+    finally:
+        # Restore the original configuration
+        config.joint_custom_pre_pass = original_pass
+
+if __name__ == "__main__":
+    test_torch_any_joint_custom_pre_pass()
+    print("Test passed successfully.")
+```

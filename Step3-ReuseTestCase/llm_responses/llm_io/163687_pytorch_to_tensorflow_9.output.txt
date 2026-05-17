@@ -1,0 +1,109 @@
+```python
+import tensorflow as tf
+
+# Helper to mimic flex_attention logic for the test structure
+# Note: This is a simplified semantic equivalent using standard TF ops
+# to preserve the computational graph structure of the original bug.
+def flex_attention_tf(q, k, v):
+    # Simulating attention: (B, H, N, D) @ (B, H, M, D).T -> (B, H, N, M)
+    attn = tf.matmul(q, k, transpose_b=True)
+    attn = tf.nn.softmax(attn)
+    # (B, H, N, M) @ (B, H, M, D) -> (B, H, N, D)
+    return tf.matmul(attn, v)
+
+# Adapted function from the original bug report
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10):
+    # We wrap the logic in tf.name_scope to test the API behavior
+    # The original bug highlights divergence between eager and compile modes.
+    # tf.name_scope behaves differently in eager vs graph (tf.function) modes.
+    with tf.name_scope("flex_attention_chain"):
+        t0 = arg0
+        t1 = arg1
+        t2 = arg2
+        t3 = flex_attention_tf(t0, t1, t2)
+
+        t4 = arg3
+        t5 = arg4
+        t6 = arg5
+        t7 = flex_attention_tf(t4, t5, t6)
+
+        t8 = flex_attention_tf(t3, t7, t7)
+
+        t9 = arg6
+        t10 = arg7
+        t11 = flex_attention_tf(t9, t7, t10)
+
+        t12 = flex_attention_tf(t11, t8, t3)
+
+        t13 = arg8
+        t14 = arg9
+        t15 = flex_attention_tf(t13, t2, t14)
+
+        t16 = arg10
+        # Mimic t16.clone(); t17.zero_()
+        t17 = tf.identity(t16)
+        t17 = tf.zeros_like(t17)
+        
+        t18 = flex_attention_tf(t17, t8, t3)
+
+        t19 = flex_attention_tf(t15, t17, t18)
+
+        t20 = flex_attention_tf(t8, t12, t19)
+        output = t20
+        return output
+
+def test_tf_name_scope_behavior():
+    # Setup inputs matching original shapes
+    # Using float32 and CPU to ensure it runs everywhere (original was CUDA)
+    arg0 = tf.random.normal([27, 26, 62, 122], dtype=tf.float32)
+    arg1 = tf.random.normal([27, 26, 124, 122], dtype=tf.float32)
+    arg2 = tf.random.normal([27, 26, 124, 122], dtype=tf.float32)
+    arg3 = tf.random.normal([27, 26, 124, 122], dtype=tf.float32)
+    arg4 = tf.random.normal([27, 26, 248, 122], dtype=tf.float32)
+    arg5 = tf.random.normal([27, 26, 248, 122], dtype=tf.float32)
+    arg6 = tf.random.normal([27, 26, 31, 122], dtype=tf.float32)
+    arg7 = tf.random.normal([27, 26, 124, 122], dtype=tf.float32)
+    arg8 = tf.random.normal([27, 26, 31, 122], dtype=tf.float32)
+    arg9 = tf.random.normal([27, 26, 124, 122], dtype=tf.float32)
+    arg10 = tf.random.normal([27, 26, 124, 122], dtype=tf.float32)
+
+    # 1. Eager Execution
+    # In eager mode, tf.name_scope may behave differently (e.g., skipping overhead)
+    # depending on the internal configuration, but generally allows execution.
+    print("Running Eager Execution...")
+    try:
+        out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+        print(f"Eager Output Shape: {out_eager.shape}")
+        assert out_eager.shape == (27, 26, 62, 122), "Eager mode shape mismatch"
+    except Exception as e:
+        print(f"Eager Execution Failed: {e}")
+        raise
+
+    # 2. Graph Execution (Compile)
+    # We use tf.function to compile the graph, similar to torch.compile.
+    # tf.name_scope should strictly apply the name prefix in the graph definition.
+    print("\nRunning Graph Execution (tf.function)...")
+    @tf.function
+    def compiled_foo(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10):
+        return foo(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10)
+
+    try:
+        out_graph = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+        print(f"Graph Output Shape: {out_graph.shape}")
+        assert out_graph.shape == (27, 26, 62, 122), "Graph mode shape mismatch"
+
+        # Verify the name scope was applied in the graph
+        # This checks the specific behavior of tf.name_scope in compiled mode
+        concrete_fn = compiled_foo.get_concrete_function(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+        graph = concrete_fn.graph
+        has_scope = any("flex_attention_chain" in op.name for op in graph.get_operations())
+        assert has_scope, "tf.name_scope was not applied in graph mode"
+        print("Assertion Passed: tf.name_scope found in graph definition.")
+
+    except Exception as e:
+        print(f"Graph Execution Failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_tf_name_scope_behavior()
+```

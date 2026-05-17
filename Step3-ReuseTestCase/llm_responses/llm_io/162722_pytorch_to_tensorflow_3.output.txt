@@ -1,0 +1,145 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# 1. Use the Similar API: Enable eager execution
+# This corresponds to the default state in PyTorch, against which torch.compile is compared.
+tf.compat.v1.enable_eager_execution()
+
+# 2. Adapt the Model Classes to TensorFlow/Keras
+
+class CausalAttention(tf.keras.layers.Layer):
+    def __init__(self, embed_size, heads):
+        super(CausalAttention, self).__init__()
+        self.embed_size = embed_size
+        self.heads = heads
+        self.head_dim = embed_size // heads
+        assert self.head_dim * heads == embed_size, "Embed size needs to be divisible by heads"
+        
+        # TensorFlow's MultiHeadAttention handles the projection logic (values, keys, queries, fc_out)
+        # We use key_dim=head_dim to match the PyTorch implementation's dimensions
+        self.mha = tf.keras.layers.MultiHeadAttention(
+            num_heads=heads, 
+            key_dim=self.head_dim,
+            output_shape=embed_size
+        )
+
+    def call(self, values, keys, query, mask):
+        # TensorFlow MHA expects inputs in shape (batch, seq_len, embedding_dim)
+        # The mask in TF MHA is usually (batch, 1, 1, seq_len) or (batch, seq_len, seq_len)
+        # We adapt the mask logic to fit TF's expectations if provided, otherwise pass None
+        
+        attention_output, _ = self.mha(
+            query=query,
+            value=values,
+            key=keys,
+            attention_mask=mask,
+            use_causal_mask=(mask is None) # Use causal mask if no explicit mask provided
+        )
+        return attention_output
+
+class CausalAttentionBlock(tf.keras.layers.Layer):
+    def __init__(self, embed_size, heads, forward_expansion, dropout):
+        super(CausalAttentionBlock, self).__init__()
+        self.attention = CausalAttention(embed_size, heads)
+        self.norm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.norm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        
+        self.feed_forward = tf.keras.Sequential([
+            tf.keras.layers.Dense(embed_size * forward_expansion, activation='relu'),
+            tf.keras.layers.Dense(embed_size)
+        ])
+        self.dropout = tf.keras.layers.Dropout(dropout)
+
+    def call(self, values, keys, query, mask, training=False):
+        # Attention block with residual connection
+        attn = self.attention(values, keys, query, mask)
+        x = self.norm1(attn + query)
+        x = self.dropout(x, training=training)
+        
+        # Feed forward block with residual connection
+        forward = self.feed_forward(x)
+        out = self.norm2(forward + x)
+        out = self.dropout(out, training=training)
+        return out
+
+class CausalAttentionDNN(tf.keras.Model):
+    def __init__(self, input_size, embed_size, num_layers, heads, forward_expansion, output_size, dropout, max_length):
+        super(CausalAttentionDNN, self).__init__()
+        self.embed_size = embed_size
+        self.word_embedding = tf.keras.layers.Embedding(input_size, embed_size)
+        self.position_embedding = tf.keras.layers.Embedding(max_length, embed_size)
+        
+        self.layers = [
+            CausalAttentionBlock(embed_size, heads, forward_expansion, dropout) 
+            for _ in range(num_layers)
+        ]
+        
+        self.fc = tf.keras.layers.Dense(output_size)
+        self.dropout = tf.keras.layers.Dropout(dropout)
+
+    def call(self, x, mask, training=False):
+        N, seq_length = tf.shape(x)[0], tf.shape(x)[1]
+        
+        # Create position indices
+        positions = tf.range(start=0, limit=seq_length, delta=1)
+        positions = tf.expand_dims(positions, 0)
+        positions = tf.tile(positions, [N, 1])
+        
+        # Embeddings
+        out = self.dropout(self.word_embedding(x) + self.position_embedding(positions), training=training)
+        
+        # Pass through transformer blocks
+        for layer in self.layers:
+            out = layer(out, out, out, mask, training=training)
+            
+        out = self.fc(out)
+        return out
+
+# 3. Test Case Logic
+# The original bug reports numerical inconsistency between eager and compiled (torch.compile) modes.
+# Here, we compare Eager mode (enabled by the API) vs Graph mode (tf.function).
+
+def test_numerical_consistency():
+    # Hyperparameters
+    input_size = 100
+    embed_size = 256
+    num_layers = 2
+    heads = 8
+    forward_expansion = 4
+    output_size = 10
+    dropout = 0.1
+    max_length = 50
+    batch_size = 4
+    seq_len = 10
+
+    # Initialize Model
+    model = CausalAttentionDNN(
+        input_size, embed_size, num_layers, heads, forward_expansion, output_size, dropout, max_length
+    )
+
+    # Create dummy input
+    x = tf.random.uniform((batch_size, seq_len), minval=0, maxval=input_size, dtype=tf.int32)
+    mask = tf.ones((batch_size, 1, 1, seq_len)) # Simple mask for compatibility
+
+    # 1. Run in Eager Mode (Enabled by tf.compat.v1.enable_eager_execution)
+    print("Running in Eager Mode...")
+    output_eager = model(x, mask, training=False)
+    
+    # 2. Run in Graph/Compiled Mode (Equivalent to torch.compile)
+    print("Running in Graph Mode (tf.function)...")
+    compiled_model = tf.function(model)
+    output_graph = compiled_model(x, mask, training=False)
+
+    # 3. Verify Numerical Consistency
+    # The bug report implies severe differences. We assert closeness to verify the fix/behavior.
+    try:
+        np.testing.assert_allclose(output_eager.numpy(), output_graph.numpy(), rtol=1e-5, atol=1e-5)
+        print("Test Passed: Eager and Graph modes are numerically consistent.")
+    except AssertionError as e:
+        print(f"Test Failed: Numerical inconsistency detected.\n{e}")
+        raise
+
+if __name__ == "__main__":
+    test_numerical_consistency()
+```

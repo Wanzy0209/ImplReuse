@@ -1,0 +1,132 @@
+```python
+import tensorflow as tf
+import tempfile
+import os
+import numpy as np
+
+def test_tf_data_save_mixed_precision_divergence():
+    """
+    Test case for tf.data.experimental.save based on PyTorch Issue 164086.
+    
+    The original bug involves an IncompatibleTypeError between fp16 and float64
+    during eager vs compiled execution, triggered by a sequence of operations
+    (tanh, linear, pow, embedding) culminating in a mixed-precision addition.
+    
+    This test translates the logic to TensorFlow, wraps it in tf.function (mimicking
+    torch.compile), and uses tf.data.experimental.save to persist the result,
+    ensuring the save operation handles the mixed-precision data correctly.
+    """
+    
+    # Enable strict type checking to mimic the divergence scenario
+    tf.config.experimental.enable_op_determinism()
+
+    # Define the function mimicking the original bug's logic
+    # We use tf.function to simulate the compilation aspect of the bug
+    @tf.function
+    def foo_tf(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+        # t0 = arg0 (int64)
+        t0 = arg0
+        
+        # t1 = torch.tanh(t0) -> TF tanh requires float, we cast back to int64 
+        # to preserve the embedding index flow described in the bug comments.
+        t1 = tf.cast(tf.tanh(tf.cast(t0, tf.float32)), tf.int64)
+        
+        # t2 = t1.clone(); t2.zero_()
+        t2 = tf.zeros_like(t1)
+        
+        # t3 = arg1 (float16)
+        t3 = arg1
+        
+        # t4 = arg2 (float16)
+        t4 = arg2
+        
+        # t5 = torch.nn.functional.linear(t3, t4) -> MatMul
+        # t3: (50000, 128), t4: (46, 128). Linear implies t4 is transposed.
+        t5 = tf.linalg.matmul(t3, t4, transpose_b=True)
+        
+        # t6 = arg3 (float16)
+        t6 = arg3
+        
+        # t7 = t6.max(dim=1).values
+        t7 = tf.reduce_max(t6, axis=1)
+        
+        # t8 = arg4, t9 = arg5
+        t8 = arg4
+        t9 = arg5
+        
+        # t10 = torch.cat([t8, t9], dim=0)
+        t10 = tf.concat([t8, t9], axis=0)
+        
+        # t11 = torch.pow(..., ...) -> Simplified chain of pow operations
+        # The bug report chains pow(t5, t7), etc. We replicate the type interaction.
+        t11 = tf.pow(tf.pow(tf.pow(tf.pow(t5, t7), t10), t5), t7)
+        
+        # t12 = torch.nn.functional.embedding(...)
+        # Clamp indices
+        clamped_indices = tf.clip_by_value(t2, 0, tf.shape(t11)[0] - 1)
+        t12 = tf.nn.embedding_lookup(t11, clamped_indices)
+        
+        # output = t12 + sentinel
+        # t12 is float16, sentinel is float64. This is the divergence trigger.
+        output = t12 + sentinel
+        
+        return output
+
+    # Setup inputs matching the bug report shapes and dtypes
+    # arg0: int64
+    arg0 = tf.constant(np.random.randint(0, 1000, (42, 56)), dtype=tf.int64)
+    # arg1: float16
+    arg1 = tf.constant(np.random.rand(50000, 128), dtype=tf.float16)
+    # arg2: float16
+    arg2 = tf.constant(np.random.rand(46, 128), dtype=tf.float16)
+    # arg3: float16
+    arg3 = tf.constant(np.random.rand(50000, 4, 46), dtype=tf.float16)
+    # arg4: float16
+    arg4 = tf.constant(np.random.rand(25786, 46), dtype=tf.float16)
+    # arg5: float16
+    arg5 = tf.constant(np.random.rand(24214, 46), dtype=tf.float16)
+    # sentinel: float64 (The source of the type mismatch in the bug)
+    sentinel = tf.constant(0.0, dtype=tf.float64)
+
+    # 1. Run Eager Mode
+    print("Running Eager Mode...")
+    out_eager = foo_tf(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    print('Eager Success! ✅')
+
+    # 2. Run Compiled Mode (tf.function is already applied, but we ensure tracing)
+    print("Running Compiled Mode...")
+    out_compiled = foo_tf(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    print('Compile Success! ✅')
+
+    # 3. Test the Similar API: tf.data.experimental.save
+    # We save the output of the mixed-precision operation.
+    print(f"Testing tf.data.experimental.save with mixed precision output...")
+    
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        save_path = os.path.join(tmp_dir, "mixed_precision_data")
+        
+        # Create a dataset from the output tensor
+        # The output is (42, 56, 46), likely float64 due to promotion with sentinel
+        dataset = tf.data.Dataset.from_tensor_slices(out_compiled)
+        
+        # Save the dataset
+        tf.data.experimental.save(dataset, save_path)
+        
+        # Load the dataset to verify integrity
+        loaded_dataset = tf.data.experimental.load(
+            save_path, 
+            output_signature=tf.TensorSpec(shape=(46,), dtype=out_compiled.dtype)
+        )
+        
+        # Verify a sample
+        for i, (orig_elem, loaded_elem) in enumerate(zip(out_compiled, loaded_dataset)):
+            if i == 0:
+                # Check if the data matches (allowing for slight float differences if any, though here it's exact pass-through)
+                assert tf.reduce_all(tf.equal(orig_elem, loaded_elem)).numpy(), "Data mismatch after load"
+                break
+        
+        print('Save and Load Success! ✅')
+
+if __name__ == '__main__':
+    test_tf_data_save_mixed_precision_divergence()
+```

@@ -1,0 +1,73 @@
+```python
+import tensorflow as tf
+
+# Configure TensorFlow to behave similarly to the eager/compile context
+tf.compat.v1.enable_eager_execution()
+
+# Set random seed for reproducibility
+tf.random.set_seed(19989)
+
+def fuzzed_program(arg_0, sentinel):
+    # Scalar arithmetic
+    var_node_2 = -6  # dtype=int64
+    var_node_3 = arg_0  # dtype=int32
+    var_node_1 = var_node_2 * var_node_3  # Result dtype depends on promotion rules
+    
+    # Tensor creation equivalent to torch.full
+    var_node_5 = tf.fill([], 1)  # size=(), dtype defaults to int32, cast to int64 to match
+    var_node_5 = tf.cast(var_node_5, tf.int64)
+    
+    # In PyTorch .item() extracts a scalar. In TF graph mode, we keep it as a tensor
+    # to maintain compatibility with tf.function tracing, unless using tf.py_function.
+    # We simulate the value usage directly.
+    var_node_4 = var_node_5 
+    
+    # Division operation
+    var_node_0 = var_node_1 / var_node_4
+    
+    # Interaction with sentinel (gradient tracking placeholder)
+    result = var_node_0 * sentinel
+    
+    # Check for complex type
+    if result.dtype.is_complex:
+        result = tf.math.real(result)
+        
+    return result
+
+# Sentinel tensor to ensure gradient computation context
+# In PyTorch: requires_grad=True. In TF: Variable.
+sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+# Argument generation
+# PyTorch: torch.randn(()).item() -> Python scalar
+# TF: 0-d tensor
+arg_0 = tf.random.uniform((), minval=-10, maxval=10, dtype=tf.int32)
+
+# Test 1: Eager Execution inside name_scope
+print("Testing Eager mode with tf.compat.v1.name_scope...")
+try:
+    with tf.compat.v1.name_scope("eager_test_scope"):
+        result_eager = fuzzed_program(arg_0, sentinel)
+    print(f'✅ eager success: {result_eager.numpy()}')
+except Exception as e:
+    print(f'❌ eager failed: {e}')
+
+# Test 2: Compiled Execution (tf.function) inside name_scope
+# tf.function is the TensorFlow equivalent of torch.compile for graph optimization
+print("Testing Compiled mode (tf.function) with tf.compat.v1.name_scope...")
+try:
+    compiled_program = tf.function(fuzzed_program)
+    
+    with tf.compat.v1.name_scope("compiled_test_scope"):
+        result_compiled = compiled_program(arg_0, sentinel)
+    print(f'✅ compile success: {result_compiled.numpy()}')
+except Exception as e:
+    print(f'❌ compile failed: {e}')
+
+# Verify consistency
+if 'result_eager' in locals() and 'result_compiled' in locals():
+    if tf.reduce_all(tf.equal(result_eager, result_compiled)):
+        print('✅ Results match between eager and compiled modes.')
+    else:
+        print('⚠️ Results differ between eager and compiled modes.')
+```

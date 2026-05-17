@@ -1,0 +1,58 @@
+```python
+import torch
+
+def test_narrow_with_different_layouts():
+    """
+    Test case for torch.narrow based on Issue 164491.
+    
+    The original bug report highlights that _scaled_mm and _int_mm fail or perform poorly
+    when the right-hand side matrix is row-major (or non-contiguous/transposed).
+    
+    This test verifies that torch.narrow correctly handles tensors with different
+    memory layouts (contiguous vs. non-contiguous/transposed) without raising errors,
+    ensuring it is robust to the layout variations that caused issues in the reported APIs.
+    """
+    
+    # Create a standard tensor (Row-Major / Contiguous)
+    # Shape: (10, 10)
+    x = torch.randn(10, 10)
+    
+    # Scenario 1: Standard Contiguous Tensor
+    # This represents the "happy path" often expected by kernels.
+    try:
+        narrowed_contiguous = torch.narrow(x, dim=0, start=2, length=5)
+        expected_contiguous = x[2:7, :]
+        assert torch.equal(narrowed_contiguous, expected_contiguous), \
+            "torch.narrow failed on contiguous tensor"
+    except Exception as e:
+        print(f"Error with contiguous tensor: {e}")
+        raise
+
+    # Scenario 2: Non-Contiguous Tensor (Transposed / Column-Major layout)
+    # The bug report mentions: "weights matrix in a Linear layer is transposed... 
+    # either one of those will be row-major [or non-contiguous in memory]".
+    # We transpose the tensor to simulate this specific memory layout.
+    x_transposed = x.t()  # Now non-contiguous (strides are swapped)
+    
+    try:
+        # Apply narrow to the non-contiguous tensor
+        narrowed_transposed = torch.narrow(x_transposed, dim=0, start=2, length=5)
+        
+        # Verify correctness against standard slicing
+        expected_transposed = x_transposed[2:7, :]
+        assert torch.equal(narrowed_transposed, expected_transposed), \
+            "torch.narrow failed on non-contiguous (transposed) tensor"
+            
+        # Verify that narrow returns a view (shares storage) when possible
+        assert narrowed_transposed.storage().data_ptr() == x_transposed.storage().data_ptr(), \
+            "torch.narrow did not return a view for the transposed tensor"
+            
+    except Exception as e:
+        print(f"Error with non-contiguous tensor: {e}")
+        raise
+
+    print("Test passed: torch.narrow handles both contiguous and non-contiguous tensors correctly.")
+
+if __name__ == "__main__":
+    test_narrow_with_different_layouts()
+```

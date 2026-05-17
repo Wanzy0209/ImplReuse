@@ -1,0 +1,65 @@
+```python
+import torch
+import torch.distributed as dist
+import os
+import sys
+
+# Check availability
+if not dist.is_available():
+    print("torch.distributed is not available. Exiting.")
+    sys.exit(0)
+
+# Minimal setup for standalone execution (simulating a single-process environment)
+os.environ['MASTER_ADDR'] = 'localhost'
+os.environ['MASTER_PORT'] = '12355'
+
+try:
+    # Using 'gloo' backend as it is generally available for CPU
+    dist.init_process_group(backend='gloo', rank=0, world_size=1)
+except Exception as e:
+    print(f"Failed to initialize process group: {e}")
+    sys.exit(0)
+
+# Wrapper over the distributed irecv operation, mimicking MPSSoftshrink
+class DistributedRecvOp:
+    __constants__ = ["src"]
+    src: int
+
+    def __init__(self, src: int = 0) -> None:
+        super().__init__()
+        self.src = src
+
+    def forward(self, input_tensor):
+        # Adaptation: Using torch.distributed.irecv instead of compiled_lib.mps_softshrink
+        work = dist.irecv(input_tensor, src=self.src)
+        work.wait()
+        return input_tensor
+
+# Wrapper over the Sequential layer, mimicking CustomMPSSoftshrinkModel
+class DistributedModel:
+    def __init__(self):
+        super().__init__()
+        self.recv_op = DistributedRecvOp()
+
+    def forward(self, x):
+        return self.recv_op.forward(x)
+
+# Test execution
+if __name__ == "__main__":
+    # Create a tensor with data to send
+    tensor = torch.ones(5) * 42
+    
+    # To make irecv complete (receiving from self), we must send first
+    dist.send(tensor, dst=0)
+    
+    model = DistributedModel()
+    # Receiving into the same tensor
+    output = model.forward(tensor)
+    
+    # Verify the data received matches the data sent
+    assert torch.equal(output, torch.ones(5) * 42), "Data mismatch in irecv"
+    
+    print("Test passed: torch.distributed.irecv executed successfully.")
+    
+    dist.destroy_process_group()
+```
