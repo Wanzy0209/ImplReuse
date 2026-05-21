@@ -1,0 +1,60 @@
+```python
+import torch
+import torch.nn.attention as attention
+import warnings
+
+def test_flex_attention_recompile_limit():
+    """
+    Test case to reproduce the recompile limit issue with flex_attention.
+    
+    This test leverages the concept of configuration limits (similar to 
+    tf.config.LogicalDeviceConfiguration's memory_limit) by explicitly 
+    setting torch._dynamo.config.recompile_limit to a low value to 
+    trigger the failure condition described in the bug report.
+    """
+    
+    # Configure the recompile limit to a small number to trigger the bug quickly.
+    # This mirrors the configuration pattern seen in the similar API 
+    # (tf.config.LogicalDeviceConfiguration) where resource limits are explicitly set.
+    torch._dynamo.config.recompile_limit = 2
+
+    # Define a standard score_mod function for flex_attention
+    def score_mod(score, b, h, i, j):
+        return score
+
+    # Define the model/function to compile
+    def flex_attention_fn(q, k, v):
+        return attention.flex_attention(q, k, v, score_mod=score_mod)
+
+    # Compile the function using torch.compile
+    compiled_fn = torch.compile(flex_attention_fn)
+
+    batch_size, seq_len, num_heads, head_dim = 2, 16, 4, 8
+    device = "cpu"
+
+    # Capture warnings to check for the recompile limit error
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        
+        # Run the compiled function multiple times.
+        # The bug report indicates that object ID checks on 'key' trigger recompilation.
+        # By creating new tensors in each iteration, we simulate the conditions
+        # that lead to hitting the recompile limit.
+        for i in range(5):
+            q = torch.randn(batch_size, num_heads, seq_len, head_dim, device=device)
+            k = torch.randn(batch_size, num_heads, seq_len, head_dim, device=device)
+            v = torch.randn(batch_size, num_heads, seq_len, head_dim, device=device)
+            
+            out = compiled_fn(q, k, v)
+
+        # Verify that the recompile limit warning was raised
+        recompile_warnings = [warning for warning in w 
+                              if "recompile_limit" in str(warning.message)]
+        
+        # Assertion to confirm the bug condition (hitting the limit)
+        assert len(recompile_warnings) > 0, \
+            "Expected to hit torch._dynamo config.recompile_limit, but no warning was found."
+
+if __name__ == "__main__":
+    test_flex_attention_recompile_limit()
+```

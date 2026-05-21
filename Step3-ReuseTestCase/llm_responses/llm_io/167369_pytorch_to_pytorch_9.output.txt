@@ -1,0 +1,49 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+# The class from the bug report
+class Config:
+    def __repr__(self):
+        return "Config()"
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Create the object
+    config = Config()
+    
+    # Prepare the list for broadcasting
+    # Rank 0 has the object, others have None
+    object_list = [config] if rank == 0 else [None]
+
+    # The similar API call
+    # Replaces torch.compile with torch.distributed.broadcast_object_list
+    # This verifies that the similar API can handle the user-defined object
+    # that caused issues in the original bug report context.
+    dist.broadcast_object_list(object_list, src=0)
+
+    # Verification
+    # All ranks should now have the Config object
+    assert isinstance(object_list[0], Config), f"Rank {rank} did not receive Config object"
+    assert repr(object_list[0]) == "Config()", f"Rank {rank} received incorrect repr"
+    
+    print(f"Rank {rank} passed.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+```

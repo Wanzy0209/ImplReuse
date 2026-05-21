@@ -1,0 +1,63 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import torch.utils._pytree as pytree
+import os
+
+# Classes from the original bug report
+class Foo:
+    pass
+
+class Bar:
+    def __eq__(self, other):
+        return super().__eq__(other)
+
+    def __hash__(self):
+        return 0
+
+pytree.register_constant(Bar)
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use gloo backend for CPU compatibility
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+# Adapted function using the similar API (torch.distributed.recv_object_list)
+# wrapped in torch.compile to test the original bug context
+@torch.compile(backend="eager")
+def fn_recv(obj_list):
+    dist.recv_object_list(obj_list)
+
+def run(rank, world_size):
+    setup(rank, world_size)
+    
+    if rank == 0:
+        # Sender: Create the object structure that triggered the original bug
+        obj = Foo()
+        obj.attr = {3: Bar()}
+        dist.send_object_list([obj], dst=1)
+    else:
+        # Receiver: Use the compiled function to receive the object
+        # This tests if torch.compile can generate guards for the temporary variables
+        # involved in recv_object_list with these specific custom types.
+        recv_list = [None]
+        fn_recv(recv_list)
+        
+        # Basic assertion to verify successful transmission
+        assert recv_list[0] is not None
+        assert isinstance(recv_list[0], Foo)
+        assert 3 in recv_list[0].attr
+        assert isinstance(recv_list[0].attr[3], Bar)
+        
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use spawn to run distributed code
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)
+```

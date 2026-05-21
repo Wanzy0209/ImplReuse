@@ -1,0 +1,81 @@
+```python
+import tensorflow as tf
+
+# Set random seed to match the original test case
+tf.random.set_seed(1215252001)
+
+# Define inputs
+# Note: PyTorch's as_strided with specific strides is translated to standard tensor creation here.
+# TensorFlow tensors are immutable and do not support custom strides in the same way as PyTorch views.
+arg_0 = tf.random.uniform((9, 1, 15, 4), minval=5, maxval=30, dtype=tf.int32)
+arg_1 = tf.random.uniform((20, 15), minval=5, maxval=30, dtype=tf.int64)
+arg_2 = tf.random.uniform((18, 15), minval=5, maxval=30, dtype=tf.int64)
+
+# Sentinel tensor to ensure gradient computation logic is preserved
+# In TensorFlow, we use tf.Variable with trainable=True or watch it via GradientTape.
+# Here we define it as a tensor to be used in the operation.
+sentinel = tf.constant(1.0, dtype=tf.float32)
+
+def fuzzed_program(arg_0, arg_1, arg_2, sentinel):
+    # The API under test: tf.keras.name_scope
+    # This context manager groups operations together in the TensorFlow graph.
+    with tf.keras.name_scope("fuzzed_logic"):
+        # var_node_4 = arg_0
+        # var_node_3 = torch.squeeze(var_node_4)
+        var_node_3 = tf.squeeze(arg_0)
+
+        # var_node_2 = torch.chunk(var_node_3, 4, dim=2)[0]
+        # tf.split returns a list, we take the first element.
+        var_node_2 = tf.split(var_node_3, 4, axis=2)[0]
+
+        # var_node_1 = torch.squeeze(var_node_2)
+        var_node_1 = tf.squeeze(var_node_2)
+
+        # var_node_7 = arg_1
+        # _input_size_var_node_6 = var_node_7.size(0)
+        input_size = tf.shape(arg_1)[0]
+
+        # _index_var_node_6 = torch.randint(0, _input_size_var_node_6, (18, 15), ...)
+        index_var = tf.random.uniform((18, 15), minval=0, maxval=input_size, dtype=tf.int64)
+
+        # var_node_6 = torch.gather(var_node_7, 0, _index_var_node_6)
+        var_node_6 = tf.gather(arg_1, index_var, axis=0)
+
+        # var_node_5 = torch.chunk(var_node_6, 2, dim=0)[0]
+        var_node_5 = tf.split(var_node_6, 2, axis=0)[0]
+
+        # var_node_0 = torch.mul(var_node_1, var_node_5)
+        var_node_0 = tf.multiply(var_node_1, var_node_5)
+
+        # Ensure gradient computation by multiplying with sentinel
+        # We cast to float to match sentinel type if necessary, or cast sentinel
+        result = tf.cast(var_node_0, tf.float32) * sentinel
+        
+        return result
+
+# Test Eager Execution
+print("Running Eager Execution...")
+try:
+    result_eager = fuzzed_program(arg_0, arg_1, arg_2, sentinel)
+    print("✅ eager success")
+except Exception as e:
+    print(f"❌ eager failed: {e}")
+
+# Test Compiled Execution (Graph Mode)
+# In TensorFlow, tf.function is the equivalent of torch.compile for capturing graphs.
+print("Running Compiled Execution (tf.function)...")
+try:
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(arg_0, arg_1, arg_2, sentinel)
+    print("✅ compile success")
+except Exception as e:
+    print(f"❌ compile failed: {e}")
+
+# Verify Divergence
+# Check if results match between eager and compiled modes
+if 'result_eager' in locals() and 'result_compiled' in locals():
+    if tf.reduce_all(tf.equal(result_eager, result_compiled)).numpy():
+        print("✅ No divergence detected between eager and compiled modes.")
+    else:
+        print("❌ Divergence detected between eager and compiled modes.")
+```

@@ -1,0 +1,59 @@
+```python
+import tensorflow as tf
+
+def test_bessel_y1_non_contiguous():
+    """
+    Adapted test case for Issue ID: 167154 (MPS Buffer Allocation Regression Bug).
+    
+    Original PyTorch Bug:
+    The MPS backend failed to allocate buffers of the right size when given 
+    non-contiguous tensors created with specific strides (e.g., stride 0 for broadcasting).
+    
+    Adaptation for TensorFlow:
+    We mimic the non-contiguous input using tf.broadcast_to (which creates a view 
+    with stride 0 logic) and pass it to tf.math.special.bessel_y1 to verify 
+    buffer handling.
+    """
+    
+    # Original PyTorch parameters
+    # shape = (5, 499, 768)
+    # stride = (0, 768, 1) -> The first dimension is broadcasted (stride 0)
+    
+    # Recreate the tensor structure in TensorFlow
+    # We create a base tensor of shape (1, 499, 768) and broadcast it to (5, 499, 768).
+    # This results in a non-contiguous tensor layout similar to the PyTorch as_strided example.
+    base_shape = (1, 499, 768)
+    target_shape = (5, 499, 768)
+    
+    # Create base tensor
+    # Using float32 to match the original bug report's dtype
+    base_tensor = tf.random.uniform(base_shape, minval=0.5, maxval=5.0, dtype=tf.float32)
+    
+    # Create the non-contiguous input tensor
+    # This mimics the stride=(0, 768, 1) behavior where the first dimension is a view
+    input_tensor = tf.broadcast_to(base_tensor, target_shape)
+    
+    # Verify the tensor is non-contiguous (conceptually in TF, this is a broadcasted view)
+    assert input_tensor.shape == target_shape
+    
+    # Call the target API
+    # The original bug triggered an assertion failure in the MPS backend:
+    # "failed assertion `... buffer is not large enough. Must be ... bytes`"
+    # We check if this operation handles the non-contiguous input correctly.
+    try:
+        result = tf.math.special.bessel_y1(input_tensor)
+        
+        # Verify the output shape matches the input shape
+        assert result.shape == target_shape
+        
+        # If we reach here, the operation handled the non-contiguous tensor without crashing
+        print("Test passed: tf.math.special.bessel_y1 handled non-contiguous input correctly.")
+        
+    except tf.errors.InternalError as e:
+        # Catch potential backend errors similar to the PyTorch MPS assertion failure
+        print(f"Test failed with backend error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_bessel_y1_non_contiguous()
+```

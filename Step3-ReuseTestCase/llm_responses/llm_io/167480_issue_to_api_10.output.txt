@@ -1,0 +1,83 @@
+```python
+import unittest
+from unittest.mock import patch, MagicMock
+import tensorflow as tf
+import os
+import sys
+
+# The original bug (Issue 167480) involved OS command injection in 
+# torch.utils.cpp_extension.load_inline via the 'extra_cflags' parameter.
+# The function constructed a shell command using user input and executed it
+# with subprocess.check_output(shell=True).
+#
+# This test case checks if the similar API, 
+# tf.experimental.dispatch_for_binary_elementwise_apis, exhibits a similar
+# vulnerability when handling user-supplied inputs (type annotations).
+# We verify that the API does not attempt to execute shell commands when
+# processing potentially malicious inputs.
+
+class TestDispatchForBinaryElementwiseApisSecurity(unittest.TestCase):
+
+    @patch('subprocess.check_output')
+    @patch('subprocess.run')
+    @patch('os.system')
+    def test_command_injection_via_type_arguments(self, mock_system, mock_run, mock_check_output):
+        """
+        Test that dispatch_for_binary_elementwise_apis does not execute
+        shell commands when provided with malicious input strings,
+        similar to the PyTorch OS command injection vulnerability.
+        """
+        # Malicious payload intended to execute a shell command if passed unsafely
+        # e.g., "type; rm -rf /"
+        malicious_payload = "; touch /tmp/pwned"
+
+        # We attempt to pass the malicious payload to the API.
+        # The API expects types (classes), but we test if it blindly stringifies
+        # arguments and passes them to a shell (like the vulnerable PyTorch code did).
+
+        # Scenario 1: Passing a raw string (invalid type, but tests input handling)
+        try:
+            @tf.experimental.dispatch_for_binary_elementwise_apis(malicious_payload, str)
+            def handler1(api_func, x, y):
+                return api_func(x, y)
+        except (TypeError, ValueError, AttributeError):
+            # It is acceptable for the API to reject invalid types.
+            # The critical check is that it did not execute a command.
+            pass
+
+        # Scenario 2: Passing a class with a malicious name (valid type, malicious metadata)
+        class MaliciousType:
+            pass
+        
+        # Modify the class name to include shell metacharacters
+        MaliciousType.__name__ = malicious_payload
+
+        try:
+            @tf.experimental.dispatch_for_binary_elementwise_apis(MaliciousType, str)
+            def handler2(api_func, x, y):
+                return api_func(x, y)
+        except Exception:
+            # Registration might succeed or fail, but should not trigger shell execution
+            pass
+
+        # Scenario 3: Passing a class with a malicious module name
+        class MaliciousModuleType:
+            pass
+        MaliciousModuleType.__module__ = malicious_payload
+
+        try:
+            @tf.experimental.dispatch_for_binary_elementwise_apis(MaliciousModuleType, str)
+            def handler3(api_func, x, y):
+                return api_func(x, y)
+        except Exception:
+            pass
+
+        # Assert that no shell commands were executed during the API calls.
+        # If the API were vulnerable like the PyTorch issue, one of these mocks would be called.
+        mock_check_output.assert_not_called()
+        mock_run.assert_not_called()
+        mock_system.assert_not_called()
+
+if __name__ == '__main__':
+    unittest.main()
+```

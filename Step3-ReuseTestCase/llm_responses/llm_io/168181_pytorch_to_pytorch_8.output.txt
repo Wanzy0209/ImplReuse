@@ -1,0 +1,96 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import unittest
+import socket
+import os
+
+def find_free_port():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+class TestDistributedRecvObjectList(unittest.TestCase):
+    """
+    Test case adapted from the Triton kernel .cpu() bug report.
+    Verifies correctness of torch.distributed.recv_object_list when receiving
+    on GPU and immediately moving to CPU, potentially within a compiled context.
+    """
+    
+    def setUp(self):
+        super().setUp()
+        self._master_port = find_free_port()
+        self._master_addr = "127.0.0.1"
+
+    @property
+    def world_size(self):
+        return 2
+
+    def _test_recv_object_list_to_cpu_impl(self):
+        rank = dist.get_rank()
+        
+        if rank == 0:
+            # Rank 0: Sender
+            # Create a tensor and send it
+            tensor = torch.randn(4, 4)
+            dist.send_object_list([tensor], dst=1)
+        else:
+            # Rank 1: Receiver
+            # Adapted function f from the original bug report.
+            # Original: Triton kernel (GPU) -> .cpu()
+            # Adapted: recv_object_list (GPU) -> .cpu()
+            def f():
+                obj_list = [None]
+                # Receive the object onto the GPU device
+                dist.recv_object_list(obj_list, src=0, device="cuda")
+                # Move the received GPU tensor to CPU and perform an operation
+                out_cpu = obj_list[0].cpu() + 1
+                return out_cpu
+
+            # Run eager version
+            eager_out = f()
+
+            # Run compiled version
+            # Note: Distributed ops typically graph-break, but we wrap it
+            # to follow the pattern of the original bug report.
+            compiled_f = torch.compile(f)
+            compiled_out = compiled_f()
+
+            # Verify correctness
+            self.assertEqual(eager_out, compiled_out)
+
+    def test_recv_object_list_to_cpu(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available")
+
+        mp.spawn(
+            self._run_worker,
+            args=(self._test_recv_object_list_to_cpu_impl,),
+            nprocs=self.world_size,
+            join=True
+        )
+
+    def _run_worker(self, rank, test_fn):
+        os.environ["MASTER_ADDR"] = self._master_addr
+        os.environ["MASTER_PORT"] = str(self._master_port)
+        
+        # Initialize process group
+        dist.init_process_group(
+            backend="gloo", # gloo is sufficient for object_list
+            rank=rank, 
+            world_size=self.world_size
+        )
+        
+        if torch.cuda.is_available():
+            torch.cuda.set_device(rank)
+
+        test_fn()
+        
+        dist.destroy_process_group()
+
+if __name__ == '__main__':
+    unittest.main()
+```

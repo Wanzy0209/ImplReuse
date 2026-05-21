@@ -1,0 +1,65 @@
+```python
+import tensorflow as tf
+
+# Replicating the custom class structure from the original PyTorch bug report
+class Foo(tf.compat.v1.train.QueueRunner):
+    """Custom QueueRunner mimicking the Foo class in the original bug."""
+    pass
+
+class Bar:
+    """Custom class mimicking the Bar class in the original bug."""
+    def __eq__(self, other):
+        return super().__eq__(other)
+
+    def __hash__(self):
+        return 0
+
+# Setup for the target API (TF1 graph mode is required for add_queue_runner)
+tf.compat.v1.disable_eager_execution()
+
+def test_add_queue_runner_custom_object():
+    """
+    Adapts the original test case logic:
+    1. Define custom classes (Foo, Bar).
+    2. Perform an operation involving the custom object (Foo) and a collection/graph state.
+    3. Verify the behavior (originally a crash, here we verify correct handling).
+    """
+    with tf.Graph().as_default():
+        # Create a standard queue
+        queue = tf.compat.v1.queue.FIFOQueue(capacity=10, dtypes=[tf.float32])
+        
+        # Instantiate the custom QueueRunner (Foo)
+        # In the original bug: fn(torch.ones(3), Foo())
+        enqueue_op = queue.enqueue([1.0])
+        foo_instance = Foo(queue, [enqueue_op])
+
+        # The original bug logic involved a function call that modified state.
+        # Here we define a function that uses the target API to modify graph state.
+        def add_to_collection(q, runner):
+            # Mimics: obj.attr = {3: Bar()}
+            # Instead of setting an attribute, we add the runner to the global collection.
+            tf.compat.v1.train.add_queue_runner(runner)
+            return q.size()
+
+        # Execute the logic
+        try:
+            # In TF1 graph mode, this builds the graph.
+            # We wrap it in a Session to verify execution context if needed,
+            # but add_queue_runner is a graph construction step.
+            with tf.compat.v1.Session() as sess:
+                # Call the function performing the API action
+                add_to_collection(queue, foo_instance)
+                
+                # Verify the side effect (mimicking the guard check in the original bug)
+                runners = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+                assert foo_instance in runners, "Custom QueueRunner was not added to the collection"
+                
+                print("Test passed: API handled custom object correctly.")
+
+        except Exception as e:
+            print(f"Error: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_add_queue_runner_custom_object()
+```

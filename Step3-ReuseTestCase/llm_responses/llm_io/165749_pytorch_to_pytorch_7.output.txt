@@ -1,0 +1,66 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run(rank, world_size):
+    setup(rank, world_size)
+    
+    # Adaptation: Use the specific dimensions from the bug report (d=65)
+    d = 65
+    # Create tensors on CUDA similar to the input in the bug report
+    x = torch.randn((1, 2, 32, 32)).cuda()
+    # Create a list of objects to send
+    object_list = [x, torch.randn(d, d).cuda()]
+
+    if rank == 0:
+        # Adaptation: Wrap the send_object_list call in torch.compile
+        # to verify if the similar API interacts correctly with torch.compile,
+        # mirroring the original bug report's scenario.
+        def send_op():
+            dist.send_object_list(object_list, dst=1, device=torch.device('cuda'))
+        
+        try:
+            compiled_send = torch.compile(send_op)
+            # Loop similar to the training loop in the original bug report
+            for _ in range(10):
+                compiled_send()
+            print("Rank 0: Compiled send_object_list executed successfully.")
+        except Exception as e:
+            print(f"Rank 0: Error during compiled send_object_list: {e}")
+
+    elif rank == 1:
+        # Receive the objects
+        recv_list = [None, None]
+        try:
+            # Loop to match the sender
+            for _ in range(10):
+                dist.recv_object_list(recv_list, src=0, device=torch.device('cuda'))
+                
+                # Verify data integrity
+                assert torch.allclose(object_list[0], recv_list[0])
+                assert torch.allclose(object_list[1], recv_list[1])
+            print("Rank 1: Receive and verification successful.")
+        except Exception as e:
+            print(f"Rank 1: Error during recv_object_list: {e}")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Check if CUDA is available before running
+    if not torch.cuda.is_available():
+        print("CUDA is not available. This test requires a CUDA environment.")
+    else:
+        mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)
+```

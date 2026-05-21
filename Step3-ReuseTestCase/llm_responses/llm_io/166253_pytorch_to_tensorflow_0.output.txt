@@ -1,0 +1,83 @@
+```python
+import tensorflow as tf
+import tempfile
+import os
+import shutil
+
+def test_matching_files_dataset_caching():
+    """
+    Adapted test case for tf.raw_ops.MatchingFilesDataset based on the 
+    torch.full caching bug report.
+    
+    Original Bug: torch.full cached the fill_value on the first call 
+    when using torch.compile with float64.
+    
+    This test verifies if tf.raw_ops.MatchingFilesDataset caches the 
+    input 'patterns' argument when traced with tf.function.
+    """
+    
+    # Setup: Create a temporary directory with distinct files to test pattern matching
+    temp_dir = tempfile.mkdtemp()
+    try:
+        file_a = os.path.join(temp_dir, "data_a.txt")
+        file_b = os.path.join(temp_dir, "data_b.txt")
+        
+        with open(file_a, 'w') as f:
+            f.write("content a")
+        with open(file_b, 'w') as f:
+            f.write("content b")
+
+        # Define the function using the similar API
+        # Corresponds to: def func_nojit(x): return torch.full((2, ), x, dtype=torch.float64)
+        def func_nojit(patterns):
+            return tf.raw_ops.MatchingFilesDataset(patterns=patterns)
+
+        # Apply compilation (equivalent to torch.compile)
+        # Corresponds to: func_jit = torch.compile(func_nojit)
+        func_jit = tf.function(func_nojit)
+
+        # Prepare inputs
+        # Corresponds to: x1 = torch.tensor(5.0, ...), x2 = torch.tensor(10.0, ...)
+        pattern_a = tf.constant([os.path.join(temp_dir, "data_a.txt")])
+        pattern_b = tf.constant([os.path.join(temp_dir, "data_b.txt")])
+
+        # Run without JIT
+        print("--- Running without tf.function ---")
+        ds_a_nojit = func_nojit(pattern_a)
+        result_a_nojit = list(ds_a_nojit.as_numpy_iterator())
+        print(f"Pattern A result: {result_a_nojit}")
+
+        ds_b_nojit = func_nojit(pattern_b)
+        result_b_nojit = list(ds_b_nojit.as_numpy_iterator())
+        print(f"Pattern B result: {result_b_nojit}")
+
+        # Run with JIT (Compiled)
+        print("\n--- Running with tf.function (Compiled) ---")
+        ds_a_jit = func_jit(pattern_a)
+        result_a_jit = list(ds_a_jit.as_numpy_iterator())
+        print(f"Pattern A result: {result_a_jit}")
+
+        ds_b_jit = func_jit(pattern_b)
+        result_b_jit = list(ds_b_jit.as_numpy_iterator())
+        print(f"Pattern B result: {result_b_jit}")
+
+        # Assertions to verify behavior
+        # 1. Verify non-jit results are distinct
+        assert result_a_nojit != result_b_nojit, "NoJIT: Results should differ for different patterns"
+        
+        # 2. Verify jit results are distinct (Checking for the caching bug)
+        assert result_a_jit != result_b_jit, "JIT Bug Detected: Results did not change with input (patterns cached)"
+        
+        # 3. Verify JIT results match non-JIT results
+        assert result_a_jit == result_a_nojit, "JIT result A differs from NoJIT result A"
+        assert result_b_jit == result_b_nojit, "JIT result B differs from NoJIT result B"
+
+        print("\nTest Passed: API correctly handles changing inputs under compilation.")
+
+    finally:
+        # Cleanup temporary directory
+        shutil.rmtree(temp_dir)
+
+if __name__ == "__main__":
+    test_matching_files_dataset_caching()
+```

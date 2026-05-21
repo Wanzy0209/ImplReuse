@@ -1,0 +1,113 @@
+Issue ID: 166290
+Title: [Fuzzer][Eager/Compile Divergence] IndexError: list index out of range
+Bug Description:
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(974450504)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0 # size=(17, 30, 17, 3), stride=(1530, 51, 3, 1), dtype=bool, device=cuda
+    var_node_2 = torch.chunk(var_node_3, 3, dim=3)[0] # size=(17, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda
+    var_node_5 = torch.full((17,), 3, dtype=torch.int64) # size=(17,), stride=(1,), dtype=int64, device=cuda
+    var_node_6 = arg_1 # size=(15,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_4 = var_node_5.size(0)
+    _index_var_node_4 = torch.randint(0, _input_size_var_node_4, (15,), device=var_node_5.device)
+    var_node_4 = torch.gather(var_node_5, 0, _index_var_node_4) # size=(15,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_1 = var_node_2.size(0)
+    _index_var_node_1 = torch.randint(0, _input_size_var_node_1, (15,), device=var_node_2.device)
+    var_node_1 = torch.index_select(var_node_2, 0, _index_var_node_1) # size=(15, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda
+    var_node_0 = torch.squeeze(var_node_1) # size=(15, 30, 17), stride=(510, 17, 1), dtype=bool, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+...
+
+Original API Under Test: torch.squeeze
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.distributions.constraints.cat
+Similarity score: 0.9940184354782104
+
+Similar API information:
+# Extracted call chain for torch.distributions.constraints.cat
+
+# --- torch.distributions.constraints._Cat ---
+class _Cat(Constraint):
+    """
+    Constraint functor that applies a sequence of constraints
+    `cseq` at the submatrices at dimension `dim`,
+    each of size `lengths[dim]`, in a way compatible with :func:`torch.cat`.
+    """
+
+    def __init__(self, cseq, dim=0, lengths=None):
+        assert all(isinstance(c, Constraint) for c in cseq)
+        self.cseq = list(cseq)
+        if lengths is None:
+            lengths = [1] * len(self.cseq)
+        self.lengths = list(lengths)
+        assert len(self.lengths) == len(self.cseq)
+        self.dim = dim
+        super().__init__()
+
+    @property
+    def is_discrete(self) -> bool:  # type: ignore[override]
+        return any(c.is_discrete for c in self.cseq)
+
+    @property
+    def event_dim(self) -> int:  # type: ignore[override]
+        return max(c.event_dim for c in self.cseq)
+
+    def check(self, value):
+        assert -value.dim() <= self.dim < value.dim()
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(974450504)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0 # size=(17, 30, 17, 3), stride=(1530, 51, 3, 1), dtype=bool, device=cuda
+    var_node_2 = torch.chunk(var_node_3, 3, dim=3)[0] # size=(17, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda
+    var_node_5 = torch.full((17,), 3, dtype=torch.int64) # size=(17,), stride=(1,), dtype=int64, device=cuda
+    var_node_6 = arg_1 # size=(15,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_4 = var_node_5.size(0)
+    _index_var_node_4 = torch.randint(0, _input_size_var_node_4, (15,), device=var_node_5.device)
+    var_node_4 = torch.gather(var_node_5, 0, _index_var_node_4) # size=(15,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_1 = var_node_2.size(0)
+    _index_var_node_1 = torch.randint(0, _input_size_var_node_1, (15,), device=var_node_2.device)
+    var_node_1 = torch.index_select(var_node_2, 0, _index_var_node_1) # size=(15, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda
+    var_node_0 = torch.squeeze(var_node_1) # size=(15, 30, 17), stride=(510, 17, 1), dtype=bool, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(0, 2, (26010,), dtype=torch.int8).bool(), (17, 30, 17, 3), (1530, 51, 3, 1))
+arg_1 = torch.as_strided(torch.randint(5, 30, (15,)).to(torch.int64), (15,), (1,))
+
+args = (arg_0, arg_1) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+The API torch.distributions.constraints.cat is identified as same-library similar to the original PyTorch API torch.squeeze.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

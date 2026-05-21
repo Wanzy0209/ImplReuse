@@ -1,0 +1,55 @@
+```python
+import tensorflow as tf
+import pytest
+
+def test_physical_device_4d_mask_stability():
+    """
+    Test case adapted from PyTorch issue #167515.
+    The original bug reported NaN values on MPS device when using a 4D attention mask
+    inside a torch.no_grad() context.
+    
+    This test leverages the similar API 'tf.config.PhysicalDevice' to verify
+    numerical stability on available physical devices (CPU/GPU) using a similar
+    4D mask structure. In TensorFlow, standard execution (without GradientTape)
+    corresponds to the 'no_grad' context.
+    """
+    
+    # Retrieve physical devices using the similar API: tf.config.PhysicalDevice
+    physical_devices = tf.config.list_physical_devices()
+    
+    # Filter for CPU and GPU to mimic the "cpu" and "mps" (GPU-like) testing in the bug report
+    target_devices = [d for d in physical_devices if d.device_type in ['CPU', 'GPU']]
+
+    if not target_devices:
+        pytest.skip("No CPU or GPU devices found")
+
+    for device in target_devices:
+        # Use the PhysicalDevice object to scope the execution
+        with tf.device(device.name):
+            # Recreate the 4D attention mask structure from the bug report
+            # Using float 1.0/0.0 for compatibility with TF operations
+            attention_mask = tf.constant([
+                [[[1.0, 0.0, 0.0, 0.0],
+                  [1.0, 1.0, 0.0, 0.0],
+                  [0.0, 0.0, 0.0, 0.0],
+                  [0.0, 0.0, 0.0, 0.0]]],
+                [[[1.0, 0.0, 0.0, 0.0],
+                  [1.0, 1.0, 0.0, 0.0],
+                  [1.0, 1.0, 1.0, 0.0],
+                  [1.0, 1.0, 1.0, 1.0]]]], dtype=tf.float32)
+
+            # Simulate a model forward pass (e.g., a simple attention mechanism)
+            # This mimics the logic inside the original model call.
+            # In the bug, this happened inside torch.no_grad(). 
+            # In TF, standard execution is effectively 'no_grad' unless GradientTape is used.
+            query = tf.random.normal([2, 1, 4, 4])
+            
+            # Apply mask (simulating attention masking)
+            masked_output = query * attention_mask
+            
+            # Perform a reduction to get a scalar result to check
+            result = tf.reduce_sum(masked_output)
+
+            # Assert no NaN values, mirroring the original bug's assertion
+            assert not tf.math.is_nan(result), f"Logits contain NaN values on device {device.name}"
+```

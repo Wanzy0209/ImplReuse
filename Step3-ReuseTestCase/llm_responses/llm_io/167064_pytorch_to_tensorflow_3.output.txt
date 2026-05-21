@@ -1,0 +1,67 @@
+```python
+import tensorflow as tf
+import sys
+
+def test_enable_eager_execution_side_effects():
+    """
+    Adapted from PyTorch Issue 167064.
+    
+    The original bug describes how torch.compile (an optimization/execution API)
+    unexpectedly calls torch.distributions.Distribution.set_default_validate_args(False),
+    affecting global state for distribution operations.
+    
+    This test checks if the similar TensorFlow API, tf.compat.v1.enable_eager_execution,
+    causes unexpected global side effects, specifically regarding distribution operations
+    or global execution state.
+    """
+    
+    # Note: enable_eager_execution must be called at program startup.
+    # We check the state before and after (conceptually, though in practice 
+    # once enabled it cannot be disabled).
+    
+    # In PyTorch, the bug affects torch.distributions.
+    # We check if tf.compat.v1.enable_eager_execution affects tf.compat.v1.distributions.
+    
+    # Check if eager execution is already enabled (common in TF 2.x)
+    is_eager_before = tf.executing_eagerly()
+    
+    # Call the API under test
+    try:
+        tf.compat.v1.enable_eager_execution()
+    except ValueError as e:
+        # If eager execution is already enabled, TF raises an error.
+        # This is expected behavior in TF 2.x environments or if called twice.
+        print(f"Info: {e}")
+        # We proceed to verify the state is indeed eager.
+    
+    is_eager_after = tf.executing_eagerly()
+    
+    # Verify the primary global state change (Execution Mode)
+    # This is the intended behavior of the API, but structurally similar to 
+    # the "global state change" in the PyTorch bug.
+    assert is_eager_after == True, "Eager execution should be enabled after the call."
+    
+    # Verify impact on distributions (Parallel to PyTorch bug)
+    # In PyTorch, validation args were toggled globally.
+    # In TensorFlow, enabling eager execution changes how distributions are instantiated
+    # and executed (from graph nodes to immediate values).
+    try:
+        # Using compat.v1.distributions to match the scope of the API
+        dist = tf.compat.v1.distributions.Normal(loc=0.0, scale=1.0)
+        sample = dist.sample()
+        
+        # In eager mode, operations return concrete values (EagerTensors) immediately.
+        # This change in behavior is the "side effect" on distribution ops.
+        assert isinstance(sample, tf.EagerTensor), \
+            "Distributions should return EagerTensors when eager execution is enabled."
+            
+    except AttributeError:
+        # tf.compat.v1.distributions might be removed in newer TF versions
+        # or if using tensorflow-probability exclusively.
+        print("Warning: tf.compat.v1.distributions not found, skipping distribution check.")
+        
+    print("Test passed: API behavior verified.")
+
+if __name__ == "__main__":
+    test_enable_eager_execution_side_effects()
+```

@@ -1,0 +1,119 @@
+Issue ID: 167263
+Title: einsum calculates wrong stride for gradient of input
+Bug Description:
+### 🐛 Describe the bug
+
+https://docs.pytorch.org/docs/stable/autograd.html#default-gradient-layouts
+This page suggests that parameters and gradients have the same stride, although it specifically mentions "parameters" and not "activations". I couldn't find any source on activations.
+
+The below code produces activations and gradients with different strides. In my model, this causes the next layer in the backward to fail.
+
+```
+import torch
+import torch.nn as nn
+
+B, H, W, C = 20, 2, 2, 128
+
+x = torch.randn(B, H, W, C, requires_grad=True)
+linear = nn.Linear(C, C, bias=False)
+
+values = linear(x)
+values.retain_grad()
+
+values_view = values.view(B, H * W, C)
+values_view.retain_grad()
+
+
+def log_grad(name):
+    def hook(grad):
+        print(f"{name} hook - shape: {grad.shape}, stride: {grad.stride()}")
+        return grad
+
+    return hook
+
+
+print("forward strides", values_view.shape, values_view.stride())
+values_view.register_hook(log_grad("values_view"))
+
+weights = torch.randn(B, H * W, C)
+result = torch.einsum("bhc,bhc->bc", weights, values_view)
+
+result.backward(torch.ones_like(result))
+```
+
+Original API Under Test: torch.einsum
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.take
+Similarity score: 0.9944648742675781
+
+Similar API information:
+# Extracted call chain for torch.take
+
+# --- torch._decomp.decompositions.take ---
+def take(self, index):
+    flattened = self.reshape(-1)
+    return flattened[index]
+
+# --- torch._prims_common.wrappers.out_wrapper ---
+def out_wrapper(
+    *out_names: str,
+    exact_dtype: bool = False,
+    pass_is_out: bool = False,
+    preserve_memory_format: bool = False,
+) -> Callable[[Callable[_P, _T]], Callable[_P, _T]]:
+    # The wrapped function needs to convert the output parameters to ensure
+    # compatibility between the Python API (which always uses "out" as the
+    # parameter name and may be a tuple) and the Aten API (which may have
+    # multiple output parameters and use different parameter names such as
+    # "grad_input", "indices" or "values".)
+
+    default_out_names = ("out",)
+    if len(out_names) == 0:
+        # Use default in out name
+        out_names = default_out_names
+
+    is_tensor = len(out_names) == 1
+
+    def maybe_compute_memory_format(t):
+        return utils.suggest_memory_format(t) if preserve_memory_format else None
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+B, H, W, C = 20, 2, 2, 128
+
+x = torch.randn(B, H, W, C, requires_grad=True)
+linear = nn.Linear(C, C, bias=False)
+
+values = linear(x)
+values.retain_grad()
+
+values_view = values.view(B, H * W, C)
+values_view.retain_grad()
+
+
+def log_grad(name):
+    def hook(grad):
+        print(f"{name} hook - shape: {grad.shape}, stride: {grad.stride()}")
+        return grad
+
+    return hook
+
+
+print("forward strides", values_view.shape, values_view.stride())
+values_view.register_hook(log_grad("values_view"))
+
+weights = torch.randn(B, H * W, C)
+result = torch.einsum("bhc,bhc->bc", weights, values_view)
+
+result.backward(torch.ones_like(result))
+
+The API torch.take is identified as same-library similar to the original PyTorch API torch.einsum.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

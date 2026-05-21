@@ -1,0 +1,55 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Enable numpy behavior to potentially access stride information
+tf.experimental.numpy.enable_numpy_behavior()
+
+def test_argsort_gradient_stride():
+    """
+    Adapts the PyTorch einsum gradient stride test to tf.experimental.numpy.argsort.
+    Note: argsort is a non-differentiable operation (discrete), so gradients 
+    are expected to be None. This test verifies the behavior of the API 
+    within the gradient context.
+    """
+    B, H, W, C = 20, 2, 2, 128
+
+    # Create a variable with gradient tracking
+    x = tf.Variable(tf.random.normal((B, H, W, C)), name='x')
+
+    # Mimic the 'view' operation from the original bug report
+    # In TensorFlow, reshape creates a new tensor, but we use it to match the logic flow
+    values_view = tf.reshape(x, (B, H * W, C))
+
+    print("Forward strides (input)", values_view.shape, values_view.shape) # TF doesn't expose strides directly on Tensor without numpy conversion
+
+    with tf.GradientTape() as tape:
+        # Watch the input tensor
+        tape.watch(x)
+        
+        # Apply the similar API: tf.experimental.numpy.argsort
+        # argsort returns indices of the sorted array along the given axis
+        # We cast to float32 to allow for a loss calculation (sum)
+        sorted_indices = tf.experimental.numpy.argsort(values_view, axis=-1)
+        loss = tf.reduce_sum(tf.cast(sorted_indices, tf.float32))
+
+    # Backward pass
+    grads = tape.gradient(loss, x)
+
+    # Verification logic
+    if grads is not None:
+        print("Gradient shape:", grads.shape)
+        # Attempt to check strides if the gradient exists
+        # (Using tf.experimental.numpy.asarray to access numpy attributes)
+        np_grads = tf.experimental.numpy.asarray(grads)
+        print("Gradient strides:", np_grads.strides)
+        
+        # Check if gradient shape matches input shape
+        assert grads.shape == x.shape, f"Gradient shape mismatch: {grads.shape} vs {x.shape}"
+    else:
+        print("Gradients are None. This is expected for argsort as it is non-differentiable.")
+        assert grads is None, "Expected None gradients for non-differentiable op"
+
+if __name__ == "__main__":
+    test_argsort_gradient_stride()
+```

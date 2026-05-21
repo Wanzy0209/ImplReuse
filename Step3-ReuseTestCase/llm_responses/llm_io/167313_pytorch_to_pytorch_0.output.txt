@@ -1,0 +1,68 @@
+```python
+import torch
+import torch.nn.functional as F
+import sys
+
+def test_addmm_compile_alpha_beta():
+    """
+    Test case to verify that torch.compile correctly handles alpha and beta 
+    parameters in torch.addmm when fused with pointwise operations.
+    """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cpu":
+        print("Warning: CUDA not available. Running on CPU. The bug was reported on CUDA.")
+
+    # Setup inputs
+    x = torch.randn(2, 2, device=device)
+    a = torch.randn(2, 3, device=device)
+    b = torch.randn(3, 2, device=device)
+
+    # Test Case 1: Original reproduction with ReLU and alpha=0.5, beta=0.5
+    def func_relu(x, a, b):
+        return F.relu(torch.addmm(x, a, b, alpha=0.5, beta=0.5))
+
+    compiled_func_relu = torch.compile(func_relu)
+    res_eager = func_relu(x, a, b)
+    res_compiled = compiled_func_relu(x, a, b)
+    
+    assert torch.allclose(res_eager, res_compiled, rtol=1e-4, atol=1e-5), \
+        f"Test 1 Failed: Mismatch in ReLU(addmm) with alpha=0.5, beta=0.5.\nEager:\n{res_eager}\nCompiled:\n{res_compiled}"
+
+    # Test Case 2: Different pointwise op (Sigmoid) and different scalars
+    def func_sigmoid(x, a, b):
+        return torch.sigmoid(torch.addmm(x, a, b, alpha=2.0, beta=3.0))
+
+    compiled_func_sigmoid = torch.compile(func_sigmoid)
+    res_eager = func_sigmoid(x, a, b)
+    res_compiled = compiled_func_sigmoid(x, a, b)
+
+    assert torch.allclose(res_eager, res_compiled, rtol=1e-4, atol=1e-5), \
+        f"Test 2 Failed: Mismatch in Sigmoid(addmm) with alpha=2.0, beta=3.0.\nEager:\n{res_eager}\nCompiled:\n{res_compiled}"
+
+    # Test Case 3: Beta = 0 (Result should be alpha * mm)
+    def func_beta_zero(x, a, b):
+        return F.tanh(torch.addmm(x, a, b, alpha=1.5, beta=0.0))
+
+    compiled_func_beta_zero = torch.compile(func_beta_zero)
+    res_eager = func_beta_zero(x, a, b)
+    res_compiled = compiled_func_beta_zero(x, a, b)
+
+    assert torch.allclose(res_eager, res_compiled, rtol=1e-4, atol=1e-5), \
+        f"Test 3 Failed: Mismatch with beta=0.0.\nEager:\n{res_eager}\nCompiled:\n{res_compiled}"
+
+    # Test Case 4: Alpha = 0 (Result should be beta * input)
+    def func_alpha_zero(x, a, b):
+        return F.relu(torch.addmm(x, a, b, alpha=0.0, beta=0.5))
+
+    compiled_func_alpha_zero = torch.compile(func_alpha_zero)
+    res_eager = func_alpha_zero(x, a, b)
+    res_compiled = compiled_func_alpha_zero(x, a, b)
+
+    assert torch.allclose(res_eager, res_compiled, rtol=1e-4, atol=1e-5), \
+        f"Test 4 Failed: Mismatch with alpha=0.0.\nEager:\n{res_eager}\nCompiled:\n{res_compiled}"
+
+    print("All tests passed.")
+
+if __name__ == "__main__":
+    test_addmm_compile_alpha_beta()
+```

@@ -1,0 +1,132 @@
+Issue ID: 166305
+Title: torch.compile() + DDP fails even for the simplest custom autograd.Function when optimize_ddp=True
+Bug Description:
+### 🐛 Describe the bug
+
+Even the **simplest possible DDP+compile test** fails when `torch._dynamo.config.optimize_ddp=True`.
+The error is raised **even for a minimal custom autograd.Function** that just multiplies the tensor by 2 in forward/backward.
+This means **"the most minimal possible code" already triggers DDPOptimizer backend failure**.
+
+## Minimal Repro Code
+```python
+# ddp_compile_test.py
+import os, torch
+import torch.nn as nn, torch.nn.functional as F
+import torch._dynamo as dynamo
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+dynamo.config.optimize_ddp = True  # <== necessary for the bug
+
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+dist.init_process_group(backend="nccl" if dist.is_nccl_available() else "gloo")
+
+class SimplistDoubleFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x): return x * 2
+    @staticmethod
+    def backward(ctx, grad_out): return grad_out * 2
+
+class DoubleLayer(nn.Module):
+    def forward(self, x): return SimplistDoubleFn.apply(x)
+
+def main():
+    device = torch.device(f"cuda:{LOCAL_RANK}")
+    model = nn.Sequential(nn.Conv2d(3,3,3,padding=1), DoubleLayer()).to(device)
+    model = torch.compile(model)
+    model = DDP(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK, find_unused_parameters=True)
+    opt = torch.optim.SGD(model.parameters(), lr=1e-4)
+
+    for it in range(3):
+        x = torch.rand(2,3,256,256, device=device)
+        out = model(x)
+        loss = F.mse
+...
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.enable_eager_execution
+Similarity score: 0.9934076070785522
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.enable_eager_execution
+
+# --- tensorflow.python.framework.ops.enable_eager_execution ---
+def enable_eager_execution(config=None, device_policy=None,
+                           execution_mode=None) -> None:
+  """Enables eager execution for the lifetime of this program.
+
+  Eager execution provides an imperative interface to TensorFlow. With eager
+  execution enabled, TensorFlow functions execute operations immediately (as
+  opposed to adding to a graph to be executed later in a `tf.compat.v1.Session`)
+  and
+  return concrete values (as opposed to symbolic references to a node in a
+  computational graph).
+
+  For example:
+
+  ```python
+  tf.compat.v1.enable_eager_execution()
+
+  # After eager execution is enabled, operations are executed as they are
+  # defined and Tensor objects hold concrete values, which can be accessed as
+  # numpy.ndarray`s through the numpy() method.
+  assert tf.multiply(6, 7).numpy() == 42
+  ```
+
+  Eager execution cannot be enabled after TensorFlow APIs have been used to
+  create or execute graphs. It is typically recommended to invoke this function
+  at program startup and not in a library (as most libraries should be usabl
+...
+
+Original Test Case:
+# ddp_compile_test.py
+import os, torch
+import torch.nn as nn, torch.nn.functional as F
+import torch._dynamo as dynamo
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+dynamo.config.optimize_ddp = True  # <== necessary for the bug
+
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+dist.init_process_group(backend="nccl" if dist.is_nccl_available() else "gloo")
+
+class SimplistDoubleFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x): return x * 2
+    @staticmethod
+    def backward(ctx, grad_out): return grad_out * 2
+
+class DoubleLayer(nn.Module):
+    def forward(self, x): return SimplistDoubleFn.apply(x)
+
+def main():
+    device = torch.device(f"cuda:{LOCAL_RANK}")
+    model = nn.Sequential(nn.Conv2d(3,3,3,padding=1), DoubleLayer()).to(device)
+    model = torch.compile(model)
+    model = DDP(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK, find_unused_parameters=True)
+    opt = torch.optim.SGD(model.parameters(), lr=1e-4)
+
+    for it in range(3):
+        x = torch.rand(2,3,256,256, device=device)
+        out = model(x)
+        loss = F.mse_loss(out, x)
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        opt.step()
+        print(f"[rank{LOCAL_RANK}] iter={it+1} loss={loss.item():.6f}")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()
+
+The API tf.compat.v1.enable_eager_execution is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

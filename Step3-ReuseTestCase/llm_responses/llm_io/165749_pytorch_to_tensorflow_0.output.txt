@@ -1,0 +1,81 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use tf.compat.v1.Session and graph mode
+tf.compat.v1.disable_eager_execution()
+
+def train_step(inputs):
+    """
+    Defines the computation graph: Conv2D with Weight Normalization.
+    Corresponds to the PyTorch model: weight_norm(nn.Conv2d(2, 65, 2))
+    """
+    # Define variables for Weight Normalization
+    # Conv2D kernel shape: [filter_height, filter_width, in_channels, out_channels]
+    # PyTorch: Conv2d(2, 65, 2) -> Kernel (2, 2, 2, 65)
+    filter_shape = [2, 2, 2, 65]
+    
+    # 'v' is the direction vector (unnormalized weight)
+    v = tf.compat.v1.get_variable("v", shape=filter_shape, initializer=tf.random_normal_initializer())
+    # 'g' is the magnitude scalar (per output channel)
+    g = tf.compat.v1.get_variable("g", shape=[65], initializer=tf.ones_initializer())
+    
+    # Reconstruct weight w = g * (v / ||v||)
+    # Calculate norm over spatial dimensions and input channels (axis 0, 1, 2)
+    norm = tf.sqrt(tf.reduce_sum(tf.square(v), axis=[0, 1, 2]) + 1e-12)
+    w = tf.reshape(g, [1, 1, 1, 65]) * (v / tf.reshape(norm, [1, 1, 1, 65]))
+    
+    # Conv2D operation
+    # Input shape: [batch, height, width, channels] -> (1, 32, 32, 2)
+    # PyTorch default is NCHW, TensorFlow default is NHWC
+    conv = tf.nn.conv2d(inputs, w, strides=[1, 1, 1, 1], padding="VALID")
+    
+    # Loss calculation (equivalent to model(x).mean())
+    loss = tf.reduce_mean(conv)
+    
+    # Backward pass (Gradients)
+    # In PyTorch bug, backward() fails. Here we compute gradients to verify the pass.
+    grads = tf.gradients(loss, [v, g])
+    
+    return loss, grads
+
+def main():
+    try:
+        # Initialize TPU system
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        
+        # Input data
+        # PyTorch: (1, 2, 32, 32) -> TF: (1, 32, 32, 2)
+        x = np.random.randn(1, 32, 32, 2).astype(np.float32)
+        
+        # Use the tf.compat.v1.tpu.rewrite API
+        # This compiles the 'train_step' computation for TPU execution.
+        # This is the semantic equivalent of torch.compile(model).
+        tpu_computation = tf.compat.v1.tpu.rewrite(train_step, [x])
+        
+        with tf.compat.v1.Session() as sess:
+            sess.run(tf.compat.v1.global_variables_initializer())
+            
+            print("Starting training loop on TPU...")
+            # Run a few iterations to check for runtime errors during backward pass
+            for i in range(10):
+                loss_val, grads_val = sess.run(tpu_computation)
+                # Check if gradients are computed (not None/NaN)
+                assert loss_val is not None, "Loss computation failed"
+                assert grads_val[0] is not None, "Gradient computation failed for v"
+                assert not np.isnan(loss_val), "Loss is NaN"
+                
+            print("Test passed: No runtime errors during backward pass with weight_norm and compile.")
+            
+    except (tf.errors.NotFoundError, ValueError) as e:
+        # Gracefully handle environments without TPU
+        print(f"TPU hardware not found or initialization failed. Skipping test. Error: {e}")
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    main()
+```

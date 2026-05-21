@@ -1,0 +1,83 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Replicate the seed from the PyTorch bug report to ensure reproducibility
+np.random.seed(751735337)
+tf.random.set_seed(751735337)
+
+def test_upsampling1d_divergence():
+    """
+    Adapted test case for tf.keras.layers.UpSampling1D based on the 
+    PyTorch fuzzer report (Issue 166245).
+    
+    The original bug involved Eager/Compile Divergence with specific 
+    tensor shapes and dtypes (int16). This test verifies that 
+    UpSampling1D behaves consistently between eager and graph (tf.function) modes.
+    """
+    
+    # Input shape derived from the PyTorch fuzzed program (var_node_4)
+    # PyTorch: size=(15, 108, 4), dtype=int16, device=cuda
+    # UpSampling1D expects 3D input: (batch_size, steps, features)
+    batch_size = 15
+    steps = 108
+    features = 4
+    input_shape = (batch_size, steps, features)
+    
+    # Use int16 to match the dtype in the original bug report
+    dtype = tf.int16
+    
+    # Create input tensor
+    # Using numpy to generate data similar to torch.randint/torch.full
+    input_data = np.random.randint(-10, 10, size=input_shape).astype(np.int16)
+    x = tf.constant(input_data, dtype=dtype)
+
+    # Initialize the layer
+    # The PyTorch code frequently uses the value 3 (torch.full(..., 3)), 
+    # so we use size=3 for the upsampling factor.
+    upsampling_factor = 3
+    layer = tf.keras.layers.UpSampling1D(size=upsampling_factor)
+
+    # 1. Eager Execution
+    print("Running Eager execution...")
+    try:
+        y_eager = layer(x)
+        print(f"Eager execution successful. Output shape: {y_eager.shape}")
+    except Exception as e:
+        print(f"Eager execution failed: {e}")
+        raise
+
+    # 2. Compiled Execution (tf.function) - Analogous to torch._dynamo
+    print("Running Compiled execution (tf.function)...")
+    @tf.function
+    def run_layer(inp):
+        return layer(inp)
+
+    try:
+        y_compiled = run_layer(x)
+        print(f"Compiled execution successful. Output shape: {y_compiled.shape}")
+    except Exception as e:
+        print(f"Compiled execution failed: {e}")
+        raise
+
+    # 3. Check for Divergence
+    # The original bug was an assert failure due to divergence between eager and compiled modes.
+    # We verify that outputs are identical.
+    print("Checking for divergence...")
+    if not tf.reduce_all(tf.equal(y_eager, y_compiled)).numpy():
+        raise AssertionError(
+            "Divergence detected! Eager and Compiled modes produced different results."
+        )
+    
+    # Verify shape expectations
+    expected_shape = (batch_size, steps * upsampling_factor, features)
+    if y_eager.shape != expected_shape:
+        raise AssertionError(
+            f"Shape mismatch. Expected {expected_shape}, got {y_eager.shape}"
+        )
+
+    print("Test passed: No divergence between Eager and Compiled modes.")
+
+if __name__ == "__main__":
+    test_upsampling1d_divergence()
+```

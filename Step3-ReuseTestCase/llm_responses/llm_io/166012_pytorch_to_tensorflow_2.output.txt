@@ -1,0 +1,57 @@
+```python
+import tensorflow as tf
+import tensorflow.experimental.dtensor as dtensor
+
+def test_copy_to_mesh_consistency():
+    """
+    Adapted from PyTorch Issue 166012.
+    
+    Original Bug: Inconsistency in tlparse entries (logs) between cache hit 
+    and miss in torch.compile.
+    
+    Adaptation: Verify consistency of layout and values in 
+    tf.experimental.dtensor.copy_to_mesh when called multiple times within 
+    a tf.function (which triggers tracing/caching).
+    """
+    
+    # Setup: Initialize a mesh for DTensor
+    # Using CPU to ensure the test runs in standard environments
+    devices = tf.config.list_physical_devices("CPU")
+    if not devices:
+        print("No CPU devices found, skipping test.")
+        return
+
+    mesh = dtensor.create_mesh([("x", 1)], devices=devices)
+    layout = dtensor.Layout.replicated(mesh, rank=0)
+
+    # Define the operation inside tf.function to simulate compilation/caching
+    @tf.function
+    def copy_to_mesh_op(tensor):
+        return dtensor.copy_to_mesh(tensor, layout)
+
+    # 1. First execution (Trace/Cache Miss)
+    # This triggers the graph construction and layout application
+    input_tensor_1 = tf.constant([[1.0, 2.0], [3.0, 4.0]])
+    result_1 = copy_to_mesh_op(input_tensor_1)
+
+    # 2. Second execution (Cache Hit)
+    # This reuses the compiled graph. The bug in PyTorch manifested as 
+    # inconsistent logs/state here. We verify functional consistency.
+    input_tensor_2 = tf.constant([[5.0, 6.0], [7.0, 8.0]])
+    result_2 = copy_to_mesh_op(input_tensor_2)
+
+    # 3. Verification
+    # Check if the layout is consistent (similar to checking graph structure consistency)
+    assert result_1.layout == layout, "Layout mismatch on first call (cache miss)"
+    assert result_2.layout == layout, "Layout mismatch on second call (cache hit)"
+
+    # Check if the data is correctly copied
+    # In a replicated layout, the local tensor should match the input
+    assert tf.reduce_all(result_1 == input_tensor_1).numpy(), "Data mismatch on first call"
+    assert tf.reduce_all(result_2 == input_tensor_2).numpy(), "Data mismatch on second call"
+
+    print("Test Passed: copy_to_mesh behavior is consistent across trace and cache hit.")
+
+if __name__ == "__main__":
+    test_copy_to_mesh_consistency()
+```

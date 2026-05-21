@@ -1,0 +1,65 @@
+```python
+import tensorflow as tf
+import tensorflow.experimental.numpy as tnp
+
+# Enable numpy behavior for tensorflow.experimental.numpy
+tnp.experimental_enable_numpy_behavior()
+
+def test_asanyarray_gradient_stride():
+    """
+    Adapted from PyTorch issue #167263.
+    Original issue: torch.einsum calculates wrong stride for gradient of input.
+    This test verifies if tf.experimental.numpy.asanyarray preserves strides 
+    in the gradient calculation.
+    """
+    B, H, W, C = 20, 2, 2, 128
+
+    # Setup input variable
+    x = tf.Variable(tf.random.normal((B, H, W, C)), name='x')
+
+    # Setup Linear layer (equivalent to nn.Linear)
+    linear = tf.keras.layers.Dense(C, use_bias=False)
+
+    with tf.GradientTape(persistent=True) as tape:
+        # Forward pass through linear layer
+        values = linear(x)
+        
+        # Create a view (reshape)
+        values_view = tf.reshape(values, (B, H * W, C))
+        
+        # Watch the view to inspect its gradient
+        tape.watch(values_view)
+
+        # Original API: torch.einsum("bhc,bhc->bc", weights, values_view)
+        # Similar API: tf.experimental.numpy.asanyarray
+        # Note: asanyarray is a type conversion utility, not a reduction like einsum.
+        # We apply it here to check if it preserves stride information in the backward pass.
+        result = tnp.asanyarray(values_view)
+        
+        # Calculate a scalar loss to trigger backward pass
+        # Equivalent to result.backward(torch.ones_like(result)) in the original snippet
+        # if result was a sum, but here we just sum the result to get a scalar.
+        loss = tf.reduce_sum(result)
+
+    # Calculate gradients
+    grads = tape.gradient(loss, values_view)
+
+    # Check strides
+    # TensorFlow tensors don't have a direct .stride() method in the public API,
+    # but we can check the numpy strides if the tensor is backed by numpy array (on CPU).
+    input_strides = values_view.numpy().strides
+    grad_strides = grads.numpy().strides
+
+    print(f"Input shape: {values_view.shape}, stride: {input_strides}")
+    print(f"Gradient shape: {grads.shape}, stride: {grad_strides}")
+
+    # Assertion to verify behavior
+    # The original bug was that strides differed. We expect them to match here.
+    assert input_strides == grad_strides, \
+        f"Stride mismatch detected! Input: {input_strides}, Gradient: {grad_strides}"
+
+    print("Test passed: Gradients preserve input strides.")
+
+if __name__ == "__main__":
+    test_asanyarray_gradient_stride()
+```

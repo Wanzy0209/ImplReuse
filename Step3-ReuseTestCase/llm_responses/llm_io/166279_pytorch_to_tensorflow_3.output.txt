@@ -1,0 +1,73 @@
+```python
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+
+# Enable numpy behavior for tf.experimental.numpy
+tnp.experimental_enable_numpy_behavior()
+
+# Set seeds to match the original test case context
+tf.random.set_seed(1166094474)
+
+# Recreate inputs with specific strides to mimic the original fuzzed conditions
+# Original: var_node_3 = torch.full((12,), False, dtype=torch.bool); stride=(97,)
+# To simulate stride 97 in TensorFlow, we create a larger tensor and slice it.
+base_size_3 = 12 * 97
+# Using tnp.zeros to mimic torch.full(..., False)
+base_3 = tnp.zeros(base_size_3, dtype=tnp.bool_)
+# Slice to get the view with stride 97
+var_node_3 = base_3[0:base_size_3:97]
+
+# Original: var_node_5 = torch.gather(...); size=(10,)
+# We create a simple bool tensor of size 10
+var_node_5 = tnp.zeros(10, dtype=tnp.bool_)
+
+# Sentinel tensor to ensure gradient computation
+sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    # Original API: torch.chunk
+    # Target API: tf.experimental.numpy.ix_
+    # ix_ takes 1-D sequences and returns N-D arrays which can be used to construct an open mesh.
+    # We adapt the logic by passing the 1-D tensors that were originally chunked.
+    
+    # Call the similar API
+    mesh = tnp.ix_(arg_0, arg_1)
+
+    # mesh is a tuple of two tensors: (12, 1) and (1, 10).
+    # To produce a single result tensor similar to the original test's output structure:
+    # We perform an operation on the mesh (e.g., multiplication) to generate a result.
+    result = mesh[0] * mesh[1]
+
+    # Ensure gradient computation by multiplying with sentinel
+    result = result * sentinel
+    return result
+
+# 1. Eager Execution
+with tf.GradientTape() as tape:
+    result_eager = fuzzed_program(var_node_3, var_node_5, sentinel)
+grad_eager = tape.gradient(result_eager, sentinel)
+
+print('✅ eager success')
+
+# 2. Compiled Execution (tf.function)
+compiled_program = tf.function(fuzzed_program)
+with tf.GradientTape() as tape:
+    result_compiled = compiled_program(var_node_3, var_node_5, sentinel)
+grad_compiled = tape.gradient(result_compiled, sentinel)
+
+print('✅ compile success')
+
+# 3. Verification
+# Check if results match
+assert tf.reduce_all(tf.equal(result_eager, result_compiled)).numpy(), "Divergence detected in results"
+print('✅ Results match')
+
+# Check gradients
+if grad_eager is not None and grad_compiled is not None:
+    assert tf.reduce_all(tf.equal(grad_eager, grad_compiled)).numpy(), "Divergence detected in gradients"
+    print('✅ Gradients match')
+elif grad_eager is None and grad_compiled is None:
+    print('✅ Gradients match (both None)')
+else:
+    raise AssertionError("Gradient mismatch (one is None)")
+```

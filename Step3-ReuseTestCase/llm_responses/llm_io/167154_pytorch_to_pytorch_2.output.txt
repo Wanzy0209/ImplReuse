@@ -1,0 +1,41 @@
+```python
+import torch
+from torch.nn import functional as F
+
+# Check if MPS is available
+if not torch.backends.mps.is_available():
+    print("MPS device not found. Skipping test.")
+else:
+    # Setup parameters for the non-contiguous tensor
+    # Shape (Batch, Channels, Length) for instance_norm
+    shape = (5, 499, 768)
+    # Stride 0 in the first dimension creates a non-contiguous tensor (broadcasting)
+    stride = (0, 768, 1)
+    storage_offset = 0
+    
+    # Calculate the necessary storage size
+    numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+    base = torch.arange(numel, dtype=torch.float32, device="mps")
+    
+    # Create the non-contiguous input tensor
+    input = torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+
+    # Prepare weight and bias for instance_norm
+    # num_features corresponds to the channel dimension (dim 1), which is 499
+    num_features = shape[1]
+    weight = torch.rand(num_features, device="mps", dtype=torch.float32)
+    bias = torch.rand(num_features, device="mps", dtype=torch.float32)
+
+    # Call the similar API (torch.nn.functional.instance_norm)
+    # This attempts to use the non-contiguous tensor, potentially triggering the MPS buffer allocation bug
+    try:
+        output = F.instance_norm(input, weight=weight, bias=bias)
+        
+        # If the bug is present, the line above will fail with an assertion error.
+        # If it succeeds, we verify the output shape.
+        assert output.shape == input.shape, f"Shape mismatch: expected {input.shape}, got {output.shape}"
+        print("Test passed successfully.")
+        
+    except RuntimeError as e:
+        print(f"RuntimeError encountered (likely the buffer allocation bug): {e}")
+```

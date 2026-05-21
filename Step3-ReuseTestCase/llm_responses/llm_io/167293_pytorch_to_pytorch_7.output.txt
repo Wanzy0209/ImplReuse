@@ -1,0 +1,88 @@
+```python
+import torch
+import torch.library
+import unittest
+
+# Define a custom operator to be used with torch.library.register_autograd
+def custom_op_meta(x):
+    return torch.empty_like(x)
+
+def custom_op_impl(x):
+    # A simple operation that preserves shape
+    return x * 2.0
+
+def custom_op_backward(ctx, grad):
+    # Backward pass
+    return grad * 2.0
+
+def custom_op_setup_context(ctx, inputs, output):
+    ctx.save_for_backward(*inputs)
+
+# Register the custom library and operator
+# Note: In a real test suite, this might be in a setup_module fixture
+try:
+    torch.library.define("testlib::custom_mul", "(Tensor x) -> Tensor")
+except AssertionError:
+    pass  # Ignore if already defined
+
+torch.library.impl("testlib::custom_mul", custom_op_impl, "CompositeExplicitAutograd")
+
+# This is the Similar API under test: torch.library.register_autograd
+# We register the backward pass for the custom operator.
+torch.library.register_autograd(
+    "testlib::custom_mul",
+    custom_op_backward,
+    setup_context=custom_op_setup_context
+)
+
+def fn_with_custom_op(x):
+    return torch.ops.testlib.custom_mul(x)
+
+class TestCustomOpAutogradExport(unittest.TestCase):
+    def test_register_autograd_op_export_dynamic_shapes(self):
+        """
+        Test that a custom operator registered with torch.library.register_autograd
+        can be successfully exported with torch.export.export using dynamic shapes.
+        
+        This test is derived from Issue 167293 where torch.export failed with
+        'Constraints violated (seq)' when dealing with dynamic shapes.
+        """
+        # Setup inputs with dynamic shapes
+        # The bug report specifically mentions issues with a 'seq' dimension.
+        # We define a dynamic dimension for the sequence length.
+        batch_dim = torch.export.Dim("batch", min=1, max=4)
+        seq_dim = torch.export.Dim("seq", min=1, max=512)
+        
+        # Example input: (Batch, Seq, Hidden)
+        x = torch.randn(2, 128, 64)
+        
+        # Attempt to export the function containing the custom op
+        # The original bug report indicates a failure here with torch._dynamo.exc.UserError
+        try:
+            exported_program = torch.export.export(
+                fn_with_custom_op,
+                args=(x,),
+                dynamic_shapes={"x": {0: batch_dim, 1: seq_dim}}
+            )
+            
+            # Verify the exported program runs correctly with a different shape
+            # that satisfies the constraints (e.g., different sequence length)
+            x_new = torch.randn(1, 256, 64)
+            result = exported_program(x_new)
+            
+            # Check output shape correctness
+            self.assertEqual(result.shape, x_new.shape)
+            
+            # Check value correctness (since op is x*2)
+            expected = x_new * 2.0
+            self.assertTrue(torch.allclose(result, expected))
+
+        except torch._dynamo.exc.UserError as e:
+            self.fail(
+                f"torch.export failed with UserError (Constraints violated). "
+                f"This matches the bug report: {e}"
+            )
+
+if __name__ == "__main__":
+    unittest.main()
+```

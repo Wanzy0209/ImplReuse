@@ -1,0 +1,66 @@
+```python
+import torch
+import torch.nn as nn
+import unittest
+
+class DynamicSeqModel(nn.Module):
+    """
+    A minimal model mimicking a Transformer component that processes inputs
+    with a dynamic sequence length. This reflects the context of the original bug
+    where 'seq' (sequence length) constraints were violated.
+    """
+    def __init__(self, hidden_dim):
+        super().__init__()
+        self.linear = nn.Linear(hidden_dim, hidden_dim)
+
+    def forward(self, x):
+        # x shape: (Batch, Seq, Hidden)
+        return self.linear(x)
+
+class TestDataParallelDynamicShapes(unittest.TestCase):
+    def test_dataparallel_dynamic_sequence_handling(self):
+        """
+        Verifies that torch.nn.DataParallel handles inputs with varying 
+        sequence lengths across multiple runs. 
+        
+        Context: The original bug (Issue 167293) involved torch.export failing 
+        with a ConstraintViolationError on the 'seq' dimension when sequence 
+        lengths changed. This test ensures the similar API (DataParallel) 
+        robustly handles dynamic sequence dimensions without constraint errors.
+        """
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available, skipping DataParallel test")
+
+        hidden_dim = 64
+        model = DynamicSeqModel(hidden_dim).cuda()
+        
+        # Replace torch.export.export with torch.nn.DataParallel
+        # DataParallel splits the batch dimension (dim 0) and should handle
+        # dynamic dimensions (like seq) transparently.
+        model = nn.DataParallel(model)
+
+        batch_size = 4
+        
+        # Run 1: Small sequence length
+        seq_len_1 = 10
+        input_1 = torch.randn(batch_size, seq_len_1, hidden_dim).cuda()
+        output_1 = model(input_1)
+        self.assertEqual(output_1.shape, (batch_size, seq_len_1, hidden_dim))
+
+        # Run 2: Sequence length matching the constraint boundary mentioned in the bug (512)
+        seq_len_2 = 512
+        input_2 = torch.randn(batch_size, seq_len_2, hidden_dim).cuda()
+        output_2 = model(input_2)
+        self.assertEqual(output_2.shape, (batch_size, seq_len_2, hidden_dim))
+
+        # Run 3: Different sequence length to verify dynamic handling
+        # The original bug failed here because constraints inferred from 
+        # previous runs did not cover the new input shape.
+        seq_len_3 = 128
+        input_3 = torch.randn(batch_size, seq_len_3, hidden_dim).cuda()
+        output_3 = model(input_3)
+        self.assertEqual(output_3.shape, (batch_size, seq_len_3, hidden_dim))
+
+if __name__ == "__main__":
+    unittest.main()
+```

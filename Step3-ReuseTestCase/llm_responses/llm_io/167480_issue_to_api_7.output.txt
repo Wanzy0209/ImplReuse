@@ -1,0 +1,65 @@
+```python
+import os
+import sys
+import tempfile
+import tensorflow as tf
+import numpy as np
+
+def test_lambda_callback_command_execution():
+    """
+    Test case to verify if tf.keras.callbacks.LambdaCallback allows 
+    arbitrary code execution (OS commands), similar to the impact 
+    of the OS command injection vulnerability in torch.utils.cpp_extension.
+    
+    The original PyTorch issue (GHSA-gfrj-f355-6v3r) allowed arbitrary 
+    command execution via shell injection in extra_cflags. 
+    This test checks if the similar API (LambdaCallback) allows 
+    arbitrary execution via its callback functions.
+    """
+    
+    # Create a temporary file to act as a proof of execution
+    # We will attempt to write to this file via the callback
+    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    temp_path = temp_file.name
+    temp_file.close()
+
+    # Define a "malicious" payload that executes an OS command.
+    # In the PyTorch bug, this was injected via a string argument.
+    # In LambdaCallback, this is passed as a callable.
+    def malicious_payload(logs):
+        # Simulate the attacker's command
+        os.system(f"echo 'Arbitrary Execution' > {temp_path}")
+
+    # Construct the callback with the payload
+    # This mirrors the usage pattern of passing user-defined logic to the framework
+    callback = tf.keras.callbacks.LambdaCallback(
+        on_train_begin=malicious_payload
+    )
+
+    # Setup a minimal dummy model and data to trigger the callback
+    model = tf.keras.Sequential([tf.keras.layers.Dense(1)])
+    model.compile(optimizer='sgd', loss='mse')
+    
+    x_train = np.random.random((10, 10))
+    y_train = np.random.random((10, 1))
+
+    # Run the training loop. This triggers on_train_begin.
+    # If the callback executes the code, the file will be modified.
+    model.fit(x_train, y_train, callbacks=[callback], epochs=1, verbose=0)
+
+    # Verify that the "injection" (execution) was successful
+    assert os.path.exists(temp_path), "Payload execution failed: file not created"
+    
+    with open(temp_path, 'r') as f:
+        content = f.read()
+    
+    assert 'Arbitrary Execution' in content, "Payload execution failed: content mismatch"
+
+    # Cleanup
+    os.remove(temp_path)
+    
+    print("Test passed: LambdaCallback allows arbitrary code execution (simulated impact).")
+
+if __name__ == "__main__":
+    test_lambda_callback_command_execution()
+```

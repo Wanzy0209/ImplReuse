@@ -1,0 +1,148 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_range_input_producer_compile_divergence():
+    """
+    Adapts the PyTorch fuzzer test case to TensorFlow.
+    The original bug involves a divergence between eager and compiled modes
+    in PyTorch when handling specific tensor operations (squeeze, chunk, gather, mul)
+    with non-standard strides (broadcasting) and mixed types (int32, int64).
+
+    This test uses tf.compat.v1.train.range_input_producer (the identified similar API)
+    to generate input data, then applies the equivalent tensor operations.
+    It compares the result of the graph execution (compiled) against a numpy-based
+    eager execution to detect potential divergences or lowering issues.
+    """
+    
+    # Disable eager execution to use the legacy queue-based API and simulate compiled graph execution
+    tf.compat.v1.disable_eager_execution()
+
+    # Seed for reproducibility
+    seed = 1215252001
+    tf.random.set_seed(seed)
+
+    # --- Input Generation using tf.compat.v1.train.range_input_producer ---
+    
+    # arg_0: size=(9, 1, 15, 4), stride=(60, 60, 0, 1) -> implies broadcasting on dim 2
+    # Base shape for arg_0 to achieve stride 0 on dim 2 is (9, 1, 1, 4)
+    limit_0 = 9 * 1 * 1 * 4
+    q0 = tf.compat.v1.train.range_input_producer(limit_0, seed=seed, shuffle=False)
+    batch0 = tf.compat.v1.train.batch([q0], batch_size=limit_0, capacity=limit_0*2, enqueue_many=False)
+    arg_0_base = tf.reshape(batch0, (9, 1, 1, 4))
+    arg_0 = tf.broadcast_to(arg_0_base, (9, 1, 15, 4)) # Simulate stride 0
+
+    # arg_1: size=(20, 15), stride=(15, 1)
+    limit_1 = 20 * 15
+    q1 = tf.compat.v1.train.range_input_producer(limit_1, seed=seed, shuffle=False)
+    batch1 = tf.compat.v1.train.batch([q1], batch_size=limit_1, capacity=limit_1*2, enqueue_many=False)
+    arg_1 = tf.reshape(batch1, (20, 15))
+    arg_1 = tf.cast(arg_1, tf.int64) # Match dtype
+
+    # arg_2: size=(18, 15), stride=(15, 1)
+    limit_2 = 18 * 15
+    q2 = tf.compat.v1.train.range_input_producer(limit_2, seed=seed, shuffle=False)
+    batch2 = tf.compat.v1.train.batch([q2], batch_size=limit_2, capacity=limit_2*2, enqueue_many=False)
+    arg_2 = tf.reshape(batch2, (18, 15))
+    arg_2 = tf.cast(arg_2, tf.int64) # Match dtype
+
+    # --- Tensor Operations (Logic Translation) ---
+
+    # var_node_3 = torch.squeeze(var_node_4) # (9, 15, 4)
+    var_node_3 = tf.squeeze(arg_0, axis=1)
+
+    # var_node_2 = torch.chunk(var_node_3, 4, dim=2)[0] # (9, 15, 1)
+    # PyTorch chunk splits into 4 parts. Dim 2 size is 4, so chunks are size 1.
+    var_node_2_split = tf.split(var_node_3, 4, axis=2)
+    var_node_2 = var_node_2_split[0]
+
+    # var_node_1 = torch.squeeze(var_node_2) # (9, 15)
+    var_node_1 = tf.squeeze(var_node_2, axis=-1)
+
+    # _input_size_var_node_6 = var_node_7.size(0) # 20
+    _input_size_var_node_6 = tf.shape(arg_1)[0]
+
+    # _index_var_node_6 = torch.randint(0, _input_size_var_node_6, (18, 15), ...)
+    # Note: tf.random.uniform requires maxval to be known or dynamic shape handled correctly.
+    # In graph mode, tf.shape(arg_1)[0] is a Tensor, which is valid for maxval.
+    _index_var_node_6 = tf.random.uniform((18, 15), minval=0, maxval=tf.cast(_input_size_var_node_6, tf.int32), dtype=tf.int32, seed=seed)
+
+    # var_node_6 = torch.gather(var_node_7, 0, _index_var_node_6) # (18, 15)
+    # PyTorch gather: out[i][j][k] = input[index[i][j][k]][j][k] (dim 0)
+    # TF gather: params[indices], axis=0 behaves similarly for these shapes.
+    var_node_6 = tf.gather(arg_1, _index_var_node_6, axis=0, batch_dims=0)
+
+    # var_node_5 = torch.chunk(var_node_6, 2, dim=0)[0] # (9, 15)
+    # Dim 0 size is 18. Chunks is 2. Splits into (9, 15) and (9, 15).
+    var_node_5_split = tf.split(var_node_6, 2, axis=0)
+    var_node_5 = var_node_5_split[0]
+
+    # var_node_0 = torch.mul(var_node_1, var_node_5) # (9, 15)
+    # var_node_1 is int32 (from arg_0), var_node_5 is int64 (from arg_1).
+    # PyTorch mul promotes to int64.
+    var_node_0 = tf.multiply(tf.cast(var_node_1, tf.int64), var_node_5)
+
+    # Sentinel multiplication
+    result = var_node_0 * 1.0
+
+    # --- Execution and Verification ---
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables
+        sess.run(tf.compat.v1.global_variables_initializer())
+        sess.run(tf.compat.v1.local_variables_initializer())
+
+        # Start queue runners for range_input_producer
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+        try:
+            # Run the compiled graph
+            result_tf = sess.run(result)
+            print('✅ TensorFlow graph execution success')
+            print(f'Result shape: {result_tf.shape}, dtype: {result_tf.dtype}')
+
+            # --- Eager / Numpy Verification ---
+            # We simulate the eager logic using numpy to check for divergence
+            np.random.seed(seed)
+            
+            # Generate inputs in numpy
+            # arg_0
+            np_arg_0_base = np.arange(limit_0, dtype=np.int32).reshape(9, 1, 1, 4)
+            np_arg_0 = np.broadcast_to(np_arg_0_base, (9, 1, 15, 4))
+            
+            # arg_1
+            np_arg_1 = np.arange(limit_1, dtype=np.int64).reshape(20, 15)
+            
+            # arg_2 (unused in logic but present in signature)
+            # np_arg_2 = np.arange(limit_2, dtype=np.int64).reshape(18, 15)
+
+            # Logic
+            np_var_3 = np.squeeze(np_arg_0, axis=1)
+            np_var_2 = np.split(np_var_3, 4, axis=2)[0]
+            np_var_1 = np.squeeze(np_var_2, axis=-1)
+            
+            np_input_size = np_arg_1.shape[0]
+            np_index = np.random.randint(0, np_input_size, (18, 15), dtype=np.int32)
+            
+            # Numpy gather equivalent for axis 0
+            np_var_6 = np_arg_1[np_index, :] # Advanced indexing
+            np_var_5 = np.split(np_var_6, 2, axis=0)[0]
+            
+            np_var_0 = np.multiply(np_var_1.astype(np.int64), np_var_5)
+            np_result = np_var_0 * 1.0
+
+            # Compare
+            if np.allclose(result_tf, np_result):
+                print('✅ Eager (Numpy) and Graph (TF) results match.')
+            else:
+                print('❌ Divergence detected between Eager and Graph execution!')
+                print("Diff:", np.abs(result_tf - np_result).max())
+
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == '__main__':
+    test_range_input_producer_compile_divergence()
+```

@@ -1,0 +1,42 @@
+```python
+import torch
+
+# This test case preserves the original bug reproduction logic (graph break + conditional context manager)
+# while leveraging the semantics of the similar API (tf.raw_ops.ZerosLike).
+# The similar API (tf.raw_ops.ZerosLike) exhibits a pattern where it dispatches based on a condition
+# (IsSwitch) and utilizes a context manager (ops.control_dependencies) in one branch to create zeros.
+# We translate this pattern to PyTorch by using torch.no_grad (context manager) and torch.zeros_like
+# (semantic equivalent of ZerosLike) inside the conditional block.
+
+flag = True
+dummy = lambda: None
+
+def fn(x):
+    x = x + 1
+    torch._dynamo.graph_break()
+    x = x + 2
+    
+    # Logic mirroring tf.raw_ops.ZerosLike:
+    # 1. Check a condition (flag vs IsSwitch)
+    # 2. In one branch, use a context manager (torch.no_grad vs ops.control_dependencies)
+    # 3. Perform an operation related to zeros (torch.zeros_like vs array_ops.zeros)
+    if flag:
+        dummy.attr0 = x
+    else:
+        with torch.no_grad():
+            # Leveraging the semantic equivalent of the similar API
+            dummy.attr1 = torch.zeros_like(x)
+            
+    return x + 4
+
+inp = torch.ones(3)
+opt_fn = torch.compile(fn, backend="eager")
+
+# First run with flag = True
+assert torch.allclose(fn(inp), opt_fn(inp))
+
+# Second run with flag = False to trigger the else branch
+# This tests the bytecode transformation stability across different control flow paths
+flag = False
+assert torch.allclose(fn(inp), opt_fn(inp))
+```

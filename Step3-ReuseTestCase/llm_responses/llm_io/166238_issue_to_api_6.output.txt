@@ -1,0 +1,45 @@
+```python
+import torch
+import collections
+import torch.nn.functional as F
+
+def test_dynamo_defaultdict_with_leaky_relu():
+    """
+    Test case to verify that torch.compile can handle collections.defaultdict creation
+    (the reported regression) while also utilizing the similar API torch.nn.functional.leaky_relu_.
+    """
+    
+    def func_to_compile(x):
+        # Leverage the similar API: torch.nn.functional.leaky_relu_
+        # This performs an in-place modification of the tensor.
+        F.leaky_relu_(x, negative_slope=0.01)
+        
+        # Reproduce the original bug logic: Creating a collections.defaultdict
+        # inside a compiled function. This was causing:
+        # torch._dynamo.exc.Unsupported: Dynamo does not know how to trace 
+        # the function `<class 'collections.defaultdict'>`
+        dd = collections.defaultdict(list)
+        dd['processed_tensor'] = x
+        return dd
+
+    # Compile the function using torch.compile
+    compiled_func = torch.compile(func_to_compile, backend="eager")
+    
+    # Create a dummy input tensor
+    input_tensor = torch.randn(5, 5)
+    
+    # Execute the compiled function
+    result = compiled_func(input_tensor)
+    
+    # Assertions to verify correctness
+    assert isinstance(result, collections.defaultdict), "Result should be a defaultdict"
+    assert 'processed_tensor' in result, "Key 'processed_tensor' missing in defaultdict"
+    
+    # Verify that leaky_relu_ was applied correctly (all values should be >= 0)
+    # Since leaky_relu_ is in-place, input_tensor is also modified, but we check the result stored in dict
+    assert torch.all(result['processed_tensor'] >= 0), "leaky_relu_ was not applied correctly"
+
+if __name__ == "__main__":
+    test_dynamo_defaultdict_with_leaky_relu()
+    print("Test passed.")
+```

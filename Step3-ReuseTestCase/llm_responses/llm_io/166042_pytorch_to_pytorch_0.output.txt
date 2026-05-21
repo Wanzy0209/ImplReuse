@@ -1,0 +1,50 @@
+```python
+import torch
+import torch.nn.functional as F
+
+# Reproduce the configuration from the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch.manual_seed(1352030645)
+
+# The bug report indicates the issue occurred on CUDA, but we fallback to CPU for general runnability
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+def test_embedding_with_float_indices():
+    """
+    Test case for Issue 166042: [Fuzzer][Eager/Compile Divergence]
+    assert "int" in str(indices.get_dtype())
+    
+    The bug occurs when torch.nn.functional.embedding is called with indices
+    that have a non-integer dtype (e.g., bfloat16), causing an assertion failure
+    or divergence between eager and compiled modes.
+    """
+    
+    # Create a standard embedding weight matrix
+    weight = torch.randn(10, 3, dtype=torch.float32, device=device)
+    
+    # Create indices with bfloat16 dtype (the problematic type from the fuzzer)
+    # The assertion "int" in str(indices.get_dtype()) will fail for "torch.bfloat16"
+    indices = torch.tensor([0, 2, 4, 1], dtype=torch.bfloat16, device=device)
+
+    def embedding_func(idx):
+        return F.embedding(idx, weight)
+
+    print("Testing Eager Mode...")
+    try:
+        result_eager = embedding_func(indices)
+        print(f"Eager mode succeeded. Output shape: {result_eager.shape}")
+    except Exception as e:
+        print(f"Eager mode failed with: {type(e).__name__}: {e}")
+
+    print("\nTesting Compiled Mode (torch.compile)...")
+    try:
+        # Compile the function to check for divergence
+        compiled_func = torch.compile(embedding_func, backend="eager")
+        result_compiled = compiled_func(indices)
+        print(f"Compiled mode succeeded. Output shape: {result_compiled.shape}")
+    except Exception as e:
+        print(f"Compiled mode failed with: {type(e).__name__}: {e}")
+
+if __name__ == "__main__":
+    test_embedding_with_float_indices()
+```

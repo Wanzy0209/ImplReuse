@@ -1,0 +1,45 @@
+```python
+import pytest
+import torch
+from transformers import AutoModelForCausalLM
+
+def test_mps_nograd_4d_mask_with_distributed_check():
+    """
+    Test case to reproduce the NaN issue with torch.no_grad() on MPS device
+    using a 4D attention mask, while leveraging torch.distributed.is_available
+    to ensure environment consistency.
+    """
+    # Check if MPS is available
+    if not torch.backends.mps.is_available():
+        pytest.skip("MPS device not available")
+
+    # Leverage the similar API: torch.distributed.is_available
+    # This is used to verify the distributed package state, as the bug occurs
+    # on macOS where distributed availability might differ.
+    is_distributed_available = torch.distributed.is_available()
+    
+    # Setup model and inputs
+    model = AutoModelForCausalLM.from_pretrained("sbintuitions/tiny-lm").to("mps")
+    input_ids = torch.tensor([[0, 1, 0, 0], [0, 1, 2, 3]], device="mps")
+
+    # 4D attention mask
+    attention_mask = torch.tensor([
+        [[[ True, False, False, False],
+          [ True,  True, False, False],
+          [False, False, False, False],
+          [False, False, False, False]]],
+        [[[ True, False, False, False],
+          [ True,  True, False, False],
+          [ True,  True,  True, False],
+          [ True,  True,  True,  True]]]], device="mps")
+
+    # The bug occurs specifically inside torch.no_grad()
+    with torch.no_grad():
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+
+    # Assert that logits do not contain NaN values
+    assert not torch.isnan(outputs.logits).any(), "Logits contain NaN values"
+    
+    # Verify that distributed availability state remains consistent
+    assert torch.distributed.is_available() == is_distributed_available
+```

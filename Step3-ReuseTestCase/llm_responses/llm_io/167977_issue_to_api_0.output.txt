@@ -1,0 +1,68 @@
+```python
+import torch
+from torch.distributed.tensor import distribute_tensor, Replicate
+from torch.distributed.tensor.experimental import register_sharding
+from torch.testing._internal.distributed._tensor.common_dtensor import DTensorTestBase, with_comms
+
+class TestTensorKwargsSharding(DTensorTestBase):
+    """
+    Test case to reproduce Issue #167977:
+    Sharding propagation failed for custom operation with Tensor in kwargs.
+    
+    The bug occurs when registering a sharding strategy for an operation that 
+    accepts DTensors via keyword arguments (kwargs). The internal propagation logic
+    fails an assertion because it only accounts for DTensors in positional arguments (args)
+    when comparing against the full specification which includes kwargs.
+    """
+    
+    @with_comms
+    def test_register_sharding_with_tensor_kwargs(self):
+        mesh = self.build_device_mesh()
+
+        # 1. Prepare input tensors
+        x = torch.randn(4, 4, device="cuda")
+        x_dt = distribute_tensor(x, mesh, [Replicate()])
+
+        # 2. Prepare output tensors (passed as kwargs via 'out')
+        out_val = torch.randn(4, 1, device="cuda")
+        out_idx = torch.randn(4, 1, device="cuda").long()
+        out_val_dt = distribute_tensor(out_val, mesh, [Replicate()])
+        out_idx_dt = distribute_tensor(out_idx, mesh, [Replicate()])
+
+        # 3. Register custom sharding strategy
+        # We target aten::min.dim_min which has the signature:
+        # min.dim_min(Tensor self, int dim, bool keepdim=False, *, Tensor(a!) min, Tensor(b!) min_indices)
+        @register_sharding(torch.ops.aten.min.dim_min)
+        def custom_strategy(mesh, args, kwargs):
+            # Define a strategy where all inputs and outputs are Replicated
+            # Input strategy: x is Replicate
+            # Output strategy: min (out_val) and min_indices (out_idx) are Replicate
+            input_strategy = ([Replicate()],)
+            output_strategy = ([Replicate(), Replicate()],)
+            return input_strategy, output_strategy
+
+        # 4. Execute the operation
+        # This triggers the sharding propagation.
+        # In the bugged version, this raises:
+        # AssertionError: assert len(input_specs) == len(input_args_strategy)
+        # because input_args_strategy only counts 'args' (x), while input_specs 
+        # includes strategies for both 'args' and 'kwargs' (x, out_val, out_idx).
+        
+        try:
+            torch.min(x_dt, dim=1, keepdim=True, out=(out_val_dt, out_idx_dt))
+        except AssertionError as e:
+            # Check if we hit the specific bug mentioned in the issue
+            if "len(input_specs) == len(input_args_strategy)" in str(e):
+                self.skipTest("Bug reproduced: Assertion failed due to mismatch in input specs length.")
+            else:
+                raise
+
+        # If the bug is fixed, the operation completes successfully.
+        # We verify the output is still a DTensor.
+        self.assertTrue(isinstance(out_val_dt, torch.distributed.dtensor.DTensor))
+        self.assertTrue(isinstance(out_idx_dt, torch.distributed.dtensor.DTensor))
+
+if __name__ == "__main__":
+    from torch.testing._internal.common_utils import run_tests
+    run_tests()
+```

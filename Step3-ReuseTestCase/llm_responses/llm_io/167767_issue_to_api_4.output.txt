@@ -1,0 +1,94 @@
+```python
+import torch
+from torch.library import Library, fallthrough_kernel
+
+def test_mps_clamp_with_fallthrough():
+    """
+    Test case for Issue 167767: clamp incorrectness with mps backend.
+    
+    This test verifies the correctness of torch.clamp on the MPS backend.
+    It also leverages the similar API 'torch.library.fallthrough_kernel' by
+    defining a custom operator that decomposes to torch.clamp, ensuring that
+    the dispatcher and fallback mechanisms (related to fallthrough_kernel)
+    correctly handle the operation on the MPS device.
+    """
+    
+    if not torch.backends.mps.is_available():
+        print("MPS backend is not available. Skipping test.")
+        return
+
+    # --- Setup: Define a custom operator using fallthrough_kernel ---
+    # This simulates a scenario where an operator relies on decomposition
+    # (fallthrough) rather than a direct backend kernel, which relates to
+    # the similar API 'torch.library.fallthrough_kernel'.
+    
+    lib = Library("test_clamp_fallthrough", "DEFINITION")
+    lib.define("custom_clamp(Tensor self, Scalar? min=None, Scalar? max=None) -> Tensor")
+
+    # Meta kernel (required for shape inference)
+    @lib.impl("custom_clamp", "Meta")
+    def custom_clamp_meta(x, min=None, max=None):
+        return x
+
+    # Register decomposition: The custom op calls torch.clamp
+    @torch.library.register_decomposition("test_clamp_fallthrough::custom_clamp")
+    def custom_clamp_decomp(x, min=None, max=None):
+        return torch.clamp(x, min=min, max=max)
+
+    # Register MPS implementation as fallthrough
+    # This tells the dispatcher to use the decomposition for MPS.
+    lib.impl("custom_clamp", fallthrough_kernel, "MPS")
+
+    # --- Test Execution ---
+    
+    device = 'mps'
+    
+    # 1. Reproduce the specific trigger sequence from the bug report
+    # The bug report noted that a specific clamp call seemed to trigger
+    # incorrect state for subsequent calls.
+    a = torch.zeros(1, device=device)
+    a_clamped = a.clamp(min=0.0)
+
+    # 2. Test torch.clamp directly (Original Bug)
+    print("Testing torch.clamp directly on MPS:")
+    
+    # Test case 1: min=1e-7
+    b = torch.zeros(1, device=device)
+    c = b.clamp(min=1e-7)
+    print(f"clamp(min=1e-7): {c.item()}")
+    assert c.item() == 1e-7, f"Direct clamp failed: expected 1e-7, got {c.item()}"
+
+    # Test case 2: min=1e-7, max=None
+    b = torch.zeros(1, device=device)
+    c = b.clamp(min=1e-7, max=None)
+    print(f"clamp(min=1e-7, max=None): {c.item()}")
+    assert c.item() == 1e-7, f"Direct clamp failed: expected 1e-7, got {c.item()}"
+
+    # Test case 3: min=1e-7, max=torch.inf
+    b = torch.zeros(1, device=device)
+    c = b.clamp(min=1e-7, max=torch.inf)
+    print(f"clamp(min=1e-7, max=inf): {c.item()}")
+    assert c.item() == 1e-7, f"Direct clamp failed: expected 1e-7, got {c.item()}"
+
+    # Test case 4: clamp_min
+    b = torch.zeros(1, device=device)
+    c = b.clamp_min(1e-7)
+    print(f"clamp_min(1e-7): {c.item()}")
+    assert c.item() == 1e-7, f"Direct clamp_min failed: expected 1e-7, got {c.item()}"
+
+    # 3. Test via the custom operator using fallthrough_kernel (Similar API)
+    # This verifies that the decomposition path (which uses fallthrough_kernel logic)
+    # produces the correct result, relying on the underlying torch.clamp.
+    print("\nTesting custom op with fallthrough_kernel on MPS:")
+    
+    b = torch.zeros(1, device=device)
+    # Calling the custom op which falls back to decomposition -> torch.clamp
+    c = torch.ops.test_clamp_fallthrough.custom_clamp(b, min=1e-7)
+    print(f"custom_clamp(min=1e-7): {c.item()}")
+    assert c.item() == 1e-7, f"Fallthrough clamp failed: expected 1e-7, got {c.item()}"
+
+    print("\nAll tests passed.")
+
+if __name__ == "__main__":
+    test_mps_clamp_with_fallthrough()
+```

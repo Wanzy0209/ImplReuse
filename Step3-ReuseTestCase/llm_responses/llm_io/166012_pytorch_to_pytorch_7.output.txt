@@ -1,0 +1,85 @@
+Based on the bug report regarding `torch.compile` and the inconsistency in log entries (specifically serialization and caching behavior), the following test case is generated for the similar API `torch.distributed.send_object_list`.
+
+This test adapts the scenario to focus on the consistency of object serialization and transmission. It verifies that complex, nested objects (similar to the graph metadata and structures in the original bug) are sent and received correctly without data loss or corruption.
+
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_send_object_list(rank, world_size):
+    """
+    Test case for torch.distributed.send_object_list.
+    
+    This test verifies the consistency of object serialization and transmission,
+    addressing the theme of the original bug (inconsistency in data handling).
+    It sends a list of complex objects (tensors, strings, dicts) from rank 0 
+    to rank 1 and asserts that the received data matches the sent data exactly.
+    """
+    # Setup distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Initialize process group
+    dist.init_process_group(
+        backend="gloo", # Use gloo backend for CPU-based object pickling
+        rank=rank,
+        world_size=world_size
+    )
+
+    if rank == 0:
+        # Define a list of complex objects to send.
+        # This mirrors the complexity of the original bug's context (graphs, metadata, configs).
+        tensor_data = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        metadata = {
+            "graph_id": "fx_graph_runnable_18",
+            "cache_status": "miss",
+            "config": {"triton_kernel_info": "enabled"}
+        }
+        string_data = "torch._functorch.config"
+        nested_list = [1, 2, [3, 4]]
+
+        object_list = [tensor_data, metadata, string_data, nested_list]
+
+        # Send the object list to rank 1
+        print(f"Rank {rank}: Sending object list...")
+        dist.send_object_list(object_list, dst=1)
+        print(f"Rank {rank}: Send complete.")
+
+    elif rank == 1:
+        # Initialize a list to receive objects. 
+        # The size must match the sender's list size.
+        recv_buffer = [None, None, None, None]
+        
+        # Receive the object list from rank 0
+        print(f"Rank {rank}: Receiving object list...")
+        dist.recv_object_list(recv_buffer, src=0)
+        print(f"Rank {rank}: Receive complete.")
+
+        # Verify consistency (Cache Hit vs Miss analogy: Sent vs Received)
+        # Check Tensor
+        assert isinstance(recv_buffer[0], torch.Tensor), "Tensor type mismatch"
+        assert torch.equal(recv_buffer[0], torch.tensor([[1.0, 2.0], [3.0, 4.0]])), "Tensor data mismatch"
+        
+        # Check Dictionary (Metadata)
+        assert isinstance(recv_buffer[1], dict), "Dict type mismatch"
+        assert recv_buffer[1]["graph_id"] == "fx_graph_runnable_18", "Metadata mismatch"
+        assert recv_buffer[1]["cache_status"] == "miss", "Metadata mismatch"
+        
+        # Check String
+        assert recv_buffer[2] == "torch._functorch.config", "String data mismatch"
+        
+        # Check Nested List
+        assert recv_buffer[3] == [1, 2, [3, 4]], "Nested list mismatch"
+
+        print("Rank 1: All assertions passed. Data consistency verified.")
+
+    # Cleanup
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn processes to simulate distributed environment
+    mp.spawn(test_send_object_list, args=(world_size,), nprocs=world_size, join=True)
+```

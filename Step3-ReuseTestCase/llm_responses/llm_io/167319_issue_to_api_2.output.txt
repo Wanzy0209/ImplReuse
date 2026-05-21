@@ -1,0 +1,67 @@
+```python
+import tensorflow as tf
+from omegaconf import OmegaConf
+import os
+import tempfile
+
+def test_tf_optimizer_omegaconf_serialization():
+    """
+    Test case to verify if TensorFlow Keras optimizers handle OmegaConf 
+    parameters correctly during checkpoint serialization, mirroring the 
+    behavior reported in the PyTorch AdamW issue.
+    
+    The original bug involves PyTorch optimizers accepting OmegaConf ListConfig 
+    objects, which retain references to the parent config tree, leading to 
+    unexpectedly large checkpoint files. This test checks if the TensorFlow 
+    equivalent (tf.keras.optimizers) exhibits similar behavior or handles it 
+    safely.
+    """
+    # Create a config with nested structure
+    cfg = OmegaConf.create({
+        'model': {'beta_1': 0.9, 'beta_2': 0.999},
+        'data': {'batch_size': 32, 'dataset': 'imagenet'},
+        'training': {'epochs': 100}
+    })
+
+    # Create a simple model
+    model = tf.keras.Sequential([
+        tf.keras.layers.Dense(10, input_shape=(5,))
+    ])
+
+    # Create optimizer with OmegaConf nodes
+    # Note: TF Keras optimizers use beta_1 and beta_2 separately, unlike PyTorch's betas tuple
+    optimizer = tf.keras.optimizers.AdamW(
+        learning_rate=1e-3, 
+        beta_1=cfg.model.beta_1, 
+        beta_2=cfg.model.beta_2
+    )
+
+    # Create a checkpoint
+    checkpoint = tf.train.Checkpoint(
+        model=model,
+        optimizer=optimizer
+    )
+
+    # Save checkpoint to a temporary file
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ckpt_path = checkpoint.save(os.path.join(tmpdir, "ckpt"))
+        
+        # Get file size
+        file_size = os.path.getsize(ckpt_path + ".index") # Checkpoint consists of multiple files, checking index as proxy or data file
+        
+        # In the PyTorch bug, the file size becomes huge because the whole config tree is serialized.
+        # A healthy checkpoint for a small model should be small (e.g., < 100KB).
+        # If the bug exists in TF, the file size would be large (MBs) due to the nested config.
+        # We assert that the file size is reasonably small to ensure no unwanted serialization occurred.
+        # Note: 50KB is an arbitrary safe limit for this tiny model's metadata.
+        assert file_size < 50 * 1024, (
+            f"Checkpoint file size ({file_size} bytes) is unexpectedly large. "
+            "This might indicate that the entire OmegaConf tree was serialized, "
+            "similar to the PyTorch bug."
+        )
+        
+        print("Test passed: Checkpoint size is within expected limits.")
+
+if __name__ == "__main__":
+    test_tf_optimizer_omegaconf_serialization()
+```

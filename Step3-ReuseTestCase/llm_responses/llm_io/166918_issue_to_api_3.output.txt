@@ -1,0 +1,85 @@
+```python
+import tensorflow as tf
+import os
+
+# This test case adapts the PyTorch distributed + torch.cond bug reproduction logic
+# to TensorFlow, leveraging tf.keras.layers.add (the similar API) within the conditional branches.
+# The goal is to verify if TensorFlow handles conditional execution of layer operations
+# within a compiled context (tf.function) and distributed setting (MirroredStrategy) 
+# without encountering segmentation faults or graph construction errors.
+
+def test_tf_cond_with_keras_add_distributed():
+    """
+    Tests tf.cond with tf.keras.layers.add inside a tf.function under distributed strategy.
+    Mirrors the logic of the PyTorch bug: distributed setup -> compile -> cond -> op.
+    """
+    
+    # Define the strategy (equivalent to PyTorch's DistributedDataParallel/NCCL setup)
+    strategy = tf.distribute.MirroredStrategy()
+
+    print(f"Number of devices: {strategy.num_replicas_in_sync}")
+
+    # The function to be compiled (equivalent to @torch.compile(dynamic=True))
+    @tf.function
+    def distributed_cond_step(rank_tensor):
+        """
+        Performs a conditional operation based on rank, using tf.keras.layers.add.
+        """
+        # tf.cond requires a scalar boolean tensor for the predicate
+        # We check if the rank is 0 (chief worker)
+        pred = tf.equal(rank_tensor, 0)
+
+        # Define the two branches for tf.cond
+        def true_fn():
+            # Use tf.keras.layers.add (the similar API) to perform an operation
+            # In the original bug, torch.tensor([1, 2, 3, 4, 5]) was created.
+            # Here we create two tensors and add them using the layer.
+            layer = tf.keras.layers.Add()
+            x = tf.constant([1.0, 2.0, 3.0, 4.0, 5.0])
+            y = tf.constant([1.0, 1.0, 1.0, 1.0, 1.0])
+            return layer([x, y])
+
+        def false_fn():
+            # Return zeros if rank is not 0
+            return tf.zeros(5, dtype=tf.float32)
+
+        # Execute conditional logic
+        result = tf.cond(pred, true_fn, false_fn)
+        
+        # In the PyTorch bug, a broadcast followed. 
+        # In TF with MirroredStrategy, values are synced automatically if needed, 
+        # but we can explicitly perform an all-reduce to mimic the collective communication aspect.
+        # Note: tf.keras.layers.Add is the primary API being tested here.
+        return result
+
+    # Execute the logic within the distributed scope
+    with strategy.scope():
+        # Get the current replica's rank (or a simplified identifier)
+        # In MirroredStrategy, all replicas often behave similarly, but we can simulate the logic.
+        # We use 0 to simulate the chief worker logic.
+        rank_input = tf.constant(0) 
+        
+        # Run the compiled function
+        # This mimics the 'example_compile_with_cond' call in the original bug
+        try:
+            output = distributed_cond_step(rank_input)
+            
+            # Verify the output
+            # If rank is 0, we expect [2, 3, 4, 5, 6] (1+1, 2+1, etc.)
+            # If rank was not 0, we would expect zeros.
+            expected = tf.constant([2.0, 3.0, 4.0, 5.0, 6.0])
+            
+            # Assert correctness
+            # We use tf.debugging.assert_near for floating point comparison
+            tf.debugging.assert_near(output, expected, message="Output does not match expected result from tf.keras.layers.add inside tf.cond")
+            
+            print("Test passed successfully. tf.keras.layers.add executed correctly within tf.cond and tf.function.")
+            
+        except Exception as e:
+            print(f"Test failed with error: {e}")
+            raise
+
+if __name__ == "__main__":
+    # Ensure environment variables for TF are set if necessary (usually not needed for CPU/Mirrored)
+    test_tf_cond_with_keras_add_distributed()
+```

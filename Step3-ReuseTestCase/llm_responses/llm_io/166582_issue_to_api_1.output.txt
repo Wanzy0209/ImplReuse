@@ -1,0 +1,89 @@
+```python
+import tensorflow as tf
+from tensorflow.keras import backend as K
+import numpy as np
+
+class CustomInt8MatMul(tf.keras.layers.Layer):
+    """
+    Mimics the custom ASIC matmul logic from the bug report:
+    - Inputs clamped to int8 range [-128, 127]
+    - Weights clamped to int8 range
+    - Matmul operation
+    - Bias addition (int32)
+    - Output int32
+    """
+    def __init__(self, units, **kwargs):
+        super(CustomInt8MatMul, self).__init__(**kwargs)
+        self.units = units
+
+    def build(self, input_shape):
+        self.kernel = self.add_weight(
+            name='kernel',
+            shape=(input_shape[-1], self.units),
+            initializer='glorot_uniform',
+            trainable=True
+        )
+        self.bias = self.add_weight(
+            name='bias',
+            shape=(self.units,),
+            initializer='zeros',
+            trainable=True
+        )
+        super(CustomInt8MatMul, self).build(input_shape)
+
+    def call(self, inputs):
+        # Quantization logic: clamp(-128, 127) -> int8
+        a_q = tf.clip_by_value(inputs, -128, 127)
+        a_q = tf.cast(a_q, tf.int8)
+
+        b_q = tf.clip_by_value(self.kernel, -128, 127)
+        b_q = tf.cast(b_q, tf.int8)
+
+        # Perform matmul (int8 * int8 -> int32 in TF)
+        c = tf.matmul(a_q, b_q)
+
+        # Add bias (round and cast to int32)
+        bias_int32 = tf.cast(tf.round(self.bias), tf.int32)
+        c = c + bias_int32
+
+        return tf.cast(c, tf.int32)
+
+def test_custom_backend_int8_matmul():
+    """
+    Test case that leverages tf.keras.backend.backend to verify the environment
+    and executes the custom quantization logic described in the bug report.
+    """
+    # Leverage the similar API: Check the current backend
+    current_backend = K.backend()
+    print(f"Running test on backend: {current_backend}")
+    assert current_backend == 'tensorflow', "Test is designed for the TensorFlow backend."
+
+    # Build a simple model using the custom layer
+    # This replaces the nn.Linear -> matmul lowering in the original bug
+    model = tf.keras.Sequential([
+        CustomInt8MatMul(units=10, input_shape=(5,))
+    ])
+
+    # Compile the model to trigger graph compilation (similar to torch.compile)
+    # We use a dummy optimizer and loss as we are testing the execution path
+    model.compile(optimizer='adam', loss='mse')
+
+    # Create dummy input data
+    # The bug mentions training with QAT, so we use float inputs that get quantized
+    x_train = np.random.randn(2, 5).astype(np.float32)
+    y_train = np.random.randint(0, 100, size=(2, 10)).astype(np.int32)
+
+    # Run a forward pass (and backward pass to ensure graph integrity)
+    # The bug report mentions "Graph Break", so we ensure the graph runs fully.
+    history = model.fit(x_train, y_train, epochs=1, verbose=0)
+
+    # Verify output shape and dtype match the custom ASIC requirements
+    output = model.predict(x_train, verbose=0)
+    assert output.shape == (2, 10), f"Expected shape (2, 10), got {output.shape}"
+    assert output.dtype == np.int32, f"Expected dtype int32, got {output.dtype}"
+
+    print("Test passed: Custom int8 matmul logic executed successfully on TensorFlow backend.")
+
+if __name__ == "__main__":
+    test_custom_backend_int8_matmul()
+```

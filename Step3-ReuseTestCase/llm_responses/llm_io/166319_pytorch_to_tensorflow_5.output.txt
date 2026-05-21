@@ -1,0 +1,58 @@
+```python
+import tensorflow as tf
+
+# Disable eager execution to use compat.v1 graph mode
+# This is analogous to the "compile" mode in the PyTorch test
+tf.compat.v1.disable_eager_execution()
+
+# Set random seed similar to the original test
+tf.random.set_seed(1215252001)
+
+def test_queue_runner():
+    with tf.compat.v1.Graph().as_default():
+        # Create a queue to hold data
+        # Using shapes loosely inspired by the original test (e.g., 9, 15)
+        queue = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.int32], shapes=[(9, 15)])
+
+        # Generate random data to enqueue
+        # In TF1 graph mode, this creates an op, not a tensor immediately
+        data = tf.random.uniform((9, 15), minval=0, maxval=100, dtype=tf.int32)
+
+        # Define the enqueue operation
+        enqueue_op = queue.enqueue(data)
+
+        # Create a QueueRunner
+        # This manages the threads that will run the enqueue_op
+        qr = tf.compat.v1.train.QueueRunner(queue, [enqueue_op])
+
+        # --- API Under Test ---
+        # Add the queue runner to the default collection
+        tf.compat.v1.train.add_queue_runner(qr)
+
+        # Verification: Check if the runner is in the collection
+        runners = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+        assert qr in runners, "QueueRunner was not added to the collection"
+
+        # Run the graph to ensure functionality
+        with tf.compat.v1.Session() as sess:
+            # Initialize variables
+            sess.run(tf.compat.v1.global_variables_initializer())
+            sess.run(tf.compat.v1.local_variables_initializer())
+
+            # Start the queue runners
+            coord = tf.compat.v1.train.Coordinator()
+            threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+            # Dequeue an item to verify the queue is working
+            result = sess.run(queue.dequeue())
+            assert result.shape == (9, 15), "Dequeued tensor has incorrect shape"
+
+            # Stop the threads
+            coord.request_stop()
+            coord.join(threads)
+
+    print("✅ Test passed: add_queue_runner works correctly in graph mode.")
+
+if __name__ == "__main__":
+    test_queue_runner()
+```

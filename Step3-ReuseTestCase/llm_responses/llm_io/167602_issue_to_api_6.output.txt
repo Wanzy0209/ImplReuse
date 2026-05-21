@@ -1,0 +1,55 @@
+```python
+import torch
+from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler
+
+def test_stable_diffusion_with_cudnn_benchmark():
+    """
+    Test case to reproduce CUDNN errors during Stable Diffusion inference.
+    This test leverages torch.backends.cudnn.benchmark to ensure the pipeline
+    runs correctly when cuDNN's autotuner is enabled, which is a common
+    configuration for performance and can expose underlying CUDNN compatibility
+    issues on specific hardware/OS combinations (like Ubuntu 24.04/ARM).
+    """
+    # Skip test if CUDA is not available
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # Leverage the similar API: torch.backends.cudnn.benchmark
+    # Setting this to True allows cuDNN to find the best algorithm for the
+    # specific hardware configuration. This is relevant to the reported bug
+    # which involves CUDNN errors.
+    torch.backends.cudnn.benchmark = True
+
+    model_id = "stabilityai/stable-diffusion-2-1"
+
+    # Original reproduction logic
+    try:
+        pipe = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
+        pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+        pipe = pipe.to("cuda")
+
+        prompt = "a photo of an astronaut riding a horse on mars"
+        
+        # Run inference to check for CUDNN errors
+        # We run it once to verify execution without crashing
+        image = pipe(prompt).images[0]
+        
+        # Basic assertion to ensure output is generated
+        assert image is not None, "Image generation failed, output is None."
+        
+    except RuntimeError as e:
+        # Check specifically for CUDNN errors mentioned in the bug report
+        error_msg = str(e)
+        if "CUDNN" in error_msg or "cudnn" in error_msg:
+            raise AssertionError(f"CUDNN Error encountered during inference: {error_msg}")
+        else:
+            raise e
+    finally:
+        # Reset benchmark flag to avoid affecting other tests
+        torch.backends.cudnn.benchmark = False
+
+if __name__ == "__main__":
+    test_stable_diffusion_with_cudnn_benchmark()
+    print("Test passed successfully.")
+```

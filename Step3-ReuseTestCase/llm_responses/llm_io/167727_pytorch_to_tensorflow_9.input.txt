@@ -1,0 +1,105 @@
+Issue ID: 167727
+Title: [MPS] mm/addmm returns incorrect results for large tensors
+Bug Description:
+### 🐛 Describe the bug
+
+On main build, MacOS15.6
+```python
+import torch
+
+# success
+a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+b = torch.rand((64, 100), dtype=torch.complex64, device="mps")
+c = torch.rand((100, 300), dtype=torch.complex64, device="mps")
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+torch.testing.assert_close(torch.addmm(a, b, c, alpha=1.0, beta=0.5).cpu(), 
+                           torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5))
+
+# fails
+a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+b = torch.rand((64, 10000), dtype=torch.complex64, device="mps")
+c = torch.rand((10000, 300), dtype=torch.complex64, device="mps")
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+torch.testing.assert_close(torch.addmm(a, b, c, alpha=1.0, beta=0.5).cpu(), 
+                           torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5))
+
+```
+
+```
+Mismatched elements: 19200 / 19200 (100.0%)
+Greatest absolute difference: 5063.81494140625 at index (0, 193) (up to 1e-05 allowed)
+Greatest relative difference: 0.992490291595459 at index (35, 120) (up to 1.3e-06 allowed)
+```
+
+I can take a look at why/what threshold it's happening little later, reporting this here for tracking
+
+### Versions
+
+main branch build
+
+cc @ezyang @anjali411 @dylanbespalko @mruberry @nikitaved @amjames @jianyuh @walterddr @xwang233 @Lezcano @kulinseth @malfet @DenisVieriu97 @jhavukainen
+
+Original API Under Test: torch.addmm
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.convert_to_tensor
+Similarity score: 0.9949698448181152
+
+Similar API information:
+# Extracted call chain for tf.convert_to_tensor
+
+# --- tensorflow.python.framework.ops.convert_to_tensor ---
+def convert_to_tensor(
+    value,
+    dtype=None,
+    name=None,
+    as_ref=False,
+    preferred_dtype=None,
+    dtype_hint=None,
+    # TODO(b/268347915): Remove argument.
+    ctx=None,  # pylint: disable=unused-argument
+    accepted_result_types=(tensor_lib.Tensor,),
+) -> Union[EagerTensor, SymbolicTensor]:
+  """Implementation of the public convert_to_tensor."""
+  # TODO(b/142518781): Fix all call-sites and remove redundant arg
+  preferred_dtype = preferred_dtype or dtype_hint
+  return tensor_conversion_registry.convert(
+      value, dtype, name, as_ref, preferred_dtype, accepted_result_types
+  )
+
+# --- tensorflow.python.profiler.trace.trace_wrapper ---
+def trace_wrapper(trace_name, **trace_kwargs):
+  """Decorator alternative to `with Trace(): ...`.  It's faster.
+
+  Args:
+    trace_name: The name of the trace event, or a callable to be traced, in
+      which case the name is inferred from qualname or name of the callable.
+    **trace_kwargs: Keyword arguments added to the trace event. Both the key and
+      value are of types that can be converted to strings, which will be
+
+Original Test Case:
+import torch
+
+# success
+a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+b = torch.rand((64, 100), dtype=torch.complex64, device="mps")
+c = torch.rand((100, 300), dtype=torch.complex64, device="mps")
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+torch.testing.assert_close(torch.addmm(a, b, c, alpha=1.0, beta=0.5).cpu(), 
+                           torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5))
+
+# fails
+a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+b = torch.rand((64, 10000), dtype=torch.complex64, device="mps")
+c = torch.rand((10000, 300), dtype=torch.complex64, device="mps")
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+torch.testing.assert_close(torch.addmm(a, b, c, alpha=1.0, beta=0.5).cpu(), 
+                           torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5))
+
+The API tf.convert_to_tensor is identified as cross-library similar to the original PyTorch API torch.addmm.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,74 @@
+```python
+import torch
+import torch.nn.attention.flex_attention as flex_attention
+import warnings
+import pytest
+
+def test_flex_attention_recompile_limit():
+    """
+    Test case for Issue 166153: Flex Attention with AO hit the recompile limit.
+    
+    This test reproduces the logic where flex_attention triggers recompilation
+    due to object ID checks on inputs. It leverages the iterative pattern 
+    found in the similar API (tf.io.decode_proto) to structure the input 
+    generation loop.
+    """
+    # Set a low recompile limit to trigger the issue quickly (Default is 8)
+    original_limit = torch._dynamo.config.recompile_limit
+    torch._dynamo.config.recompile_limit = 2
+
+    try:
+        # Define the flex attention function
+        def attention_fn(q, k, v):
+            return flex_attention.flex_attention(q, k, v)
+
+        # Compile the function
+        compiled_fn = torch.compile(attention_fn)
+
+        # Define input configurations. 
+        # We use a list of configs to mimic the 'coders' list in tf.io.decode_proto
+        # and iterate in reverse to match the similar API's pattern.
+        input_configs = [
+            (2, 4, 8, 16), # Batch, Heads, Seq, Dim
+            (2, 4, 8, 16),
+            (2, 4, 8, 16),
+        ]
+
+        recompile_warning_found = False
+
+        # Iterate through configurations (mimicking the loop in _map_structure)
+        # The similar API uses 'reversed(coders)', so we apply that here.
+        for i, (B, H, S, D) in enumerate(reversed(input_configs)):
+            # Create new tensors for each call to trigger object ID checks.
+            # The bug log mentions: ___check_obj_id(key, ...)
+            # This happens when the compiler guards on the specific object instance
+            # rather than just its properties (dtype/shape).
+            query = torch.randn(B, H, S, D, dtype=torch.float32)
+            key = torch.randn(B, H, S, D, dtype=torch.float32)
+            value = torch.randn(B, H, S, D, dtype=torch.float32)
+
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                
+                # Execute the compiled function
+                output = compiled_fn(query, key, value)
+                
+                # Check for the specific recompile limit warning mentioned in the bug report
+                for warning in w:
+                    if "recompile_limit" in str(warning.message):
+                        recompile_warning_found = True
+
+        # Assertion: 
+        # Based on the bug report, hitting the recompile limit is the expected behavior 
+        # of the buggy code when called multiple times with new object instances.
+        # This assertion confirms the reproduction logic is active.
+        assert recompile_warning_found, \
+            "Expected to hit recompile_limit based on bug reproduction logic (Issue 166153)"
+
+    finally:
+        # Restore original limit to avoid affecting other tests
+        torch._dynamo.config.recompile_limit = original_limit
+
+if __name__ == "__main__":
+    test_flex_attention_recompile_limit()
+```

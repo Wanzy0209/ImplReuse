@@ -1,0 +1,41 @@
+```python
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+# Setup mesh for DTensor
+# We use CPU devices to ensure the test runs in most environments
+devices = tf.config.list_physical_devices('CPU')
+if not devices:
+    # Fallback if physical devices aren't listed explicitly
+    devices = ["/CPU:0"]
+
+mesh = dtensor.create_mesh([("x", len(devices))], devices=devices)
+
+# Create a tensor (Analogous to the model input/output in the original bug)
+# Using the shape (1, 3, 224, 224) from the original bug report
+x = tf.random.uniform((1, 3, 224, 224))
+
+# Define layouts
+# Original layout: Replicated across all devices
+layout_replicated = dtensor.Layout([dtensor.UNSHARDED, dtensor.UNSHARDED, dtensor.UNSHARDED, dtensor.UNSHARDED], mesh)
+
+# Target layout: Sharded on the first dimension
+layout_sharded = dtensor.Layout([dtensor.SHARDED, dtensor.UNSHARDED, dtensor.UNSHARDED, dtensor.UNSHARDED], mesh)
+
+# Wrap the tensor in a DTensor with the original layout
+d_x = dtensor.DTensor(x, layout_replicated)
+
+# Apply the API: relayout
+# This is analogous to torch.export.export, transforming the representation
+d_x_relayouted = dtensor.relayout(d_x, layout_sharded)
+
+# Verification
+# To verify correctness, we relayout back to the original layout and compare values.
+# This checks if the data was corrupted during the relayout process, similar to
+# checking if the exported model produces the same output as the original.
+d_x_restored = dtensor.relayout(d_x_relayouted, layout_replicated)
+
+# Assert that the original tensor and the restored tensor are close
+# This mirrors torch.testing.assert_close(model(x), ep.module()(x))
+tf.debugging.assert_near(x, d_x_restored.to_tensor(), message="Relayout produced incorrect tensor values")
+```

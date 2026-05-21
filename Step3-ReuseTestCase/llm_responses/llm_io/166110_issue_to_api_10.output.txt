@@ -1,0 +1,51 @@
+```python
+import torch
+import math
+import unittest
+import io
+
+class TestONNXExportTruncError(unittest.TestCase):
+    def test_onnx_export_math_trunc_with_broadcast(self):
+        """
+        Test case to reproduce the ConversionError when exporting a model
+        containing math.trunc to ONNX, leveraging torch.broadcast_to.
+        
+        This test mimics the scenario where a tensor operation (broadcast_to)
+        prepares data, followed by a math.trunc operation which fails during
+        ONNX translation.
+        """
+        
+        class TruncModel(torch.nn.Module):
+            def forward(self, x):
+                # Simulate the multiplication node (%mul_104) from the bug report
+                x = x * 2.0
+                
+                # Leverage the similar API: torch.broadcast_to
+                # This is used to manipulate the tensor shape, similar to how
+                # complex models might reshape data before processing.
+                x = torch.broadcast_to(x, (2, 4))
+                
+                # The problematic operation: math.trunc
+                # This causes the ConversionError in torch.onnx.export
+                return math.trunc(x)
+
+        model = TruncModel()
+        # Create a dummy input compatible with the broadcast operation
+        dummy_input = torch.randn(1, 4)
+        
+        # We expect an ExportError (or ConversionError) because math.trunc
+        # is not directly supported/convertible in the ONNX graph context.
+        with self.assertRaises(torch.onnx.utils.ExportError) as context:
+            torch.onnx.export(
+                model,
+                dummy_input,
+                io.BytesIO(), # Export to buffer to avoid file I/O
+                opset_version=17,
+            )
+            
+        # Verify the error is related to 'trunc'
+        self.assertTrue("trunc" in str(context.exception).lower())
+
+if __name__ == "__main__":
+    unittest.main()
+```

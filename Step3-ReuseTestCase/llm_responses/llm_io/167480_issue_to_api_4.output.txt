@@ -1,0 +1,65 @@
+```python
+import os
+import tensorflow as tf
+
+def test_crossed_column_command_injection():
+    """
+    Test case for OS command injection in tf.feature_column.crossed_column.
+    
+    This test is derived from a similar issue in PyTorch (Issue ID: 167480) 
+    where user-supplied input passed to build parameters (like extra_cflags) 
+    resulted in OS command injection due to subprocess.check_output(..., shell=True).
+    
+    This test attempts to reproduce that logic by injecting shell metacharacters 
+    into the 'keys' parameter of crossed_column to verify if the API is 
+    vulnerable to similar injection attacks.
+    """
+    
+    # Enable eager execution to ensure immediate processing
+    tf.compat.v1.enable_eager_execution()
+
+    # Define a marker file to verify command execution
+    injection_marker = "/tmp/tf_crossed_column_injection_check"
+    
+    # Clean up before test
+    if os.path.exists(injection_marker):
+        os.remove(injection_marker)
+
+    # Construct a malicious payload similar to the PyTorch repro:
+    # "; touch /tmp/file" attempts to break out of the intended argument context
+    # and execute a shell command.
+    malicious_payload = f"; touch {injection_marker}"
+
+    try:
+        # Call the similar API (tf.feature_column.crossed_column) with the payload.
+        # In the PyTorch issue, the vulnerability was triggered when the library
+        # constructed a shell command using user input.
+        column = tf.feature_column.crossed_column(
+            keys=[malicious_payload],
+            hash_bucket_size=10
+        )
+        
+        # Note: In TensorFlow, feature columns are often symbolic. 
+        # We attempt to access properties or serialize to trigger any potential 
+        # underlying processing that might involve string formatting or shell calls.
+        _ = str(column)
+
+    except Exception as e:
+        # If the API crashes, that's a separate issue (DoS), but we are primarily 
+        # checking for the side effect of the injection.
+        print(f"Exception encountered during test: {e}")
+
+    # Assertion: If the file exists, the command was executed, indicating a vulnerability.
+    # If the file does not exist, the input was likely treated as a string literal (Safe).
+    assert not os.path.exists(injection_marker), \
+        "Security Alert: OS Command Injection detected! The API executed arbitrary shell commands."
+
+    # Clean up after test
+    if os.path.exists(injection_marker):
+        os.remove(injection_marker)
+
+    print("Test passed: No OS command injection detected.")
+
+if __name__ == "__main__":
+    test_crossed_column_command_injection()
+```

@@ -1,0 +1,96 @@
+```python
+import tensorflow.compat.v1 as tf
+import numpy as np
+
+# Disable TensorFlow 2 behavior to use compat.v1 APIs
+tf.disable_v2_behavior()
+
+def test_string_input_producer_consistency():
+    """
+    Adapted test case for Issue 166012: tlparse entries on cache hit and not are inconsistent.
+    
+    Original Context: In PyTorch, running torch.compile generates a set of log files (entries).
+    The bug reported that these entries were inconsistent between a cache miss (first run)
+    and a cache hit (subsequent run).
+    
+    Adapted Context: For tf.compat.v1.train.string_input_producer, the "entries" are the 
+    strings produced by the queue. We verify that the sequence of strings (entries) is 
+    consistent across multiple runs (simulating cache hit/miss) when a seed is provided.
+    """
+    
+    # Define the input data (analogous to the model input in the original bug)
+    filenames = ["file1.txt", "file2.txt", "file3.txt", "file4.txt", "file5.txt"]
+    string_tensor = tf.constant(filenames)
+
+    # Configuration parameters
+    num_epochs = 1
+    shuffle = True
+    seed = 42
+    capacity = 32
+
+    def run_pipeline():
+        """
+        Executes the input pipeline and returns the list of produced strings.
+        This simulates one 'run' of the compilation/execution process.
+        """
+        with tf.Session() as sess:
+            # Initialize local variables (required for num_epochs)
+            sess.run(tf.local_variables_initializer())
+            sess.run(tf.global_variables_initializer())
+
+            # Create the string input producer
+            # This sets up the queue logic
+            queue = tf.compat.v1.train.string_input_producer(
+                string_tensor,
+                num_epochs=num_epochs,
+                shuffle=shuffle,
+                seed=seed,
+                capacity=capacity
+            )
+
+            # Dequeue operation to retrieve the strings
+            dequeue_op = queue.dequeue()
+
+            # Start queue runners
+            coord = tf.train.Coordinator()
+            threads = tf.train.start_queue_runners(coord=coord, sess=sess)
+
+            outputs = []
+            try:
+                # Dequeue elements. Since num_epochs=1, the queue will throw OutOfRangeError
+                # after one pass through the data.
+                while not coord.should_stop():
+                    output = sess.run(dequeue_op)
+                    # Decode bytes to string for comparison
+                    outputs.append(output.decode('utf-8'))
+            except tf.errors.OutOfRangeError:
+                # Expected when num_epochs is reached
+                pass
+            finally:
+                coord.request_stop()
+                coord.join(threads)
+
+        return outputs
+
+    # Run 1: Simulate "Cache Miss" (First execution/compilation)
+    # We expect a specific set of entries based on the seed.
+    entries_miss = run_pipeline()
+    print(f"Run 1 (Cache Miss) Entries: {entries_miss}")
+
+    # Run 2: Simulate "Cache Hit" (Subsequent execution)
+    # We expect the entries to be identical to the first run.
+    entries_hit = run_pipeline()
+    print(f"Run 2 (Cache Hit) Entries:  {entries_hit}")
+
+    # Assertion: Verify that the entries (logs/outputs) are consistent.
+    # If this assertion fails, it mirrors the original bug where entries were inconsistent.
+    assert entries_miss == entries_hit, \
+        f"Inconsistency detected between runs (Cache Miss vs Hit).\n" \
+        f"Run 1 (Miss): {entries_miss}\n" \
+        f"Run 2 (Hit):  {entries_hit}"
+
+    print("Test Passed: Entries are consistent across runs.")
+
+if __name__ == "__main__":
+    test_string_input_producer_consistency()
+```

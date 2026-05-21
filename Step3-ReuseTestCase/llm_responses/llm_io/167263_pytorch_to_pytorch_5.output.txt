@@ -1,0 +1,37 @@
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+B, H, W, C = 20, 2, 2, 128
+
+x = torch.randn(B, H, W, C, requires_grad=True)
+linear = nn.Linear(C, C, bias=False)
+
+values = linear(x)
+values_view = values.view(B, H * W, C)
+values_view.retain_grad()
+
+def log_grad(name):
+    def hook(grad):
+        print(f"{name} hook - shape: {grad.shape}, stride: {grad.stride()}")
+        return grad
+    return hook
+
+print("Forward strides", values_view.shape, values_view.stride())
+values_view.register_hook(log_grad("values_view"))
+
+# Adapted call site: replacing torch.einsum with torch.nn.functional.hardshrink
+# hardshrink is an element-wise operation, so we expect it to preserve strides
+result = F.hardshrink(values_view)
+
+# Perform backward pass
+# Since hardshrink preserves shape, we pass a gradient of ones with the same shape
+result.backward(torch.ones_like(result))
+
+# Verify that the gradient stride matches the input stride
+# This assertion checks if the similar API respects the stride layout
+assert values_view.grad is not None, "Gradient was not computed"
+assert values_view.grad.stride() == values_view.stride(), \
+    f"Gradient stride {values_view.grad.stride()} does not match input stride {values_view.stride()}"
+```

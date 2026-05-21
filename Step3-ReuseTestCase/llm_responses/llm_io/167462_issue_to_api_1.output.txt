@@ -1,0 +1,53 @@
+```python
+import time
+import tensorflow as tf
+
+def test_categorical_large_vocab_performance():
+    """
+    Test case for tf.compat.v1.distributions.Categorical inspired by
+    torch.topk speed regression (Issue 167462).
+    
+    This test verifies the performance and correctness of the Categorical 
+    distribution when handling large vocabulary sizes (VOCAB=8M), similar 
+    to the stress conditions in the PyTorch topk issue.
+    """
+    # Dimensions from the original bug report
+    BS, VOCAB, K = 128, 8000000, 1000
+
+    # Create a large logits tensor. 
+    # Note: Using float32 as distributions typically require stable precision,
+    # whereas the original bug used float16.
+    logits = tf.random.uniform((BS, VOCAB), minval=-1.0, maxval=1.0, dtype=tf.float32)
+
+    # Initialize the Categorical distribution
+    dist = tf.compat.v1.distributions.Categorical(logits=logits)
+
+    # Warmup runs to allow for any initialization overhead
+    for _ in range(10):
+        _ = dist.sample(K)
+
+    walltime = []
+    # Performance loop
+    for _ in range(100):
+        s = time.time()
+        # Sample K indices from the distribution. 
+        # This operation involves logic similar to selection/argmax over the large vocabulary,
+        # mirroring the computational load of torch.topk(k=K).
+        samples = dist.sample(K)
+        # Force execution in eager mode
+        _ = samples.numpy()
+        e = time.time()
+        walltime.append(e - s)
+
+    # Calculate average latency (excluding warmup)
+    walltime = walltime[10:]
+    avg_latency_ms = 1000 * (sum(walltime) / len(walltime))
+
+    print(f"TensorFlow Categorical latency: {avg_latency_ms:.4f}ms")
+
+    # Assertion to ensure the operation produces the correct shape
+    assert samples.shape == (BS, K), f"Expected shape ({BS}, {K}), got {samples.shape}"
+
+if __name__ == "__main__":
+    test_categorical_large_vocab_performance()
+```

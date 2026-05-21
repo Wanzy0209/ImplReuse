@@ -1,0 +1,50 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def run_test(rank, world_size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Adaptation of the original test case context:
+    # The bug report highlights that torch.compile (in a specific context) 
+    # calls torch.distributions.Distribution.set_default_validate_args(False).
+    # We verify that torch.distributed.recv_object_list does NOT have this side effect.
+    
+    # Set validation args to True to detect if it flips to False
+    torch.distributions.Distribution.set_default_validate_args(True)
+    
+    if rank == 0:
+        # Send data
+        data = [torch.tensor([1, 2, 3]), "test_string", 42]
+        dist.send_object_list(data, dst=1)
+    elif rank == 1:
+        # Receive data
+        recv_data = [None, None, None]
+        dist.recv_object_list(recv_data, src=0)
+        
+        # Verify data integrity
+        assert torch.equal(recv_data[0], torch.tensor([1, 2, 3]))
+        assert recv_data[1] == "test_string"
+        assert recv_data[2] == 42
+        
+        # Verify the side effect mentioned in the bug report did NOT occur
+        # (i.e., validation args should remain True)
+        is_validating = torch.distributions.Distribution._get_default_validate_args()
+        assert is_validating is True, \
+            "recv_object_list should not modify global distribution validation args"
+
+    dist.destroy_process_group()
+
+def test_recv_object_list():
+    world_size = 2
+    # Use spawn to run the test in multiple processes
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    test_recv_object_list()
+```

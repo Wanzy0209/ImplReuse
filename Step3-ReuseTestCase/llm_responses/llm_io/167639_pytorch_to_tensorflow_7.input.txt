@@ -1,0 +1,135 @@
+Issue ID: 167639
+Title: torch.compile incompatible with CUDA Graph capture due to RNG state access during compilation
+Bug Description:
+### 🐛 Describe the bug
+
+Description:
+When using torch.compile() inside a CUDA Graph capture context, the compilation process fails because it attempts to access CUDA RNG state, which is prohibited during graph capture. This prevents users from combining two important PyTorch performance optimization features.
+code:
+```
+import torch
+import torch.nn as nn
+
+class TestModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(10, 20)
+        self.fc2 = nn.Linear(20, 1)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+def get_default_model():
+    return TestModel()
+
+def get_sample_inputs():
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    x = torch.randn(4, 10, requires_grad=True, device=device)
+    return (x,)
+
+def main():
+    model = get_default_model()
+    inputs = get_sample_inputs()
+    device = inputs[0].device
+    model.to(device)
+    model.eval()
+
+    with torch.no_grad():
+        original_output = model(*inputs)
+        print('Original model output shape:', original_output.shape)
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.keras.backend.name_scope
+Similarity score: 0.9931139349937439
+
+Similar API information:
+# Extracted call chain for tf.keras.backend.name_scope
+
+# --- tensorflow.python.framework.ops.name_scope ---
+def name_scope(
+    name, default_name=None, values=None, skip_on_eager=True,
+) -> ContextManager[Optional[str]]:
+  """Internal-only entry point for `name_scope*`.
+
+  Internal ops do not use the public API and instead rely on
+  `ops.name_scope` regardless of the execution mode. This function
+  dispatches to the correct `name_scope*` implementation based on
+  the arguments provided and the current mode. Specifically,
+
+  * if `values` contains a graph tensor `Graph.name_scope` is used;
+  * `name_scope_v1` is used in graph mode;
+  * `name_scope_v2` -- in eager mode.
+
+  Args:
+    name: The name argument that is passed to the op function.
+    default_name: The default name to use if the `name` argument is `None`.
+    values: The list of `Tensor` arguments that are passed to the op function.
+    skip_on_eager: Indicates to return NullContextmanager if executing eagerly.
+      By default this is True since naming tensors and operations in eager mode
+      have little use and cause unnecessary performance overhead. However, it is
+      important to preserve variable names since they
+...
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+class TestModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(10, 20)
+        self.fc2 = nn.Linear(20, 1)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+def get_default_model():
+    return TestModel()
+
+def get_sample_inputs():
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    x = torch.randn(4, 10, requires_grad=True, device=device)
+    return (x,)
+
+def main():
+    model = get_default_model()
+    inputs = get_sample_inputs()
+    device = inputs[0].device
+    model.to(device)
+    model.eval()
+
+    with torch.no_grad():
+        original_output = model(*inputs)
+        print('Original model output shape:', original_output.shape)
+
+        if torch.cuda.is_available():
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                compiled_model = torch.compile(model)
+                captured_output = compiled_model(*inputs)
+            graph_output = graph.run()
+            print('Captured graph output shape:', graph_output.shape)
+            assert torch.allclose(original_output, graph_output), "Output mismatch between original and graph execution"
+        else:
+            print("CUDA not available, skipping graph capture")
+
+if __name__ == "__main__":
+    main()
+
+The API tf.keras.backend.name_scope is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,104 @@
+Issue ID: 167154
+Title: MPS Buffer Allocation Regression Bug
+Bug Description:
+### 🐛 Describe the bug
+
+Starting in version 2.8.0, the MPS backend doesn't allocate buffers of the right size with non-contiguous tensors. Here is a small example for reproducing:
+
+```python
+import torch
+from torch.nn import functional as F
+
+weight = torch.rand((768, 768), device="mps", dtype=torch.float32)
+bias = torch.rand((768), device="mps", dtype=torch.float32)
+
+shape = (5, 499, 768)
+stride = (0, 768, 1)
+storage_offset = 0
+numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+base = torch.arange(numel, dtype=torch.float32, device="mps")
+input = torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+
+F.linear(input, weight, bias)
+```
+
+Running it on an M-series Macbook Pro (Sequoia 15.6) yields the following error message:
+```console
+/AppleInternal/Library/BuildRoots/4~B5E4ugD7ttWrICQL0cKin8ziE5extnGgu--yePo/Library/Caches/com.apple.xbs/Sources/MetalPerformanceShaders/MPSCore/Types/MPSNDArray.mm:891: failed assertion `[MPSNDArray, initWithBufferImpl:offset:descriptor:isForNDArrayAlias:isUserBuffer:] Error: buffer is not large enough. Must be 7664640 bytes
+```
+
+It works just fine if the input is converted to contiguous with `.contiguous()`.
+
+### Versions
+
+```text
+Collecting environment information...
+PyTorch version: 2.8.0
+Is debug build: False
+CUDA used to build PyTorch: None
+ROCM used to build PyTorch: N/A
+
+OS: macOS 15.6 (arm64)
+GCC version: Could not collect
+Clang version: 16.0.0 (clang-1600.0.26.6)
+
+Original API Under Test: torch.nn.functional.linear
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.math.special.bessel_j0
+Similarity score: 0.9926167130470276
+
+Similar API information:
+# Extracted call chain for tf.math.special.bessel_j0
+
+# --- tensorflow.python.ops.special_math_ops.bessel_j0 ---
+def bessel_j0(x, name=None):
+  """Computes the Bessel j0 function of `x` element-wise.
+
+  Modified Bessel function of order 0.
+
+  >>> tf.math.special.bessel_j0([0.5, 1., 2., 4.]).numpy()
+  array([ 0.93846981,  0.76519769,  0.22389078, -0.39714981], dtype=float32)
+
+  Args:
+    x: A `Tensor` or `SparseTensor`. Must be one of the following types: `half`,
+      `float32`, `float64`.
+    name: A name for the operation (optional).
+
+  Returns:
+    A `Tensor` or `SparseTensor`, respectively. Has the same type as `x`.
+
+  @compatibility(scipy)
+  Equivalent to scipy.special.j0
+  @end_compatibility
+  """
+  with ops.name_scope(name, 'bessel_j0', [x]):
+    return gen_special_math_ops.bessel_j0(x)
+
+# --- tensorflow.python.ops.gen_special_math_ops.bessel_j0 ---
+def bessel_j0(x, name=None):
+  """Computes the Bessel j0 function of `x` element-wise.
+
+Original Test Case:
+import torch
+from torch.nn import functional as F
+
+weight = torch.rand((768, 768), device="mps", dtype=torch.float32)
+bias = torch.rand((768), device="mps", dtype=torch.float32)
+
+shape = (5, 499, 768)
+stride = (0, 768, 1)
+storage_offset = 0
+numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+base = torch.arange(numel, dtype=torch.float32, device="mps")
+input = torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+
+F.linear(input, weight, bias)
+
+The API tf.math.special.bessel_j0 is identified as cross-library similar to the original PyTorch API torch.nn.functional.linear.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

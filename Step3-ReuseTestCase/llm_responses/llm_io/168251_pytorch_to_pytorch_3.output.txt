@@ -1,0 +1,78 @@
+```python
+import torch
+from torch import Tensor
+from torch.library import define, impl
+
+# The similar API is torch.library.impl_abstract.
+# We use it to define the abstract implementation for a custom operator
+# that mimics the VAE's behavior of returning a tuple.
+
+# Define the custom operator schema: takes a Tensor, returns a tuple of 3 Tensors
+define("test_vae::forward", (Tensor,), (Tensor, Tensor, Tensor))
+
+# Register the abstract implementation using the similar API.
+# This defines the behavior for FakeTensors (used during tracing/compilation).
+@torch.library.impl_abstract("test_vae::forward")
+def vae_forward_abstract(x: Tensor):
+    # Return a tuple of FakeTensors representing (reconstruction, mu, log_var).
+    # We assume reconstruction is same shape as x, mu/log_var are smaller (latent dim).
+    # This ensures the compiler knows the output is a tuple of specific shapes.
+    return (x, x[:, :20], x[:, :20])
+
+# Register a concrete implementation for CPU to make the op runnable.
+@impl("test_vae::forward", "CPU")
+def vae_forward_cpu(x: Tensor):
+    # Dummy implementation mimicking VAE output structure
+    reconstruction = x
+    mu = x[:, :20]
+    log_var = x[:, :20]
+    return (reconstruction, mu, log_var)
+
+def get_sample_inputs():
+    batch_size = 32
+    input_dim = 784
+    x = torch.randn(batch_size, input_dim)
+    return (x,)
+
+def main():
+    inputs = get_sample_inputs()
+    x = inputs[0]
+
+    # Test eager execution
+    print("Testing eager execution...")
+    output = torch.ops.test_vae.forward(x)
+    
+    # Verify output is a tuple
+    assert isinstance(output, tuple), "Output should be a tuple"
+    
+    # Unpack to access shapes (correct usage)
+    reconstruction, mu, log_var = output
+    
+    print(f'Input shape: {x.shape}')
+    print(f'Reconstruction shape: {reconstruction.shape}')
+    print(f'Mu shape: {mu.shape}')
+    print(f'Log_var shape: {log_var.shape}')
+
+    # Test with torch.compile (context of the original bug)
+    # The bug report indicated issues with tuple outputs under torch.compile.
+    print("\nTesting torch.compile with custom op...")
+    def model_fn(x):
+        return torch.ops.test_vae.forward(x)
+
+    compiled_fn = torch.compile(model_fn)
+    output_compile = compiled_fn(x)
+
+    # Verify the structure is preserved and accessible
+    assert isinstance(output_compile, tuple), "Compiled output should be a tuple"
+    
+    rec_c, mu_c, log_c = output_compile
+    assert rec_c.shape == reconstruction.shape
+    assert mu_c.shape == mu.shape
+    assert log_c.shape == log_var.shape
+    
+    print(f'Compile Reconstruction shape: {rec_c.shape}')
+    print("Test passed: torch.library.impl_abstract handles tuple returns correctly.")
+
+if __name__ == '__main__':
+    main()
+```

@@ -1,0 +1,50 @@
+```python
+import tensorflow as tf
+import collections
+
+def test_add_queue_runner_with_defaultdict():
+    """
+    Adapts the PyTorch Dynamo regression test (Issue 166238) to TensorFlow.
+    
+    Original Bug: Dynamo (torch.compile) failed to trace the creation of 
+    `collections.defaultdict`, raising an Unsupported error.
+    
+    This test verifies that `tf.compat.v1.train.add_queue_runner` (and the 
+    surrounding graph construction context) handles `collections.defaultdict` 
+    gracefully without raising tracing or type errors.
+    """
+    # Ensure we are in a context where we can build a graph (TF1 style behavior)
+    # Note: QueueRunners are primarily for Graph mode.
+    with tf.Graph().as_default():
+        # Create a simple FIFO queue
+        queue = tf.queue.FIFOQueue(capacity=10, dtypes=[tf.int32], shapes=[])
+
+        # --- Core Bug Reproduction Logic ---
+        # In the original PyTorch bug, simply creating a defaultdict inside 
+        # a compiled function caused a crash. We replicate this creation 
+        # inside the graph context here.
+        dd = collections.defaultdict(list)
+        
+        # Populate the defaultdict with TensorFlow ops
+        dd['enqueue_ops'].append(queue.enqueue(1))
+        dd['enqueue_ops'].append(queue.enqueue(2))
+        # -----------------------------------
+
+        # Create a QueueRunner using the operations extracted from the defaultdict
+        # This verifies that the object created by the "buggy" logic can be used 
+        # to construct arguments for the target API.
+        qr = tf.train.QueueRunner(queue, dd['enqueue_ops'])
+
+        # Call the API under test
+        # This should not raise an error related to defaultdict tracing.
+        tf.compat.v1.train.add_queue_runner(qr)
+
+        # Verify the behavior: The QueueRunner should be added to the collection.
+        runners = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+        
+        assert qr in runners, "QueueRunner was not successfully added to the collection."
+        print("Test passed: tf.compat.v1.train.add_queue_runner handled collections.defaultdict correctly.")
+
+if __name__ == "__main__":
+    test_add_queue_runner_with_defaultdict()
+```

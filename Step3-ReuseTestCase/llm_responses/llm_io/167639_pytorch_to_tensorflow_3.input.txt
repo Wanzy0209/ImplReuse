@@ -1,0 +1,138 @@
+Issue ID: 167639
+Title: torch.compile incompatible with CUDA Graph capture due to RNG state access during compilation
+Bug Description:
+### 🐛 Describe the bug
+
+Description:
+When using torch.compile() inside a CUDA Graph capture context, the compilation process fails because it attempts to access CUDA RNG state, which is prohibited during graph capture. This prevents users from combining two important PyTorch performance optimization features.
+code:
+```
+import torch
+import torch.nn as nn
+
+class TestModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(10, 20)
+        self.fc2 = nn.Linear(20, 1)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+def get_default_model():
+    return TestModel()
+
+def get_sample_inputs():
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    x = torch.randn(4, 10, requires_grad=True, device=device)
+    return (x,)
+
+def main():
+    model = get_default_model()
+    inputs = get_sample_inputs()
+    device = inputs[0].device
+    model.to(device)
+    model.eval()
+
+    with torch.no_grad():
+        original_output = model(*inputs)
+        print('Original model output shape:', original_output.shape)
+
+Original API Under Test: torch.compile
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.enable_eager_execution
+Similarity score: 0.9934076070785522
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.enable_eager_execution
+
+# --- tensorflow.python.framework.ops.enable_eager_execution ---
+def enable_eager_execution(config=None, device_policy=None,
+                           execution_mode=None) -> None:
+  """Enables eager execution for the lifetime of this program.
+
+  Eager execution provides an imperative interface to TensorFlow. With eager
+  execution enabled, TensorFlow functions execute operations immediately (as
+  opposed to adding to a graph to be executed later in a `tf.compat.v1.Session`)
+  and
+  return concrete values (as opposed to symbolic references to a node in a
+  computational graph).
+
+  For example:
+
+  ```python
+  tf.compat.v1.enable_eager_execution()
+
+  # After eager execution is enabled, operations are executed as they are
+  # defined and Tensor objects hold concrete values, which can be accessed as
+  # numpy.ndarray`s through the numpy() method.
+  assert tf.multiply(6, 7).numpy() == 42
+  ```
+
+  Eager execution cannot be enabled after TensorFlow APIs have been used to
+  create or execute graphs. It is typically recommended to invoke this function
+  at program startup and not in a library (as most libraries should be usabl
+...
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+class TestModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(10, 20)
+        self.fc2 = nn.Linear(20, 1)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+def get_default_model():
+    return TestModel()
+
+def get_sample_inputs():
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    x = torch.randn(4, 10, requires_grad=True, device=device)
+    return (x,)
+
+def main():
+    model = get_default_model()
+    inputs = get_sample_inputs()
+    device = inputs[0].device
+    model.to(device)
+    model.eval()
+
+    with torch.no_grad():
+        original_output = model(*inputs)
+        print('Original model output shape:', original_output.shape)
+
+        if torch.cuda.is_available():
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                compiled_model = torch.compile(model)
+                captured_output = compiled_model(*inputs)
+            graph_output = graph.run()
+            print('Captured graph output shape:', graph_output.shape)
+            assert torch.allclose(original_output, graph_output), "Output mismatch between original and graph execution"
+        else:
+            print("CUDA not available, skipping graph capture")
+
+if __name__ == "__main__":
+    main()
+
+The API tf.compat.v1.enable_eager_execution is identified as cross-library similar to the original PyTorch API torch.compile.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

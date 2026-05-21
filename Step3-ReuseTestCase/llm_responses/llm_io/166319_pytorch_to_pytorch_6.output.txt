@@ -1,0 +1,63 @@
+```python
+import torch
+
+# Configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch.manual_seed(1215252001)
+
+# Determine device (CUDA is preferred based on the original bug, fallback to CPU)
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+# Generate inputs exactly as in the original bug report to preserve the "fuzzed" characteristics
+# arg_0: size=(9, 1, 15, 4), stride=(60, 60, 0, 1), dtype=int32
+arg_0 = torch.as_strided(torch.randint(5, 30, (484,)).to(torch.int32), (9, 1, 15, 4), (60, 60, 0, 1)).to(device)
+# arg_1: size=(20, 15), stride=(15, 1), dtype=int64
+arg_1 = torch.as_strided(torch.randint(5, 30, (300,)).to(torch.int64), (20, 15), (15, 1)).to(device)
+# arg_2: size=(18, 15), stride=(15, 1), dtype=int64
+arg_2 = torch.as_strided(torch.randint(5, 30, (270,)).to(torch.int64), (18, 15), (15, 1)).to(device)
+
+# Adapt the inputs for torch.lobpcg
+# lobpcg requires float/complex inputs and specific shapes (A: N x N, B: N x N, X: N x k)
+
+# Prepare A (Symmetric Positive Definite matrix)
+# Use arg_1 (20, 15). Slice to (15, 15) and convert to float.
+A = arg_1[:15, :].to(torch.float32)
+# Make A symmetric positive definite: A = A @ A.T + epsilon * I
+A = A @ A.T + torch.eye(15, device=device) * 0.1
+A.requires_grad = True
+
+# Prepare B (Generalized eigenvalue problem matrix, optional)
+# Use arg_0 (9, 1, 15, 4). Reshape to (15, 15) and convert to float.
+# We take the first 225 elements to form a 15x15 matrix.
+B = arg_0.flatten()[:225].reshape(15, 15).to(torch.float32)
+# Make B symmetric positive definite
+B = B @ B.T + torch.eye(15, device=device) * 0.1
+B.requires_grad = True
+
+# Prepare X (Initial guess for eigenvectors)
+# Use arg_2 (18, 15). Slice to (15, 5) and convert to float.
+X = arg_2[:15, :5].to(torch.float32)
+X.requires_grad = True
+
+def test_lobpcg(A, B, X):
+    # Call the similar API: torch.lobpcg
+    # We pass k=5 to match the dimension of X
+    return torch.lobpcg(A, k=5, B=B, X=X)
+
+# Test Eager mode
+print("Testing Eager mode...")
+try:
+    e_eager, v_eager = test_lobpcg(A, B, X)
+    print('✅ eager success')
+except Exception as e:
+    print(f'❌ eager failed: {e}')
+
+# Test Compiled mode
+print("Testing Compiled mode...")
+compiled_fn = torch.compile(test_lobpcg, fullgraph=True, dynamic=True)
+try:
+    e_compiled, v_compiled = compiled_fn(A, B, X)
+    print('✅ compile success')
+except Exception as e:
+    print(f'❌ compile failed: {e}')
+```

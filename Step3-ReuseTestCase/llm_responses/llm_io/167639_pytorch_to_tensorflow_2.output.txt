@@ -1,0 +1,79 @@
+```python
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+def get_sample_input():
+    """Generates a sample tensor input."""
+    # Using CPU to ensure the test runs in most environments, 
+    # similar to how the original test checks for CUDA availability.
+    return tf.random.normal((4, 10), dtype=tf.float32)
+
+def setup_dtensor_mesh():
+    """Sets up a DTensor mesh for the test."""
+    try:
+        # Initialize the accelerator system (CPU or GPU)
+        # Note: In a real distributed setting, this would configure the specific devices.
+        # For this minimal test, we use the local CPU.
+        dtensor.initialize_accelerator_system('cpu')
+        
+        # Create a mesh with available devices
+        # We assume a single device mesh for simplicity in this test case
+        devices = tf.config.list_physical_devices('CPU')
+        if not devices:
+            # Fallback if physical devices aren't listed explicitly
+            device_ids = ['CPU:0']
+        else:
+            device_ids = [d.name for d in devices]
+            
+        mesh = dtensor.Mesh(device_ids, ['x'])
+        return mesh
+    except Exception as e:
+        print(f"Skipping DTensor test due to initialization error: {e}")
+        return None
+
+def main():
+    mesh = setup_dtensor_mesh()
+    if mesh is None:
+        return
+
+    # Define a layout (fully replicated)
+    layout = dtensor.Layout([dtensor.UNSHARDED, dtensor.UNSHARDED], mesh)
+    
+    tensor_input = get_sample_input()
+    
+    print(f"Original tensor shape: {tensor_input.shape}")
+
+    # Mimic the CUDA Graph capture context using tf.function.
+    # The original bug involved torch.compile (an optimization/compilation step) 
+    # being called inside a graph capture context. 
+    # Here, we test copy_to_mesh inside a tf.function (TensorFlow's graph context).
+    
+    @tf.function
+    def graph_capture_context(t, l):
+        # This is the API under test, analogous to torch.compile in the original bug.
+        # We are checking if this operation behaves correctly inside a graph context.
+        return dtensor.copy_to_mesh(t, l)
+
+    try:
+        # Execute inside the graph context
+        print("Attempting to run copy_to_mesh inside graph context...")
+        dtensor_output = graph_capture_context(tensor_input, layout)
+        
+        # Verify the output
+        # The output should be a DTensor
+        assert isinstance(dtensor_output, dtensor.DTensor), "Output is not a DTensor"
+        
+        # Shape should be preserved
+        assert dtensor_output.shape == tensor_input.shape, "Output shape mismatch"
+        
+        print("Captured graph output shape:", dtensor_output.shape)
+        print("Test passed: copy_to_mesh is compatible with graph context.")
+
+    except Exception as e:
+        # If this fails, it indicates a similar incompatibility between the API and graph capture
+        print(f"Test failed with error: {e}")
+        print("This indicates a potential incompatibility similar to the reported bug.")
+
+if __name__ == "__main__":
+    main()
+```

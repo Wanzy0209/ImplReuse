@@ -1,0 +1,69 @@
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.backends.cuda import enable_cudnn_sdp
+from torch._dynamo.testing import CompileCounter
+
+# Helper function that sets the backend flag and compiles, 
+# mimicking the structure of the original bug's helper function.
+def compile_with_cudnn_flag(module: nn.Module, enabled: bool, backend):
+    enable_cudnn_sdp(enabled)
+    return torch.compile(module, backend=backend)
+
+class SDPA_Model(nn.Module):
+    def forward(self, x):
+        # Using scaled_dot_product_attention to interact with enable_cudnn_sdp
+        return F.scaled_dot_product_attention(x, x, x)
+
+def test_recompilation_with_cudnn_sdp():
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    backend = CompileCounter()
+    input_tensor = torch.randn(1, 2, 4, 4).cuda()
+
+    # Case 1: Compile with enabled=True
+    mod1 = SDPA_Model().cuda()
+    opt_mod1 = compile_with_cudnn_flag(mod1, True, backend)
+    opt_mod1(input_tensor)
+    
+    # Initial compilation should happen once
+    assert backend.frame_count == 1, "Should compile once initially"
+
+    # Case 2: Compile another module with enabled=True (Same state)
+    # Unlike the bug where a new backend object caused recompilation,
+    # here the global state is the same, so we expect no recompilation
+    # (or at least correct behavior).
+    mod2 = SDPA_Model().cuda()
+    opt_mod2 = compile_with_cudnn_flag(mod2, True, backend)
+    opt_mod2(input_tensor)
+    
+    # Since the backend object is the same and the flag is the same, 
+    # we expect to reuse the compiled graph (no new frame compilation).
+    # Note: Depending on strict graph hashing, this might still compile, 
+    # but the key is that it doesn't fail or behave erratically like the bug.
+    # We assert it doesn't compile excessively.
+    assert backend.frame_count == 1, "Should not recompile for same state/backend"
+
+    # Case 3: Compile with enabled=False (Different state)
+    # This should trigger a recompilation because the backend behavior changes.
+    mod3 = SDPA_Model().cuda()
+    opt_mod3 = compile_with_cudnn_flag(mod3, False, backend)
+    opt_mod3(input_tensor)
+    
+    assert backend.frame_count == 2, "Should recompile when backend flag changes"
+
+    # Case 4: Compile with enabled=True again (State change back)
+    mod4 = SDPA_Model().cuda()
+    opt_mod4 = compile_with_cudnn_flag(mod4, True, backend)
+    opt_mod4(input_tensor)
+    
+    assert backend.frame_count == 3, "Should recompile when backend flag changes back"
+
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_recompilation_with_cudnn_sdp()
+```

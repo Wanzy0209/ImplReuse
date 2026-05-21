@@ -1,0 +1,64 @@
+```python
+import torch
+import torch.nn as nn
+
+class TestModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(10, 20)
+        self.fc2 = nn.Linear(20, 1)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+def get_default_model():
+    return TestModel()
+
+def get_sample_inputs():
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    x = torch.randn(4, 10, requires_grad=True, device=device)
+    return (x,)
+
+def main():
+    model = get_default_model()
+    inputs = get_sample_inputs()
+    device = inputs[0].device
+    model.to(device)
+    model.eval()
+
+    with torch.no_grad():
+        # Baseline execution
+        original_output = model(*inputs)
+        # Apply the similar API (torch.prod) to the output
+        original_prod = torch.prod(original_output)
+        print('Original prod output:', original_prod.item())
+
+        if torch.cuda.is_available():
+            # Warmup run (required for CUDA Graph capture)
+            # We need to run the exact sequence we intend to capture
+            warmup_output = model(*inputs)
+            warmup_prod = torch.prod(warmup_output)
+
+            graph = torch.cuda.CUDAGraph()
+            # Capture the graph
+            with torch.cuda.graph(graph):
+                # Adapted call site: Using torch.prod inside the graph capture
+                graph_output = model(*inputs)
+                graph_prod = torch.prod(graph_output)
+
+            # Replay the graph
+            graph.run()
+
+            # Verify results
+            print('Captured graph prod output:', graph_prod.item())
+            assert torch.allclose(original_prod, graph_prod), "Output mismatch between original and graph execution"
+        else:
+            print("CUDA not available, skipping graph capture")
+
+if __name__ == "__main__":
+    main()
+```

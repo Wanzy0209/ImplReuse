@@ -1,0 +1,107 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import torch.nn as nn
+import torch.nn.functional as F
+import os
+
+# VAE Model definition from the original bug report
+class VAE(nn.Module):
+    def __init__(self, input_dim, hidden_dim, latent_dim):
+        super(VAE, self).__init__()
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_var = nn.Linear(hidden_dim, latent_dim)
+        self.decoder = nn.Sequential(nn.Linear(latent_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, input_dim), nn.Sigmoid())
+
+    def encode(self, x):
+        h = self.encoder(x)
+        mu = self.fc_mu(h)
+        log_var = self.fc_var(h)
+        return (mu, log_var)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def decode(self, z):
+        return self.decoder(z)
+
+    def forward(self, x):
+        x = x.view(-1, self.input_dim)
+        (mu, log_var) = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        reconstruction = self.decode(z)
+        return (reconstruction, mu, log_var)
+
+def run_test(rank, world_size):
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Setup Model and Inputs
+    input_dim = 784
+    hidden_dim = 400
+    latent_dim = 20
+    batch_size = 32
+    
+    model = VAE(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim)
+    model.eval()
+    x = torch.randn(batch_size, input_dim)
+
+    if rank == 0:
+        # --- Sender ---
+        with torch.no_grad():
+            # The model returns a tuple (reconstruction, mu, log_var)
+            # This is the structure that caused issues in the original bug report
+            output_tuple = model(x)
+        
+        # Adaptation: Instead of torch.compile, we use torch.distributed.send_object_list
+        # We wrap the tuple in a list as required by the API
+        object_list = [output_tuple]
+        
+        try:
+            dist.send_object_list(object_list, dst=1)
+            print("Rank 0: Successfully sent tuple output.")
+        except Exception as e:
+            print(f"Rank 0: Error sending object list - {e}")
+
+    elif rank == 1:
+        # --- Receiver ---
+        received_list = [None]
+        
+        try:
+            dist.recv_object_list(received_list, src=0)
+            received_tuple = received_list[0]
+            
+            # Verification: Ensure the tuple structure is preserved and accessible
+            assert isinstance(received_tuple, tuple), "Received object is not a tuple"
+            assert len(received_tuple) == 3, "Received tuple does not have 3 elements"
+            
+            reconstruction, mu, log_var = received_tuple
+            
+            # Verify shapes (The original bug was triggered by accessing .shape)
+            assert reconstruction.shape == torch.Size([batch_size, input_dim]), \
+                f"Reconstruction shape mismatch: {reconstruction.shape}"
+            assert mu.shape == torch.Size([batch_size, latent_dim]), \
+                f"Mu shape mismatch: {mu.shape}"
+            assert log_var.shape == torch.Size([batch_size, latent_dim]), \
+                f"Log_var shape mismatch: {log_var.shape}"
+                
+            print("Rank 1: Successfully received and verified tuple output shapes.")
+            
+        except Exception as e:
+            print(f"Rank 1: Error receiving or verifying object list - {e}")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use spawn to launch processes for distributed testing
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+```

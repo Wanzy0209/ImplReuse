@@ -1,0 +1,124 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# The original bug report involves torch.chunk and shape assertions.
+# We adapt the logic to TensorFlow, using tf.split (semantically similar to chunk)
+# inside a computation graph, and verify the behavior with tf.keras.optimizers.Nadam
+# under both eager and graph (tf.function) execution.
+
+def test_nadam_with_chunk_like_logic():
+    # Enable verbose logging to catch any internal assertions
+    tf.get_logger().setLevel('DEBUG')
+
+    # Initialize the optimizer similar to the context of the bug report
+    optimizer = tf.keras.optimizers.Nadam(learning_rate=0.002)
+
+    # Replicate the tensor shapes from the PyTorch bug report
+    # var_node_3: size=(12,)
+    # var_node_6: size=(12,)
+    # var_node_5: size=(10,)
+    # var_node_10: size=(6, 4)
+    # var_node_11: size=(2,)
+
+    # We use Variables to ensure gradient computation is tracked
+    # Mimicking the 'arg' inputs from the original test
+    arg_0 = tf.Variable(tf.zeros((12,), dtype=tf.bool), name='arg_0')
+    arg_1 = tf.Variable(tf.zeros((10,), dtype=tf.int64), name='arg_1')
+    arg_2 = tf.Variable(tf.zeros((6, 4), dtype=tf.bool), name='arg_2')
+    arg_3 = tf.Variable(tf.zeros((2,), dtype=tf.bool), name='arg_3')
+    
+    # Sentinel to ensure gradient flow (mimicking the original sentinel logic)
+    sentinel = tf.Variable(1.0, name='sentinel')
+
+    # Define the computation logic adapted from the PyTorch fuzzed_program
+    # PyTorch: torch.chunk -> TensorFlow: tf.split
+    # PyTorch: torch.gather -> TensorFlow: tf.gather
+    # PyTorch: torch.squeeze -> TensorFlow: tf.squeeze
+    # PyTorch: torch.cat -> TensorFlow: tf.concat
+    def computation_step():
+        with tf.GradientTape() as tape:
+            # var_node_3 = torch.full((12,), False, dtype=torch.bool)
+            var_node_3 = tf.fill((12,), False)
+            
+            # var_node_2 = torch.chunk(var_node_3, 4, dim=0)[0]
+            # tf.split returns a list, we take the first element
+            var_node_2 = tf.split(var_node_3, 4, axis=0)[0]
+
+            # var_node_6 = arg_0
+            var_node_6 = arg_0
+            
+            # var_node_7 = arg_1
+            var_node_7 = arg_1
+            
+            # _input_size_var_node_5 = var_node_6.size(0)
+            _input_size_var_node_5 = tf.shape(var_node_6)[0]
+            
+            # _index_var_node_5 = torch.randint(0, _input_size_var_node_5, (10,), ...)
+            # Using random uniform to mimic randint
+            _index_var_node_5 = tf.random.uniform((10,), minval=0, maxval=_input_size_var_node_5, dtype=tf.int32)
+            
+            # var_node_5 = torch.gather(var_node_6, 0, _index_var_node_5)
+            # Note: tf.gather indices must be int32 or int64. PyTorch uses int64.
+            var_node_5 = tf.gather(var_node_6, _index_var_node_5) # axis=0 is default
+            
+            # var_node_4 = torch.chunk(var_node_5, 2, dim=0)[0]
+            var_node_4 = tf.split(var_node_5, 2, axis=0)[0]
+            
+            # var_node_10 = arg_2
+            var_node_10 = arg_2
+            
+            # var_node_9 = torch.chunk(var_node_10, 4, dim=1)[0]
+            var_node_9 = tf.split(var_node_10, 4, axis=1)[0]
+            
+            # var_node_8 = torch.squeeze(var_node_9)
+            var_node_8 = tf.squeeze(var_node_9)
+            
+            # var_node_1 = torch.cat([var_node_2, var_node_4, var_node_8], dim=0)
+            # Cast to float for multiplication with sentinel later if needed, 
+            # though original kept bool until the end. 
+            # TF concat requires same types. var_node_2,4,8 are bool.
+            var_node_1 = tf.concat([var_node_2, var_node_4, var_node_8], axis=0)
+            
+            # var_node_11 = arg_3
+            var_node_11 = arg_3
+            
+            # var_node_0 = torch.cat([var_node_1, var_node_11], dim=0)
+            var_node_0 = tf.concat([var_node_1, var_node_11], axis=0)
+            
+            # Ensure gradient computation by multiplying with sentinel
+            # Cast bool to float for multiplication
+            result = tf.cast(var_node_0, tf.float32) * sentinel
+            
+            # Create a dummy loss to trigger optimizer steps
+            loss = tf.reduce_sum(result)
+
+        # Calculate gradients
+        grads = tape.gradient(loss, [arg_0, arg_1, arg_2, arg_3, sentinel])
+        
+        # Apply gradients using Nadam
+        optimizer.apply_gradients(zip(grads, [arg_0, arg_1, arg_2, arg_3, sentinel]))
+        
+        return loss
+
+    # 1. Test Eager Execution
+    try:
+        loss_eager = computation_step()
+        print('✅ eager success')
+    except Exception as e:
+        print(f'❌ eager failed: {e}')
+        raise
+
+    # 2. Test Compiled Execution (tf.function)
+    # This mimics torch.compile
+    try:
+        compiled_step = tf.function(computation_step)
+        loss_compiled = compiled_step()
+        print('✅ compile success')
+    except Exception as e:
+        print(f'❌ compile failed: {e}')
+        raise
+
+if __name__ == '__main__':
+    test_nadam_with_chunk_like_logic()
+```

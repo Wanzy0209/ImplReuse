@@ -1,0 +1,101 @@
+Issue ID: 167727
+Title: [MPS] mm/addmm returns incorrect results for large tensors
+Bug Description:
+### 🐛 Describe the bug
+
+On main build, MacOS15.6
+```python
+import torch
+
+# success
+a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+b = torch.rand((64, 100), dtype=torch.complex64, device="mps")
+c = torch.rand((100, 300), dtype=torch.complex64, device="mps")
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+torch.testing.assert_close(torch.addmm(a, b, c, alpha=1.0, beta=0.5).cpu(), 
+                           torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5))
+
+# fails
+a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+b = torch.rand((64, 10000), dtype=torch.complex64, device="mps")
+c = torch.rand((10000, 300), dtype=torch.complex64, device="mps")
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+torch.testing.assert_close(torch.addmm(a, b, c, alpha=1.0, beta=0.5).cpu(), 
+                           torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5))
+
+```
+
+```
+Mismatched elements: 19200 / 19200 (100.0%)
+Greatest absolute difference: 5063.81494140625 at index (0, 193) (up to 1e-05 allowed)
+Greatest relative difference: 0.992490291595459 at index (35, 120) (up to 1.3e-06 allowed)
+```
+
+I can take a look at why/what threshold it's happening little later, reporting this here for tracking
+
+### Versions
+
+main branch build
+
+cc @ezyang @anjali411 @dylanbespalko @mruberry @nikitaved @amjames @jianyuh @walterddr @xwang233 @Lezcano @kulinseth @malfet @DenisVieriu97 @jhavukainen
+
+Original API Under Test: torch.addmm
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.addmm
+Similarity score: 1.0000001192092896
+
+Similar API information:
+# Extracted call chain for torch.addmm
+
+# --- torch._decomp.decompositions.addmm ---
+def addmm(self: Tensor, mat1: Tensor, mat2: Tensor, beta: int = 1, alpha: int = 1):
+    if not self.is_floating_point() and not self.is_complex():
+        beta = int(beta)
+        alpha = int(alpha)
+    out = alpha * torch.mm(mat1, mat2)
+    if beta == 0:
+        return out
+
+    # The output of aten.addmm is contiguous, we need to match this behavior in the decomposition.
+    # The original implementation 'beta * self + out' would return a strided tensor if `self` is strided.
+    # We thus use `out`, the output of torch.mm, which is always contiguous, as the first argument for addition.
+    # This is relying on TensorIterator's behavior that it takes higher precedence on the stride of first input.
+    # Alternative, we can write `(beta * self + out).contiguous()`, but it introduces another copy in some cases.
+    # This implementation is not ideal, and we should revisit this when we have a better solution.
+    return out + beta * self
+
+# --- torch._prims_common.wrappers.out_wrapper ---
+def out_wrapper(
+    *out_names: str,
+    exact_dtype: bool = False,
+    pass_is_out: bool = False,
+    preserve_m
+...
+
+Original Test Case:
+import torch
+
+# success
+a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+b = torch.rand((64, 100), dtype=torch.complex64, device="mps")
+c = torch.rand((100, 300), dtype=torch.complex64, device="mps")
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+torch.testing.assert_close(torch.addmm(a, b, c, alpha=1.0, beta=0.5).cpu(), 
+                           torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5))
+
+# fails
+a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+b = torch.rand((64, 10000), dtype=torch.complex64, device="mps")
+c = torch.rand((10000, 300), dtype=torch.complex64, device="mps")
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+torch.testing.assert_close(torch.addmm(a, b, c, alpha=1.0, beta=0.5).cpu(), 
+                           torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5))
+
+The API torch.addmm is identified as same-library similar to the original PyTorch API torch.addmm.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,86 @@
+```python
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+import numpy as np
+
+def test_tf_numpy_pad_train_eval_stability():
+    """
+    Test case derived from PyTorch Issue 167980.
+    
+    This test reproduces the training -> evaluation flow where a crash occurred
+    in PyTorch. It leverages the similar API `tf.experimental.numpy.pad` to 
+    handle tensor dimension manipulations, verifying stability during the 
+    transition from gradient computation (train) to inference (eval) on CPU.
+    """
+    
+    # Force CPU execution to mirror the original bug report's specific crash condition
+    with tf.device('/CPU:0'):
+        # 1. Data Setup (Mimicking MNIST shapes: Batch=80, 28x28)
+        batch_size = 80
+        # Random data simulating MNIST images
+        X_train = np.random.rand(batch_size, 28, 28).astype(np.float32)
+        y_train = np.random.randint(0, 10, size=(batch_size,))
+        
+        X_test = np.random.rand(batch_size, 28, 28).astype(np.float32)
+        y_test = np.random.randint(0, 10, size=(batch_size,))
+
+        # 2. Model Definition using the Similar API
+        # We replace the standard flatten/linear stack with a custom module
+        # that explicitly uses tf.experimental.numpy.pad to manipulate dimensions.
+        class PadNet(tf.Module):
+            def __init__(self):
+                self.w1 = tf.Variable(tf.random.normal([900, 256])) # 30*30 = 900 (after padding)
+                self.b1 = tf.Variable(tf.zeros([256]))
+                self.w2 = tf.Variable(tf.random.normal([256, 10]))
+                self.b2 = tf.Variable(tf.zeros([10]))
+
+            def __call__(self, x):
+                # LEVERAGE SIMILAR API: tf.experimental.numpy.pad
+                # Pad the 28x28 input to 30x30 (pad 1 pixel on all sides)
+                # This tests the API's ability to handle tensor shape changes
+                # within the model forward pass.
+                x_padded = tnp.pad(x, pad_width=((0, 0), (1, 1), (1, 1)), mode='constant')
+                
+                # Flatten
+                x_flat = tf.reshape(x_padded, [batch_size, -1])
+                
+                # Linear + ReLU
+                h = tf.matmul(x_flat, self.w1) + self.b1
+                h = tf.nn.relu(h)
+                
+                # Output Layer
+                out = tf.matmul(h, self.w2) + self.b2
+                return out
+
+        model = PadNet()
+        optimizer = tf.optimizers.SGD(learning_rate=0.01)
+        loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+
+        # 3. Training Step (Gradient Context)
+        # The original bug occurred after this phase.
+        print("=== TRAIN ===")
+        with tf.GradientTape() as tape:
+            pred = model(X_train)
+            loss = loss_fn(y_train, pred)
+        
+        grads = tape.gradient(loss, model.trainable_variables)
+        optimizer.apply_gradients(zip(grads, model.trainable_variables))
+        print("Train step completed. Loss:", loss.numpy())
+
+        # 4. Evaluation Step (No Gradient Context)
+        # The original PyTorch kernel crashed here.
+        # We verify that tf.experimental.numpy.pad does not cause a crash
+        # when switching to inference mode.
+        print("=== EVAL (CRASH CHECK) ===")
+        # In TF, we don't strictly need torch.no_grad(), but we ensure no tape is running.
+        pred_eval = model(X_test)
+        
+        # Assertions to verify correctness and stability
+        assert pred_eval.shape == (batch_size, 10), f"Output shape mismatch: {pred_eval.shape}"
+        assert not np.any(np.isnan(pred_eval.numpy())), "Output contains NaNs"
+        
+        print("Eval step completed successfully. No crash detected.")
+
+if __name__ == "__main__":
+    test_tf_numpy_pad_train_eval_stability()
+```

@@ -1,0 +1,65 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_bfloat16_scope_addmm():
+    """
+    Adapts the torch.addmm test case to verify behavior under 
+    tf.compat.v1.tpu.bfloat16_scope.
+    
+    The original bug involved incorrect results for large tensors on MPS.
+    Here we verify that the matrix operation (addmm equivalent) performs 
+    correctly within the bfloat16 precision context.
+    """
+    # Define shapes matching the original bug report (large tensor case)
+    shape_a = (64, 300)
+    shape_b = (64, 10000)
+    shape_c = (10000, 300)
+
+    # Generate random input data
+    np.random.seed(42)
+    a_np = np.random.randn(*shape_a).astype(np.float32)
+    b_np = np.random.randn(*shape_b).astype(np.float32)
+    c_np = np.random.randn(*shape_c).astype(np.float32)
+
+    # Calculate reference result (float32)
+    # torch.addmm(a, b, c, alpha=1.0, beta=0.5) -> beta * a + alpha * (b @ c)
+    expected = 0.5 * a_np + 1.0 * np.matmul(b_np, c_np)
+
+    # Perform the operation inside the bfloat16_scope
+    # This scope is intended to handle variables/operations in bfloat16 precision on TPUs.
+    with tf.compat.v1.tpu.bfloat16_scope():
+        # We explicitly cast to bfloat16 to ensure the operation runs in the precision 
+        # managed by the scope, simulating the environment the scope is designed for.
+        a_tf = tf.constant(a_np, dtype=tf.bfloat16)
+        b_tf = tf.constant(b_np, dtype=tf.bfloat16)
+        c_tf = tf.constant(c_np, dtype=tf.bfloat16)
+
+        # TensorFlow equivalent of addmm: beta * input + alpha * (mat1 @ mat2)
+        result_bf16 = 0.5 * a_tf + 1.0 * tf.matmul(b_tf, c_tf)
+
+        # Cast back to float32 to compare with the reference
+        result_float32 = tf.cast(result_bf16, tf.float32)
+
+    # Verify the results
+    # bfloat16 has lower precision than float32, so we use a tolerance.
+    # The original bug showed a 100% mismatch with huge differences (5063.0).
+    # Here we assert that the operation is numerically reasonable within precision limits.
+    result_val = result_float32.numpy()
+    
+    # Check for gross numerical errors (similar to the original bug's magnitude)
+    max_diff = np.max(np.abs(result_val - expected))
+    print(f"Max absolute difference: {max_diff}")
+
+    # Assert that the results are close within expected bfloat16 precision
+    # (rtol=1e-2, atol=1e-1 are typical for bfloat16 vs float32 comparisons)
+    try:
+        np.testing.assert_allclose(result_val, expected, rtol=1e-2, atol=1e-1)
+        print("Test passed: Operation within bfloat16_scope is numerically consistent.")
+    except AssertionError as e:
+        print(f"Test failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_bfloat16_scope_addmm()
+```

@@ -1,0 +1,58 @@
+```python
+import torch
+from torch.library import Library, register_fake, impl
+
+# Define a custom library and operator to leverage the similar API (torch.library.get_ctx)
+lib = Library("test_clamp_ctx", "DEF")
+lib.define("custom_clamp(Tensor self, Scalar? min=None, Scalar? max=None) -> Tensor")
+
+# Register a fake implementation where we use torch.library.get_ctx
+@register_fake("test_clamp_ctx::custom_clamp")
+def custom_clamp_fake(self, min=None, max=None):
+    """
+    Fake implementation for meta tensor generation.
+    This block tests the similar API: torch.library.get_ctx
+    """
+    # Retrieve the current context to ensure it is accessible and valid
+    ctx = torch.library.get_ctx()
+    assert ctx is not None, "get_ctx() returned None inside fake impl"
+    
+    # Return a meta tensor preserving the shape of the input
+    return torch.empty_like(self)
+
+# Register a concrete implementation for CPU to execute the logic
+@impl("test_clamp_ctx::custom_clamp", "CPU")
+def custom_clamp_cpu(self, min=None, max=None):
+    # Delegate to the standard clamp to preserve the original logic
+    return self.clamp(min, max)
+
+def test_clamp_correctness_with_ctx():
+    """
+    Test case preserving the original bug reproduction logic while 
+    leveraging torch.library.get_ctx via a custom operator.
+    """
+    # The following line triggers the context setup in the original bug report
+    a = torch.zeros(1)
+    a_clamped = torch.ops.test_clamp_ctx.custom_clamp(a, min=0.0)
+    assert a_clamped.item() == 0.0
+
+    # Test Case 1: Basic min clamping (The main failure case in the bug)
+    b = torch.zeros(1)
+    c = torch.ops.test_clamp_ctx.custom_clamp(b, min=1e-7)
+    # The bug reported 0.0, the correct behavior is 1e-7
+    assert c.item() == 1e-7, f"Expected 1e-7, got {c.item()}"
+
+    # Test Case 2: Explicit max=None
+    b = torch.zeros(1)
+    c = torch.ops.test_clamp_ctx.custom_clamp(b, min=1e-7, max=None)
+    assert c.item() == 1e-7, f"Expected 1e-7, got {c.item()}"
+
+    # Test Case 3: max=torch.inf
+    b = torch.zeros(1)
+    c = torch.ops.test_clamp_ctx.custom_clamp(b, min=1e-7, max=float('inf'))
+    assert c.item() == 1e-7, f"Expected 1e-7, got {c.item()}"
+
+if __name__ == "__main__":
+    test_clamp_correctness_with_ctx()
+    print("Test passed.")
+```

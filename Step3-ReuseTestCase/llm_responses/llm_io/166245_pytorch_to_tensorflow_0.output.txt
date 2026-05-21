@@ -1,0 +1,97 @@
+```python
+import tensorflow as tf
+import os
+import tempfile
+
+def build_fuzzed_graph(out_dir):
+    """
+    Builds a TensorFlow graph mirroring the logic of the PyTorch fuzzed program.
+    The original program involves chunking, squeezing, random indexing, clamping, and concatenation.
+    """
+    # Inputs
+    # var_node_4: size=(15, 108, 4), dtype=int16
+    arg_0 = tf.placeholder(tf.int16, shape=(15, 108, 4), name="arg_0")
+
+    # var_node_3 = torch.chunk(var_node_4, 4, dim=1)[0]
+    # Splitting dimension 1 (108) into 4 parts of size 27
+    var_node_3 = tf.split(arg_0, 4, axis=1)[0]
+
+    # var_node_2 = torch.chunk(var_node_3, 4, dim=2)[0]
+    # Splitting dimension 2 (4) into 4 parts of size 1
+    var_node_2 = tf.split(var_node_3, 4, axis=2)[0]
+
+    # var_node_1 = torch.squeeze(var_node_2)
+    var_node_1 = tf.squeeze(var_node_2)
+
+    # var_node_8 = torch.full((13, 27), 3, dtype=torch.int16)
+    var_node_8 = tf.fill([13, 27], tf.cast(3, tf.int16))
+
+    # var_node_9 = arg_1 (size=(11,), dtype=int64)
+    arg_1 = tf.placeholder(tf.int64, shape=(11,), name="arg_1")
+
+    # _index_var_node_7 = torch.randint(0, _input_size_var_node_7, (11,))
+    # Using tf.random.uniform to generate indices. 
+    # Note: PyTorch randint defaults to int64, so we match that here.
+    _input_size_var_node_7 = tf.shape(var_node_8)[0]
+    _index_var_node_7 = tf.random.uniform([11], minval=0, maxval=_input_size_var_node_7, dtype=tf.int64)
+
+    # var_node_7 = torch.index_select(var_node_8, 0, _index_var_node_7)
+    # tf.gather is the equivalent of torch.index_select
+    var_node_7 = tf.gather(var_node_8, _index_var_node_7, axis=0)
+
+    # var_node_6 = torch.clamp(var_node_7, min=-1.0, max=1.0)
+    var_node_6 = tf.clip_by_value(var_node_7, clip_value_min=-1.0, clip_value_max=1.0)
+
+    # var_node_12 = arg_2 (size=(3, 27), dtype=int16)
+    arg_2 = tf.placeholder(tf.int16, shape=(3, 27), name="arg_2")
+
+    # var_node_11 = torch.clamp(var_node_12, min=-1.0, max=1.0)
+    var_node_11 = tf.clip_by_value(arg_2, clip_value_min=-1.0, clip_value_max=1.0)
+
+    # var_node_13 = torch.full((1,), 3, dtype=torch.int64)
+    var_node_13 = tf.fill([1], tf.cast(3, tf.int64))
+
+    # var_node_10 = torch.index_select(var_node_11, 0, _index_var_node_10)
+    _input_size_var_node_10 = tf.shape(var_node_11)[0]
+    _index_var_node_10 = tf.random.uniform([1], minval=0, maxval=_input_size_var_node_10, dtype=tf.int64)
+    var_node_10 = tf.gather(var_node_11, _index_var_node_10, axis=0)
+
+    # var_node_15 = torch.cat([var_node_16, var_node_17, var_node_18], dim=0)
+    arg_3 = tf.placeholder(tf.int16, shape=(1, 27), name="arg_3")
+    arg_4 = tf.placeholder(tf.int16, shape=(1, 27), name="arg_4")
+    arg_5 = tf.placeholder(tf.int16, shape=(1, 27), name="arg_5")
+    var_node_15 = tf.concat([arg_3, arg_4, arg_5], axis=0)
+
+    # var_node_14 = torch.index_select(var_node_15, 0, _index_var_node_14)
+    _input_size_var_node_14 = tf.shape(var_node_15)[0]
+    _index_var_node_14 = tf.random.uniform([1], minval=0, maxval=_input_size_var_node_14, dtype=tf.int64)
+    var_node_14 = tf.gather(var_node_15, _index_var_node_14, axis=0)
+
+    # Add an identity node to mark the output for the graph
+    tf.identity(var_node_14, name="output")
+
+# Main test logic
+if __name__ == "__main__":
+    # Create a temporary directory for the graph output
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Build the graph
+        graph = tf.Graph()
+        with graph.as_default():
+            build_fuzzed_graph(tmpdir)
+
+        # Write the graph using the API under test
+        graph_filename = "fuzzed_graph.pb"
+        graph_path = os.path.join(tmpdir, graph_filename)
+        
+        try:
+            # This is the API call being tested
+            tf.io.write_graph(graph, tmpdir, graph_filename, as_text=False)
+            print(f"Graph successfully written to {graph_path}")
+
+            # Verify the file was created
+            assert os.path.exists(graph_path), "Graph file was not created."
+            print("Test passed: Graph file exists and write operation succeeded.")
+        except Exception as e:
+            print(f"Test failed with exception: {e}")
+            raise
+```

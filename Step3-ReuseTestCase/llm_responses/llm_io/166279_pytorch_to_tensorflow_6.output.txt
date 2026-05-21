@@ -1,0 +1,87 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Set seed for reproducibility
+tf.random.set_seed(1166094474)
+
+def fuzzed_program(arg_0, arg_1, arg_2, arg_3, sentinel):
+    # var_node_3: Create a boolean tensor
+    var_node_3 = tf.fill((12,), False)
+    
+    # var_node_2: Adapt torch.chunk to tf.keras.ops.swapaxes
+    # Original: chunk((12,), 4, dim=0)[0] -> (3,)
+    # Adaptation: Expand to 2D, swap axes, squeeze back to 1D to test the API
+    var_node_2 = tf.squeeze(tf.keras.ops.swapaxes(tf.expand_dims(var_node_3, axis=0), 0, 1))
+
+    # var_node_6, var_node_5: Gather operation
+    var_node_6 = arg_0
+    # Mimic torch.randint for gather indices
+    _input_size_var_node_5 = tf.shape(var_node_6)[0]
+    _index_var_node_5 = tf.random.uniform((10,), minval=0, maxval=_input_size_var_node_5, dtype=tf.int32)
+    var_node_5 = tf.gather(var_node_6, _index_var_node_5)
+
+    # var_node_4: Adapt torch.chunk to tf.keras.ops.swapaxes
+    # Original: chunk((10,), 2, dim=0)[0] -> (5,)
+    # Adaptation: Expand to 2D, swap axes, squeeze back to 1D
+    var_node_4 = tf.squeeze(tf.keras.ops.swapaxes(tf.expand_dims(var_node_5, axis=0), 0, 1))
+
+    # var_node_10, var_node_9: 2D tensor operation
+    var_node_10 = arg_2
+    # Original: chunk((6, 4), 4, dim=1)[0] -> (6, 1)
+    # Adaptation: swapaxes((6, 4), 0, 1) -> (4, 6)
+    var_node_9 = tf.keras.ops.swapaxes(var_node_10, 0, 1)
+
+    # var_node_8: Squeeze operation
+    # Original: squeeze((6, 1)) -> (6,)
+    # Adaptation: squeeze((4, 6)) -> (4,)
+    var_node_8 = tf.squeeze(var_node_9)
+
+    # var_node_1: Concatenation
+    # Original shapes: (3,), (5,), (6,) -> (14,)
+    # Adapted shapes: (12,), (10,), (4,) -> (26,)
+    var_node_1 = tf.concat([var_node_2, var_node_4, var_node_8], axis=0)
+
+    # var_node_11, var_node_0: Final concatenation
+    var_node_11 = arg_3
+    # Original shapes: (14,), (2,) -> (16,)
+    # Adapted shapes: (26,), (2,) -> (28,)
+    var_node_0 = tf.concat([var_node_1, var_node_11], axis=0)
+
+    # Ensure gradient computation by multiplying with sentinel
+    result = tf.cast(var_node_0, dtype=sentinel.dtype) * sentinel
+    return result
+
+# Define inputs
+# Note: TensorFlow does not expose as_strided in the same way, using standard constructors
+arg_0 = tf.constant([False] * 12, dtype=tf.bool)
+arg_1 = tf.constant([1] * 10, dtype=tf.int64) # Present in signature, unused in logic
+arg_2 = tf.constant([[False] * 4 for _ in range(6)], dtype=tf.bool)
+arg_3 = tf.constant([False] * 2, dtype=tf.bool)
+
+# Sentinel tensor to ensure gradient computation
+sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+# Test Eager Execution
+print("Testing Eager Execution...")
+result_eager = fuzzed_program(arg_0, arg_1, arg_2, arg_3, sentinel)
+print(f"✅ Eager success. Result shape: {result_eager.shape}")
+
+# Test Compiled Execution (tf.function)
+print("\nTesting Compiled Execution...")
+compiled_program = tf.function(fuzzed_program)
+result_compiled = compiled_program(arg_0, arg_1, arg_2, arg_3, sentinel)
+print(f"✅ Compile success. Result shape: {result_compiled.shape}")
+
+# Verify Consistency
+assert tf.reduce_all(tf.equal(result_eager, result_compiled)).numpy(), "Divergence detected between eager and compiled modes!"
+print("✅ Eager and Compiled results match.")
+
+# Verify Gradients
+print("\nTesting Gradients...")
+with tf.GradientTape() as tape:
+    result_grad = fuzzed_program(arg_0, arg_1, arg_2, arg_3, sentinel)
+grads = tape.gradient(result_grad, sentinel)
+assert grads is not None, "Gradient computation failed!"
+print(f"✅ Gradient computation success. Gradient value: {grads.numpy()}")
+```

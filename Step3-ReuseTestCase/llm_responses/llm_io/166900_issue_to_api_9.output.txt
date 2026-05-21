@@ -1,0 +1,55 @@
+```python
+import torch
+import torch.utils._pytree as pytree
+import torch.autograd.graph
+
+# Setup classes from the original bug report
+class Foo:
+    pass
+
+class Bar:
+    def __eq__(self, other):
+        return super().__eq__(other)
+
+    def __hash__(self):
+        return 0
+
+# Register Bar as a pytree constant, which is part of the trigger for the bug
+pytree.register_constant(Bar)
+
+@torch.compile(backend="eager")
+def fn(x, obj):
+    # Original bug reproduction logic:
+    # Attempting to set an attribute on an object with a dictionary containing
+    # a pytree-registered constant inside a compiled function.
+    obj.attr = {3: Bar()}
+
+    # Leveraging the similar API (torch.autograd.graph.get_gradient_edge):
+    # We call this inside the compiled function to see how it interacts
+    # with the Dynamo guard generation logic.
+    # Note: x requires grad for this API call to be valid.
+    edge = torch.autograd.graph.get_gradient_edge(x)
+
+    return x + 1
+
+# Test execution
+# We use requires_grad=True to satisfy the constraints of get_gradient_edge
+input_tensor = torch.ones(3, requires_grad=True)
+foo_obj = Foo()
+
+# Run the function
+try:
+    result = fn(input_tensor, foo_obj)
+    
+    # Assertions to verify the function ran correctly and side effects occurred
+    expected = torch.ones(3) + 1
+    assert torch.equal(result, expected), "Output tensor mismatch"
+    assert hasattr(foo_obj, 'attr'), "Side effect attribute missing"
+    assert 3 in foo_obj.attr, "Dictionary key missing in side effect"
+    assert isinstance(foo_obj.attr[3], Bar), "Value type mismatch in side effect"
+    
+    print("Test passed successfully.")
+
+except Exception as e:
+    print(f"Test failed with error: {e}")
+```

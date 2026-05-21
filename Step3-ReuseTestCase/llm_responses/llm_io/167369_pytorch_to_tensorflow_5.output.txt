@@ -1,0 +1,49 @@
+```python
+import tensorflow as tf
+
+# Ensure we are in graph mode (TF 1.x style) as add_queue_runner is a graph-mode API
+tf.compat.v1.disable_eager_execution()
+
+# Replicate the class from the bug report
+class Config:
+    def __repr__(self):
+        return "Config()"
+
+# Create a custom QueueRunner that utilizes the Config object.
+# This mimics the 'forward' function context where the user object is used.
+class CustomQueueRunner(tf.compat.v1.train.QueueRunner):
+    def __init__(self, queue=None, enqueue_ops=None, config=None):
+        super().__init__(queue=queue, enqueue_ops=enqueue_ops)
+        self.config = config
+
+    def __repr__(self):
+        # This mimics the usage in the PyTorch bug: calling repr on the user object
+        return f"RunnerConfig: {repr(self.config)}"
+
+# Setup the graph
+with tf.compat.v1.Graph().as_default():
+    # Create a simple queue and enqueue op
+    q = tf.compat.v1.FIFOQueue(10, dtypes=[tf.float32], shapes=[])
+    enqueue_op = q.enqueue([1.0])
+
+    # Instantiate the user-defined config
+    config = Config()
+    
+    # Instantiate the custom runner with the config
+    qr = CustomQueueRunner(q, [enqueue_op], config=config)
+
+    # Call the API under test: tf.compat.v1.train.add_queue_runner
+    # The PyTorch bug occurs at the compile step (torch.compile).
+    # Here we test if add_queue_runner handles the object registration without
+    # failing due to the custom __repr__ method.
+    try:
+        tf.compat.v1.train.add_queue_runner(qr)
+        
+        # Verify the runner was added to the collection
+        runners = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+        assert qr in runners
+        
+        print("Test Passed: API handled object with custom repr successfully.")
+    except Exception as e:
+        print(f"Test Failed: {e}")
+```

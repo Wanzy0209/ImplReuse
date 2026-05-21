@@ -1,0 +1,59 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# 1. Setup inputs
+# Mimicking the random tensor setup from the PyTorch bug report
+x = tf.random.normal((2, 3))
+
+# 2. Define the function using the target API
+# Original PyTorch logic: relu(addmm(x, a, b, alpha=0.5, beta=0.5))
+# The bug was that the compiler (torch.compile) ignored the alpha/beta parameters.
+# 
+# Adapted logic for tf.keras.backend.stop_gradient:
+# We define a function that relies on the specific behavior of stop_gradient.
+# The "parameter" being tested here is the gradient blocking property itself.
+# If the compiler (tf.function) ignores stop_gradient, gradients will flow incorrectly.
+def f(x):
+    # We wrap it in relu to mimic the structure of the original bug report
+    return tf.nn.relu(tf.keras.backend.stop_gradient(x))
+
+# 3. Compile the function
+# Equivalent to torch.compile in PyTorch
+fc = tf.function(f)
+
+# 4. Execute Eager and Compiled versions
+y_eager = f(x)
+y_compiled = fc(x)
+
+print("Eager Output:", y_eager.numpy())
+print("Compiled Output:", y_compiled.numpy())
+
+# Check forward pass consistency
+# stop_gradient does not change values, so these should be identical.
+if not np.allclose(y_eager.numpy(), y_compiled.numpy()):
+    print("[FAIL] Forward pass mismatch between eager and compiled.")
+else:
+    print("[PASS] Forward pass consistent.")
+
+# 5. Check Gradients
+# This is the critical part for stop_gradient.
+# If stop_gradient is ignored by the compiler, the gradient will be non-zero.
+with tf.GradientTape() as tape_eager:
+    y_eager = f(x)
+grad_eager = tape_eager.gradient(y_eager, x)
+
+with tf.GradientTape() as tape_compiled:
+    y_compiled = fc(x)
+grad_compiled = tape_compiled.gradient(y_compiled, x)
+
+print("Eager Gradient:", grad_eager)
+print("Compiled Gradient:", grad_compiled)
+
+# Assertions to verify the behavior
+# Both gradients should be None (or effectively zero) because of stop_gradient
+assert grad_eager is None, "Eager mode failed to stop gradient."
+assert grad_compiled is None, "Compiled mode (tf.function) failed to stop gradient. This mimics the 'ignored parameter' bug."
+
+print("[PASS] Gradients correctly stopped in both modes.")
+```

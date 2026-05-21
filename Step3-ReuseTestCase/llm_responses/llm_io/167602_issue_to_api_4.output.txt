@@ -1,0 +1,49 @@
+```python
+import tensorflow as tf
+import time
+
+def test_in_cross_replica_context():
+    """
+    Test case for tf.distribute.in_cross_replica_context.
+    This test preserves the structural logic of the original Stable Diffusion bug report
+    (Setup -> Context Transfer -> Loop Execution -> Timing) while adapting it to 
+    validate the TensorFlow distributed context API.
+    """
+    
+    # Setup: Define a distribution strategy (analogous to loading the model)
+    strategy = tf.distribute.MirroredStrategy()
+
+    # "Move to device": Enter the strategy scope (analogous to pipe.to("cuda"))
+    with strategy.scope():
+        
+        # The original script runs a loop 10 times to generate images.
+        # We run a loop 10 times to verify the context state remains consistent.
+        start = time.time()
+        for i in range(10):
+            # Inside the scope, we expect to be in a cross-replica context.
+            # This mirrors the execution of the pipeline in the original bug report.
+            is_cross_replica = tf.distribute.in_cross_replica_context()
+            
+            # Assertion to verify the API behavior
+            assert is_cross_replica, \
+                f"Iteration {i}: Expected to be in cross-replica context inside strategy.scope()"
+        
+        print("Time taken for context checks: ", time.time() - start)
+
+        # Define a step function to run in replica context
+        def step_fn():
+            # Inside strategy.run(), we expect NOT to be in a cross-replica context.
+            # This checks the boundary condition, similar to how the original code
+            # interacts with the CUDA device context.
+            assert not tf.distribute.in_cross_replica_context(), \
+                "Expected not to be in cross-replica context inside strategy.run()"
+            return tf.constant(1)
+
+        # Execute the step function (analogous to the final image generation/save)
+        strategy.run(step_fn)
+
+    print("Test completed successfully.")
+
+if __name__ == "__main__":
+    test_in_cross_replica_context()
+```

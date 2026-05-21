@@ -1,0 +1,51 @@
+```python
+import torch
+
+# Helper function mimicking the similar API: tf.keras.backend.ndim
+# This function extracts a scalar property (rank) from a tensor.
+def get_ndim(x):
+    """Returns the number of axes in a tensor, as an integer."""
+    return x.ndim
+
+def test_inductor_item_and_ndim():
+    """
+    Test case for torch.compile (Inductor backend) that reproduces the 
+    NameError bug when using .item() on a float tensor argument, 
+    while also leveraging the pattern of the similar API (tf.keras.backend.ndim).
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # The function to be compiled. It combines the original bug logic 
+    # (using .item() on a tensor arg) with the similar API logic 
+    # (extracting a scalar property like ndim).
+    def func(x, max_val):
+        # Original bug logic: using .item() on a float tensor arg inside a compiled graph
+        y = torch.clamp(x, 0, max_val.item())
+        
+        # Similar API logic: accessing a scalar property (ndim) of the tensor
+        rank = get_ndim(x)
+        
+        return y, rank
+
+    # Compile with the specific backend and options that trigger the bug
+    compiled_func = torch.compile(func, backend='inductor', fullgraph=True)
+
+    # Setup inputs
+    x = torch.randn(10, 20, 30, device='cuda')
+    max_val = torch.tensor(5.0, device='cuda')
+
+    # Run the compiled function
+    result_y, result_rank = compiled_func(x, max_val)
+
+    # Assertions to verify correctness
+    expected_y = torch.clamp(x, 0, 5.0)
+    assert torch.allclose(result_y, expected_y), "Clamp operation result mismatch"
+    assert result_rank == 3, "Ndim result mismatch"
+
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_inductor_item_and_ndim()
+```

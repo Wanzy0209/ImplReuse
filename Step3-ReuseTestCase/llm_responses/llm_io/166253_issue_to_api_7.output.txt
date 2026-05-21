@@ -1,0 +1,42 @@
+```python
+import torch
+import torch.nn.functional as F
+
+def func_nojit(x):
+    # Using the similar API: adaptive_avg_pool1d
+    # We adapt the logic to apply the operation on the input tensor x
+    return F.adaptive_avg_pool1d(x, output_size=1)
+
+# Compile the function as in the original bug report
+func_jit = torch.compile(func_nojit)
+
+# Test logic: Run both non-compiled and compiled versions with different float64 inputs
+# to check if the compiled version caches the result of the first call (the bug).
+for func in [func_nojit, func_jit]:
+    # Create inputs with dtype=torch.float64 as specified in the bug
+    # Shape (Batch, Channel, Length) -> (1, 1, 2)
+    x1 = torch.tensor([[[1.0, 2.0]]], dtype=torch.float64)
+    x2 = torch.tensor([[[10.0, 20.0]]], dtype=torch.float64)
+    
+    out1 = func(x1)
+    out2 = func(x2)
+    
+    print(f"Function: {func.__name__}")
+    print(f"Result 1 (input avg 1.5): {out1}")
+    print(f"Result 2 (input avg 15.0): {out2}")
+    
+    # Assertions to verify correctness and detect the "stuck value" bug
+    # Check that the output matches the expected average for the specific input
+    if func == func_nojit:
+        assert torch.allclose(out1, torch.tensor([[[1.5]]], dtype=torch.float64))
+        assert torch.allclose(out2, torch.tensor([[[15.0]]], dtype=torch.float64))
+    else:
+        # For the compiled version, specifically check that the second call 
+        # does not return the result of the first call (the reported bug behavior)
+        assert not torch.allclose(out2, out1), \
+            "Bug detected: Compiled function returned cached result from first call"
+        assert torch.allclose(out2, torch.tensor([[[15.0]]], dtype=torch.float64)), \
+            "Bug detected: Compiled function returned incorrect value"
+
+print("Test passed.")
+```

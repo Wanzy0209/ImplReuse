@@ -1,0 +1,81 @@
+```python
+import tensorflow as tf
+import os
+import tempfile
+import shutil
+
+def test_save_options_command_injection():
+    """
+    Adapted test case for OS command injection vulnerability.
+    
+    Original Issue: torch.utils.cpp_extension.load_inline allowed OS command injection 
+    via extra_cflags when use_pch=True, because it passed user input to subprocess 
+    with shell=True.
+    
+    This test attempts to verify if tf.saved_model.SaveOptions exhibits similar 
+    behavior when handling user-supplied string arguments (e.g., namespace_whitelist, 
+    experimental_io_device).
+    """
+    
+    # Setup: Define a minimal TensorFlow model to save
+    class SimpleModel(tf.Module):
+        @tf.function
+        def __call__(self, x):
+            return x * 2
+
+    model = SimpleModel()
+
+    # The malicious payload intended to execute an OS command.
+    # In the PyTorch bug, this was passed to 'extra_cflags'.
+    # Here we attempt to pass it to string/list arguments in SaveOptions.
+    # The payload attempts to create a file as proof of execution.
+    malicious_payload = "; touch /tmp/tf_pwned_167480"
+
+    # Cleanup: Ensure the indicator file does not exist before the test
+    indicator_file = "/tmp/tf_pwned_167480"
+    if os.path.exists(indicator_file):
+        os.remove(indicator_file)
+
+    # Construct SaveOptions with the payload.
+    # We target string arguments that might be naively concatenated into commands.
+    options = tf.saved_model.SaveOptions(
+        # namespace_whitelist accepts a list of strings
+        namespace_whitelist=[malicious_payload],
+        # experimental_io_device accepts a string
+        experimental_io_device=malicious_payload
+    )
+
+    export_dir = tempfile.mkdtemp()
+
+    try:
+        # Execute the save operation.
+        # In the vulnerable PyTorch API, this triggers a shell command execution.
+        # In TensorFlow, this should only perform serialization logic.
+        tf.saved_model.save(model, export_dir, options=options)
+        
+    except Exception as e:
+        # TensorFlow might raise an error (e.g., InvalidArgument) if the payload 
+        # is not a valid device name or namespace. This is acceptable behavior 
+        # (input validation). The critical check is that the command was NOT executed.
+        print(f"Note: Exception raised during save (expected for invalid input): {e}")
+
+    finally:
+        # Cleanup the temporary directory
+        if os.path.exists(export_dir):
+            shutil.rmtree(export_dir)
+
+    # Verification: Check if the malicious command was executed.
+    # If the file exists, the API is vulnerable to OS command injection.
+    if os.path.exists(indicator_file):
+        # Clean up the evidence of the hack
+        os.remove(indicator_file)
+        raise AssertionError(
+            "SECURITY ISSUE: OS Command Injection detected! "
+            "tf.saved_model.SaveOptions executed shell commands from user input."
+        )
+    else:
+        print("Test Passed: No OS command injection detected in tf.saved_model.SaveOptions.")
+
+if __name__ == "__main__":
+    test_save_options_command_injection()
+```

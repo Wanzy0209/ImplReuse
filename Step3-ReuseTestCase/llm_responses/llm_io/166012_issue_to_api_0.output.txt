@@ -1,0 +1,51 @@
+```python
+import torch
+import torch.nn as nn
+
+def test_replication_pad3d_compile_cache_consistency():
+    """
+    Test case for Issue 166012: tlparse entries on cache hit and not are inconsistent.
+    
+    This test verifies that torch.compile handles torch.nn.ReplicationPad3d consistently
+    between a cache miss and a cache hit. The original issue reported discrepancies
+    in generated tracing logs (e.g., aotautograd_cache_miss.json vs cache hit behavior)
+    during the compilation process.
+    """
+    # 1. Setup the model using the Similar API: torch.nn.ReplicationPad3d
+    # Using a 6-tuple for padding (left, right, top, bottom, front, back)
+    padding_layer = nn.ReplicationPad3d(padding=(1, 1, 2, 2, 0, 0))
+    
+    # 2. Apply torch.compile (Original API Under Test)
+    # This enables the caching mechanism described in the bug report.
+    compiled_model = torch.compile(padding_layer)
+
+    # 3. Prepare input data
+    # Input shape: (Batch, Channel, Depth, Height, Width)
+    # Expected Output Depth: 5 + 0 + 0 = 5
+    # Expected Output Height: 5 + 2 + 2 = 9
+    # Expected Output Width: 5 + 1 + 1 = 7
+    input_tensor = torch.randn(2, 3, 5, 5, 5)
+
+    # 4. First execution: Cache Miss
+    # This triggers the dynamo tracing, aotautograd, and logging generation
+    # (e.g., aotautograd_cache_miss.json) mentioned in the issue.
+    output_miss = compiled_model(input_tensor)
+
+    # 5. Second execution: Cache Hit
+    # This reuses the compiled graph. The bug report highlights inconsistencies
+    # in how this step is logged/traced compared to the miss.
+    output_hit = compiled_model(input_tensor)
+
+    # 6. Assertions
+    # Ensure the outputs are mathematically identical regardless of cache state.
+    assert torch.allclose(output_miss, output_hit), "Outputs differ between cache miss and hit"
+    
+    # Ensure the output shape matches the expected padding transformation.
+    expected_shape = (2, 3, 5, 9, 7)
+    assert output_miss.shape == expected_shape, f"Shape mismatch: expected {expected_shape}, got {output_miss.shape}"
+
+    print("Test passed: ReplicationPad3d behaves consistently across cache miss and hit.")
+
+if __name__ == "__main__":
+    test_replication_pad3d_compile_cache_consistency()
+```

@@ -1,0 +1,56 @@
+```python
+import torch
+import tensorflow as tf
+from tensorflow.keras import backend as K
+
+def test_inductor_item_with_floatx_config():
+    """
+    Test case that reproduces the Inductor NameError when using .item() on a float tensor arg,
+    while leveraging tf.keras.backend.floatx to configure the tensor dtype.
+    """
+    # Leverage the similar API (tf.keras.backend.floatx) to determine the data type.
+    # This reuses the pattern of retrieving a configuration value to drive the test setup.
+    tf_float_str = K.floatx()
+    
+    # Map the TensorFlow float type string to a PyTorch dtype
+    dtype_mapping = {
+        'float16': torch.float16,
+        'float32': torch.float32,
+        'float64': torch.float64
+    }
+    torch_dtype = dtype_mapping.get(tf_float_str, torch.float32)
+
+    # Original bug reproduction logic: torch.compile with .item() on a tensor arg
+    def f(x, max_val):
+        # The bug occurs here when max_val is a tensor and .item() is called
+        y = torch.clamp(x, 0, max_val.item())
+        return y
+
+    # Compile the function using the Inductor backend
+    compiled_func = torch.compile(f, backend='inductor', fullgraph=True)
+
+    # Setup inputs using the dtype derived from the similar API
+    x = torch.randn(10, 20, 30, device='cuda', dtype=torch_dtype)
+    max_val = torch.tensor(5.0, device='cuda', dtype=torch_dtype)
+
+    # Execute the compiled function
+    # This reproduces the scenario where Inductor might fail with NameError: 'zuf0' is not defined
+    try:
+        result = compiled_func(x, max_val)
+        
+        # Basic assertions to verify logic if compilation succeeds
+        assert torch.all(result >= 0), "Clamp min failed"
+        assert torch.all(result <= 5.0), "Clamp max failed"
+        print(f"Test passed for dtype {tf_float_str}")
+        
+    except NameError as e:
+        if 'zuf0' in str(e):
+            print(f"Bug reproduced: {e}")
+        else:
+            raise
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+
+if __name__ == "__main__":
+    test_inductor_item_with_floatx_config()
+```

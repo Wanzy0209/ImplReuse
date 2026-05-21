@@ -1,0 +1,56 @@
+```python
+import torch
+
+# Check for MPS availability
+if not torch.backends.mps.is_available():
+    print("MPS device not available. Skipping test.")
+else:
+    # Reproduce the non-contiguous tensor setup from the bug report
+    # This specific stride pattern (0, 768, 1) with shape (5, 499, 768)
+    # triggers the buffer allocation miscalculation in the MPS backend.
+    shape = (5, 499, 768)
+    stride = (0, 768, 1)
+    storage_offset = 0
+    
+    # Calculate the minimum storage size required for the strided view
+    numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+    base = torch.arange(numel, dtype=torch.float32, device="mps")
+    
+    # Create the non-contiguous input tensor
+    input = torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+
+    # Setup arguments for torch.quantize_per_channel
+    axis = 0
+    # Scales and zero_points must match the dimension of the axis
+    scales = torch.ones((shape[axis],), device="mps")
+    zero_points = torch.zeros((shape[axis],), device="mps", dtype=torch.int)
+    
+    quant_min = 0
+    quant_max = 255
+    dtype = torch.uint8
+
+    # Call the similar API
+    # In PyTorch 2.8.0, this is expected to trigger the MPS buffer allocation error
+    # if the regression affects this function similarly to F.linear.
+    try:
+        output = torch.quantize_per_channel(
+            input,
+            scales,
+            zero_points,
+            axis,
+            quant_min,
+            quant_max,
+            dtype
+        )
+        
+        # Verify output properties if successful
+        assert output.shape == input.shape, f"Shape mismatch: {output.shape} != {input.shape}"
+        assert output.device.type == "mps", "Output device is not MPS"
+        print("Test passed successfully.")
+        
+    except RuntimeError as e:
+        if "buffer is not large enough" in str(e):
+            print(f"Bug reproduced: {e}")
+        else:
+            raise
+```

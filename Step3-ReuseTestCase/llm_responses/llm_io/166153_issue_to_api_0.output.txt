@@ -1,0 +1,66 @@
+```python
+import torch
+import warnings
+from torch.nn.attention import flex_attention
+
+def test_flex_attention_recompile_limit():
+    """
+    Test that flex_attention does not hit the recompile_limit
+    when called multiple times with new tensor instances.
+    
+    This test reproduces the logic from Issue 166153 where models using 
+    flex_attention with torch.compile hit the recompile_limit, preventing 
+    proper fusion and degrading performance.
+    """
+    # Define a simple score modification function required by flex_attention
+    def score_mod(score, b, h, q_idx, k_idx):
+        return score
+
+    # Define the function to be compiled
+    def run_flex_attention(q, k, v):
+        return flex_attention(q, k, v, score_mod=score_mod)
+
+    # Compile the function using torch.compile (Inductor backend)
+    # The default recompile_limit is 8.
+    compiled_fn = torch.compile(run_flex_attention)
+
+    # Configuration for the tensors
+    batch_size = 2
+    num_heads = 4
+    seq_len = 128
+    head_dim = 32
+    
+    # Run the function more times than the default recompile_limit (8)
+    # to trigger the bug if it exists.
+    num_iterations = 10
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        
+        for _ in range(num_iterations):
+            # Create new tensors every iteration to simulate a training loop.
+            # This changes object IDs, which might trigger the guard 
+            # mentioned in the bug log (___check_obj_id).
+            q = torch.randn(batch_size, num_heads, seq_len, head_dim)
+            k = torch.randn(batch_size, num_heads, seq_len, head_dim)
+            v = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+            out = compiled_fn(q, k, v)
+            
+            # Basic assertion to ensure the function executes correctly
+            assert out.shape == (batch_size, num_heads, seq_len, head_dim)
+
+        # Filter for the specific recompile limit warning mentioned in the issue
+        recompile_warnings = [
+            warning for warning in w 
+            if "recompile_limit" in str(warning.message)
+        ]
+        
+        # Assert that we did not hit the recompile limit.
+        # If the bug is present, this assertion will fail.
+        assert len(recompile_warnings) == 0, \
+            f"Hit recompile limit during flex_attention execution: {recompile_warnings[0].message if recompile_warnings else ''}"
+
+if __name__ == "__main__":
+    test_flex_attention_recompile_limit()
+```

@@ -1,0 +1,70 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Adapted from PyTorch test case for Issue 167263
+# Original API: torch.einsum
+# Target API: tf.argsort
+
+# Note: tf.argsort returns integer indices, which are non-differentiable.
+# To test gradient flow and layout (stride/shape) as in the original bug report,
+# we combine tf.argsort with tf.gather to create a differentiable sorting operation.
+
+B, H, W, C = 20, 2, 2, 128
+
+# 1. Setup Input and Layer
+x = tf.random.normal((B, H, W, C))
+# TensorFlow Dense layer is equivalent to nn.Linear
+linear = tf.keras.layers.Dense(C, use_bias=False)
+
+# 2. Forward pass
+values = linear(x)
+
+# 3. Create View (Reshape)
+# PyTorch: values.view(B, H * W, C)
+# TensorFlow: tf.reshape
+values_view = tf.reshape(values, (B, H * W, C))
+
+print(f"Forward shape: {values_view.shape}")
+
+# 4. Gradient Calculation
+with tf.GradientTape() as tape:
+    # Watch the intermediate tensor (equivalent to retain_grad/register_hook context)
+    tape.watch(values_view)
+
+    # Original PyTorch operation: torch.einsum("bhc,bhc->bc", weights, values_view)
+    # Target TensorFlow operation: tf.argsort
+    # Since argsort returns indices (int), we use gather to make it differentiable
+    # and allow gradients to flow back to values_view.
+    indices = tf.argsort(values_view, axis=-1)
+    
+    # Gather values based on argsort indices to simulate a differentiable sort
+    # batch_dims=2 treats (B, H*W) as the batch dimensions
+    sorted_values = tf.gather(values_view, indices, batch_dims=2, axis=-1)
+    
+    # Create a scalar result for backward pass
+    # In the original code, result was (B, C), summed to (1,) implicitly by backward(ones)
+    result = tf.reduce_sum(sorted_values)
+
+# 5. Backward pass
+grad = tape.gradient(result, values_view)
+
+# 6. Verification
+# The original bug was about stride mismatch. 
+# TensorFlow tensors do not expose strides in the same way as PyTorch (storage abstraction).
+# However, we can verify that the gradient tensor exists and has the correct shape.
+if grad is not None:
+    print(f"Gradient shape: {grad.shape}")
+    print(f"Gradient dtype: {grad.dtype}")
+    
+    # Check if gradient shape matches input shape
+    assert grad.shape == values_view.shape, "Gradient shape mismatch!"
+    
+    # Note on Strides: 
+    # In PyTorch, the bug was grad.stride() != input.stride().
+    # In TensorFlow, memory layout is abstracted. If the gradient is generated,
+    # it is expected to be compatible with the input shape.
+    print("Test passed: Gradient generated with correct shape.")
+else:
+    print("Test failed: Gradient is None (non-differentiable path).")
+```

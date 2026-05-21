@@ -1,0 +1,54 @@
+```python
+import unittest
+import time
+import torch
+
+class TestTopKPerformance(unittest.TestCase):
+    def test_topk_speed_regression(self):
+        """
+        Test case to reproduce the torch.topk speed regression reported in Issue 167462.
+        This test verifies that the latency of torch.topk on large tensors (BS=128, VOCAB=8M, K=1000)
+        does not exceed a reasonable threshold, indicating a performance regression.
+        
+        The logic preserves the original bug reproduction script, adapted into a unittest format.
+        """
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is not available, skipping GPU performance test")
+
+        BS, VOCAB, K = 128, 8000000, 1000
+        # Use float16 as per the original issue
+        x = torch.randn((BS, VOCAB), device="cuda", dtype=torch.float16)
+        
+        # Warmup runs
+        for _ in range(10):
+            _ = x.topk(k=K, dim=-1)
+            torch.cuda.synchronize()
+
+        # Timed runs
+        num_iterations = 100
+        walltime = []
+        for _ in range(num_iterations):
+            s = time.time()
+            _ = x.topk(k=K, dim=-1)
+            torch.cuda.synchronize()
+            e = time.time()
+            walltime.append(e - s)
+        
+        avg_latency_ms = 1000 * (sum(walltime) / len(walltime))
+        
+        # The issue reports a regression from ~11.3ms to ~17.3ms.
+        # We set a threshold to catch significant regressions, e.g., > 15ms.
+        # This threshold acts as a regression guard.
+        threshold_ms = 15.0
+        
+        print(f"torch: {torch.__version__}, topk latency: {avg_latency_ms}ms")
+        
+        self.assertLess(
+            avg_latency_ms, 
+            threshold_ms, 
+            f"Performance regression detected: {avg_latency_ms}ms is greater than threshold {threshold_ms}ms"
+        )
+
+if __name__ == "__main__":
+    unittest.main()
+```

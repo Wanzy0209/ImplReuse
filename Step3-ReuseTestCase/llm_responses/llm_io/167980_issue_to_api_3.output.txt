@@ -1,0 +1,111 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# This test case is generated based on Issue ID 167980 (PyTorch kernel restart during eval)
+# and the similar API tf.raw_ops.ExtractVolumePatches.
+#
+# Logic Mapping:
+# 1. Bug Pattern: The original issue involves a crash during the evaluation phase 
+#    immediately following a training phase (Train -> Eval).
+# 2. Similar API: The provided similar API is `tf.raw_ops.ExtractVolumePatches`, 
+#    typically tested across multiple dtypes (float16, float32, etc.).
+# 3. Synthesis: This test creates a TensorFlow model using `extract_volume_patches`,
+#    runs a training step (gradient calculation), and then immediately runs an 
+#    evaluation step, iterating through the dtypes specified in the similar API's 
+#    test suite. This checks for stability issues similar to the PyTorch bug.
+
+class TestExtractVolumePatchesStability(tf.test.TestCase):
+    """Tests stability of ExtractVolumePatches across Train->Eval cycles."""
+
+    def _VerifyValues(self, image, ksizes, strides, padding, expected_shape):
+        """
+        Helper to test input-output pairs for the ExtractVolumePatches op
+        across a Train->Eval cycle.
+        
+        Args:
+            image: Input tensor [batch, planes, rows, cols, depth].
+            ksizes: Patch size.
+            strides: Stride size.
+            padding: Padding type.
+            expected_shape: Expected output shape.
+        """
+        # Define a simple model wrapping the similar API
+        class VolumeModel(tf.Module):
+            def __init__(self):
+                super().__init__()
+                self.ksizes = ksizes
+                self.strides = strides
+                self.padding = padding
+
+            def __call__(self, x):
+                # Using the high-level wrapper for tf.raw_ops.ExtractVolumePatches
+                return tf.image.extract_volume_patches(
+                    x, 
+                    ksizes=self.ksizes, 
+                    strides=self.strides, 
+                    padding=self.padding
+                )
+
+        model = VolumeModel()
+        loss_fn = tf.keras.losses.MeanSquaredError()
+        
+        # Dummy target for loss calculation
+        target = tf.zeros(expected_shape, dtype=image.dtype)
+
+        # === TRAIN ===
+        # Mimic the PyTorch training loop: Forward -> Loss -> Backward
+        with tf.GradientTape() as tape:
+            pred = model(image)
+            loss = loss_fn(target, pred)
+        
+        # Calculate gradients to simulate the training graph execution
+        # (Even though the op itself might not have weights, this changes the backend state)
+        grads = tape.gradient(loss, model.trainable_variables)
+
+        # === EVAL (CRASH POINT IN ORIGINAL BUG) ===
+        # Mimic the PyTorch evaluation loop: Forward pass only (no gradients)
+        # This is where the PyTorch kernel restart occurred.
+        with tf.stop_gradient(image):
+            pred_eval = model(image)
+
+        # Verify output to ensure execution completed without crash
+        self.assertAllEqual(pred_eval.shape, expected_shape)
+        self.assertDTypeEqual(pred_eval, image.dtype)
+
+    def test_extract_volume_patches_train_eval_cycle(self):
+        """Test ExtractVolumePatches stability across dtypes after a training step."""
+        
+        # Dtypes from the similar API information
+        dtypes = [
+            np.float16,
+            np.float32,
+            np.float64,
+        ]
+
+        # Input shape: [batch, in_planes, in_rows, in_cols, depth]
+        batch_size = 2
+        input_shape = [batch_size, 1, 10, 10, 3]
+        
+        # Kernel and Stride configuration
+        ksizes = [1, 1, 2, 2, 1]
+        strides = [1, 1, 2, 2, 1]
+        padding = "VALID"
+        
+        # Calculate expected output shape
+        # out_planes = (in_planes - ksize_planes) / stride_planes + 1
+        # out_rows = (10 - 2) / 2 + 1 = 5
+        # out_cols = (10 - 2) / 2 + 1 = 5
+        # out_depth = ksize_planes * ksize_rows * ksize_cols * depth = 1*2*2*3 = 12
+        expected_shape = [batch_size, 1, 5, 5, 12]
+
+        for dtype in dtypes:
+            # Generate random input data
+            image = tf.constant(np.random.randn(*input_shape), dtype=dtype)
+            
+            # Run the verification (Train -> Eval cycle)
+            self._VerifyValues(image, ksizes, strides, padding, expected_shape)
+
+if __name__ == "__main__":
+    tf.test.main()
+```

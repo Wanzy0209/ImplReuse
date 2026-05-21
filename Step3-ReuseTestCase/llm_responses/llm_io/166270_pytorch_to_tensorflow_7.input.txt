@@ -1,0 +1,117 @@
+Issue ID: 166270
+Title: [Fuzzer][Eager/Compile Divergence] assert len(self.stride) == len(order)
+Bug Description:
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1061983224)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_4 = arg_0 # size=(4,), stride=(1,), dtype=bool, device=cuda
+    var_node_3 = torch.chunk(var_node_4, 4, dim=0)[0] # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_2 = torch.squeeze(var_node_3) # size=(), stride=(), dtype=bool, device=cuda
+    var_node_1 = torch.stack([var_node_2], dim=0) # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_0 = torch.reshape(var_node_1, [1]) # size=(1,), stride=(1,), dtype=bool, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(0, 2, (4,), dtype=torch.int8).bool(), (4,), (1,))
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+```
+
+```
+   ✅ eager success
+   Traceback (most recent call last):
+     File "/tmp/torchfuzz/fuzz_4fc36e68.py", line 27, in <module>
+       result_compiled = compiled_program(*args)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_dynamo/eval
+...
+
+Original API Under Test: torch.squeeze
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.compat.v1.data.get_output_shapes
+Similarity score: 0.9920561909675598
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.data.get_output_shapes
+
+# --- tensorflow.lite.python.test_util.get_output_shapes ---
+def get_output_shapes(model_data):
+  """Returns a list of output shapes in the tflite model data."""
+  model = schema_fb.Model.GetRootAsModel(model_data, 0)
+
+  output_shapes = []
+  for subgraph_idx in range(model.SubgraphsLength()):
+    subgraph = model.Subgraphs(subgraph_idx)
+    for output_idx in range(subgraph.OutputsLength()):
+      output_tensor_idx = subgraph.Outputs(output_idx)
+      output_tensor = subgraph.Tensors(output_tensor_idx)
+      output_shapes.append(output_tensor.ShapeAsNumpy().tolist())
+
+  return output_shapes
+
+# --- output_shapes.append ---
+def append(arr, values, axis=None):
+  if axis is None:
+    return concatenate([np_array_ops.ravel(arr), np_array_ops.ravel(values)], 0)
+  else:
+    return concatenate([arr, values], axis=axis)
+
+# --- tensorflow.python.ops.numpy_ops.np_math_ops.concatenate ---
+def concatenate(arys, axis=0):  # pylint: disable=missing-function-docstring
+  if not isinstance(arys, (list, tuple)):
+    arys = [arys]
+  if not arys:
+    raise ValueError(
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1061983224)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_4 = arg_0 # size=(4,), stride=(1,), dtype=bool, device=cuda
+    var_node_3 = torch.chunk(var_node_4, 4, dim=0)[0] # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_2 = torch.squeeze(var_node_3) # size=(), stride=(), dtype=bool, device=cuda
+    var_node_1 = torch.stack([var_node_2], dim=0) # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_0 = torch.reshape(var_node_1, [1]) # size=(1,), stride=(1,), dtype=bool, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(0, 2, (4,), dtype=torch.int8).bool(), (4,), (1,))
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+The API tf.compat.v1.data.get_output_shapes is identified as cross-library similar to the original PyTorch API torch.squeeze.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

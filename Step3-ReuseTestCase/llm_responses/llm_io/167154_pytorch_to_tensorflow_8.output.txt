@@ -1,0 +1,73 @@
+```python
+import tensorflow as tf
+
+def test_string_to_hash_bucket_non_contiguous():
+    """
+    Adapted test case for tf.compat.v1.string_to_hash_bucket based on 
+    PyTorch MPS Buffer Allocation Regression (Issue 167154).
+    
+    The original bug involves passing a non-contiguous tensor (created via 
+    as_strided with stride 0) to an operation. The backend incorrectly 
+    calculated the required buffer size based on the logical shape rather 
+    than the actual storage size, leading to an out-of-bounds access.
+    
+    This test creates a similar scenario in TensorFlow by using broadcasting
+    to simulate a stride of 0, creating a large logical tensor from a small 
+    underlying storage.
+    """
+    
+    # 1. Setup: Create a base string tensor with small storage
+    # We use a small base to mimic the limited storage in the PyTorch bug.
+    # PyTorch base size was ~383k, logical size was ~1.9M.
+    # Here we use a base of 12 elements and a logical size of 1200.
+    dim1 = 3
+    dim2 = 4
+    base_size = dim1 * dim2
+    
+    # Create a base tensor of strings
+    base_strings = [f"string_{i}" for i in range(base_size)]
+    base_tensor = tf.constant(base_strings, dtype=tf.string)
+    base_tensor = tf.reshape(base_tensor, (dim1, dim2))
+
+    # 2. Create a non-contiguous/broadcasted input
+    # PyTorch used stride=(0, 768, 1) which broadcasts the first dimension.
+    # We use tf.broadcast_to to achieve the same effect: 
+    # The logical shape is (100, 3, 4), but it only points to the (3, 4) storage.
+    batch_size = 100
+    input_tensor = tf.broadcast_to(base_tensor, (batch_size, dim1, dim2))
+
+    # 3. Execute the API
+    # The PyTorch bug occurred during the operation (F.linear) when it tried 
+    # to access the buffer. We call the TF API to see if it handles the 
+    # non-contiguous/broadcasted input gracefully.
+    num_buckets = 10
+    
+    try:
+        # Disable eager execution if necessary to test graph compilation issues, 
+        # but eager is fine for runtime buffer checks.
+        result = tf.compat.v1.string_to_hash_bucket(input_tensor, num_buckets)
+        
+        # 4. Verification
+        # If the bug exists (buffer allocation error), this line might not be reached 
+        # or an assertion error might occur.
+        assert result.shape == (batch_size, dim1, dim2), \
+            f"Output shape mismatch. Expected {(batch_size, dim1, dim2)}, got {result.shape}"
+        
+        # Verify that the hashing is deterministic (same input -> same hash)
+        # Since the input is broadcasted, all slices along dim 0 should be identical.
+        assert tf.reduce_all(tf.equal(result[0], result[1])).numpy(), \
+            "Broadcasted inputs should yield identical hashes"
+            
+        print("Test Passed: tf.compat.v1.string_to_hash_bucket handled non-contiguous input correctly.")
+        
+    except tf.errors.InvalidArgumentError as e:
+        # Catch potential buffer/shape related errors similar to the MPS assertion failure
+        print(f"Test Failed with InvalidArgumentError: {e}")
+        raise
+    except Exception as e:
+        print(f"Test Failed with unexpected error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_string_to_hash_bucket_non_contiguous()
+```

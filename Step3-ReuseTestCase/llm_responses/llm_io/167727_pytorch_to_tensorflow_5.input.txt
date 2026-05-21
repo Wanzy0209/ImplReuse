@@ -1,0 +1,103 @@
+Issue ID: 167727
+Title: [MPS] mm/addmm returns incorrect results for large tensors
+Bug Description:
+### 🐛 Describe the bug
+
+On main build, MacOS15.6
+```python
+import torch
+
+# success
+a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+b = torch.rand((64, 100), dtype=torch.complex64, device="mps")
+c = torch.rand((100, 300), dtype=torch.complex64, device="mps")
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+torch.testing.assert_close(torch.addmm(a, b, c, alpha=1.0, beta=0.5).cpu(), 
+                           torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5))
+
+# fails
+a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+b = torch.rand((64, 10000), dtype=torch.complex64, device="mps")
+c = torch.rand((10000, 300), dtype=torch.complex64, device="mps")
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+torch.testing.assert_close(torch.addmm(a, b, c, alpha=1.0, beta=0.5).cpu(), 
+                           torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5))
+
+```
+
+```
+Mismatched elements: 19200 / 19200 (100.0%)
+Greatest absolute difference: 5063.81494140625 at index (0, 193) (up to 1e-05 allowed)
+Greatest relative difference: 0.992490291595459 at index (35, 120) (up to 1.3e-06 allowed)
+```
+
+I can take a look at why/what threshold it's happening little later, reporting this here for tracking
+
+### Versions
+
+main branch build
+
+cc @ezyang @anjali411 @dylanbespalko @mruberry @nikitaved @amjames @jianyuh @walterddr @xwang233 @Lezcano @kulinseth @malfet @DenisVieriu97 @jhavukainen
+
+Original API Under Test: torch.addmm
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.experimental.numpy.iscomplexobj
+Similarity score: 0.9954506158828735
+
+Similar API information:
+# Extracted call chain for tf.experimental.numpy.iscomplexobj
+
+# --- tensorflow.python.ops.numpy_ops.np_math_ops.iscomplexobj ---
+def iscomplexobj(x):
+  x = np_array_ops.array(x)
+  return np.issubdtype(x.dtype.as_numpy_dtype, np.complexfloating)
+
+# --- tensorflow.python.ops.numpy_ops.np_array_ops.array ---
+def array(val, dtype=None, copy=True, ndmin=0):  # pylint: disable=redefined-outer-name
+  """Since Tensors are immutable, a copy is made only if val is placed on a
+
+  different device than the current one. Even if `copy` is False, a new Tensor
+  may need to be built to satisfy `dtype` and `ndim`. This is used only if `val`
+  is an ndarray or a Tensor.
+  """  # pylint:disable=g-docstring-missing-newline
+  if dtype:
+    dtype = np_utils.result_type(dtype)
+  return _array_internal(val, dtype, copy, ndmin)
+
+# --- tensorflow.python.ops.numpy_ops.np_array_ops._array_internal ---
+def _array_internal(val, dtype=None, copy=True, ndmin=0):  # pylint: disable=redefined-outer-name
+  """Main implementation of np.array()."""
+  result_t = val
+
+  if not isinstance(result_t, tensor_lib.Tensor):
+    dtype = np_utils.result_type_unary(result_t, dtype)
+    # We can't call `convert_to_tensor(result_t
+...
+
+Original Test Case:
+import torch
+
+# success
+a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+b = torch.rand((64, 100), dtype=torch.complex64, device="mps")
+c = torch.rand((100, 300), dtype=torch.complex64, device="mps")
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+torch.testing.assert_close(torch.addmm(a, b, c, alpha=1.0, beta=0.5).cpu(), 
+                           torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5))
+
+# fails
+a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+b = torch.rand((64, 10000), dtype=torch.complex64, device="mps")
+c = torch.rand((10000, 300), dtype=torch.complex64, device="mps")
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+torch.testing.assert_close(torch.addmm(a, b, c, alpha=1.0, beta=0.5).cpu(), 
+                           torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5))
+
+The API tf.experimental.numpy.iscomplexobj is identified as cross-library similar to the original PyTorch API torch.addmm.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

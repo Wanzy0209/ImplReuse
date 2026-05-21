@@ -1,0 +1,109 @@
+Issue ID: 167313
+Title: [Bug][Inductor]addmm -> add(mm)ignores parametersalpha/beta
+Bug Description:
+### 🐛 Describe the bug
+
+Have a look at the following reproduction:
+
+```python
+In [1]: import torch
+
+In [2]: x = torch.rand(2, device="cuda")
+         
+In [3]: a = torch.rand(2, 3, device="cuda")
+
+In [4]: b = torch.rand(3, 2, device="cuda")
+
+In [5]: f = lambda x, a, b: torch.nn.functional.relu(torch.addmm(x, a, b, alpha=0.5, beta=0.5))
+
+In [6]: fc = torch.compile(f)
+
+In [7]: f(x, a, b)
+Out[7]: 
+tensor([[0.7411, 0.6704],
+        [0.5025, 0.4090]], device='cuda:0')
+
+In [8]: fc(x, a, b)
+Out[8]: 
+tensor([[1.4822, 1.3408],
+        [1.0049, 0.8180]], device='cuda:0')
+```
+
+The fx pass replaces `addmm` with `add(mm)` because there is a point-wise user (`relu`). The problem is that the pattern matching ignores parameters `alpha/beta` and `alpha/beta` are being silently replaced with value `1`.
+
+### Versions
+
+Current master
+
+cc @voznesenskym @penguinwu @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @ipiszy @chenyang78 @kadeng @muchulee8 @amjames @chauhang @aakhundov @coconutruben
+
+cc @eellison
+
+Original API Under Test: torch.addmm
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.nonzero
+Similarity score: 0.9969482421875
+
+Similar API information:
+# Extracted call chain for torch.nonzero
+
+# --- torch._meta_registrations.nonzero ---
+def nonzero(self):
+    torch._check_not_implemented(
+        exp_config.meta_nonzero_assume_all_nonzero,
+        lambda: "The register_meta function for torch.nonzero() raises unimplemented by default, "
+        "as a correct data-independent implementation does not exist. This implementation "
+        "returns a fake value, assuming all elements of the tensor are non-zero. "
+        "To enable this registration, please set "
+        "'torch.fx.experimental._config.meta_nonzero_assume_all_nonzero' to True.",
+    )
+    return torch.empty_strided(
+        (self.numel(), self.dim()),
+        (1, self.numel()),
+        dtype=torch.long,
+        device=self.device,
+    )
+
+# --- torch._prims_common.wrappers.out_wrapper ---
+def out_wrapper(
+    *out_names: str,
+    exact_dtype: bool = False,
+    pass_is_out: bool = False,
+    preserve_memory_format: bool = False,
+) -> Callable[[Callable[_P, _T]], Callable[_P, _T]]:
+    # The wrapped function needs to convert the output parameters to ensure
+    # compatibility between the Python API (which always uses "out" as the
+    # parameter name and may be a tuple)
+...
+
+Original Test Case:
+In [1]: import torch
+
+In [2]: x = torch.rand(2, device="cuda")
+         
+In [3]: a = torch.rand(2, 3, device="cuda")
+
+In [4]: b = torch.rand(3, 2, device="cuda")
+
+In [5]: f = lambda x, a, b: torch.nn.functional.relu(torch.addmm(x, a, b, alpha=0.5, beta=0.5))
+
+In [6]: fc = torch.compile(f)
+
+In [7]: f(x, a, b)
+Out[7]: 
+tensor([[0.7411, 0.6704],
+        [0.5025, 0.4090]], device='cuda:0')
+
+In [8]: fc(x, a, b)
+Out[8]: 
+tensor([[1.4822, 1.3408],
+        [1.0049, 0.8180]], device='cuda:0')
+
+The API torch.nonzero is identified as same-library similar to the original PyTorch API torch.addmm.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

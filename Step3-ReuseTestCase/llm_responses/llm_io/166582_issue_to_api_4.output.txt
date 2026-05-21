@@ -1,0 +1,114 @@
+```python
+import torch
+import torch.nn as nn
+from torch._dynamo import register_backend
+from torch.fx import GraphModule
+
+# --- Leveraging the similar API pattern: tf.summary.experimental.get_step ---
+# We translate the semantic of retrieving a global state (step) into the PyTorch backend context.
+# This mimics the structure:
+#   def get_step():
+#       return _summary_state.step
+
+class _BackendState:
+    """Mimics the internal state holder used in the similar API."""
+    step = 0
+
+def get_backend_step():
+    """Returns the default backend step for the current thread.
+    
+    This function reuses the code pattern and semantic of 
+    `tf.summary.experimental.get_step` to manage state within the 
+    custom backend compilation process.
+    """
+    return _BackendState.step
+
+# --- Bug Reproduction Logic: Custom Backend with Quantization ---
+
+def custom_quantized_matmul(a: torch.Tensor, b: torch.Tensor, bias=None):
+    """
+    Simulates the custom ASIC matmul logic from the bug report.
+    The bug involves the lowering of this operation (int8 matmul) 
+    causing graph breaks.
+    """
+    # Quantization logic from the issue
+    a_q = a.clamp(-128, 127).to(torch.int8)
+    b_q = b.clamp(-128, 127).to(torch.int8)
+
+    # Simulate the hardware operation (using standard torch for the test)
+    # Note: The actual bug involves the interaction between this lowering 
+    # and torch.compile's graph tracing.
+    c = torch.matmul(a_q.to(torch.float32), b_q.to(torch.float32).t())
+    
+    if bias is not None:
+        c = c + bias
+        
+    return c.to(torch.int32)
+
+@register_backend(name="custom_tpu_backend")
+def custom_backend(gm: GraphModule, example_inputs):
+    """
+    The custom backend implementation that triggers the bug.
+    It replaces nn.Linear (aten.linear.default) with the custom quantized matmul.
+    """
+    # Reuse the similar API pattern: Retrieve state during compilation
+    current_step = get_backend_step()
+    print(f"Compiling backend at step: {current_step}")
+
+    # Graph manipulation logic from the bug report
+    for node in list(gm.graph.nodes):
+        if node.target == torch.ops.aten.linear.default:
+            x, weight, bias = node.args
+            with gm.graph.inserting_before(node):
+                new_node = gm.graph.call_function(
+                    custom_quantized_matmul,
+                    args=(x, weight, bias),
+                )
+            node.replace_all_uses_with(new_node)
+            gm.graph.erase_node(node)
+
+    gm.recompile()
+    return gm
+
+# --- Test Case ---
+
+def test_backend_compiler_graph_break():
+    """
+    Test case for Issue ID: 166582.
+    Verifies that the custom backend can be registered and run without 
+    unexpected graph breaks during the quantization lowering process.
+    """
+    # Initialize state (mimicking set_step)
+    _BackendState.step = 1
+
+    class SimpleModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(10, 10)
+
+        def forward(self, x):
+            return self.linear(x)
+
+    model = SimpleModel()
+    
+    # Compile with the custom backend
+    # The bug manifests here if the graph breaks during the lowering of 
+    # the replaced linear node.
+    compiled_model = torch.compile(model, backend="custom_tpu_backend")
+
+    # Run inference
+    input_tensor = torch.randn(1, 10)
+    
+    try:
+        output = compiled_model(input_tensor)
+        # Basic assertion to ensure the graph executed
+        assert output is not None
+        assert output.shape == (1, 10)
+        print("Test Passed: Backend compiled and executed successfully.")
+    except Exception as e:
+        print(f"Test Failed: Graph break or compilation error occurred - {e}")
+        raise
+
+if __name__ == "__main__":
+    test_backend_compiler_graph_break()
+```

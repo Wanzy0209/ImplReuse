@@ -1,0 +1,76 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_compute_gradient_error_bfloat16():
+    """
+    Adapted test case for tf.compat.v1.test.compute_gradient_error.
+    
+    The original PyTorch issue (166042) involved a fuzzer generating a complex 
+    graph of bfloat16 matrix multiplications leading to an embedding operation.
+    The crash was an assertion failure regarding the dtype of indices 
+    (assert "int" in str(indices.get_dtype())).
+
+    This test adapts the logic to TensorFlow by:
+    1. Replicating the bfloat16 matrix multiplication chain from the fuzzer output.
+    2. Using tf.compat.v1.test.compute_gradient_error to verify gradient 
+       computation with these specific dtypes and shapes.
+    3. Checking if the gradient checker handles the bfloat16 type correctly 
+       (analogous to the dtype assertion in the original bug).
+    """
+    
+    # Disable eager execution to use compat.v1 session and gradient checker
+    tf.compat.v1.disable_eager_execution()
+
+    # Replicate shapes from the original fuzzer output
+    # var_node_4: (4, 8), var_node_5: (8, 7) -> var_node_3: (4, 7)
+    input_shape = [4, 8]
+    output_shape = [4, 7]
+
+    # Define the input tensor (x) and output tensor (y) for gradient checking
+    # Using bfloat16 to match the fuzzer's dtype
+    x = tf.compat.v1.placeholder(tf.bfloat16, shape=input_shape, name='input_x')
+
+    # Replicate var_node_5: torch.full((8, 7), -0.80078125, dtype=torch.bfloat16)
+    # Note: numpy uses float16 to represent bfloat16 data for initialization
+    weight_val = np.full((8, 7), -0.80078125, dtype=np.float16)
+    weight = tf.constant(weight_val, dtype=tf.bfloat16, name='weight')
+
+    # Replicate the operation: torch.matmul(var_node_4, var_node_5)
+    y = tf.matmul(x, weight, name='output_y')
+
+    # Initialize variables
+    init = tf.compat.v1.global_variables_initializer()
+
+    with tf.compat.v1.Session() as sess:
+        sess.run(init)
+
+        # Initialize input data (random bfloat16 values)
+        x_init_value = np.random.randn(*input_shape).astype(np.float16)
+
+        # Call the target API: compute_gradient_error
+        # This verifies the gradients of the matmul operation with bfloat16 inputs.
+        # The original bug was triggered by a dtype mismatch; here we verify 
+        # that the gradient checker handles bfloat16 without crashing.
+        try:
+            error = tf.compat.v1.test.compute_gradient_error(
+                x, input_shape,
+                y, output_shape,
+                x_init_value=x_init_value
+            )
+            
+            # Verify the result is a finite number
+            assert np.isfinite(error), f"Gradient error is not finite: {error}"
+            print(f"Test passed. Gradient error: {error}")
+
+        except AssertionError as e:
+            # Catching assertion errors similar to the original bug report
+            print(f"Assertion failed: {e}")
+            raise
+        except Exception as e:
+            print(f"Unexpected error during gradient computation: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_compute_gradient_error_bfloat16()
+```

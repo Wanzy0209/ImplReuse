@@ -1,0 +1,77 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use V1 QueueRunners (required for range_input_producer)
+# This mimics the "compiled" graph state similar to torch.compile
+tf.compat.v1.disable_eager_execution()
+
+# Setup Distributed Strategy (DDP equivalent)
+strategy = tf.distribute.MirroredStrategy()
+
+def main():
+    # Input pipeline using the target API: tf.compat.v1.train.range_input_producer
+    # This produces integers from 0 to limit-1
+    limit = 10
+    input_queue = tf.compat.v1.train.range_input_producer(
+        limit, 
+        shuffle=False, 
+        seed=42, 
+        capacity=32
+    )
+    
+    # Dequeue a batch to mimic the input tensor x
+    batch_size = 2
+    batch = input_queue.dequeue_many(batch_size)
+    # Cast to float to allow for gradient operations (mimicking torch.rand)
+    x = tf.cast(batch, tf.float32)
+
+    with strategy.scope():
+        # Define the model (mimicking nn.Sequential + DoubleLayer)
+        # Using a Lambda layer to represent the simplest custom autograd.Function
+        model = tf.keras.Sequential([
+            tf.keras.layers.Lambda(lambda t: t * 2)
+        ])
+        
+        # Optimizer
+        optimizer = tf.keras.optimizers.SGD(learning_rate=1e-4)
+
+        # Define loss and training step
+        # Mimicking F.mse_loss(out, x)
+        def compute_loss():
+            y = model(x)
+            return tf.reduce_mean(tf.square(y - x))
+
+        train_op = optimizer.minimize(compute_loss, var_list=model.trainable_variables)
+
+    # Initialization
+    init_op = tf.compat.v1.global_variables_initializer()
+    local_init_op = tf.compat.v1.local_variables_initializer()
+
+    # Session execution
+    config = tf.compat.v1.ConfigProto()
+    config.allow_soft_placement = True
+    
+    with tf.compat.v1.Session(config=config) as sess:
+        sess.run([init_op, local_init_op])
+        
+        # Start Queue Runners (necessary for range_input_producer)
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord)
+
+        print("Starting training loop...")
+        try:
+            for it in range(3):
+                # Run training step and fetch loss
+                # Note: We group the loss computation and training op to ensure consistency
+                loss_val, _ = sess.run([compute_loss(), train_op])
+                print(f"Iter={it+1} loss={loss_val:.6f}")
+        except Exception as e:
+            print(f"Error during training: {e}")
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    main()
+```

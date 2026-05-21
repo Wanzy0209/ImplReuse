@@ -1,0 +1,67 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import torch.nn as nn
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_recv_object_list_scalar_param(rank, world_size):
+    """
+    Test function to verify torch.distributed.recv_object_list handles
+    learnable scalar parameters and batched parameters correctly.
+    This adapts the data structures from the Flex Attention bug report
+    to the distributed communication context.
+    """
+    setup(rank, world_size)
+
+    if rank == 0:
+        # Sender process
+        # Reproduce the "learnable scalar" that caused issues in the original bug
+        temp_scalar = nn.Parameter(torch.tensor(0.0))
+        
+        # Reproduce the "batched parameter" that worked in the original bug
+        B = 4 # Batch size
+        temp_batched = nn.Parameter(torch.randn(B))
+
+        # Package them into a list to send
+        objects_to_send = [temp_scalar, temp_batched]
+        
+        # Send the list of objects to rank 1
+        dist.send_object_list(objects_to_send, dst=1)
+        print(f"Rank {rank}: Sent learnable scalar and batched parameter.")
+
+    elif rank == 1:
+        # Receiver process
+        recv_list = [None, None]
+        
+        # Adaptation: Verify recv_object_list can receive the learnable scalar
+        # that caused issues in the Flex Attention context.
+        dist.recv_object_list(recv_list, src=0)
+
+        received_scalar = recv_list[0]
+        received_batched = recv_list[1]
+
+        # Assertions to verify the data was received correctly
+        assert isinstance(received_scalar, torch.Tensor), "Scalar param should be a Tensor"
+        assert received_scalar.item() == 0.0, f"Expected 0.0, got {received_scalar.item()}"
+        
+        assert isinstance(received_batched, torch.Tensor), "Batched param should be a Tensor"
+        assert received_batched.shape == (4,), f"Expected shape (4,), got {received_batched.shape}"
+        
+        print(f"Rank {rank}: Successfully received and validated learnable scalar and batched parameter.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_recv_object_list_scalar_param, args=(world_size,), nprocs=world_size, join=True)
+```

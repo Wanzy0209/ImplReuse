@@ -1,0 +1,54 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_recv_object_list_with_compile(rank, world_size):
+    """
+    Test case to verify torch.distributed.recv_object_list behavior 
+    when used with torch.compile(fullgraph=True) and torch.compiler.disable.
+    
+    This is based on Issue 167927 which states that torch.compile(fullgraph=True) 
+    should accept torch.compiler.disable.
+    """
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    if rank == 0:
+        # Rank 0 acts as the sender
+        send_list = ["tensor_data", 123, 4.5]
+        dist.send_object_list(send_list, dst=1)
+    else:
+        # Rank 1 acts as the receiver
+        # We wrap the recv_object_list call in torch.compiler.disable
+        # to test if fullgraph=True allows this intentional graph break.
+        @torch.compiler.disable
+        def recv_logic():
+            obj_list = [None, None, None]
+            dist.recv_object_list(obj_list, src=0)
+            return obj_list
+
+        # Compile the function with fullgraph=True
+        # According to the bug report, this combination should work
+        # (or currently raises torch._dynamo.exc.Unsupported)
+        compiled_recv = torch.compile(recv_logic, fullgraph=True)
+        
+        try:
+            result = compiled_recv()
+            expected = ["tensor_data", 123, 4.5]
+            assert result == expected, f"Expected {expected}, but got {result}"
+            print(f"Rank {rank}: Test passed. Successfully received and compiled: {result}")
+        except Exception as e:
+            # This block catches the error mentioned in the bug report:
+            # torch._dynamo.exc.Unsupported: Skip calling `torch.compiler.disable()`d function
+            print(f"Rank {rank}: Test failed with error: {e}")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_recv_object_list_with_compile, args=(world_size,), nprocs=world_size, join=True)
+```

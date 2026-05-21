@@ -1,0 +1,101 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Set seeds for reproducibility
+tf.random.set_seed(1215252001)
+np.random.seed(1215252001)
+
+# Define the inputs
+# arg_0: size=(9, 1, 15, 4), dtype=int32
+# Note: PyTorch code uses as_strided with specific strides. 
+# In TensorFlow, we create a tensor of the target shape.
+arg_0 = tf.random.uniform((9, 1, 15, 4), minval=5, maxval=30, dtype=tf.int32)
+
+# arg_1: size=(20, 15), dtype=int64
+arg_1 = tf.random.uniform((20, 15), minval=5, maxval=30, dtype=tf.int64)
+
+# arg_2: size=(18, 15), dtype=int64
+arg_2 = tf.random.uniform((18, 15), minval=5, maxval=30, dtype=tf.int64)
+
+# Sentinel tensor
+sentinel = tf.constant(1.0, dtype=tf.float32)
+
+def fuzzed_program(arg_0, arg_1, arg_2, sentinel):
+    # Use the similar API: tf.keras.backend.name_scope
+    # This is the TensorFlow equivalent for scoping operations in a graph.
+    with tf.keras.backend.name_scope("fuzzed_logic"):
+        var_node_4 = arg_0
+        
+        # torch.squeeze(var_node_4) -> size=(9, 15, 4)
+        # PyTorch squeeze removes all dims of size 1. TF squeeze removes specific or all.
+        var_node_3 = tf.squeeze(var_node_4, axis=1)
+        
+        # torch.chunk(var_node_3, 4, dim=2)[0] -> size=(9, 15, 1)
+        # PyTorch chunk splits into 4 parts. TF split does the same.
+        var_node_2 = tf.split(var_node_3, 4, axis=2)[0]
+        
+        # torch.squeeze(var_node_2) -> size=(9, 15)
+        var_node_1 = tf.squeeze(var_node_2, axis=2)
+        
+        var_node_7 = arg_1
+        var_node_8 = arg_2 # Present in signature, unused in logic
+        
+        # _input_size_var_node_6 = var_node_7.size(0)
+        _input_size_var_node_6 = tf.shape(var_node_7)[0]
+        
+        # torch.randint(0, _input_size_var_node_6, (18, 15), ...)
+        # tf.random.uniform generates values in [minval, maxval).
+        _index_var_node_6 = tf.random.uniform(
+            (18, 15), 
+            minval=0, 
+            maxval=_input_size_var_node_6, 
+            dtype=tf.int64
+        )
+        
+        # torch.gather(var_node_7, 0, _index_var_node_6)
+        # tf.gather(params, indices, axis). 
+        # PyTorch gather dim=0 corresponds to TF axis=0.
+        var_node_6 = tf.gather(var_node_7, _index_var_node_6, axis=0)
+        
+        # torch.chunk(var_node_6, 2, dim=0)[0] -> size=(9, 15)
+        var_node_5 = tf.split(var_node_6, 2, axis=0)[0]
+        
+        # torch.mul(var_node_1, var_node_5)
+        # var_node_1 is int32, var_node_5 is int64. TF promotes types automatically.
+        var_node_0 = tf.multiply(var_node_1, var_node_5)
+        
+        # result = var_node_0 * sentinel
+        result = var_node_0 * sentinel
+        
+        # if result.is_complex(): result = result.real
+        if tf.dtypes.is_complex(result.dtype):
+            result = tf.math.real(result)
+            
+        return result
+
+# 1. Run in Eager Mode
+print("Running eager execution...")
+try:
+    result_eager = fuzzed_program(arg_0, arg_1, arg_2, sentinel)
+    print("✅ eager success")
+except Exception as e:
+    print(f"❌ eager failed: {e}")
+
+# 2. Run in Compiled Mode (tf.function)
+# This simulates the torch.compile behavior to check for graph compilation issues.
+print("Running compiled execution (tf.function)...")
+try:
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(arg_0, arg_1, arg_2, sentinel)
+    print("✅ compile success")
+    
+    # Verify consistency (optional but good for divergence tests)
+    if np.allclose(result_eager.numpy(), result_compiled.numpy()):
+        print("✅ Results match between eager and compiled")
+    else:
+        print("❌ Divergence detected between eager and compiled")
+        
+except Exception as e:
+    print(f"❌ compile failed: {e}")
+```

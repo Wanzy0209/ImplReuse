@@ -1,0 +1,106 @@
+```python
+import torch
+import torch.nn as nn
+import torch._dynamo
+from torch._dynamo import register_backend
+from torch._inductor.compile_fx import compile_fx
+import collections
+
+# Translating the semantics of tf.io.VarLenFeature to PyTorch.
+# VarLenFeature is a configuration object (namedtuple) used to define 
+# data types for parsing. Here, we define a similar configuration object
+# to specify the quantization data types for our custom backend, 
+# reflecting the bug's focus on int8/int16 constraints.
+class QuantizationFeature(collections.namedtuple("QuantizationFeature", ["input_dtype", "output_dtype"])):
+    """Configuration for the custom backend quantization, mimicking VarLenFeature structure."""
+    pass
+
+def mock_asic_matmul(a: torch.Tensor, b: torch.Tensor, bias=None):
+    """
+    Mocks the hardware behavior described in the bug report.
+    The chip only does int8 matmuls with int16/int32 output.
+    """
+    # Quantize inputs to int8 as per hardware constraints
+    a_q = a.clamp(-128, 127).to(torch.int8)
+    b_q = b.clamp(-128, 127).to(torch.int8)
+
+    # Simulate the matmul operation (using float for calculation in this mock, 
+    # but respecting the flow described in the issue)
+    # In the real bug, this calls an external async function.
+    c = torch.matmul(a_q.to(torch.float32), b_q.to(torch.float32).t())
+
+    if bias is not None:
+        c = c + bias
+        
+    # Return as int32 as seen in the bug report's return logic
+    return c.to(torch.int32)
+
+@register_backend(name="custom_tpu_backend")
+def custom_backend(gm: torch.fx.GraphModule, example_inputs):
+    """
+    Custom backend implementation that replaces nn.Linear with the mock ASIC matmul.
+    This logic mirrors the bug report's reproduction steps.
+    """
+    # Instantiate the configuration similar to how one might use VarLenFeature
+    quant_config = QuantizationFeature(input_dtype=torch.int8, output_dtype=torch.int32)
+
+    print("\n=== FX graph received ===")
+    # gm.graph.print_tabular()
+
+    # Replace every linear node with the custom matmul
+    for node in list(gm.graph.nodes):
+        if node.target == torch.ops.aten.linear.default:
+            x, weight, bias = node.args
+            with gm.graph.inserting_before(node):
+                new_node = gm.graph.call_function(
+                    mock_asic_matmul,
+                    args=(x, weight, bias),
+                )
+            node.replace_all_uses_with(new_node)
+            gm.graph.erase_node(node)
+
+    gm.recompile()
+    print("\n=== Modified graph ===")
+    # gm.graph.print_tabular()
+
+    # Let Inductor compile the rest of the graph
+    return compile_fx(gm, example_inputs)
+
+def test_custom_backend_graph_break():
+    """
+    Test case to reproduce the graph break/compilation issue.
+    It verifies that the custom backend can successfully replace Linear layers
+    and compile the graph without breaking, handling the specific quantization types.
+    """
+    class SimpleModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(10, 5)
+
+        def forward(self, x):
+            return self.linear(x)
+
+    model = SimpleModel()
+    input_data = torch.randn(2, 10)
+
+    # Compile the model using the registered custom backend
+    # The bug report indicates issues here with graph breaking during lowering
+    try:
+        compiled_model = torch.compile(model, backend="custom_tpu_backend", fullgraph=True)
+        
+        # Run inference
+        output = compiled_model(input_data)
+        
+        # Assertions to verify execution
+        assert output is not None, "Output is None"
+        assert output.shape == (2, 5), f"Expected shape (2, 5), got {output.shape}"
+        
+        print("Test Passed: Backend compiled and executed successfully with custom quantization logic.")
+        
+    except Exception as e:
+        print(f"Test Failed: Graph break or compilation error occurred - {e}")
+        raise
+
+if __name__ == "__main__":
+    test_custom_backend_graph_break()
+```

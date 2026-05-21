@@ -1,0 +1,76 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_batch_parallel_scalar_support():
+    """
+    Test to verify if tf.compat.v1.tpu.batch_parallel supports 
+    learnable scalars (Variables) captured in the computation.
+    
+    This adapts the PyTorch Flex Attention bug report where a learnable 
+    scalar caused a vmap error. In TensorFlow, batch_parallel should 
+    broadcast captured scalars to all shards.
+    """
+    
+    # 1. Define a learnable scalar (mimicking nn.Parameter(torch.tensor(0.0)))
+    # We use a tf.Variable to represent a learnable parameter.
+    temp = tf.Variable(0.5, dtype=tf.float32, name="learnable_scalar")
+
+    # 2. Define the computation function
+    # This mimics the score_mod function in the PyTorch bug report.
+    # It attempts to add the scalar 'temp' to the input score.
+    def computation(inputs):
+        # inputs is a list of tensors corresponding to the batch shard
+        score = inputs[0]
+        # The operation being tested: adding a scalar to a batched tensor
+        score = score + temp
+        return score
+
+    # 3. Prepare inputs
+    # batch_parallel expects a list of Tensors to be sharded along the 0th dimension.
+    batch_size = 8
+    num_features = 16
+    inputs = [tf.random.normal((batch_size, num_features))]
+
+    num_shards = 2
+
+    # 4. Execute
+    # Note: tf.compat.v1.tpu.batch_parallel requires a TPU runtime.
+    # We wrap the execution in a try-except block to handle environments 
+    # without TPUs gracefully.
+    try:
+        # Initialize TPU system
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        
+        # Use a Session as batch_parallel is a v1 compat API
+        with tf.compat.v1.Session() as sess:
+            sess.run(tf.compat.v1.global_variables_initializer())
+            
+            # Call the similar API: tf.compat.v1.tpu.batch_parallel
+            result_op = tf.compat.v1.tpu.batch_parallel(
+                computation,
+                inputs=inputs,
+                num_shards=num_shards
+            )
+            
+            # Run the op
+            result = sess.run(result_op)
+            
+            # Assertions
+            # The output should be concatenated back to the original batch size
+            assert result.shape == (batch_size, num_features), \
+                f"Output shape mismatch. Expected {(batch_size, num_features)}, got {result.shape}"
+            
+            print("Test Passed: batch_parallel supports learnable scalars.")
+            return True
+
+    except (tf.errors.NotFoundError, tf.errors.InternalError, ValueError) as e:
+        # Handle cases where TPU is not found or not configured
+        print(f"Test Skipped: TPU not available or configured. Error: {e}")
+        return None
+
+if __name__ == "__main__":
+    test_batch_parallel_scalar_support()
+```

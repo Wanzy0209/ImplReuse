@@ -1,0 +1,117 @@
+Issue ID: 166270
+Title: [Fuzzer][Eager/Compile Divergence] assert len(self.stride) == len(order)
+Bug Description:
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1061983224)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_4 = arg_0 # size=(4,), stride=(1,), dtype=bool, device=cuda
+    var_node_3 = torch.chunk(var_node_4, 4, dim=0)[0] # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_2 = torch.squeeze(var_node_3) # size=(), stride=(), dtype=bool, device=cuda
+    var_node_1 = torch.stack([var_node_2], dim=0) # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_0 = torch.reshape(var_node_1, [1]) # size=(1,), stride=(1,), dtype=bool, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(0, 2, (4,), dtype=torch.int8).bool(), (4,), (1,))
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+```
+
+```
+   ✅ eager success
+   Traceback (most recent call last):
+     File "/tmp/torchfuzz/fuzz_4fc36e68.py", line 27, in <module>
+       result_compiled = compiled_program(*args)
+     File "/home/bobren/local/a/pytorch-env/lib/python3.10/site-packages/torch/_dynamo/eval
+...
+
+Original API Under Test: torch.squeeze
+Library Scope: Cross-library
+Similarity Type: Cross-library similar API
+Similar API: tf.lite.experimental.Analyzer
+Similarity score: 0.9919565916061401
+
+Similar API information:
+# Extracted call chain for tf.lite.experimental.Analyzer
+
+# --- tensorflow.python.autograph.pyct.static_analysis.liveness.Analyzer ---
+class Analyzer(cfg.GraphVisitor):
+  """CFG visitor that performs liveness analysis at statement level."""
+
+  def __init__(self, graph, include_annotations):
+    super(Analyzer, self).__init__(graph)
+    self.include_annotations = include_annotations
+
+  def init_state(self, _):
+    return set()
+
+  def lamba_check(self, fn_ast_node):
+    if isinstance(fn_ast_node, gast.Lambda):
+      # Exception: lambda functions are assumed to be used only in the
+      # place where they are defined, and not later.
+      return True
+    return False
+
+  def visit_node(self, node):
+    prev_live_in = self.in_[node]
+
+    if anno.hasanno(node.ast_node, anno.Static.SCOPE):
+      node_scope = anno.getanno(node.ast_node, anno.Static.SCOPE)
+
+      gen = node_scope.read
+      if not self.include_annotations:
+        gen -= node_scope.annotations
+      # TODO(mdan): verify whether composites' parents need to be added.
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1061983224)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_4 = arg_0 # size=(4,), stride=(1,), dtype=bool, device=cuda
+    var_node_3 = torch.chunk(var_node_4, 4, dim=0)[0] # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_2 = torch.squeeze(var_node_3) # size=(), stride=(), dtype=bool, device=cuda
+    var_node_1 = torch.stack([var_node_2], dim=0) # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_0 = torch.reshape(var_node_1, [1]) # size=(1,), stride=(1,), dtype=bool, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(0, 2, (4,), dtype=torch.int8).bool(), (4,), (1,))
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+The API tf.lite.experimental.Analyzer is identified as cross-library similar to the original PyTorch API torch.squeeze.
+Please adapt the original PyTorch test case to this TensorFlow-style API, preserving the core bug reproduction logic and verifying the similar API's behavior.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

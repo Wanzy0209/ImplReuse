@@ -1,0 +1,70 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_rnn_dynamic_sequence_exportability():
+    """
+    Adapted from PyTorch test_dynamic_cache_exportability_multiple_run.
+    Verifies that tf.keras.layers.RNN handles dynamic sequence lengths
+    correctly under graph tracing (tf.function), similar to how
+    torch.export.export should handle constraints.
+    
+    The original bug involved a constraint violation on 'seq' (sequence length)
+    when running multiple times with growing sequence lengths (e.g., 10 -> 50 -> 512).
+    """
+    # Define a simple RNN layer (LSTM) to simulate the Transformer's recurrent nature
+    cell = tf.keras.layers.LSTMCell(64)
+    rnn_layer = tf.keras.layers.RNN(cell, return_sequences=True, return_state=True)
+
+    # Define the function to be exported/traced.
+    # We use input_signature to explicitly define dynamic shapes (None for sequence dim).
+    # This is analogous to setting up constraints in PyTorch export.
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=[None, None, 32], dtype=tf.float32, name="inputs"), # Batch, Seq, Features
+        tf.TensorSpec(shape=[None, 64], dtype=tf.float32, name="state_h"),      # Batch, Units
+        tf.TensorSpec(shape=[None, 64], dtype=tf.float32, name="state_c")       # Batch, Units
+    ])
+    def run_rnn(inputs, state_h, state_c):
+        return rnn_layer(inputs, initial_state=[state_h, state_c])
+
+    batch_size = 2
+    features = 32
+    
+    # Initial state
+    initial_state_h = tf.zeros((batch_size, 64))
+    initial_state_c = tf.zeros((batch_size, 64))
+
+    # Run 1: Small sequence length
+    seq_len_1 = 10
+    inputs_1 = tf.random.normal((batch_size, seq_len_1, features))
+    out_1, h_1, c_1 = run_rnn(inputs_1, initial_state_h, initial_state_c)
+    assert out_1.shape == (batch_size, seq_len_1, 64)
+    print(f"Run 1 (seq_len={seq_len_1}) passed. Output shape: {out_1.shape}")
+
+    # Run 2: Medium sequence length (simulating growing sequence)
+    seq_len_2 = 50
+    inputs_2 = tf.random.normal((batch_size, seq_len_2, features))
+    # Pass state from previous run to simulate 'past_key_values' / context accumulation
+    out_2, h_2, c_2 = run_rnn(inputs_2, h_1, c_1)
+    assert out_2.shape == (batch_size, seq_len_2, 64)
+    print(f"Run 2 (seq_len={seq_len_2}) passed. Output shape: {out_2.shape}")
+
+    # Run 3: Sequence length 512 (The constraint limit mentioned in the PyTorch bug)
+    seq_len_3 = 512
+    inputs_3 = tf.random.normal((batch_size, seq_len_3, features))
+    out_3, h_3, c_3 = run_rnn(inputs_3, h_2, c_2)
+    assert out_3.shape == (batch_size, seq_len_3, 64)
+    print(f"Run 3 (seq_len={seq_len_3}) passed. Output shape: {out_3.shape}")
+
+    # Run 4: Sequence length 600 (Exceeding the constraint limit mentioned in the bug)
+    # PyTorch 2.10 failed here with "Constraints violated (seq)".
+    # TensorFlow should handle this dynamic shape change gracefully without crashing.
+    seq_len_4 = 600
+    inputs_4 = tf.random.normal((batch_size, seq_len_4, features))
+    out_4, h_4, c_4 = run_rnn(inputs_4, h_3, c_3)
+    assert out_4.shape == (batch_size, seq_len_4, 64)
+    print(f"Run 4 (seq_len={seq_len_4}) passed. Output shape: {out_4.shape}")
+
+if __name__ == "__main__":
+    test_rnn_dynamic_sequence_exportability()
+```

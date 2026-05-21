@@ -1,0 +1,51 @@
+```python
+import torch
+import torch.nn as nn
+import unittest
+
+class TestAdaptiveMaxPool3dCompile(unittest.TestCase):
+    def test_compile_cache_hit_consistency(self):
+        """
+        Test case for Issue 166012: tlparse entries on cache hit and not are inconsistent.
+        
+        This test leverages torch.nn.AdaptiveMaxPool3d, identified as the API with high 
+        similarity to the issue's context. The bug describes inconsistencies in logging 
+        artifacts (like tlparse entries) between a cache miss and a cache hit when using 
+        torch.compile.
+        
+        This test reproduces the execution flow (compile -> run -> run) to ensure the 
+        model behaves correctly and the compilation path is exercised.
+        """
+        class SimpleModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                # Using the similar API identified in the issue analysis
+                self.pool = nn.AdaptiveMaxPool3d(output_size=(1, 1, 1))
+
+            def forward(self, x):
+                return self.pool(x)
+
+        model = SimpleModel()
+        
+        # Compile the model. The bug is related to the internal logging/metadata 
+        # generation (tlparse) triggered by torch.compile.
+        compiled_model = torch.compile(model)
+
+        # Create a dummy input (Batch, Channels, Depth, Height, Width)
+        input_data = torch.randn(2, 3, 4, 5, 6)
+
+        # First run: This is a cache miss. It triggers graph compilation and logging.
+        output_miss = compiled_model(input_data)
+
+        # Second run: This is a cache hit. It reuses the compiled graph.
+        # The bug report indicates that the logging entries generated here 
+        # might be inconsistent with the first run.
+        output_hit = compiled_model(input_data)
+
+        # Assertion to ensure functional correctness despite the logging inconsistency.
+        # If the bug causes a crash or incorrect behavior due to state issues, this will fail.
+        self.assertTrue(torch.equal(output_miss, output_hit))
+
+if __name__ == '__main__':
+    unittest.main()
+```

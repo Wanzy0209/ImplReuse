@@ -1,0 +1,71 @@
+```python
+import tensorflow as tf
+
+def test_varlen_feature_indices_dtype():
+    """
+    Test case for tf.io.VarLenFeature inspired by PyTorch Issue 166042.
+    
+    The original issue involves an assertion failure: assert "int" in str(indices.get_dtype()).
+    This occurred in the context of torch.nn.functional.embedding where indices must be integers.
+    
+    This test adapts that logic to tf.io.VarLenFeature. While VarLenFeature is a configuration
+    for parsing, it results in a SparseTensor. A SparseTensor contains 'indices' which must
+    be integers (int64). We verify that the API correctly handles the dtype configuration
+    and that the resulting indices satisfy the integer type constraint found in the bug.
+    """
+    
+    # 1. Define the feature configuration using the Similar API
+    # The 'dtype' argument is central to the VarLenFeature definition.
+    feature_dtype = tf.float32
+    varlen_feature = tf.io.VarLenFeature(dtype=feature_dtype)
+    
+    # 2. Create a serialized example to parse
+    # We construct a SparseTensor manually to serialize it, simulating input data.
+    # Indices must be integers for the SparseTensor to be valid.
+    original_indices = [[0, 0], [1, 2]]
+    original_values = [1.5, 2.5]
+    original_shape = [2, 3]
+    
+    sparse_tensor = tf.SparseTensor(
+        indices=original_indices,
+        values=original_values,
+        dense_shape=original_shape
+    )
+    
+    # Serialize the sparse tensor
+    serialized_sparse = tf.io.serialize_sparse(sparse_tensor)
+    
+    # Wrap in a tf.train.Example
+    def _bytes_feature(value):
+        # Assumes value is a string/bytes
+        return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+        
+    example_proto = tf.train.Example(features=tf.train.Features(feature={
+        'data': _bytes_feature(serialized_sparse.numpy())
+    }))
+    serialized_example = example_proto.SerializeToString()
+    
+    # 3. Parse the example using the VarLenFeature configuration
+    features = tf.io.parse_single_example(serialized_example, {'data': varlen_feature})
+    parsed_sparse = features['data']
+    
+    # 4. Verify the logic related to the bug: Index Type Checking
+    # The bug asserted: assert "int" in str(indices.get_dtype())
+    # We apply a similar check to the indices of the parsed SparseTensor.
+    
+    indices_dtype = parsed_sparse.indices.dtype
+    indices_dtype_str = str(indices_dtype).lower()
+    
+    # Assertion mirroring the bug report's check
+    assert "int" in indices_dtype_str, \
+        f"Bug reproduction logic: Expected indices dtype to contain 'int', but got {indices_dtype}"
+        
+    # Also verify the values dtype matches the VarLenFeature config
+    assert parsed_sparse.values.dtype == feature_dtype, \
+        f"Expected values dtype {feature_dtype}, but got {parsed_sparse.values.dtype}"
+        
+    print("Test Passed: VarLenFeature produces SparseTensors with integer indices, satisfying the type constraint.")
+
+if __name__ == "__main__":
+    test_varlen_feature_indices_dtype()
+```

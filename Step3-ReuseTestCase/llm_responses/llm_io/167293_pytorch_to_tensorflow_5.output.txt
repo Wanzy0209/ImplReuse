@@ -1,0 +1,87 @@
+```python
+import tensorflow as tf
+import numpy as np
+import sys
+
+def test_clone_model_dynamic_sequence_constraints():
+    """
+    Adapted test case for tf.keras.models.clone_model based on PyTorch issue #167293.
+    
+    Original Issue: torch.export.export fails with torch._dynamo.exc.UserError: 
+    "Constraints violated (seq)" when dealing with dynamic sequence lengths in 
+    past_key_values.
+    
+    This test verifies that tf.keras.models.clone_model correctly handles models
+    with dynamic sequence dimensions (None), ensuring the 'seq' constraint logic
+    is preserved during the cloning process.
+    """
+    
+    # 1. Define a model with dynamic sequence lengths (mimicking Transformer inputs)
+    # The 'None' in the shape represents the dynamic sequence dimension (seq).
+    # This corresponds to the 'seq' variable in the PyTorch error message.
+    input_ids = tf.keras.Input(shape=(None, 64), name="input_ids", batch_size=2)
+    past_key_values = tf.keras.Input(shape=(None, 64), name="past_key_values", batch_size=2)
+    
+    # Simple processing logic to simulate a transformer block interaction
+    x = tf.keras.layers.Dense(64)(input_ids)
+    y = tf.keras.layers.Dense(64)(past_key_values)
+    output = tf.keras.layers.Add()([x, y])
+    
+    original_model = tf.keras.Model(inputs=[input_ids, past_key_values], outputs=output)
+    
+    # 2. Clone the model using the target API
+    try:
+        cloned_model = tf.keras.models.clone_model(original_model)
+    except Exception as e:
+        print(f"FAILED: clone_model raised an exception during cloning: {e}")
+        sys.exit(1)
+        
+    # 3. Verify that the dynamic shape (None) is preserved in the clone
+    # In the PyTorch bug, the constraint on 'seq' was violated or lost.
+    # Here we assert that the cloned model maintains the same dynamic input signature.
+    orig_shape = original_model.inputs[0].shape
+    clone_shape = cloned_model.inputs[0].shape
+    
+    if orig_shape != clone_shape:
+        print(f"FAILED: Shape mismatch. Original: {orig_shape}, Cloned: {clone_shape}")
+        sys.exit(1)
+        
+    if orig_shape[1] is not None:
+        print(f"FAILED: Dynamic dimension (seq) was not preserved. Expected None, got {orig_shape[1]}")
+        sys.exit(1)
+
+    # 4. Verify behavior with different sequence lengths
+    # The PyTorch error occurred when the sequence length changed (e.g., 88 vs 512).
+    # We test that the cloned model accepts varying sequence lengths without error.
+    
+    # Test Case A: Sequence length 10
+    seq_len_a = 10
+    input_data_a = [np.random.rand(2, seq_len_a, 64).astype(np.float32), 
+                     np.random.rand(2, seq_len_a, 64).astype(np.float32)]
+    
+    try:
+        out_a_orig = original_model(input_data_a, training=False)
+        out_a_clone = cloned_model(input_data_a, training=False)
+        np.testing.assert_allclose(out_a_orig.numpy(), out_a_clone.numpy(), rtol=1e-5)
+    except Exception as e:
+        print(f"FAILED: Inference failed for seq_len={seq_len_a}: {e}")
+        sys.exit(1)
+
+    # Test Case B: Sequence length 512 (The limit mentioned in the PyTorch error)
+    seq_len_b = 512
+    input_data_b = [np.random.rand(2, seq_len_b, 64).astype(np.float32), 
+                     np.random.rand(2, seq_len_b, 64).astype(np.float32)]
+    
+    try:
+        out_b_orig = original_model(input_data_b, training=False)
+        out_b_clone = cloned_model(input_data_b, training=False)
+        np.testing.assert_allclose(out_b_orig.numpy(), out_b_clone.numpy(), rtol=1e-5)
+    except Exception as e:
+        print(f"FAILED: Inference failed for seq_len={seq_len_b}: {e}")
+        sys.exit(1)
+
+    print("SUCCESS: clone_model correctly preserved dynamic sequence constraints.")
+
+if __name__ == "__main__":
+    test_clone_model_dynamic_sequence_constraints()
+```

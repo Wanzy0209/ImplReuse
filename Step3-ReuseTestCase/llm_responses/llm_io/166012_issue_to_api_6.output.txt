@@ -1,0 +1,71 @@
+```python
+import torch
+import pytest
+from torch.utils.data._utils.collate import default_collate
+
+def test_default_collate_consistency_with_string_entries():
+    """
+    Test case derived from Issue 166012: tlparse entries on cache hit and not are inconsistent.
+    
+    The original issue involves a list of filenames (strings) being processed, where the 
+    presence or absence of certain entries (cache hit vs miss) leads to inconsistency.
+    
+    This test verifies the behavior of torch.utils.data.default_collate (which has high
+    code similarity to the logging logic in the original issue) when handling batches
+    of string entries (filenames) and structured data (dictionaries), ensuring that
+    the output structure is consistent or errors are raised appropriately for 
+    inconsistent inputs.
+    """
+    
+    # Scenario 1: Batch of strings (mimicking the list of filenames in the bug report)
+    # Original bug context: A list of log files like 'dynamo_output_graph_9.txt'
+    string_batch = [
+        "dynamo_output_graph_9.txt",
+        "before_pre_grad_graph_10.txt",
+        "aotautograd_cache_miss_12.json"
+    ]
+    
+    # default_collate should return a list of strings for string inputs
+    collated_strings = default_collate(string_batch)
+    assert isinstance(collated_strings, list), "Collating strings should return a list"
+    assert all(isinstance(item, str) for item in collated_strings), "Items should remain strings"
+    assert collated_strings == string_batch, "String batch should be returned unchanged"
+
+    # Scenario 2: Batch of dictionaries (mimicking structured log entries)
+    # Original bug context: Inconsistency in entries (some present, some missing)
+    # We test if default_collate handles consistent dicts correctly
+    consistent_dict_batch = [
+        {"file": "graph_9.txt", "status": "ok"},
+        {"file": "graph_10.txt", "status": "ok"}
+    ]
+    
+    collated_dicts = default_collate(consistent_dict_batch)
+    assert isinstance(collated_dicts, dict), "Collating dicts should return a dict"
+    assert "file" in collated_dicts and "status" in collated_dicts
+    assert collated_dicts["file"] == ["graph_9.txt", "graph_10.txt"]
+
+    # Scenario 3: Inconsistent dictionary entries (simulating the "inconsistent entries" bug)
+    # If one entry is missing a key that others have, default_collate typically raises a KeyError.
+    # This mirrors the instability in the original bug when entries were missing/changed.
+    inconsistent_dict_batch = [
+        {"file": "graph_9.txt", "status": "ok"},
+        {"file": "graph_10.txt"} # Missing 'status' key
+    ]
+    
+    with pytest.raises(KeyError):
+        # This should fail because the structure is inconsistent, 
+        # similar to how the original parsing failed on inconsistent log lists.
+        default_collate(inconsistent_dict_batch)
+
+    # Scenario 4: Mixed types (simulating potential cache hit vs miss data type variance)
+    # If the cache returns numbers but miss returns strings (or vice versa), collation might fail.
+    mixed_batch = [1, "string_value"]
+    
+    with pytest.raises(TypeError):
+        # default_collate expects uniform types in the batch
+        default_collate(mixed_batch)
+
+if __name__ == "__main__":
+    test_default_collate_consistency_with_string_entries()
+    print("Test passed.")
+```

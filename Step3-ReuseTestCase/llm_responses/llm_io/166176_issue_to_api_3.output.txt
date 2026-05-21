@@ -1,0 +1,66 @@
+```python
+import tensorflow as tf
+import tensorflow.experimental.dtensor as dtensor
+
+def test_dtensor_checkpoint_nested_state():
+    """
+    Test case for tf.experimental.dtensor.DTensorCheckpoint.
+    
+    This test is derived from a PyTorch Dynamo issue (ID: 166176) where nested 
+    contexts (torch.no_grad) combined with graph breaks (state interruptions) 
+    caused a KeyError during resume code generation.
+
+    The similarity lies in handling state resumption/checkpointing within 
+    nested or complex scopes. Here, we test DTensorCheckpoint's ability to 
+    save and restore state across a nested trackable object structure, 
+    mirroring the nested context logic of the original bug.
+    """
+    
+    # Setup a minimal mesh for DTensor
+    mesh = dtensor.create_mesh([("x", 1)], devices=["CPU:0"])
+
+    # Define a nested trackable structure to mimic the nested 'with' blocks
+    # in the original bug report.
+    class InnerModule(tf.Module):
+        def __init__(self):
+            self.inner_var = dtensor.DVariable(
+                dtensor.initializers.zeros()((2,)),
+                mesh=mesh,
+                layout=[dtensor.UNSHARDED]
+            )
+
+    class OuterModule(tf.Module):
+        def __init__(self):
+            self.outer_var = dtensor.DVariable(
+                dtensor.initializers.zeros()((2,)),
+                mesh=mesh,
+                layout=[dtensor.UNSHARDED]
+            )
+            self.inner = InnerModule()
+
+    root = OuterModule()
+
+    # Initialize DTensorCheckpoint with the root object.
+    # The API handles the root and its dependencies (nested children).
+    checkpoint = dtensor.DTensorCheckpoint(mesh=mesh, root=root)
+
+    # Save the initial state (analogous to the first graph break/resume point)
+    save_path = checkpoint.save("/tmp/dtensor_nested_test")
+
+    # Modify state in the nested context (analogous to operations inside nested no_grad)
+    root.outer_var.assign(tf.ones((2,)))
+    root.inner.inner_var.assign(tf.ones((2,)))
+
+    # Restore the state (analogous to resuming execution)
+    checkpoint.restore(save_path).assert_existing_objects_matched()
+
+    # Verify that the state was correctly restored, handling the nested structure
+    # without error (e.g., KeyError or corruption).
+    assert tf.reduce_all(root.outer_var == 0).numpy(), "Outer variable restoration failed"
+    assert tf.reduce_all(root.inner.inner_var == 0).numpy(), "Inner variable restoration failed"
+
+    print("Test passed: DTensorCheckpoint handled nested state correctly.")
+
+if __name__ == "__main__":
+    test_dtensor_checkpoint_nested_state()
+```

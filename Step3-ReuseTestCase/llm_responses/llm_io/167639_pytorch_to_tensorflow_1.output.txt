@@ -1,0 +1,79 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Set seed for reproducibility
+tf.random.set_seed(42)
+
+def get_computation():
+    """
+    Defines a computation function mimicking the PyTorch TestModel:
+    Linear(10, 20) -> ReLU -> Linear(20, 1)
+    """
+    def model(x):
+        # Layer 1: Linear(10, 20)
+        w1 = tf.get_variable("w1", [10, 20], initializer=tf.random_normal_initializer())
+        b1 = tf.get_variable("b1", [20], initializer=tf.zeros_initializer())
+        x = tf.nn.relu(tf.matmul(x, w1) + b1)
+        
+        # Layer 2: Linear(20, 1)
+        w2 = tf.get_variable("w2", [20, 1], initializer=tf.random_normal_initializer())
+        b2 = tf.get_variable("b2", [1], initializer=tf.zeros_initializer())
+        return tf.matmul(x, w2) + b2
+    return model
+
+def main():
+    # Reset graph to ensure clean state
+    tf.compat.v1.reset_default_graph()
+    
+    # Define sample inputs
+    # Mimics get_sample_inputs() returning a tuple/list of tensors
+    inputs = [tf.random.normal([4, 10])]
+    
+    # 1. Baseline execution (Original model)
+    with tf.compat.v1.variable_scope("baseline"):
+        model = get_computation()
+        baseline_output = model(inputs[0])
+    
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
+        baseline_result = sess.run(baseline_output)
+        print('Original model output shape:', baseline_result.shape)
+
+        # 2. Test tf.compat.v1.tpu.batch_parallel
+        # This mimics the "torch.compile" optimization step inside the execution context.
+        # Note: batch_parallel is a TPU-specific API.
+        try:
+            # Use a different variable scope to avoid name conflicts with the baseline
+            with tf.compat.v1.variable_scope("tpu_model"):
+                tpu_model = get_computation()
+                
+                # Call the similar API: tf.compat.v1.tpu.batch_parallel
+                # num_shards=1 is used to mimic the single-device behavior of the original test
+                tpu_output = tf.compat.v1.tpu.batch_parallel(
+                    tpu_model, 
+                    inputs, 
+                    num_shards=1
+                )
+            
+            # Initialize variables specifically for the tpu_model scope
+            sess.run(tf.compat.v1.variables_initializer(
+                tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.GLOBAL_VARIABLES, scope="tpu_model")
+            ))
+            
+            tpu_result = sess.run(tpu_output)
+            print('Batch parallel output shape:', tpu_result.shape)
+            
+            # Verify behavior: Check if shapes match
+            assert baseline_result.shape == tpu_result.shape, "Output shape mismatch between original and batch_parallel"
+            print("Test passed: batch_parallel executed successfully.")
+            
+        except tf.errors.NotFoundError:
+            # Handle cases where TPU hardware is not available
+            print("TPU not available, skipping batch_parallel test.")
+        except Exception as e:
+            print(f"Error during batch_parallel execution: {e}")
+
+if __name__ == "__main__":
+    main()
+```

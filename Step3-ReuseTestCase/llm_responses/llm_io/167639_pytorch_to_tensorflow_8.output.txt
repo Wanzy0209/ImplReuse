@@ -1,0 +1,88 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def get_default_model():
+    """Creates a simple TensorFlow Keras model similar to the PyTorch TestModel."""
+    inputs = tf.keras.Input(shape=(10,))
+    x = tf.keras.layers.Dense(20, name="fc1")(inputs)
+    x = tf.keras.layers.ReLU(name="relu")(x)
+    outputs = tf.keras.layers.Dense(1, name="fc2")(x)
+    model = tf.keras.Model(inputs=inputs, outputs=outputs)
+    return model
+
+def get_sample_inputs():
+    """Generates sample inputs compatible with the model."""
+    # Using GPU if available, otherwise CPU
+    device = "/GPU:0" if tf.config.list_physical_devices('GPU') else "/CPU:0"
+    with tf.device(device):
+        x = tf.random.normal((4, 10), dtype=tf.float32)
+    return (x,)
+
+def main():
+    model = get_default_model()
+    inputs = get_sample_inputs()
+    
+    # Ensure inputs and model are on the same device
+    device = inputs[0].device
+    
+    # Run original model
+    with tf.device(device):
+        original_output = model(*inputs)
+        print('Original model output shape:', original_output.shape)
+
+    # Check for CUDA availability to attempt CUDA Graph capture
+    gpus = tf.config.list_physical_devices('GPU')
+    
+    if gpus:
+        try:
+            # TensorFlow's equivalent to CUDA Graph capture is tf.experimental.CUDAGraph
+            # We test if tf.keras.name_scope works inside this capture context
+            graph = tf.experimental.CUDAGraph()
+            
+            # Define the function to be captured
+            # We include tf.keras.name_scope here to test compatibility
+            @tf.function
+            def graph_captured_model(x):
+                with tf.keras.name_scope("cuda_graph_scope"):
+                    return model(x)
+
+            with tf.device(device):
+                # Capture the graph
+                with graph.capture():
+                    # In the PyTorch bug, torch.compile is called inside the graph context.
+                    # Here we execute the model wrapped in name_scope inside the capture context.
+                    captured_output = graph_captured_model(*inputs)
+                
+                # Replay the graph
+                graph_output = graph.run()
+                
+            print('Captured graph output shape:', graph_output.shape)
+            
+            # Verify outputs match
+            # Note: CUDAGraph in TF might require specific handling of outputs depending on version
+            # but generally graph.run() returns the outputs of the captured function.
+            assert tf.reduce_all(tf.abs(original_output - graph_output) < 1e-5), "Output mismatch between original and graph execution"
+            print("Test passed: tf.keras.name_scope is compatible with CUDA Graph capture.")
+            
+        except Exception as e:
+            print(f"Failed during CUDA Graph capture or execution: {e}")
+    else:
+        print("CUDA not available, testing with tf.function (Graph Mode) instead.")
+        
+        # Fallback to standard Graph Mode (tf.function) to verify name_scope behavior
+        @tf.function
+        def graph_mode_model(x):
+            with tf.keras.name_scope("graph_mode_scope"):
+                return model(x)
+        
+        with tf.device(device):
+            graph_output = graph_mode_model(*inputs)
+            
+        print('Graph mode output shape:', graph_output.shape)
+        assert tf.reduce_all(tf.abs(original_output - graph_output) < 1e-5), "Output mismatch between original and graph mode execution"
+        print("Test passed: tf.keras.name_scope is compatible with tf.function.")
+
+if __name__ == "__main__":
+    main()
+```

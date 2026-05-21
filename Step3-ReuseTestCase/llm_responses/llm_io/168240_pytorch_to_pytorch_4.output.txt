@@ -1,0 +1,29 @@
+```python
+import torch
+import torchvision
+from torch.utils.checkpoint import checkpoint_sequential
+
+# Setup the model and input as per the original bug report
+model = torchvision.models.mobilenet_v2(weights=None)
+model.eval()  # Set to eval mode for deterministic comparison
+x = torch.rand((1, 3, 224, 224))
+
+# Calculate the expected output using the original model
+expected_output = model(x)
+
+# Adapt the test case to use torch.utils.checkpoint.checkpoint_sequential
+# MobileNetV2's core structure is in the 'features' attribute (nn.Sequential)
+# We apply checkpointing to this sequential block.
+modules = list(model.features.children())
+
+# Run the model with checkpointing
+# Note: checkpoint_sequential runs the functions in the list.
+# We need to handle the pooling and classifier manually to match the full model forward pass.
+x_checkpointed = checkpoint_sequential(modules, segments=4, input=x, use_reentrant=False)
+x_checkpointed = torch.nn.functional.adaptive_avg_pool2d(x_checkpointed, (1, 1))
+x_checkpointed = torch.flatten(x_checkpointed, 1)
+x_checkpointed = model.classifier(x_checkpointed)
+
+# Verify that the output matches the original model
+torch.testing.assert_close(expected_output, x_checkpointed)
+```

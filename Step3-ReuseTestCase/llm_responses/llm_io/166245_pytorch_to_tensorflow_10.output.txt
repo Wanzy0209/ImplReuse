@@ -1,0 +1,64 @@
+```python
+import os
+import tensorflow as tf
+from tensorflow.experimental import dtensor
+
+# The original PyTorch issue involved eager/compile divergence with torch._dynamo.
+# To adapt this to tf.experimental.dtensor.num_clients, we verify the behavior
+# of the API in both eager execution and inside a tf.function (graph mode),
+# ensuring the return value is consistent and handles environment configuration correctly.
+
+def test_num_clients():
+    # Save original environment state
+    original_jobs = os.environ.get("DTENSOR_JOBS")
+    
+    try:
+        # Test Case 1: Local Mode (Default)
+        # Corresponds to the 'fuzzed_program' setup where specific configurations are tested.
+        if "DTENSOR_JOBS" in os.environ:
+            del os.environ["DTENSOR_JOBS"]
+        
+        # Eager execution check
+        count_eager = dtensor.num_clients()
+        assert count_eager == 1, f"Expected 1 in local mode (eager), got {count_eager}"
+        
+        # Graph/Compile execution check (mimicking torch._dynamo compilation)
+        @tf.function
+        def get_num_clients_graph():
+            return dtensor.num_clients()
+            
+        count_graph = get_num_clients_graph()
+        assert count_graph == 1, f"Expected 1 in local mode (graph), got {count_graph}"
+
+        # Test Case 2: Multi-Client Mode
+        # Simulating a distributed environment configuration
+        os.environ["DTENSOR_JOBS"] = "worker0,worker1,worker2"
+        
+        count_eager = dtensor.num_clients()
+        assert count_eager == 3, f"Expected 3 for 3 jobs (eager), got {count_eager}"
+        
+        count_graph = get_num_clients_graph()
+        assert count_graph == 3, f"Expected 3 for 3 jobs (graph), got {count_graph}"
+
+        # Test Case 3: BNS Style Job Names (Validation logic from source)
+        # The source code indicates specific validation for BNS paths.
+        os.environ["DTENSOR_JOBS"] = "/bns/cluster/task0,/bns/cluster/task1"
+        
+        count_eager = dtensor.num_clients()
+        assert count_eager == 2, f"Expected 2 for BNS jobs (eager), got {count_eager}"
+        
+        count_graph = get_num_clients_graph()
+        assert count_graph == 2, f"Expected 2 for BNS jobs (graph), got {count_graph}"
+
+        print("All test cases passed for tf.experimental.dtensor.num_clients")
+
+    finally:
+        # Restore environment state
+        if original_jobs is not None:
+            os.environ["DTENSOR_JOBS"] = original_jobs
+        elif "DTENSOR_JOBS" in os.environ:
+            del os.environ["DTENSOR_JOBS"]
+
+if __name__ == "__main__":
+    test_num_clients()
+```

@@ -1,0 +1,57 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Ensure we are in graph mode (similar to torch.compile context)
+tf.compat.v1.disable_eager_execution()
+
+def test_string_input_producer_with_epochs():
+    """
+    Adapts the logic of testing a specific feature (num_epochs/disable)
+    within a strict execution context (Graph/fullgraph).
+    
+    Original PyTorch Bug: torch.compile(fullgraph=True) errors on torch.compiler.disable().
+    Adaptation: string_input_producer (Graph mode) requires local_variables_initializer() 
+    when num_epochs is set. This test verifies the API handles the feature correctly 
+    with the necessary setup.
+    """
+    # Input data
+    filenames = ["file1.txt", "file2.txt", "file3.txt"]
+    string_tensor = tf.constant(filenames, dtype=tf.string)
+
+    # Use the API with a feature that requires specific handling (num_epochs)
+    # This parallels using torch.compiler.disable inside torch.compile(fullgraph=True)
+    # where a specific feature interacts with the execution context.
+    queue = tf.compat.v1.train.string_input_producer(
+        string_tensor, 
+        num_epochs=1, 
+        shuffle=True,
+        capacity=32
+    )
+
+    # Get a batch to consume the queue
+    batch = tf.compat.v1.train.batch([queue], batch_size=2, capacity=10)
+
+    with tf.compat.v1.Session() as sess:
+        # The "Fix": Initialize local variables required by num_epochs.
+        # Without this, the test would fail with FailedPreconditionError,
+        # similar to the Unsupported error in the PyTorch bug.
+        sess.run(tf.compat.v1.local_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+        try:
+            # Execute the graph
+            result = sess.run(batch)
+            # Verify we got the expected batch size
+            assert result.shape == (2,), f"Expected batch size 2, got {result.shape}"
+            print("Test passed. Batch retrieved:", result)
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_string_input_producer_with_epochs()
+```

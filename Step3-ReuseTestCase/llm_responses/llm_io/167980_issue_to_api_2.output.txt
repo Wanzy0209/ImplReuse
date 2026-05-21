@@ -1,0 +1,68 @@
+```python
+import os
+import tensorflow as tf
+from tensorflow.keras import layers, models, datasets, ops
+
+# Mimic the environment setup from the issue
+# os.environ["CUDA_VISIBLE_DEVICES"] = ""  # Uncomment to force CPU
+
+print("Device:", "GPU" if tf.config.list_physical_devices('GPU') else "CPU")
+
+# Load MNIST data
+(x_train, y_train), (x_test, y_test) = datasets.mnist.load_data()
+
+# Preprocess data: Normalize and add channel dimension
+x_train = x_train.astype("float32") / 255.0
+x_test = x_test.astype("float32") / 255.0
+x_train = x_train[..., tf.newaxis]
+x_test = x_test[..., tf.newaxis]
+
+# Create DataLoaders (tf.data.Dataset)
+batch_size = 80
+train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(60000).batch(batch_size)
+test_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(batch_size)
+
+# Define the Model (Equivalent to PyTorch nn.Module)
+model = models.Sequential([
+    layers.Flatten(input_shape=(28, 28, 1)),
+    layers.Dense(256, activation='relu'),
+    layers.Dense(256, activation='relu'),
+    layers.Dense(10)
+])
+
+loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+optimizer = tf.keras.optimizers.SGD(learning_rate=0.01)
+
+# Training Step (One batch)
+print("=== TRAIN ===")
+for X, y in train_ds.take(1):
+    with tf.GradientTape() as tape:
+        pred = model(X, training=True)
+        loss = loss_fn(y, pred)
+    grads = tape.gradient(loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(grads, model.trainable_variables))
+
+# Evaluation Step (One batch)
+# The original issue crashes here. We use the similar API (tf.keras.ops.append)
+# to accumulate results, mirroring the pattern of concatenating tensors.
+print("=== EVAL ===")
+all_preds = None
+for batch, (X, y) in enumerate(test_ds.take(1)):
+    print("batch", batch)
+    pred = model(X, training=False)
+    
+    # Leverage the similar API: tf.keras.ops.append
+    # This relates to the issue by handling tensor concatenation/accumulation logic
+    # which is often a source of memory/layout errors in native backends.
+    if all_preds is None:
+        all_preds = pred
+    else:
+        all_preds = ops.append(all_preds, pred, axis=0)
+
+# Assertions to verify execution and shape consistency
+assert all_preds is not None, "Predictions should not be None"
+assert all_preds.shape[0] == batch_size, f"Expected batch size {batch_size}, got {all_preds.shape[0]}"
+assert all_preds.shape[1] == 10, "Expected 10 output classes"
+
+print("Test passed successfully.")
+```

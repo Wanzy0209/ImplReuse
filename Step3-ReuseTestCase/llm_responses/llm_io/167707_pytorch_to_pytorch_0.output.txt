@@ -1,0 +1,75 @@
+```python
+import torch
+import os
+import tempfile
+import json
+import gzip
+
+def test_tensorboard_trace_handler_with_gzip():
+    """
+    Test case to verify that torch.profiler.tensorboard_trace_handler
+    correctly saves a trace file when use_gzip=True and worker_name is specified.
+    This addresses the issue where saved traces were broken on the main branch.
+    """
+    # Skip test if CUDA is not available, as the bug report involves CUDA activities
+    if not torch.cuda.is_available():
+        print("Test skipped: CUDA not available.")
+        return
+
+    # Use a temporary directory to avoid polluting the workspace
+    with tempfile.TemporaryDirectory() as tmpdir:
+        worker_name = "trace"
+        
+        # Initialize profiler with the specific configuration from the bug report
+        profile = torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                tmpdir, worker_name=worker_name, use_gzip=True
+            ),
+        )
+
+        profile.start()
+
+        # Execute operations on CUDA
+        x = torch.randn(2, device="cuda")
+        y = x + 21
+        z = x * 15
+        
+        profile.stop()
+
+        # --- Verification ---
+        files = os.listdir(tmpdir)
+        assert len(files) == 1, f"Expected 1 trace file, found {len(files)} in {tmpdir}"
+
+        trace_file = files[0]
+        
+        # Verify file naming convention: {worker_name}.{timestamp}.pt.trace.json.gz
+        assert trace_file.startswith(worker_name), \
+            f"Trace file '{trace_file}' does not start with worker_name '{worker_name}'"
+        assert trace_file.endswith(".pt.trace.json.gz"), \
+            f"Trace file '{trace_file}' does not have the expected .gz extension"
+
+        trace_path = os.path.join(tmpdir, trace_file)
+
+        # Verify that the file is valid gzip and valid JSON
+        try:
+            with gzip.open(trace_path, 'rt') as f:
+                trace_data = json.load(f)
+        except Exception as e:
+            raise AssertionError(f"Failed to read or parse trace file: {e}")
+
+        # Verify basic structure of the Chrome trace format
+        assert "traceEvents" in trace_data, "Trace data missing 'traceEvents' key"
+        assert isinstance(trace_data["traceEvents"], list), "'traceEvents' should be a list"
+        
+        # Ensure some events were actually captured
+        assert len(trace_data["traceEvents"]) > 0, "Trace data contains no events"
+
+        print("Test passed: Trace file saved and validated successfully.")
+
+if __name__ == "__main__":
+    test_tensorboard_trace_handler_with_gzip()
+```

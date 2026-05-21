@@ -1,0 +1,109 @@
+Issue ID: 167313
+Title: [Bug][Inductor]addmm -> add(mm)ignores parametersalpha/beta
+Bug Description:
+### 🐛 Describe the bug
+
+Have a look at the following reproduction:
+
+```python
+In [1]: import torch
+
+In [2]: x = torch.rand(2, device="cuda")
+         
+In [3]: a = torch.rand(2, 3, device="cuda")
+
+In [4]: b = torch.rand(3, 2, device="cuda")
+
+In [5]: f = lambda x, a, b: torch.nn.functional.relu(torch.addmm(x, a, b, alpha=0.5, beta=0.5))
+
+In [6]: fc = torch.compile(f)
+
+In [7]: f(x, a, b)
+Out[7]: 
+tensor([[0.7411, 0.6704],
+        [0.5025, 0.4090]], device='cuda:0')
+
+In [8]: fc(x, a, b)
+Out[8]: 
+tensor([[1.4822, 1.3408],
+        [1.0049, 0.8180]], device='cuda:0')
+```
+
+The fx pass replaces `addmm` with `add(mm)` because there is a point-wise user (`relu`). The problem is that the pattern matching ignores parameters `alpha/beta` and `alpha/beta` are being silently replaced with value `1`.
+
+### Versions
+
+Current master
+
+cc @voznesenskym @penguinwu @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @ipiszy @chenyang78 @kadeng @muchulee8 @amjames @chauhang @aakhundov @coconutruben
+
+cc @eellison
+
+Original API Under Test: torch.addmm
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.t
+Similarity score: 0.9966782331466675
+
+Similar API information:
+# Extracted call chain for torch.t
+
+# --- torch._refs.t ---
+def t(a: TensorLikeType):
+    # TODO: Add sparse support
+    # if a.is_sparse:
+    #     sparse_dim = a.sparse_dim()
+    #     dense_dim = a.dense_dim()
+    #     if not (sparse_dim <= 2 and dense_dim == 0):
+    #         raise RuntimeError(
+    #             f"t() expects a tensor with <= 2 sparse and 0 dense dimensions, but got {sparse_dim} sparse and"
+    #             f"{dense_dim} dense dimensions"
+    #         )
+    if a.ndim > 2:
+        raise RuntimeError(
+            f"t() expects a tensor with <= 2 dimensions, but self is {a.ndim}D"
+        )
+    return torch.transpose(a, 0, 0 if a.ndim < 2 else 1)
+
+# --- torch._decomp.register_decomposition ---
+def register_decomposition(
+    aten_op, registry=None, *, type="post_autograd", unsafe=False
+) -> Callable[[Callable[_P, _T]], Callable[_P, _T]]:
+    """
+    A decorator to register a function as a decomposition to the Python
+    decomposition table.  Use it like this::
+
+        @register_decomposition(torch.ops.aten.clamp_min)
+        def clamp_min(x):
+            return torch.clamp(self, min=min)
+
+Original Test Case:
+In [1]: import torch
+
+In [2]: x = torch.rand(2, device="cuda")
+         
+In [3]: a = torch.rand(2, 3, device="cuda")
+
+In [4]: b = torch.rand(3, 2, device="cuda")
+
+In [5]: f = lambda x, a, b: torch.nn.functional.relu(torch.addmm(x, a, b, alpha=0.5, beta=0.5))
+
+In [6]: fc = torch.compile(f)
+
+In [7]: f(x, a, b)
+Out[7]: 
+tensor([[0.7411, 0.6704],
+        [0.5025, 0.4090]], device='cuda:0')
+
+In [8]: fc(x, a, b)
+Out[8]: 
+tensor([[1.4822, 1.3408],
+        [1.0049, 0.8180]], device='cuda:0')
+
+The API torch.t is identified as same-library similar to the original PyTorch API torch.addmm.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

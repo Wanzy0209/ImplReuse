@@ -1,0 +1,64 @@
+```python
+import tensorflow as tf
+
+# Disable eager execution to use SessionRunArgs and the legacy session-based graph mode
+tf.compat.v1.disable_eager_execution()
+
+def test_session_run_args_dynamic_feed():
+    """
+    Test case adapted from the torch.full bug report (Issue 166253).
+    
+    Original Bug: torch.compile cached the value argument of torch.full for float64,
+    causing subsequent calls with different values to return the initial value.
+    
+    Adaptation: In TensorFlow v1 graph mode, SessionRunArgs is used to pass dynamic
+    values (feed_dict) to a static graph. This test verifies that SessionRunArgs
+    correctly updates the input values across multiple runs, ensuring the output
+    changes as expected (i.e., no caching/stuck value bug).
+    """
+    
+    # 1. Define the graph (equivalent to the function definition in PyTorch)
+    # We use a placeholder to mimic the input 'x'
+    x = tf.compat.v1.placeholder(dtype=tf.float64, shape=(), name='input_value')
+    
+    # We mimic torch.full((2,), x, dtype=torch.float64)
+    # tf.fill creates a tensor filled with a given value
+    result_tensor = tf.fill(dims=(2,), value=x, name='full_tensor')
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables (though none are strictly used here besides the op)
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        # 2. First run with value 5.0
+        # Mimics: x1 = torch.tensor(5.0, dtype=torch.float64)
+        args_1 = tf.compat.v1.train.SessionRunArgs(
+            fetches=result_tensor,
+            feed_dict={x: 5.0}
+        )
+        output_1 = sess.run(args_1)
+        
+        # Expected: [5., 5.]
+        assert tf.reduce_all(output_1 == 5.0).eval(), f"First run failed: {output_1}"
+        print(f"Run 1: {output_1}")
+
+        # 3. Second run with value 10.0
+        # Mimics: x2 = torch.tensor(10.0, dtype=torch.float64)
+        args_2 = tf.compat.v1.train.SessionRunArgs(
+            fetches=result_tensor,
+            feed_dict={x: 10.0}
+        )
+        output_2 = sess.run(args_2)
+        
+        # Expected: [10., 10.]
+        # The original bug would cause this to be [5., 5.]
+        assert tf.reduce_all(output_2 == 10.0).eval(), f"Second run failed (stuck value?): {output_2}"
+        print(f"Run 2: {output_2}")
+
+        # 4. Explicit check to ensure values changed (Reproducing the bug condition check)
+        assert not tf.reduce_all(output_1 == output_2).eval(), \
+            "Bug detected: Output did not change between runs with different inputs."
+
+if __name__ == "__main__":
+    test_session_run_args_dynamic_feed()
+    print("Test passed.")
+```

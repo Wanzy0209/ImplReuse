@@ -1,0 +1,59 @@
+```python
+import tensorflow as tf
+import unittest
+
+class TestTPUBatchParallel(unittest.TestCase):
+    def test_batch_parallel_to_cpu(self):
+        """
+        Adapted from PyTorch test_triton_kernel_to_cpu.
+        Verifies that tf.compat.v1.tpu.batch_parallel correctly executes
+        a computation on TPU and returns results that can be used on the CPU.
+        """
+        # Initialize TPU
+        try:
+            resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+            tf.config.experimental_connect_to_cluster(resolver)
+            tf.tpu.experimental.initialize_tpu_system(resolver)
+            strategy = tf.distribute.TPUStrategy(resolver)
+            num_shards = strategy.num_replicas_in_sync
+        except (ValueError, tf.errors.NotFoundError):
+            self.skipTest("TPU hardware not found")
+            return
+
+        # Define inputs
+        x = tf.random.normal((4, 4))
+        y = tf.random.normal((4, 4))
+
+        # Eager execution (CPU) - The ground truth
+        # Mimics: out = x + y; out_cpu = out + 1
+        eager_out = (x + y) + 1
+
+        # The "User-defined kernel" logic to be run on TPU
+        # Mimics the Triton kernel add_kernel
+        def add_kernel(x_shard, y_shard):
+            return x_shard + y_shard
+
+        @tf.function
+        def f(x, y):
+            # Run the "kernel" on TPU using batch_parallel
+            # This mimics the torch.compile execution path
+            out = tf.compat.v1.tpu.batch_parallel(
+                add_kernel,
+                [x, y],
+                num_shards=num_shards
+            )
+            
+            # Move to CPU and perform operation
+            # In TensorFlow, using the TPU tensor result in a standard operation
+            # implicitly handles the device transfer (similar to .cpu() in PyTorch)
+            out_cpu = out + 1
+            return out_cpu
+
+        compiled_out = f(x, y)
+
+        # Verify correctness
+        self.assertAllClose(eager_out, compiled_out)
+
+if __name__ == "__main__":
+    tf.test.main()
+```

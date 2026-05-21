@@ -1,0 +1,48 @@
+```python
+import torch
+import unittest
+
+# Note: make_custom_pool is a helper function referenced in the bug report.
+# It is assumed to be available in the test environment (e.g., from a C++ extension).
+# For the purpose of this standalone test case, we define a placeholder.
+# In a real execution environment, this must return a valid handle to a C++ MemoryPool.
+def make_custom_pool(index):
+    return index
+
+class TestMemPoolPatterns(unittest.TestCase):
+    def test_temporary_mempool_object(self):
+        """
+        Test case for Issue 167745: Failures in basic custom MemPool patterns.
+        
+        This test reproduces the failing pattern where a temporary MemPool object
+        is created inline within the use_mem_pool context manager. It leverages
+        torch.random.initial_seed (the similar API) to ensure CUDA initialization
+        and verify that the memory pool operations do not corrupt the global CUDA state.
+        """
+        # Leverage torch.random.initial_seed to eagerly initialize CUDA
+        # and capture the initial state. This mirrors the initialization pattern
+        # seen in the similar API's implementation.
+        seed_before = torch.random.initial_seed()
+
+        # Reproduce Test 1 from the bug report
+        pool1 = make_custom_pool(1)
+
+        # The bug is specifically about the lifetime of the MemPool object
+        # created here as a temporary argument.
+        with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):
+            # Perform allocation within the custom pool context
+            x1 = torch.randn(8, device="cuda")
+            self.assertIsNotNone(x1)
+        
+        del x1
+
+        # Verify that the CUDA context remains valid and the random state
+        # (which resides in CUDA memory) has not been corrupted by the
+        # custom MemPool operations.
+        seed_after = torch.random.initial_seed()
+        self.assertEqual(seed_before, seed_after, 
+                         "CUDA state corruption detected: random seed mismatch")
+
+if __name__ == '__main__':
+    unittest.main()
+```

@@ -1,0 +1,106 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Mimicking the C++ structure c10::CachingDeviceAllocator::DeviceStats
+# as described in the Issue's proposed implementation.
+class DeviceStats:
+    def __init__(self):
+        self.allocated_bytes = 0
+        self.reserved_bytes = 0
+        self.num_alloc_retries = 0
+
+    def increase(self, nbytes):
+        """Corresponds to stats_.allocated_bytes[0].increase(nbytes) in C++."""
+        self.allocated_bytes += nbytes
+        self.reserved_bytes += nbytes
+
+    def reset_accumulated(self):
+        """Corresponds to reset_accumulated() in C++."""
+        self.allocated_bytes = 0
+        self.reserved_bytes = 0
+        self.num_alloc_retries = 0
+
+# Mimicking the OpenRegDeviceAllocator implementation
+class OpenRegDeviceAllocator:
+    def __init__(self):
+        self.stats_ = DeviceStats()
+        self.initialized_ = False
+
+    def allocate(self, nbytes):
+        """
+        Simulates the allocate() override from the C++ code.
+        This is where the bug fix (adding stats tracking) is applied.
+        """
+        if nbytes > 0:
+            # Simulate orMalloc(&data, nbytes);
+            # The fix adds the following lines:
+            self.stats_.increase(nbytes)
+            return np.zeros(nbytes) # Dummy allocation for testing
+        return None
+
+    def get_device_stats(self, device_index):
+        """
+        Simulates c10::DeviceAllocator::getDeviceStats().
+        This API was missing/empty in the original bug report context.
+        """
+        return self.stats_
+
+    def reset_accumulated_stats(self, device_index):
+        """
+        Simulates c10::DeviceAllocator::resetAccumulatedStats().
+        """
+        self.stats_.reset_accumulated()
+
+def test_openreg_memory_stats_with_exp():
+    """
+    Test case to verify that the OpenRegDeviceAllocator correctly tracks
+    memory statistics when performing operations similar to tf.compat.v1.math.exp.
+    
+    This test preserves the logic of the bug report (adding stats to the allocator)
+    and leverages the similar API (tf.compat.v1.math.exp) as the workload.
+    """
+    allocator = OpenRegDeviceAllocator()
+
+    # 1. Setup input data
+    # Using a small tensor to keep the test minimal
+    x = tf.constant([1.0, 2.0], dtype=tf.float32)
+
+    # 2. Calculate expected memory footprint
+    # float32 is 4 bytes. 2 elements = 8 bytes.
+    expected_bytes = x.dtype.size * x.shape.num_elements()
+
+    # 3. Perform allocation (simulating the internal allocation for the result of exp)
+    # The Issue highlights that stats were missing. The fix adds stats_.increase(nbytes).
+    # We manually invoke the allocator's logic here to simulate the memory usage of the operation.
+    allocator.allocate(expected_bytes)
+
+    # 4. Perform the actual operation using the Similar API
+    # This represents the workload that consumes the memory we just tracked.
+    # Using tf.compat.v1.math.exp as specified in the Similar API information.
+    y = tf.compat.v1.math.exp(x)
+
+    # 5. Verify the operation result
+    expected_vals = np.exp([1.0, 2.0])
+    np.testing.assert_array_almost_equal(y.numpy(), expected_vals)
+
+    # 6. Verify the Statistics (The core of the Issue)
+    # Before the fix, these would be 0 or non-existent.
+    # After the fix (mimicked here), they should reflect the allocation.
+    stats = allocator.get_device_stats(device_index=0)
+
+    assert stats.allocated_bytes == expected_bytes, \
+        f"Allocated bytes mismatch. Expected {expected_bytes}, got {stats.allocated_bytes}"
+    assert stats.reserved_bytes == expected_bytes, \
+        f"Reserved bytes mismatch. Expected {expected_bytes}, got {stats.reserved_bytes}"
+
+    # 7. Verify reset functionality (part of the proposed implementation)
+    allocator.reset_accumulated_stats(device_index=0)
+    stats_after_reset = allocator.get_device_stats(device_index=0)
+    assert stats_after_reset.allocated_bytes == 0, "Stats were not reset correctly."
+
+    print("Test Passed: Memory statistics are correctly tracked for tf.compat.v1.math.exp workload.")
+
+if __name__ == "__main__":
+    test_openreg_memory_stats_with_exp()
+```

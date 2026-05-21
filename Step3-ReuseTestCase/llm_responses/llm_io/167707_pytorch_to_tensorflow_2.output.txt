@@ -1,0 +1,59 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# The original bug report (Issue 167707) describes a regression where 
+# torch.profiler.profile fails to save a trace file correctly.
+# 
+# The similar API provided is tf.compat.v1.nn.space_to_depth, which is a 
+# tensor manipulation operation (rearranging data blocks from spatial to depth).
+# 
+# Since the APIs are functionally different (Profiling I/O vs. Tensor Math),
+# we adapt the test case to verify the correct behavior of the TensorFlow API
+# (tensor transformation), mirroring the structure of the original test:
+# 1. Setup inputs (mimicking device placement).
+# 2. Execute the operation.
+# 3. Verify the output.
+
+def test_space_to_depth():
+    # Setup: Create input tensor
+    # Original: x = torch.randn(2, device="cuda")
+    # Adapted: Create a 4D tensor (batch, height, width, channels) representing an image.
+    # We use a simple 2x2 block to verify the transformation logic clearly.
+    input_data = np.array([[[[1.0], [2.0]],
+                            [[3.0], [4.0]]]], dtype=np.float32)
+    
+    # Attempt to use GPU if available, similar to the original "device='cuda'"
+    device_name = '/GPU:0' if tf.config.list_physical_devices('GPU') else '/CPU:0'
+    
+    with tf.device(device_name):
+        input_tensor = tf.constant(input_data)
+        
+        # Operation: Execute the API
+        # Original: y = x + 21; z = x * 15 (operations inside profile)
+        # Adapted: Apply space_to_depth transformation
+        block_size = 2
+        output_tensor = tf.compat.v1.nn.space_to_depth(
+            input_tensor, 
+            block_size=block_size,
+            data_format="NHWC" # Default format
+        )
+        
+        # Verification: Check the result
+        # Original: Implicitly checks if the trace file is valid/broken
+        # Adapted: Explicitly check if the tensor shape and values are correct
+        
+        # Expected shape: [1, 1, 1, 4] (Height/Width divided by block_size, Depth multiplied by block_size^2)
+        expected_shape = [1, 1, 1, 4]
+        assert list(output_tensor.shape) == expected_shape, \
+            f"Shape mismatch. Expected {expected_shape}, got {list(output_tensor.shape)}"
+        
+        # Expected values: The spatial data [1, 2, 3, 4] should be moved to the depth channel
+        expected_values = np.array([[[[1.0, 2.0, 3.0, 4.0]]]], dtype=np.float32)
+        
+        np.testing.assert_array_almost_equal(output_tensor.numpy(), expected_values)
+        print(f"Test passed on {device_name}. Output shape and values are correct.")
+
+if __name__ == "__main__":
+    test_space_to_depth()
+```

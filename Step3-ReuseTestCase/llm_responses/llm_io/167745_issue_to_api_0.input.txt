@@ -1,0 +1,100 @@
+Issue ID: 167745
+Title: Umbrella bug: failures in basic custom MemPool patterns
+Bug Description:
+### 🐛 Describe the bug
+
+This is a bug to document several problematic patterns with custom MemPool allocations.
+For now, these simple tests do not include interactions with CUDA graph pools, but at the moment, custom MemPools behave very similarly to CUDA graph pools, so hopefully the current tests are sufficient for now.
+Additionally, the tests are not checking for thread-safety (for now), which will be added in the future as this was an issue previously (https://github.com/pytorch/pytorch/issues/152861).
+
+All tests can be found in this repo (which has two branches as explained per below): https://github.com/MatthiasKohl/pytorch-mempool-litmus
+
+Failing tests due to temporary `MemPool` objects:
+
+Test 1:
+
+```python
+pool1 = make_custom_pool(1)
+
+with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):
+    print("Pool 1 ctx start")
+    x1 = torch.randn(8, device="cuda")
+    print("Pool 1 ctx end")
+del x1
+```
+
+Test 2:
+
+```python
+pool1 = make_custom_pool(1)
+pool2 = make_custom_pool(2)
+
+x1 = torch.randn(8, device="cuda")
+with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):
+    print("Pool 1 ctx start")
+    with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool2)):
+        print("Pool 2 ctx start")
+        print("Pool 2 ctx end")
+    print("Pool 1 ctx end")
+del x1
+```
+
+For these, I think an important question is: should the above pattern be allowed at all in python?
+IMO, it should: From the point of view of the user, it should not be their responsibility to keep track of when exact
+...
+
+Original API Under Test: torch.cuda.MemPool
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.backends.cusparselt.version
+Similarity score: 0.990038275718689
+
+Similar API information:
+# Extracted call chain for torch.backends.cusparselt.version
+
+# --- torch.backends.cusparselt.version ---
+def version() -> Optional[int]:
+    """Return the version of cuSPARSELt"""
+    if not _init():
+        return None
+    return __cusparselt_version
+
+# --- benchmarks.operator_benchmark.pt.qbatchnorm_test.QBatchNorm1dBenchmark._init ---
+def _init():
+    r"""Register prims as implementation of var_mean and group_norm."""
+    global _lib
+
+    if _lib is not None or not is_built():
+        return
+
+    from torch._decomp.decompositions import native_group_norm_backward
+    from torch._refs import native_group_norm
+
+    _lib = _Library("aten", "IMPL")  # noqa: TOR901
+    _lib.impl("native_group_norm", native_group_norm, "MPS")
+    _lib.impl("native_group_norm_backward", native_group_norm_backward, "MPS")
+
+# --- _lib.impl ---
+def impl(qualname, *, device_types=("cpu", "cuda"), func=None):
+    r"""Register an implementation for a device type for this custom op.
+
+    If the op is passed multiple Tensor inputs with different device
+    types, it will dispatch to the registered implementation for the highest
+
+Original Test Case:
+pool1 = make_custom_pool(1)
+
+with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):
+    print("Pool 1 ctx start")
+    x1 = torch.randn(8, device="cuda")
+    print("Pool 1 ctx end")
+del x1
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

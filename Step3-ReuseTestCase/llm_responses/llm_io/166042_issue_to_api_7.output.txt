@@ -1,0 +1,60 @@
+```python
+import torch
+import torch.nn.functional as F
+
+def test_embedding_indices_dtype_check():
+    """
+    Test case derived from Issue 166042.
+    The issue reports an eager/compile divergence and an assertion failure
+    related to the dtype of indices in an embedding operation.
+    
+    This test leverages torch.backends.cuda.is_built (Similar API) to ensure
+    the test environment matches the bug report's requirements (CUDA).
+    """
+    
+    # Leverage the similar API to check for CUDA availability
+    # The bug report explicitly uses device=cuda
+    if not torch.backends.cuda.is_built():
+        print("Skipping test: CUDA is not built.")
+        return
+
+    # Configuration from the bug report
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch.manual_seed(1352030645)
+
+    device = torch.device("cuda")
+
+    # Setup data mimicking the bug report's usage of bfloat16
+    # The bug report involves a chain of matmuls resulting in indices
+    # that might not be integers. Here we simulate the problematic input.
+    embedding_weight = torch.randn(100, 16, dtype=torch.bfloat16, device=device)
+    
+    # Create indices with bfloat16 dtype to trigger the assertion:
+    # assert "int" in str(indices.get_dtype())
+    # This simulates the potential output of the matmul chain in the fuzzer
+    # if it were incorrectly cast or used as indices.
+    invalid_indices = torch.tensor([1, 2, 3, 4], dtype=torch.bfloat16, device=device)
+
+    # Define the function to compile
+    def embedding_op(weight, indices):
+        return F.embedding(weight, indices)
+
+    # Attempt to compile and run
+    # The bug title mentions "Eager/Compile Divergence", so we test the compiled path.
+    try:
+        compiled_op = torch.compile(embedding_op)
+        result = compiled_op(embedding_weight, invalid_indices)
+        # If we reach here, the behavior might differ from the assertion expected in the bug
+        print("Test passed (or error was silently handled/transformed).")
+    except (AssertionError, RuntimeError) as e:
+        # Check if the error matches the bug report's assertion pattern
+        error_str = str(e)
+        if "int" in error_str.lower() and "dtype" in error_str.lower():
+            print(f"Caught expected assertion/error related to indices dtype: {e}")
+        else:
+            print(f"Caught an unexpected error: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_embedding_indices_dtype_check()
+```

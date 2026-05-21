@@ -1,0 +1,67 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+import datetime
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_new_group(rank, world_size):
+    setup(rank, world_size)
+
+    # Test 1: Create a new group with all ranks
+    # This verifies the basic functionality of torch.distributed.new_group
+    try:
+        group_all = dist.new_group()
+        # Verify the group works by performing a barrier
+        dist.barrier(group=group_all)
+        if rank == 0:
+            print("Test 1 Passed: Default new_group creation successful.")
+    except Exception as e:
+        print(f"Rank {rank}: Test 1 Failed with error: {e}")
+
+    # Test 2: Create a new group with a subset of ranks
+    # This verifies the 'ranks' argument handling
+    if world_size >= 2:
+        try:
+            ranks = [0, 1]
+            if rank in ranks:
+                subgroup = dist.new_group(ranks=ranks)
+                # Verify the subgroup works with a collective operation
+                tensor = torch.ones(1) * rank
+                dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=subgroup)
+                # Sum of rank 0 and 1 is 1
+                assert tensor.item() == 1, f"Subgroup reduction failed: expected 1, got {tensor.item()}"
+                if rank == 0:
+                    print("Test 2 Passed: Subgroup new_group creation and operation successful.")
+        except Exception as e:
+            print(f"Rank {rank}: Test 2 Failed with error: {e}")
+
+    # Test 3: Create a new group with a specific timeout
+    # This verifies the 'timeout' argument handling
+    try:
+        timeout_group = dist.new_group(timeout=datetime.timedelta(seconds=10))
+        dist.barrier(group=timeout_group)
+        if rank == 0:
+            print("Test 3 Passed: new_group with timeout successful.")
+    except Exception as e:
+        print(f"Rank {rank}: Test 3 Failed with error: {e}")
+
+    cleanup()
+
+def main():
+    world_size = 2
+    # Spawn 2 processes to simulate a distributed environment
+    mp.spawn(test_new_group, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()
+```

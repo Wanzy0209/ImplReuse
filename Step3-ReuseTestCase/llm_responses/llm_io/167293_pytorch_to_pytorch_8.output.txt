@@ -1,0 +1,88 @@
+```python
+import torch
+import torch.library
+from torch.testing import assert_close
+
+def test_register_vmap_dynamic_sequence_handling():
+    """
+    Test case for torch.library.register_vmap.
+    
+    This test verifies that a custom operator mimicking transformer cache operations
+    (which involve dynamic sequence lengths) can be successfully vectorized using
+    torch.vmap via a registered vmap fallback.
+    
+    Context: Issue 167293 highlights failures in torch.export with dynamic sequence 
+    constraints. This test ensures the similar API, torch.library.register_vmap, 
+    correctly handles batching logic for operations with dynamic dimension slicing.
+    """
+
+    # 1. Define a custom operator that simulates slicing a key cache based on sequence length.
+    # This mirrors the 'past_key_values' logic in the bug report.
+    def cache_slice_impl(key_cache: torch.Tensor, seq_len: int) -> torch.Tensor:
+        # key_cache shape: [Batch, Heads, Max_Seq, Head_Dim]
+        # We slice the sequence dimension (dim 2) up to seq_len
+        return key_cache[..., :seq_len, :]
+
+    # 2. Create a custom library and define the operator
+    lib = torch.library.Library("test_cache_lib", "DEF")
+    lib.define("cache_slice(Tensor key_cache, int seq_len) -> Tensor")
+
+    # 3. Register the default implementation
+    lib.impl("cache_slice", cache_slice_impl, "CompositeExplicitAutograd")
+
+    # 4. Register the vmap implementation (The API under test)
+    def cache_slice_vmap(info, in_dims, key_cache, seq_len):
+        """
+        vmap rule for cache_slice.
+        in_dims: (batch_dim_for_key_cache, batch_dim_for_seq_len)
+        Since seq_len is an int, its batch_dim is None.
+        """
+        batch_dim = in_dims[0]
+        
+        # If the input is not batched, just call the impl
+        if batch_dim is None:
+            return cache_slice_impl(key_cache, seq_len)
+            
+        # If the input is batched, we rely on the fact that the slicing dimension
+        # (sequence length) is distinct from the batch dimension.
+        # The implementation cache_slice_impl uses ... which handles arbitrary batch dims.
+        return cache_slice_impl(key_cache, seq_len)
+
+    torch.library.register_vmap("test_cache_lib::cache_slice", cache_slice_vmap)
+
+    # 5. Execute the test
+    batch_size = 4
+    num_heads = 8
+    max_seq_len = 128
+    head_dim = 64
+    
+    # Create a dummy cache tensor
+    # Shape: [Batch, Heads, Max_Seq, Head_Dim]
+    key_cache = torch.randn(batch_size, num_heads, max_seq_len, head_dim)
+    
+    # Define a dynamic sequence length to slice to
+    current_seq_len = 64
+    
+    # Apply torch.vmap to the custom operator
+    # We map over the batch dimension (0). The seq_len argument is not batched (None).
+    # This tests if the registered vmap rule correctly handles the batching.
+    try:
+        result = torch.vmap(torch.ops.test_cache_lib.cache_slice, in_dims=(0, None))(key_cache, current_seq_len)
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        raise
+
+    # 6. Assertions
+    # Expected shape: [Batch, Heads, Current_Seq, Head_Dim]
+    expected_shape = (batch_size, num_heads, current_seq_len, head_dim)
+    assert result.shape == expected_shape, f"Shape mismatch: got {result.shape}, expected {expected_shape}"
+    
+    # Verify values match the expected slicing behavior
+    expected_output = key_cache[..., :current_seq_len, :]
+    assert_close(result, expected_output)
+    
+    print("Test passed: torch.library.register_vmap successfully handled dynamic sequence slicing.")
+
+if __name__ == "__main__":
+    test_register_vmap_dynamic_sequence_handling()
+```

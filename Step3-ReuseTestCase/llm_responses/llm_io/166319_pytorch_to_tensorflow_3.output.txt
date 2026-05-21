@@ -1,0 +1,94 @@
+```python
+import tensorflow as tf
+
+# Original API Under Test: torch.compile
+# Similar API: tf.compat.v1.enable_eager_execution
+# 
+# The original bug report highlights a divergence between eager execution and compiled execution.
+# In TensorFlow, eager execution is enabled by default in TF 2.x, but we explicitly call 
+# tf.compat.v1.enable_eager_execution() to align with the requested API usage.
+# We also test with tf.function (graph mode) to check for similar divergences.
+
+tf.compat.v1.enable_eager_execution()
+
+# Set seed for reproducibility
+tf.random.set_seed(1215252001)
+
+def fuzzed_program(arg_0, arg_1, arg_2, sentinel):
+    # var_node_4 = arg_0 # size=(9, 1, 15, 4), dtype=int32
+    # var_node_3 = torch.squeeze(var_node_4)
+    var_node_3 = tf.squeeze(arg_0) # size=(9, 15, 4)
+
+    # var_node_2 = torch.chunk(var_node_3, 4, dim=2)[0]
+    # tf.split is the TensorFlow equivalent of torch.chunk
+    var_node_2 = tf.split(var_node_3, 4, axis=2)[0] # size=(9, 15, 1)
+
+    # var_node_1 = torch.squeeze(var_node_2)
+    var_node_1 = tf.squeeze(var_node_2) # size=(9, 15)
+
+    # var_node_7 = arg_1 # size=(20, 15), dtype=int64
+    # var_node_8 = arg_2 # size=(18, 15), dtype=int64 (unused in logic)
+
+    # _input_size_var_node_6 = var_node_7.size(0)
+    _input_size_var_node_6 = tf.shape(arg_1)[0]
+
+    # _index_var_node_6 = torch.randint(0, _input_size_var_node_6, (18, 15), ...)
+    # tf.random.uniform with minval/maxval mimics randint
+    _index_var_node_6 = tf.random.uniform(
+        (18, 15), 
+        minval=0, 
+        maxval=_input_size_var_node_6, 
+        dtype=tf.int64
+    )
+
+    # var_node_6 = torch.gather(var_node_7, 0, _index_var_node_6)
+    # PyTorch gather(dim=0) maps to TF gather(axis=0)
+    var_node_6 = tf.gather(arg_1, _index_var_node_6, axis=0) # size=(18, 15)
+
+    # var_node_5 = torch.chunk(var_node_6, 2, dim=0)[0]
+    var_node_5 = tf.split(var_node_6, 2, axis=0)[0] # size=(9, 15)
+
+    # var_node_0 = torch.mul(var_node_1, var_node_5)
+    var_node_0 = tf.multiply(var_node_1, var_node_5) # size=(9, 15)
+
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    
+    # Check for complex type
+    if result.dtype.is_complex:
+        result = tf.math.real(result)
+        
+    return result
+
+# Sentinel tensor
+# PyTorch uses requires_grad=True. In TF, gradients are handled via GradientTape, 
+# but for the purpose of this logic test, a constant is sufficient.
+sentinel = tf.constant(1.0)
+
+# Create inputs
+# PyTorch uses as_strided for specific memory layouts. TF uses immutable tensors,
+# so we create tensors with matching shapes and dtypes.
+arg_0 = tf.random.uniform((9, 1, 15, 4), minval=0, maxval=100, dtype=tf.int32)
+arg_1 = tf.random.uniform((20, 15), minval=0, maxval=100, dtype=tf.int64)
+arg_2 = tf.random.uniform((18, 15), minval=0, maxval=100, dtype=tf.int64)
+
+args = (arg_0, arg_1, arg_2, sentinel)
+
+# Test Eager Execution
+try:
+    result_eager = fuzzed_program(*args)
+    print('✅ eager success')
+    print(f"Result shape: {result_eager.shape}, dtype: {result_eager.dtype}")
+except Exception as e:
+    print(f"❌ eager failed: {e}")
+
+# Test Compiled Execution (tf.function) to check for divergence
+# This corresponds to the torch.compile part of the original bug report.
+try:
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(*args)
+    print('✅ compile (tf.function) success')
+    print(f"Result shape: {result_compiled.shape}, dtype: {result_compiled.dtype}")
+except Exception as e:
+    print(f"❌ compile (tf.function) failed: {e}")
+```

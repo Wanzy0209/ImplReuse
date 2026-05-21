@@ -1,0 +1,95 @@
+Issue ID: 166279
+Title: [Fuzzer][Eager/Compile Divergence] assert len(input_size) == len(new_size)
+Bug Description:
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1166094474)
+
+def fuzzed_program(arg_0, arg_1, arg_2, arg_3, sentinel):
+    var_node_3 = torch.full((12,), False, dtype=torch.bool) # size=(12,), stride=(97,), dtype=bool, device=cuda
+    var_node_2 = torch.chunk(var_node_3, 4, dim=0)[0] # size=(3,), stride=(1,), dtype=bool, device=cuda
+    var_node_6 = arg_0 # size=(12,), stride=(1,), dtype=bool, device=cuda
+    var_node_7 = arg_1 # size=(10,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_5 = var_node_6.size(0)
+    _index_var_node_5 = torch.randint(0, _input_size_var_node_5, (10,), device=var_node_6.device)
+    var_node_5 = torch.gather(var_node_6, 0, _index_var_node_5) # size=(10,), stride=(1,), dtype=bool, device=cuda
+    var_node_4 = torch.chunk(var_node_5, 2, dim=0)[0] # size=(5,), stride=(1,), dtype=bool, device=cuda
+    var_node_10 = arg_2 # size=(6, 4), stride=(4, 1), dtype=bool, device=cuda
+    var_node_9 = torch.chunk(var_node_10, 4, dim=1)[0] # size=(6, 1), stride=(1, 1), dtype=bool, device=cuda
+    var_node_8 = torch.squeeze(var_node_9) # size=(6,), stride=(1,), dtype=bool, device=cuda
+    var_node_1 = torch.cat([var_node_2, var_node_4, var_node_8], dim=0) # size=(14,), stride=(1,), dtype=bool, device=cuda
+    var_node_11 = arg_3 # size=(2,), stride=(1,), dtype=bool, device=cuda
+    var_node_0 = torch.cat([var_node_1, var_node_11], dim=0) # size=(16,), stride=(1,), dtype=bool, device=cuda
+    # Ensure gradient c
+...
+
+Original API Under Test: torch.chunk
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+Similarity score: 0.9811367392539978
+
+Similar API information:
+# Extracted call chain for torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+
+# --- torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed ---
+def fp16_bf16_reduction_math_sdp_allowed():
+    r"""
+    .. warning:: This flag is beta and subject to change.
+
+    Returns whether fp16/bf16 reduction in math scaled dot product attention is enabled or not.
+    """
+    return torch._C._get_math_sdp_allow_fp16_bf16_reduction()
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1166094474)
+
+def fuzzed_program(arg_0, arg_1, arg_2, arg_3, sentinel):
+    var_node_3 = torch.full((12,), False, dtype=torch.bool) # size=(12,), stride=(97,), dtype=bool, device=cuda
+    var_node_2 = torch.chunk(var_node_3, 4, dim=0)[0] # size=(3,), stride=(1,), dtype=bool, device=cuda
+    var_node_6 = arg_0 # size=(12,), stride=(1,), dtype=bool, device=cuda
+    var_node_7 = arg_1 # size=(10,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_5 = var_node_6.size(0)
+    _index_var_node_5 = torch.randint(0, _input_size_var_node_5, (10,), device=var_node_6.device)
+    var_node_5 = torch.gather(var_node_6, 0, _index_var_node_5) # size=(10,), stride=(1,), dtype=bool, device=cuda
+    var_node_4 = torch.chunk(var_node_5, 2, dim=0)[0] # size=(5,), stride=(1,), dtype=bool, device=cuda
+    var_node_10 = arg_2 # size=(6, 4), stride=(4, 1), dtype=bool, device=cuda
+    var_node_9 = torch.chunk(var_node_10, 4, dim=1)[0] # size=(6, 1), stride=(1, 1), dtype=bool, device=cuda
+    var_node_8 = torch.squeeze(var_node_9) # size=(6,), stride=(1,), dtype=bool, device=cuda
+    var_node_1 = torch.cat([var_node_2, var_node_4, var_node_8], dim=0) # size=(14,), stride=(1,), dtype=bool, device=cuda
+    var_node_11 = arg_3 # size=(2,), stride=(1,), dtype=bool, device=cuda
+    var_node_0 = torch.cat([var_node_1, var_node_11], dim=0) # size=(16,), stride=(1,), dtype=bool, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(0, 2, (12,), dtype=torch.int8).bool(), (12,), (1,))
+arg_1 = torch.as_strided(torch.randint(5, 30, (10,)).to(torch.int64), (10,), (1,))
+arg_2 = torch.as_strided(torch.randint(0, 2, (24,), dtype=torch.int8).bool(), (6, 4), (4, 1))
+arg_3 = torch.as_strided(torch.randint(0, 2, (2,), dtype=torch.int8).bool(), (2,), (1,))
+
+args = (arg_0, arg_1, arg_2, arg_3) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.

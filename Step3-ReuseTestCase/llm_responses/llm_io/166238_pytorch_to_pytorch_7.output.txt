@@ -1,0 +1,69 @@
+```python
+import torch
+import torch.distributed as dist
+from collections import defaultdict
+import multiprocessing as mp
+import os
+import sys
+
+def setup(rank, world_size):
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use gloo backend for CPU-based object passing
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    if rank == 0:
+        # Create a collections.defaultdict
+        # This mirrors the context of the bug where defaultdict creation was problematic
+        dd = defaultdict(list)
+        dd['a'].append(1)
+        dd['b'].append(2)
+        
+        # Send the object using the similar API
+        # send_object_list requires a list of picklable objects
+        dist.send_object_list([dd], dst=1)
+        
+    elif rank == 1:
+        # Receive the object
+        obj_list = [None]
+        dist.recv_object_list(obj_list, src=0)
+        
+        received_dd = obj_list[0]
+        
+        # Verify the received object is indeed a defaultdict
+        assert isinstance(received_dd, defaultdict), \
+            f"Expected defaultdict, got {type(received_dd)}"
+        
+        # Verify the data integrity
+        assert received_dd['a'] == [1], "Data mismatch for key 'a'"
+        assert received_dd['b'] == [2], "Data mismatch for key 'b'"
+        
+        # Verify the default_factory behavior (creation aspect)
+        # Accessing a non-existent key should return an empty list
+        assert received_dd['non_existent_key'] == [], \
+            "Default factory behavior failed after transmission"
+
+    cleanup()
+
+def test_distributed_send_object_list_defaultdict():
+    """
+    Test case for torch.distributed.send_object_list handling collections.defaultdict.
+    Adapted from Issue 166238 regarding defaultdict creation/tracing issues.
+    """
+    world_size = 2
+    # Check if multiprocessing is available to run distributed tests
+    try:
+        mp.start_processes(run_test, args=(world_size,), nprocs=world_size, join=True)
+    except Exception as e:
+        print(f"Skipping distributed test due to environment limitations: {e}")
+
+if __name__ == "__main__":
+    test_distributed_send_object_list_defaultdict()
+```

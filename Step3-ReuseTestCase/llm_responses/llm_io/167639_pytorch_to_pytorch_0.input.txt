@@ -1,0 +1,137 @@
+Issue ID: 167639
+Title: torch.compile incompatible with CUDA Graph capture due to RNG state access during compilation
+Bug Description:
+### 🐛 Describe the bug
+
+Description:
+When using torch.compile() inside a CUDA Graph capture context, the compilation process fails because it attempts to access CUDA RNG state, which is prohibited during graph capture. This prevents users from combining two important PyTorch performance optimization features.
+code:
+```
+import torch
+import torch.nn as nn
+
+class TestModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(10, 20)
+        self.fc2 = nn.Linear(20, 1)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+def get_default_model():
+    return TestModel()
+
+def get_sample_inputs():
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    x = torch.randn(4, 10, requires_grad=True, device=device)
+    return (x,)
+
+def main():
+    model = get_default_model()
+    inputs = get_sample_inputs()
+    device = inputs[0].device
+    model.to(device)
+    model.eval()
+
+    with torch.no_grad():
+        original_output = model(*inputs)
+        print('Original model output shape:', original_output.shape)
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.compile
+Similarity score: 1.0
+
+Similar API information:
+# Extracted call chain for torch.compile
+
+# --- torch.compile ---
+def compile(
+    model: _Optional[_Callable] = None,
+    *,
+    fullgraph: builtins.bool = False,
+    dynamic: _Optional[builtins.bool] = None,
+    backend: _Union[str, _Callable] = "inductor",
+    mode: _Union[str, None] = None,
+    options: _Optional[dict[str, _Union[str, builtins.int, builtins.bool]]] = None,
+    disable: builtins.bool = False,
+) -> _Union[
+    _Callable[[_Callable[_InputT, _RetT]], _Callable[_InputT, _RetT]],
+    _Callable[_InputT, _RetT],
+]:
+    """
+    Optimizes given model/function using TorchDynamo and specified backend.
+    If you are compiling an :class:`torch.nn.Module`, you can also use :meth:`torch.nn.Module.compile`
+    to compile the module inplace without changing its structure.
+
+    Concretely, for every frame executed within the compiled region, we will attempt
+    to compile it and cache the compiled result on the code object for future
+    use.  A single frame may be compiled multiple times if previous compiled
+    results are not applicable for subsequent calls (this is called a "guard
+    failure), you can use TORCH_LOGS=guards to debug these situations.
+    Multiple compiled re
+...
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+class TestModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(10, 20)
+        self.fc2 = nn.Linear(20, 1)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+def get_default_model():
+    return TestModel()
+
+def get_sample_inputs():
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    x = torch.randn(4, 10, requires_grad=True, device=device)
+    return (x,)
+
+def main():
+    model = get_default_model()
+    inputs = get_sample_inputs()
+    device = inputs[0].device
+    model.to(device)
+    model.eval()
+
+    with torch.no_grad():
+        original_output = model(*inputs)
+        print('Original model output shape:', original_output.shape)
+
+        if torch.cuda.is_available():
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                compiled_model = torch.compile(model)
+                captured_output = compiled_model(*inputs)
+            graph_output = graph.run()
+            print('Captured graph output shape:', graph_output.shape)
+            assert torch.allclose(original_output, graph_output), "Output mismatch between original and graph execution"
+        else:
+            print("CUDA not available, skipping graph capture")
+
+if __name__ == "__main__":
+    main()
+
+The API torch.compile is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.

@@ -1,0 +1,56 @@
+```python
+import torch
+from torch.distributed.tensor import distribute_tensor, Replicate
+from torch.distributed.tensor.experimental import register_sharding
+from torch.utils.checkpoint import set_checkpoint_debug_enabled
+from torch.testing._internal.distributed._tensor.common_dtensor import DTensorTestBase, with_comms
+
+aten = torch.ops.aten
+
+class TestRegisterShardingKwargs(DTensorTestBase):
+    @with_comms
+    def test_register_sharding_with_tensor_kwargs(self):
+        """
+        Tests sharding propagation for custom operations with Tensor parameters in kwargs.
+        Leverages set_checkpoint_debug_enabled to ensure propagation logic is robust
+        within different global state contexts.
+        """
+        mesh = self.build_device_mesh()
+
+        # Setup input tensors
+        x = torch.randn(4, 4, device="cuda")
+        x = distribute_tensor(x, mesh, [Replicate()])
+
+        # Setup output tensors (passed as kwargs via 'out')
+        value = torch.randn(4, 1, device="cuda")
+        indices = torch.randn(4, 1, device="cuda").long()
+        value = distribute_tensor(value, mesh, [Replicate()])
+        indices = distribute_tensor(indices, mesh, [Replicate()])
+
+        # Register strategy for aten::min.dim_min
+        # This operation has Tensor params in kwargs (min, min_indices)
+        @register_sharding(aten.min.dim_min)
+        def custom_strategy(x, dim, keepdim, min, min_indices):
+            acceptable_shardings = []
+            # Define strategy: All inputs and outputs are Replicated
+            # Inputs: x (arg), min (kwarg), min_indices (kwarg)
+            # Outputs: values, indices
+            all_replicate = (
+                [Replicate(), Replicate()],  # Output strategies
+                [Replicate(), None, None, Replicate(), Replicate()]  # Input strategies
+            )
+            acceptable_shardings.append(all_replicate)
+            return acceptable_shardings
+
+        # Leverage the similar API: set_checkpoint_debug_enabled
+        # We wrap the operation in this context manager to verify that
+        # sharding propagation works correctly even when global debug flags are toggled.
+        with set_checkpoint_debug_enabled(True):
+            # This call triggers the sharding propagation logic.
+            # If the bug is present, an AssertionError will be raised:
+            # "assert len(input_specs) == len(input_args_strategy)"
+            torch.min(x, dim=1, keepdim=True, out=(value, indices))
+
+        # If we reach here, the propagation succeeded
+        self.assertTrue(True)
+```

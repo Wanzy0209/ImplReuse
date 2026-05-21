@@ -1,0 +1,82 @@
+```python
+import torch
+import torch.onnx
+import math
+import unittest
+import tempfile
+import os
+
+# Leveraging the similar API pattern: tf.keras.initializers.LecunNormal
+# We adapt the logic to PyTorch to reuse the initialization pattern 
+# associated with the "trunc" keyword found in the bug report.
+class LecunNormal:
+    """
+    PyTorch adaptation of tf.keras.initializers.LecunNormal.
+    Draws samples from a truncated normal distribution centered on 0 
+    with standard deviation sqrt(1 / fan_in).
+    """
+    def __init__(self, seed=None):
+        self.seed = seed
+
+    def __call__(self, tensor, fan_in=None):
+        if fan_in is None:
+            fan_in = tensor.shape[1] if len(tensor.shape) > 1 else 1
+        
+        std = math.sqrt(1.0 / fan_in)
+        # PyTorch equivalent of truncated_normal
+        torch.nn.init.trunc_normal_(tensor, mean=0.0, std=std)
+        return tensor
+
+class TruncationBugModel(torch.nn.Module):
+    """
+    Minimal model to reproduce the ConversionError related to math.trunc.
+    """
+    def __init__(self):
+        super().__init__()
+        self.linear = torch.nn.Linear(10, 10)
+        # Reusing the LecunNormal pattern for initialization
+        initializer = LecunNormal()
+        initializer(self.linear.weight, fan_in=self.linear.in_features)
+        torch.nn.init.zeros_(self.linear.bias)
+
+    def forward(self, x):
+        # The bug is triggered by the use of math.trunc inside the forward pass.
+        # The ONNX exporter fails to translate this node.
+        # Error: call_function[target=math.trunc]
+        x = self.linear(x)
+        return math.trunc(x)
+
+class TestONNXExportWithTrunc(unittest.TestCase):
+    def test_onnx_export_math_trunc_error(self):
+        """
+        Test that torch.onnx.export raises a ConversionError 
+        when encountering math.trunc, preserving the original bug logic.
+        """
+        model = TruncationBugModel()
+        model.eval()
+        dummy_input = torch.randn(1, 10)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            onnx_path = os.path.join(tmpdir, "model.onnx")
+            
+            # The issue reports a ConversionError during export.
+            # We expect this to fail or raise an error related to 'trunc'.
+            with self.assertRaises(Exception) as context:
+                torch.onnx.export(
+                    model,
+                    dummy_input,
+                    onnx_path,
+                    opset_version=14,
+                    input_names=['input'],
+                    output_names=['output']
+                )
+            
+            # Verify the error message contains 'trunc' or 'ConversionError'
+            # to ensure we are catching the specific bug.
+            error_msg = str(context.exception).lower()
+            self.assertTrue("trunc" in error_msg or "conversion" in error_msg, 
+                            f"Expected trunc/Conversion error, got: {context.exception}")
+
+if __name__ == "__main__":
+    unittest.main()
+```

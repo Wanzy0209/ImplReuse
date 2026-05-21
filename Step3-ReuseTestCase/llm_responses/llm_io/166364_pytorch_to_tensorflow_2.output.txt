@@ -1,0 +1,51 @@
+```python
+import tensorflow as tf
+import tensorflow.experimental.dtensor as dtensor
+import numpy as np
+
+def test_copy_to_mesh_with_learnable_scalar():
+    """
+    Test function to verify learnable scalars work with copy_to_mesh.
+    This adapts the PyTorch Flex Attention bug report where a scalar parameter 
+    caused errors, to the TensorFlow DTensor API.
+    """
+    # Setup a mesh (simulating the distributed/compiled environment)
+    # Using CPU to ensure testability without specific hardware
+    mesh = dtensor.create_mesh([("batch", 2)], devices=["CPU:0", "CPU:1"])
+
+    # 1. Reproduce the "Bug" scenario: Learnable Scalar
+    # PyTorch: temp = nn.Parameter(torch.tensor(0.0))
+    scalar_param = tf.Variable(0.0, dtype=tf.float32, name="learnable_scalar")
+
+    # Define a layout for the scalar (Replicated is the logical choice for a scalar)
+    scalar_layout = dtensor.Layout.replicated(mesh, rank=0)
+
+    # Attempt to copy the scalar to the mesh
+    # This is the equivalent of passing the scalar into the compiled/flex attention context
+    try:
+        d_scalar = dtensor.copy_to_mesh(scalar_param, scalar_layout)
+        print("Successfully copied learnable scalar to mesh.")
+    except Exception as e:
+        print(f"Failed to copy learnable scalar: {e}")
+        raise
+
+    # 2. Verify usage (Mimicking the score_mod function logic)
+    # PyTorch: score = score + temp
+    # Create a dummy batched tensor (representing 'score')
+    batch_data = tf.constant(np.random.rand(2, 4), dtype=tf.float32)
+    # Layout: unsharded for simplicity, or sharded by batch
+    batch_layout = dtensor.Layout([dtensor.UNSHARDED, dtensor.UNSHARDED], mesh)
+    d_batch = dtensor.copy_to_mesh(batch_data, batch_layout)
+
+    # Perform the addition inside the mesh context
+    with dtensor.default_mesh(mesh):
+        # This operation tests if the scalar DTensor interacts correctly with batched DTensors
+        result = d_batch + d_scalar
+
+    print("Operation with learnable scalar succeeded.")
+    assert result.shape == (2, 4)
+    return result
+
+if __name__ == "__main__":
+    test_copy_to_mesh_with_learnable_scalar()
+```

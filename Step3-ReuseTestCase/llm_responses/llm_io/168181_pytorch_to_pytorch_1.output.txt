@@ -1,0 +1,61 @@
+```python
+import torch
+import torch.distributed as dist
+import unittest
+import os
+
+class TestDistributedReduceCompile(unittest.TestCase):
+    
+    @unittest.skipIf(not torch.distributed.is_available(), "requires distributed")
+    def test_distributed_reduce_to_cpu(self):
+        # This test assumes the process group is already initialized.
+        # In a real distributed test suite, this would be handled by a fixture.
+        if not dist.is_initialized():
+            # Simple initialization for demonstration if run standalone with appropriate env vars
+            try:
+                rank = int(os.environ['RANK'])
+                world_size = int(os.environ['WORLD_SIZE'])
+                dist.init_process_group(backend='gloo' if not torch.cuda.is_available() else 'nccl')
+            except KeyError:
+                self.skipTest("Distributed environment variables not set")
+
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        
+        # Adapted from the original test case logic:
+        # Original: out = torch.zeros_like(x); add_kernel(...); out_cpu = out.cpu() + 1
+        # Adapted: x is the buffer; dist.reduce(...); x_cpu = x.cpu() + 1
+        
+        def f(x):
+            # Perform the reduction operation (similar to the user-defined kernel)
+            # This modifies x in-place at the destination rank (0)
+            dist.reduce(x, dst=0)
+            
+            # Move the result to CPU and perform an operation
+            # This tests the synchronization between the collective op and the CPU transfer
+            return x.cpu() + 1
+
+        # Setup inputs
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        # Create a tensor based on rank to verify reduction logic
+        x = torch.ones(4, 4, device=device) * rank
+
+        # Eager execution
+        eager_out = f(x.clone())
+        
+        # Compiled execution
+        compiled_f = torch.compile(f)
+        compiled_out = compiled_f(x.clone())
+
+        if rank == 0:
+            # Verify correctness at the destination rank
+            # The sum of ranks 0 to N-1 is N*(N-1)/2
+            expected_sum = sum(range(world_size))
+            expected_tensor = torch.ones(4, 4, device="cpu") * expected_sum + 1
+            
+            self.assertEqual(eager_out, expected_tensor)
+            self.assertEqual(compiled_out, eager_out)
+
+if __name__ == '__main__':
+    unittest.main()
+```

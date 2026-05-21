@@ -1,0 +1,47 @@
+```python
+import tensorflow as tf
+from tf.distribute.experimental.partitioners import FixedShardsPartitioner
+
+# This test case is adapted from the logic of the PyTorch bug report (Issue 166253).
+# The original bug involved `torch.full` caching the `fill_value` argument across 
+# multiple calls when using `torch.compile` and `dtype=torch.float64`.
+# 
+# Here, we test the similar API `tf.distribute.experimental.partitioners.Partitioner`
+# to ensure it does not exhibit similar caching behavior with its `shape` and `dtype`
+# arguments across multiple invocations.
+
+def test_partitioner_state_isolation():
+    # Instantiate a concrete partitioner implementation
+    partitioner = FixedShardsPartitioner(num_shards=2)
+
+    # First call with specific shape and dtype (analogous to x1 in the bug report)
+    shape1 = tf.TensorShape([10, 3])
+    dtype1 = tf.float32
+    result1 = partitioner(shape1, dtype1, axis=0)
+
+    # Second call with different shape and dtype (analogous to x2 in the bug report)
+    shape2 = tf.TensorShape([20, 5])
+    dtype2 = tf.float64
+    result2 = partitioner(shape2, dtype2, axis=0)
+
+    # Calculate expected results for FixedShardsPartitioner with num_shards=2
+    # Shape [10, 3] on axis 0 -> 10 split into 2 shards -> [5, 5]
+    # Shape [20, 5] on axis 0 -> 20 split into 2 shards -> [10, 10]
+    
+    expected_result1 = [5, 5]
+    expected_result2 = [10, 10]
+
+    # Assert that the first call returns the correct result
+    assert result1 == expected_result1, \
+        f"First call failed: expected {expected_result1}, got {result1}"
+
+    # Assert that the second call returns the correct result based on the NEW inputs,
+    # not cached inputs from the first call.
+    assert result2 == expected_result2, \
+        f"Second call failed (potential caching bug): expected {expected_result2}, got {result2}"
+
+    print("Test passed: Partitioner correctly handles multiple calls with different arguments.")
+
+if __name__ == "__main__":
+    test_partitioner_state_isolation()
+```

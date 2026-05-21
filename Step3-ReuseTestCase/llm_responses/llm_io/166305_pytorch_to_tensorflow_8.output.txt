@@ -1,0 +1,73 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# --- Adaptation Logic ---
+# The original bug involves Distributed Data Parallel (DDP), Compilation (torch.compile),
+# and Custom Autograd Functions. We map these to TensorFlow equivalents:
+# 1. DDP -> tf.distribute.MirroredStrategy
+# 2. torch.compile -> tf.function (graph compilation)
+# 3. torch.autograd.Function -> tf.custom_gradient
+# 4. The target API tf.keras.name_scope is used to encapsulate the custom layer logic,
+#    verifying that naming scopes work correctly within the compiled distributed context.
+
+def test_name_scope_in_distributed_compile():
+    # Setup Distributed Strategy (Equivalent to DDP)
+    strategy = tf.distribute.MirroredStrategy()
+
+    # Define Custom Gradient (Equivalent to torch.autograd.Function)
+    @tf.custom_gradient
+    def simplest_double_fn(x):
+        def grad(dy):
+            return dy * 2
+        return x * 2, grad
+
+    # Define the model construction logic
+    def build_model():
+        inputs = tf.keras.Input(shape=(256, 256, 3))
+        
+        # Standard Conv2d layer
+        x = tf.keras.layers.Conv2D(3, 3, padding='same')(inputs)
+        
+        # Use the target API: tf.keras.name_scope
+        # This wraps the custom operation logic, similar to how the original code
+        # wrapped the custom autograd function in a Module.
+        with tf.keras.name_scope("double_layer_scope"):
+            x = simplest_double_fn(x)
+            
+        return tf.keras.Model(inputs=inputs, outputs=x)
+
+    # Main execution within distributed scope
+    with strategy.scope():
+        model = build_model()
+        optimizer = tf.keras.optimizers.SGD(learning_rate=1e-4)
+        loss_fn = tf.keras.losses.MeanSquaredError()
+
+        # Compilation (Equivalent to torch.compile)
+        # We wrap the training step in tf.function to enable graph optimization.
+        @tf.function
+        def train_step(batch_x):
+            with tf.GradientTape() as tape:
+                # Forward pass
+                out = model(batch_x, training=True)
+                # Calculate loss (MSE against input, similar to original)
+                loss = loss_fn(batch_x, out)
+            
+            # Backward pass
+            gradients = tape.gradient(loss, model.trainable_variables)
+            optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+            return loss
+
+        # Run iterations
+        print("Starting distributed compiled training with name_scope...")
+        for it in range(3):
+            # Create dummy data
+            x = tf.random.normal((2, 256, 256, 3))
+            loss = train_step(x)
+            print(f"iter={it+1} loss={loss.numpy():.6f}")
+
+        print("Test completed successfully.")
+
+if __name__ == "__main__":
+    test_name_scope_in_distributed_compile()
+```

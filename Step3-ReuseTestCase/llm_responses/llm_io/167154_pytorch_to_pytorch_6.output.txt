@@ -1,0 +1,39 @@
+```python
+import torch
+
+# Check for MPS availability
+if not torch.backends.mps.is_available():
+    print("MPS device is not available. Skipping test.")
+else:
+    # Reproduce the non-contiguous tensor setup from the bug report
+    shape = (5, 499, 768)
+    stride = (0, 768, 1)
+    storage_offset = 0
+    
+    # Calculate the number of elements required for the storage
+    numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+    base = torch.arange(numel, dtype=torch.float32, device="mps")
+    
+    # Create the non-contiguous input tensor
+    input = torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+
+    # Test torch.renorm with the non-contiguous input
+    # This verifies if the MPS backend handles buffer allocation correctly for this API
+    # with non-standard strides.
+    try:
+        output = torch.renorm(input, p=2.0, dim=1, maxnorm=1.0)
+        
+        # Basic assertions to verify the operation completed
+        assert output.shape == input.shape, f"Shape mismatch: expected {input.shape}, got {output.shape}"
+        assert output.device.type == "mps", "Output device is not MPS"
+        assert output.dtype == torch.float32, "Output dtype mismatch"
+        
+        print("Test passed successfully.")
+        
+    except RuntimeError as e:
+        if "buffer is not large enough" in str(e):
+            print(f"Bug reproduced: {e}")
+        else:
+            # Re-raise if it's a different error
+            raise
+```

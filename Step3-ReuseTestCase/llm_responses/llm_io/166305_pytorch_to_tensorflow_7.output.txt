@@ -1,0 +1,64 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Define a custom gradient function (equivalent to torch.autograd.Function)
+@tf.custom_gradient
+def simplest_double_fn(x):
+    def grad(dy):
+        return dy * 2
+    return x * 2, grad
+
+# Define a layer that uses the target API: tf.keras.backend.name_scope
+class DoubleLayer(tf.keras.layers.Layer):
+    def call(self, x):
+        # Using the target API to scope the custom operation
+        with tf.keras.backend.name_scope("DoubleLayerScope"):
+            return simplest_double_fn(x)
+
+def main():
+    # Setup Distributed Strategy (equivalent to DDP)
+    strategy = tf.distribute.MirroredStrategy()
+    print(f'Number of devices: {strategy.num_replicas_in_sync}')
+
+    with strategy.scope():
+        # Build Model
+        # Note: TensorFlow uses channels_last (NHWC) by default, unlike PyTorch (NCHW)
+        model = tf.keras.Sequential([
+            tf.keras.layers.Conv2D(3, 3, padding='same', input_shape=(256, 256, 3)),
+            DoubleLayer()
+        ])
+
+        optimizer = tf.keras.optimizers.SGD(learning_rate=1e-4)
+        loss_fn = tf.keras.losses.MeanSquaredError()
+
+        # Compilation (equivalent to torch.compile)
+        # We wrap the training step in tf.function to enable graph mode/compilation
+        @tf.function
+        def train_step(inputs):
+            with tf.GradientTape() as tape:
+                outputs = model(inputs, training=True)
+                # Reproduce the loss logic: loss = F.mse_loss(out, x)
+                loss = loss_fn(inputs, outputs)
+            
+            gradients = tape.gradient(loss, model.trainable_variables)
+            optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+            return loss
+
+    # Training Loop
+    for it in range(3):
+        # Generate random input data
+        # PyTorch: (2, 3, 256, 256) -> TF: (2, 256, 256, 3)
+        x = tf.random.normal((2, 256, 256, 3))
+        
+        # Execute distributed step
+        per_replica_losses = strategy.run(train_step, args=(x,))
+        loss = strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses, axis=None)
+        
+        print(f"iter={it+1} loss={loss.numpy():.6f}")
+
+    print("Test completed successfully.")
+
+if __name__ == "__main__":
+    main()
+```

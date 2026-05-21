@@ -1,0 +1,114 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+import torch.nn.functional as F
+import os
+import tempfile
+
+# Keeping the VAE model definition from the original test case
+class VAE(nn.Module):
+
+    def __init__(self, input_dim, hidden_dim, latent_dim):
+        super(VAE, self).__init__()
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_var = nn.Linear(hidden_dim, latent_dim)
+        self.decoder = nn.Sequential(nn.Linear(latent_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, input_dim), nn.Sigmoid())
+
+    def encode(self, x):
+        h = self.encoder(x)
+        mu = self.fc_mu(h)
+        log_var = self.fc_var(h)
+        return (mu, log_var)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def decode(self, z):
+        return self.decoder(z)
+
+    def forward(self, x):
+        x = x.view(-1, self.input_dim)
+        (mu, log_var) = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        reconstruction = self.decode(z)
+        return (reconstruction, mu, log_var)
+
+def get_default_model():
+    input_dim = 784
+    hidden_dim = 400
+    latent_dim = 20
+    model = VAE(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim)
+    return model
+
+def get_sample_inputs():
+    batch_size = 32
+    input_dim = 784
+    x = torch.randn(batch_size, input_dim)
+    return (x,)
+
+def main():
+    # Initialize distributed process group for single-process testing
+    # Using a temporary file to ensure the test is runnable without external setup
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        tmp_path = tmp_file.name
+
+    try:
+        dist.init_process_group(
+            backend='gloo',
+            init_method=f'file://{tmp_path}',
+            rank=0,
+            world_size=1
+        )
+
+        model = get_default_model()
+        model.eval()
+        inputs = get_sample_inputs()
+
+        with torch.no_grad():
+            # Run model in eager mode to get the tuple output
+            (reconstruction, mu, log_var) = model(*inputs)
+        
+        print('Model executed successfully!')
+        print(f'Input shape: {inputs[0].shape}')
+        print(f'Reconstruction shape: {reconstruction.shape}')
+        print(f'Mu shape: {mu.shape}')
+        print(f'Log_var shape: {log_var.shape}')
+
+        # Adaptation: Use torch.distributed.broadcast_object_list
+        # The API expects a list, so we convert the tuple output to a list
+        object_list = [reconstruction, mu, log_var]
+        
+        # Call the similar API
+        torch.distributed.broadcast_object_list(object_list, src=0)
+
+        # Verification: Check shapes of the elements inside the list
+        # This mirrors the intent of the original test case to check shapes
+        print(f'Broadcasted Element 0 shape: {object_list[0].shape}')
+        print(f'Broadcasted Element 1 shape: {object_list[1].shape}')
+        print(f'Broadcasted Element 2 shape: {object_list[2].shape}')
+
+        # Replicate the "Bug" scenario: Accessing .shape on the collection object
+        # The original bug was accessing .shape on a tuple returned by compile.
+        # Here we check if accessing .shape on the list (the collection) also fails as expected.
+        try:
+            _ = object_list.shape
+            print("ERROR: List object should not have .shape attribute")
+            assert False, "List should not have shape attribute"
+        except AttributeError:
+            print("Correctly caught AttributeError when accessing .shape on the list object.")
+
+    finally:
+        # Clean up distributed resources
+        dist.destroy_process_group()
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+if __name__ == '__main__':
+    main()
+```

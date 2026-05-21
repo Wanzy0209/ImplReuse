@@ -1,0 +1,78 @@
+```python
+import tensorflow as tf
+import traceback
+
+# Define custom classes similar to the PyTorch bug report
+class Foo:
+    pass
+
+class Bar:
+    def __eq__(self, other):
+        return super().__eq__(other)
+
+    def __hash__(self):
+        return 0
+
+# Note: TensorFlow does not have a direct equivalent to pytree.register_constant.
+# We proceed with the custom objects as-is to test the API's behavior with them.
+
+def test_string_input_producer_custom_obj():
+    # Ensure we are in graph mode as string_input_producer is a TF1 queue API
+    tf.compat.v1.reset_default_graph()
+    tf.compat.v1.disable_eager_execution()
+
+    try:
+        # Input tensor for the API
+        filenames = tf.constant(["file1.txt", "file2.txt", "file3.txt"])
+        
+        # Custom object instance
+        obj = Foo()
+
+        # Define the function logic
+        # In PyTorch, this was wrapped in @torch.compile
+        # In TF, we define the graph structure here
+        def graph_logic(x, custom_obj):
+            # Call the similar API
+            queue = tf.compat.v1.train.string_input_producer(x, num_epochs=1)
+            
+            # Reproduce the side effect logic from the bug report
+            # PyTorch bug: obj.attr = {3: Bar()}
+            custom_obj.attr = {3: Bar()}
+            
+            return queue
+
+        # Build the graph
+        queue = graph_logic(filenames, obj)
+
+        # Verify the side effect occurred during graph construction (tracing)
+        assert hasattr(obj, 'attr'), "Side effect on custom object did not occur"
+        assert isinstance(obj.attr[3], Bar), "Side effect value is incorrect"
+
+        # Run the graph to verify execution
+        with tf.compat.v1.Session() as sess:
+            # Initialize variables
+            sess.run(tf.compat.v1.local_variables_initializer())
+            sess.run(tf.compat.v1.global_variables_initializer())
+
+            # Start queue runners
+            coord = tf.compat.v1.train.Coordinator()
+            threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+            # Attempt to dequeue
+            for _ in range(3):
+                result = sess.run(queue.dequeue())
+                print(f"Dequeued: {result}")
+
+            coord.request_stop()
+            coord.join(threads)
+
+        print("Test passed successfully.")
+
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        traceback.print_exc()
+        raise
+
+if __name__ == "__main__":
+    test_string_input_producer_custom_obj()
+```

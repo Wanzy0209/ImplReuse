@@ -1,0 +1,61 @@
+```python
+import torch
+import os
+import tempfile
+
+# Adapted from the similar API pattern (tf.io.write_file) which handles directory creation and file writing.
+# Here we adapt it to save a PyTorch model state dictionary to preserve the file I/O logic.
+def save_model_state(model, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(model.state_dict(), path)
+
+class TruncModel(torch.nn.Module):
+    """
+    Minimal model to reproduce the math.trunc conversion error.
+    The bug report indicates an issue with exporting a node 'math.trunc'.
+    In PyTorch, this corresponds to torch.trunc.
+    """
+    def forward(self, x):
+        return torch.trunc(x)
+
+def test_onnx_export_with_trunc():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        model_path = os.path.join(tmpdir, "hift.pt")
+        onnx_path = os.path.join(tmpdir, "hift.onnx")
+        
+        # Initialize model
+        model = TruncModel()
+        
+        # Save model state (mimicking the file I/O pattern from the similar API)
+        save_model_state(model, model_path)
+        
+        # Load model (mimicking the bug report's load_hift logic)
+        loaded_model = TruncModel()
+        loaded_model.load_state_dict(torch.load(model_path))
+        loaded_model.eval()
+        
+        # Build example inputs (mimicking build_example_inputs)
+        # Using a shape similar to the bug report's speech_feat (Batch, Mel, Frames)
+        dummy_input = torch.randn(1, 80, 10)
+        
+        # Attempt ONNX export (The core bug scenario)
+        try:
+            torch.onnx.export(
+                loaded_model,
+                dummy_input,
+                onnx_path,
+                opset_version=17,
+                input_names=['input'],
+                output_names=['output']
+            )
+            # Assertion to verify export completed
+            assert os.path.exists(onnx_path), "ONNX file was not created."
+            print("Test Passed: ONNX export successful.")
+        except Exception as e:
+            # If the bug exists, this might fail with ConversionError regarding math.trunc
+            print(f"Test Failed with error: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_onnx_export_with_trunc()
+```

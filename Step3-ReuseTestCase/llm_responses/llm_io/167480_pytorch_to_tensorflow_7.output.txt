@@ -1,0 +1,81 @@
+```python
+import tensorflow as tf
+import os
+import sys
+
+def test_string_input_producer_command_injection():
+    """
+    Adapted test case for Issue ID: 167480 (OS command injection).
+    
+    Original Issue: torch.utils.cpp_extension.load_inline allowed OS command injection 
+    via extra_cflags because it used subprocess.check_output(..., shell=True).
+    
+    Target API: tf.compat.v1.train.string_input_producer.
+    
+    This test verifies if passing shell metacharacters into the string_input_producer
+    results in command execution (vulnerability) or if the API handles the input safely
+    (expected behavior for TensorFlow).
+    """
+    
+    # Disable eager execution to use v1 queue runners
+    tf.compat.v1.disable_eager_execution()
+
+    # Define a malicious payload intended to create a file as a side effect.
+    # This mimics the 'extra_cflags' injection vector in the PyTorch issue.
+    # Payload: "; touch /tmp/tf_pwned "
+    malicious_payload = "; touch /tmp/tf_pwned "
+    test_file_path = "/tmp/tf_pwned"
+
+    # Cleanup: Ensure the file does not exist before the test
+    if os.path.exists(test_file_path):
+        os.remove(test_file_path)
+
+    try:
+        with tf.compat.v1.Session() as sess:
+            # Initialize variables
+            sess.run(tf.compat.v1.global_variables_initializer())
+            sess.run(tf.compat.v1.local_variables_initializer())
+
+            # Create a string tensor containing the malicious payload
+            # In the PyTorch case, this was user-supplied input like extra_cflags.
+            string_tensor = tf.constant([malicious_payload])
+
+            # Call the target API
+            # We inject the payload into the string_tensor argument.
+            queue = tf.compat.v1.train.string_input_producer(
+                string_tensor,
+                name="injection_test_queue"
+            )
+
+            # Start the queue runners to process the data
+            coord = tf.train.Coordinator()
+            threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+
+            # Dequeue an element to trigger the pipeline logic
+            result = sess.run(queue.dequeue())
+
+            # Stop the threads
+            coord.request_stop()
+            coord.join(threads)
+
+        # Verification Step
+        # Check if the side effect (file creation) occurred.
+        if os.path.exists(test_file_path):
+            print("FAIL: OS Command Injection vulnerability detected in tf.compat.v1.train.string_input_producer.")
+            print(f"The malicious command executed and created file: {test_file_path}")
+            # Clean up for the environment
+            os.remove(test_file_path)
+            return False
+        else:
+            print("PASS: No OS command injection detected. The API handled the input safely.")
+            return True
+
+    except Exception as e:
+        print(f"ERROR: An exception occurred during test execution: {e}")
+        return False
+
+if __name__ == "__main__":
+    # Run the test
+    success = test_string_input_producer_command_injection()
+    sys.exit(0 if success else 1)
+```

@@ -1,0 +1,46 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import torch.distributions
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_broadcast_no_side_effect(rank, world_size):
+    setup(rank, world_size)
+    
+    # Set distribution validation to True explicitly to check for side effects
+    torch.distributions.Distribution.set_default_validate_args(True)
+    initial_val = torch.distributions.Distribution._get_default_validate_args()
+    
+    # Call the similar API: torch.distributed.broadcast_object_list
+    # We create a dummy list to broadcast
+    if rank == 0:
+        object_list = ["test", 123, torch.tensor([1, 2, 3])]
+    else:
+        object_list = [None, None, None]
+        
+    dist.broadcast_object_list(object_list, src=0)
+    
+    # Check if the global state was changed by the API call
+    final_val = torch.distributions.Distribution._get_default_validate_args()
+    
+    cleanup()
+    
+    # Assert that the API did not inadvertently change the global distribution validation args
+    # (which was the bug in the original torch.compile context)
+    assert initial_val == final_val, \
+        f"torch.distributed.broadcast_object_list changed distribution validation args from {initial_val} to {final_val}"
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_broadcast_no_side_effect, args=(world_size,), nprocs=world_size, join=True)
+```

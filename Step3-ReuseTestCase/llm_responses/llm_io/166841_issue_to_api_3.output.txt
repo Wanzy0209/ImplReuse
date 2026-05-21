@@ -1,0 +1,94 @@
+```python
+import torch
+import torch.export
+import torch._inductor
+import os
+import shutil
+import unittest
+
+class TestAOTIMultiDeviceScatter(unittest.TestCase):
+    """
+    Test case for Issue 166841:
+    Verifies that aoti_compile_and_package correctly handles CPU scatter_add_
+    operations in models that also contain CUDA operations.
+    """
+    
+    def setUp(self):
+        self.output_dir = "/tmp/test_aoti_scatter_cpu"
+        if os.path.exists(self.output_dir):
+            shutil.rmtree(self.output_dir)
+        os.makedirs(self.output_dir, exist_ok=True)
+
+    def tearDown(self):
+        if os.path.exists(self.output_dir):
+            shutil.rmtree(self.output_dir)
+
+    def test_scatter_add_cpu_with_cuda_matmul(self):
+        """
+        Reproduces the bug where a CUDA kernel is incorrectly generated
+        for a CPU scatter_add_ operation.
+        """
+        class MyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                # Buffers are explicitly on CPU
+                self.register_buffer(
+                    "index",
+                    torch.tensor([1, 4, 1, 7], device='cpu', dtype=torch.int64)
+                )
+                self.register_buffer(
+                    "src",
+                    torch.ones(4, device='cpu', dtype=torch.int64)
+                )
+
+            def forward(self, matrix, vector):
+                # Inputs are on CUDA
+                # 1. Operation on CPU tensors (scatter_add_)
+                z = torch.zeros((vector.shape[0],), device='cpu', dtype=torch.int64)
+                scatter_result = z.scatter_add(0, self.index, self.src)
+
+                # 2. Move result to CUDA and continue on CUDA
+                # This mixed-device context triggers the compilation bug
+                v = vector + scatter_result.to(vector.dtype).to('cuda')
+                return torch.matmul(matrix, v)
+
+        model = MyModel().eval().to('cpu')
+        
+        # Create inputs on CUDA
+        matrix = torch.randn(10, 10, device='cuda')
+        vector = torch.randn(10, device='cuda')
+        example_args = (matrix, vector)
+
+        # 1. Export the model
+        print("Exporting model...")
+        ep = torch.export.export(model, example_args)
+
+        package = os.path.join(self.output_dir, "model_package.pt2")
+
+        # 2. Compile with AOTInductor
+        # Bug occurs here: generates CUDA kernel for CPU scatter_add_
+        print("Starting AOTInductor compilation...")
+        torch._inductor.aoti_compile_and_package(
+            ep,
+            package_path=package,
+        )
+        print(f"Compiled package at: {package}")
+
+        # 3. Load and Run
+        # Bug manifests here: runtime error CUDAGuardImpl initialized with non-CUDA DeviceType: cpu
+        print("\nAttempting to load and run compiled model...")
+        loaded = torch._inductor.aoti_load_package(package)
+        print("Model package loaded successfully.")
+
+        result_compiled = loaded(*example_args)
+        
+        # Verify correctness against eager execution
+        with torch.no_grad():
+            result_eager = model(*example_args)
+        
+        self.assertTrue(torch.allclose(result_compiled, result_eager))
+        print("Model ran successfully with the loaded package.")
+
+if __name__ == '__main__':
+    unittest.main()
+```

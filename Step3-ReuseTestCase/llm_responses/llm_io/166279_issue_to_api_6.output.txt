@@ -1,0 +1,72 @@
+```python
+import torch
+import torch.nn.functional as F
+
+# Reproduce the environment configuration from the original issue
+torch._dynamo.config.capture_scalar_outputs = True
+torch.manual_seed(1166094474)
+
+def fuzzed_program(arg_0, arg_1, arg_2, arg_3, sentinel):
+    # Leverage the similar API: torch.nn.functional.sigmoid
+    # We apply it to the inputs, converting to float as required by sigmoid.
+    # Using the pattern (3 * a).sigmoid() found in the similar API information.
+    
+    # Process arg_0 (bool -> float)
+    out_0 = (3 * arg_0.float()).sigmoid()
+
+    # Process arg_1 (int64 -> float)
+    out_1 = (3 * arg_1.float()).sigmoid()
+
+    # Process arg_2 (bool (6,4) -> float)
+    # We flatten it to allow concatenation with 1D tensors later, 
+    # mimicking the structure of the original program's output.
+    out_2 = (3 * arg_2.float()).sigmoid().flatten()
+
+    # Process arg_3 (bool -> float)
+    out_3 = (3 * arg_3.float()).sigmoid()
+
+    # Concatenate results to create a single output tensor
+    # This mimics the structure of the original program which returned a concatenated tensor
+    result = torch.cat([out_0, out_1, out_2, out_3], dim=0)
+
+    # Ensure gradient computation by multiplying with sentinel
+    return result * sentinel
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+# Generate inputs using the same strided logic as the original issue
+# These specific strides and types are often the source of bugs in eager/compile divergence
+arg_0 = torch.as_strided(torch.randint(0, 2, (12,), dtype=torch.int8).bool(), (12,), (1,))
+arg_1 = torch.as_strided(torch.randint(5, 30, (10,)).to(torch.int64), (10,), (1,))
+arg_2 = torch.as_strided(torch.randint(0, 2, (24,), dtype=torch.int8).bool(), (6, 4), (4, 1))
+arg_3 = torch.as_strided(torch.randint(0, 2, (2,), dtype=torch.int8).bool(), (2,), (1,))
+
+args = (arg_0, arg_1, arg_2, arg_3) + (sentinel,)
+
+# Test Eager mode
+print("Testing Eager mode...")
+try:
+    result_eager = fuzzed_program(*args)
+    print("✅ Eager success")
+except Exception as e:
+    print(f"❌ Eager failed: {e}")
+    result_eager = None
+
+# Test Compiled mode
+print("Testing Compiled mode...")
+try:
+    compiled_fn = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+    result_compiled = compiled_fn(*args)
+    print("✅ Compile success")
+except Exception as e:
+    print(f"❌ Compile failed: {e}")
+    result_compiled = None
+
+# Check for divergence
+if result_eager is not None and result_compiled is not None:
+    if torch.allclose(result_eager, result_compiled):
+        print("✅ Results match")
+    else:
+        print("❌ Divergence detected: Eager and Compiled results differ")
+```

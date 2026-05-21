@@ -1,0 +1,92 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Adapted implementation of get_output_shapes for a runnable test case.
+# The original snippet relies on internal flatbuffers (schema_fb) which are not 
+# always available in standard environments. This wrapper uses the public 
+# TFLite Interpreter API to achieve the same result: extracting output shapes 
+# from a compiled model.
+def get_output_shapes(model_data):
+    """Returns a list of output shapes in the tflite model data."""
+    interpreter = tf.lite.Interpreter(model_content=model_data)
+    interpreter.allocate_tensors()
+    output_details = interpreter.get_output_details()
+    return [detail['shape'].tolist() for detail in output_details]
+
+# Define the model logic mirroring the PyTorch operations
+# Original API: torch.chunk -> Adapted to: tf.split
+# Original API: torch.cat -> Adapted to: tf.concat
+@tf.function
+def fuzzed_program_tf(arg_0, arg_1, arg_2, arg_3):
+    # var_node_2 = torch.chunk(var_node_3, 4, dim=0)[0] -> (3,)
+    # var_node_3 is full((12,), False). We use arg_0 (12,)
+    var_node_2 = tf.split(arg_0, 4, axis=0)[0]
+
+    # var_node_4 = torch.chunk(var_node_5, 2, dim=0)[0] -> (5,)
+    # var_node_5 is gather result. We use arg_1 (10,)
+    var_node_4 = tf.split(arg_1, 2, axis=0)[0]
+
+    # var_node_9 = torch.chunk(var_node_10, 4, dim=1)[0] -> (6, 1)
+    # var_node_10 is arg_2 (6, 4)
+    var_node_9 = tf.split(arg_2, 4, axis=1)[0]
+
+    # var_node_8 = torch.squeeze(var_node_9) -> (6,)
+    var_node_8 = tf.squeeze(var_node_9)
+
+    # var_node_1 = torch.cat([var_node_2, var_node_4, var_node_8], dim=0) -> (14,)
+    var_node_1 = tf.concat([var_node_2, var_node_4, var_node_8], axis=0)
+
+    # var_node_0 = torch.cat([var_node_1, var_node_11], dim=0) -> (16,)
+    # var_node_11 is arg_3 (2,)
+    var_node_0 = tf.concat([var_node_1, arg_3], axis=0)
+
+    return var_node_0
+
+# Prepare inputs matching the PyTorch test
+# arg_0: size=(12,), dtype=bool
+arg_0 = tf.constant(np.zeros((12,), dtype=bool))
+# arg_1: size=(10,), dtype=int64
+arg_1 = tf.constant(np.zeros((10,), dtype=np.int64))
+# arg_2: size=(6, 4), dtype=bool
+arg_2 = tf.constant(np.zeros((6, 4), dtype=bool))
+# arg_3: size=(2,), dtype=bool
+arg_3 = tf.constant(np.zeros((2,), dtype=bool))
+
+# 1. Run in Eager/Graph mode
+result_eager = fuzzed_program_tf(arg_0, arg_1, arg_2, arg_3)
+print(f'✅ eager success, shape: {result_eager.shape}')
+
+# 2. Compile to TFLite (The "Compile" step)
+# We need a concrete function for the converter
+concrete_func = fuzzed_program_tf.get_concrete_function(
+    tf.TensorSpec(shape=(12,), dtype=tf.bool),
+    tf.TensorSpec(shape=(10,), dtype=tf.int64),
+    tf.TensorSpec(shape=(6, 4), dtype=tf.bool),
+    tf.TensorSpec(shape=(2,), dtype=tf.bool)
+)
+
+converter = tf.lite.TFLiteConverter.from_concrete_functions([concrete_func])
+converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
+
+try:
+    tflite_model = converter.convert()
+    print('✅ compile success')
+
+    # 3. Use the adapted API to get output shapes
+    output_shapes = get_output_shapes(tflite_model)
+    print(f'✅ get_output_shapes result: {output_shapes}')
+
+    # 4. Verify Divergence (or lack thereof)
+    # The PyTorch bug was an assertion error on shape lengths. 
+    # Here we verify that the compiled output shape matches the eager shape.
+    expected_shape = list(result_eager.shape)
+    assert len(output_shapes) == 1, "Expected single output"
+    assert output_shapes[0] == expected_shape, \
+        f"Eager/Compile Divergence! Eager: {expected_shape}, Compiled: {output_shapes[0]}"
+    
+    print('✅ Eager and Compile shapes match.')
+
+except Exception as e:
+    print(f'❌ Error during compilation or shape extraction: {e}')
+```

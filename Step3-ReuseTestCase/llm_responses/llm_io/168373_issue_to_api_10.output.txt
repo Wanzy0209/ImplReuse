@@ -1,0 +1,50 @@
+```python
+import tensorflow as tf
+
+# The similar API provided in the issue context
+# (tensorflow.python.autograph.utils.ag_logging.trace)
+def trace(*args):
+    """Traces argument information at compilation time."""
+    print(*args)
+
+
+# Helper function mimicking the bug's pattern:
+# A fresh backend function is created on every instance of the call.
+def create_compiled_layer_with_trace():
+    # In the original bug: backend = aot_autograd(...)
+    # Here: We create a fresh lambda that wraps the 'trace' API.
+    # This lambda acts as the "backend" or configuration object.
+    fresh_trace_backend = lambda msg: trace(f"Tracing: {msg}")
+
+    # The function to be compiled (equivalent to the Module)
+    def layer_logic(x):
+        # Use the backend
+        fresh_trace_backend(x)
+        return x + 1
+
+    # Compile (equivalent to torch.compile)
+    # We pass the backend as a non-tensor argument to simulate the guard check
+    # that exists in torch.compile.
+    @tf.function
+    def compiled_layer(x, backend):
+        backend(x)
+        return x * 2
+
+    return compiled_layer, fresh_trace_backend
+
+
+# Reproduce the issue scenario
+# Similar to Mod class initializing mod_a and mod_b with the helper
+layer_a, backend_a = create_compiled_layer_with_trace()
+layer_b, backend_b = create_compiled_layer_with_trace()
+
+# Execution
+# Because backend_a and backend_b are different Python objects (lambdas),
+# tf.function will treat these as distinct calls requiring separate traces,
+# mirroring the "recompilation due to backend mismatch" issue.
+print("Executing Layer A...")
+layer_a(tf.constant(1.0), backend_a)
+
+print("Executing Layer B...")
+layer_b(tf.constant(1.0), backend_b)
+```

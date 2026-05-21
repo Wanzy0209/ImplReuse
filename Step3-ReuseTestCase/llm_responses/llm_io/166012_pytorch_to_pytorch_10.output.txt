@@ -1,0 +1,76 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use gloo backend for CPU-based testing
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_gather_object_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Create a unique object for each rank
+    # This mimics the "state" that might be cached or logged in the original bug
+    local_obj = {"rank": rank, "tensor": torch.ones(2, 2) * rank}
+
+    # Container for the gathered objects (only significant on the destination rank)
+    gathered_objects = [None] * world_size if rank == 0 else None
+
+    # First call (Simulating a "miss" or first run)
+    dist.gather_object(local_obj, gathered_objects, dst=0)
+
+    if rank == 0:
+        # Verify the first gather
+        expected_objects = [{"rank": i, "tensor": torch.ones(2, 2) * i} for i in range(world_size)]
+        for i in range(world_size):
+            assert gathered_objects[i]["rank"] == expected_objects[i]["rank"]
+            assert torch.equal(gathered_objects[i]["tensor"], expected_objects[i]["tensor"])
+        
+        # Store the result to compare with the second run
+        first_run_result = gathered_objects
+
+    # Reset container for the second call
+    gathered_objects_2 = [None] * world_size if rank == 0 else None
+
+    # Second call (Simulating a "hit" or subsequent run)
+    # The bug report highlights inconsistency between cache hit and miss.
+    # Here we verify that gather_object produces consistent results across multiple calls.
+    dist.gather_object(local_obj, gathered_objects_2, dst=0)
+
+    if rank == 0:
+        # Verify the second gather
+        for i in range(world_size):
+            assert gathered_objects_2[i]["rank"] == expected_objects[i]["rank"]
+            assert torch.equal(gathered_objects_2[i]["tensor"], expected_objects[i]["tensor"])
+        
+        # Check consistency between the two runs (The core theme of the bug report)
+        assert len(first_run_result) == len(gathered_objects_2)
+        for i in range(world_size):
+            assert first_run_result[i]["rank"] == gathered_objects_2[i]["rank"]
+            assert torch.equal(first_run_result[i]["tensor"], gathered_objects_2[i]["tensor"])
+        
+        print("Consistency test passed for torch.distributed.gather_object")
+
+    cleanup()
+
+def test_gather_object_consistency():
+    """
+    Test case for torch.distributed.gather_object.
+    Adapted from the context of Issue 166012 (Inconsistent entries).
+    While torch.compile deals with cache logs, gather_object deals with data consistency.
+    This test ensures that the gathered objects are consistent across multiple invocations.
+    """
+    world_size = 2
+    mp.spawn(run_gather_object_test, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    test_gather_object_consistency()
+```

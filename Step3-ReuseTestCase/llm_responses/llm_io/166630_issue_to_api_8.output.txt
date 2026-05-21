@@ -1,0 +1,64 @@
+```python
+import torch
+import torch.distributed as dist
+import logging
+import unittest
+import sys
+
+class TestDistributedLogging(unittest.TestCase):
+    """
+    Test case to verify logging format string consistency when using
+    torch.distributed.is_initialized, adapted from the logic of Issue 166630.
+    """
+
+    def setUp(self):
+        # Configure a logger to capture output
+        self.logger = logging.getLogger("test_torch_distributed")
+        self.logger.setLevel(logging.INFO)
+        # Avoid duplicate handlers in repeated runs
+        if not self.logger.handlers:
+            handler = logging.StreamHandler(sys.stdout)
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+
+    def test_is_initialized_logging_format(self):
+        """
+        Tests that logging the distributed state does not raise a KeyError
+        due to missing format string arguments (similar to the signals_to_handle bug).
+        """
+        # Use the similar API to get the state
+        is_init = dist.is_initialized()
+        backend = dist.get_backend() if is_init else "N/A"
+        
+        # Define the format string. 
+        # In the original bug, 'signals_to_handle' was missing from the format string
+        # while present in the dictionary (or vice versa, causing a mismatch).
+        # Here we ensure 'is_initialized' is present in both to prevent the error.
+        log_format = (
+            "Distributed State Check:\n"
+            "  is_initialized          : %(is_initialized)s\n"
+            "  backend                 : %(backend)s\n"
+        )
+
+        # Define the data dictionary
+        log_data = {
+            "is_initialized": is_init,
+            "backend": backend,
+        }
+
+        # This call should not raise a KeyError or TypeError
+        # If the format string was missing %(is_initialized)s but the dict had it,
+        # standard logging ignores it. If the string had it but dict missed it, it would crash.
+        # We verify the successful logging here.
+        try:
+            self.logger.info(log_format, log_data)
+        except (KeyError, TypeError) as e:
+            self.fail(f"Logging failed due to format mismatch: {e}")
+
+        # Verify the data is as expected
+        self.assertIsInstance(is_init, bool)
+
+if __name__ == "__main__":
+    unittest.main()
+```

@@ -1,0 +1,58 @@
+```python
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+
+# Enable numpy behavior for TensorFlow
+tnp.experimental_enable_numpy_behavior()
+
+B, H, W, C = 20, 2, 2, 128
+
+# Use the similar API (tf.experimental.numpy.asarray) for tensor creation
+# mimicking torch.randn
+x = tnp.asarray(tf.random.normal((B, H, W, C)))
+# Linear layer weights
+w_linear = tnp.asarray(tf.random.normal((C, C)))
+
+# TensorFlow requires GradientTape for automatic differentiation
+with tf.GradientTape() as tape:
+    # Watch the input tensors
+    tape.watch(x)
+    tape.watch(w_linear)
+
+    # Linear operation: x * w^T
+    values = tnp.dot(x, w_linear.T)
+
+    # Create a view (reshape) similar to values.view(B, H * W, C)
+    values_view = tnp.reshape(values, (B, H * W, C))
+    
+    # Watch the view specifically to inspect its gradient later
+    tape.watch(values_view)
+
+    # Create weights for the einsum operation using the similar API
+    weights = tnp.asarray(tf.random.normal((B, H * W, C)))
+
+    # Perform the einsum operation
+    # Note: tf.einsum is the direct equivalent, wrapped here via tnp if available,
+    # or standard tf.einsum. tnp.einsum maps to tf.einsum.
+    result = tnp.einsum("bhc,bhc->bc", weights, values_view)
+
+# Compute gradients
+# Equivalent to result.backward(torch.ones_like(result))
+grad_result = tnp.asarray(tf.ones_like(result))
+grads = tape.gradient(result, values_view)
+
+# Verify strides
+# In PyTorch, the bug was that grad.stride() != values_view.stride()
+# In TensorFlow, we use tnp.strides to inspect the layout.
+print("Forward strides:", values_view.shape, tnp.strides(values_view))
+print("Gradient strides:", grads.shape, tnp.strides(grads))
+
+# Assertion to check if strides match (mimicking the expectation from the bug report)
+# Note: TensorFlow's memory handling might differ from PyTorch, 
+# so this serves to verify the behavior of the similar API context.
+if grads is not None:
+    assert tnp.strides(values_view) == tnp.strides(grads), \
+        f"Stride mismatch! Forward: {tnp.strides(values_view)}, Grad: {tnp.strides(grads)}"
+else:
+    print("Gradient is None")
+```

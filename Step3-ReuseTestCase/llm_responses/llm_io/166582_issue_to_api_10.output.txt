@@ -1,0 +1,120 @@
+```python
+import torch
+import torch.nn as nn
+import torch._dynamo
+from torch._dynamo import register_backend, disable
+from torch._inductor.compile_fx import compile_fx
+import asyncio
+
+# --- Mocking the external hardware dependency to make the test runnable ---
+
+async def mock_hardware_matmul_async(dut, a, b, bias=None):
+    """
+    Simulates the async hardware matmul operation.
+    In the original bug report, this calls 'test_tpu.matmul'.
+    """
+    # Simulate async operation
+    await asyncio.sleep(0.001)
+    
+    # Perform a standard matmul to simulate the output logic
+    # Note: The bug report involves int8 quantization, but for a runnable test
+    # we ensure the tensor operations are valid.
+    c = torch.matmul(a, b.t())
+    if bias is not None:
+        c = c + bias
+    return c
+
+# --- Reproduction Logic from Bug Report ---
+
+@disable
+async def dut_matmul_async(dut, a: torch.Tensor, b: torch.Tensor, bias=None):
+    """
+    Async function that prepares data and calls the hardware.
+    Decorated with @disable to prevent torch.compile from tracing into it.
+    """
+    # Quantization logic from the bug report
+    a_q = a.clamp(-128, 127).to(torch.int8)
+    b_q = b.clamp(-128, 127).to(torch.int8)
+
+    # Call the mocked hardware
+    c = await mock_hardware_matmul_async(dut, a_q, b_q, bias)
+    
+    # Return as int32 as per the bug report
+    return c.to(torch.int32)
+
+def dut_matmul_sync(dut, a, b, bias=None):
+    """
+    Synchronous wrapper for the async hardware call.
+    This pattern mirrors the wrapper structure seen in tf.compat.v1.user_ops.my_fact.
+    """
+    return asyncio.run(dut_matmul_async(dut, a, b, bias))
+
+def make_backend():
+    """
+    Registers a custom backend that replaces nn.Linear with the custom matmul.
+    """
+    @register_backend(name="custom_tpu_backend")
+    def _backend(gm: torch.fx.GraphModule, example_inputs):
+        # ---- Replace every linear node ----
+        for node in list(gm.graph.nodes):
+            if node.target == torch.ops.aten.linear.default:
+                x, weight, bias = node.args
+                with gm.graph.inserting_before(node):
+                    # Insert the custom synchronous wrapper
+                    new_node = gm.graph.call_function(
+                        dut_matmul_sync,
+                        args=(None, x, weight, bias),
+                    )
+                node.replace_all_uses_with(new_node)
+                gm.graph.erase_node(node)
+
+        gm.recompile()
+        # Let Inductor compile the rest of the graph
+        return compile_fx(gm, example_inputs)
+
+    return _backend
+
+# --- Test Case ---
+
+def test_backend_compiler_graph_break():
+    """
+    Test case to reproduce the Backend Compiler Graph Break issue.
+    It verifies that a custom backend can replace Linear layers and execute
+    without breaking the graph or causing compilation errors.
+    """
+    # 1. Register the backend
+    make_backend()
+
+    # 2. Define a simple model with a Linear layer
+    class SimpleModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(10, 5)
+        
+        def forward(self, x):
+            return self.linear(x)
+
+    model = SimpleModel()
+    input_tensor = torch.randn(2, 10)
+
+    # 3. Compile the model using the custom backend
+    # The bug report indicates issues here regarding graph breaks and lowering
+    compiled_model = torch.compile(model, backend="custom_tpu_backend")
+
+    # 4. Run the model
+    try:
+        output = compiled_model(input_tensor)
+        
+        # 5. Assertions to verify execution
+        assert output is not None, "Output is None"
+        assert output.shape == (2, 5), f"Expected shape (2, 5), got {output.shape}"
+        
+        print("Test Passed: Backend executed successfully without graph break.")
+        
+    except Exception as e:
+        print(f"Test Failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_backend_compiler_graph_break()
+```

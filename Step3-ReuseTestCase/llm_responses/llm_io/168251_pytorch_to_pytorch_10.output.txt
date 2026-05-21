@@ -1,0 +1,116 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import torch.nn as nn
+import torch.nn.functional as F
+import os
+
+class VAE(nn.Module):
+
+    def __init__(self, input_dim, hidden_dim, latent_dim):
+        super(VAE, self).__init__()
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_var = nn.Linear(hidden_dim, latent_dim)
+        self.decoder = nn.Sequential(nn.Linear(latent_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, input_dim), nn.Sigmoid())
+
+    def encode(self, x):
+        h = self.encoder(x)
+        mu = self.fc_mu(h)
+        log_var = self.fc_var(h)
+        return (mu, log_var)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def decode(self, z):
+        return self.decoder(z)
+
+    def forward(self, x):
+        x = x.view(-1, self.input_dim)
+        (mu, log_var) = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        reconstruction = self.decode(z)
+        return (reconstruction, mu, log_var)
+
+def get_default_model():
+    input_dim = 784
+    hidden_dim = 400
+    latent_dim = 20
+    model = VAE(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim)
+    return model
+
+def get_sample_inputs():
+    batch_size = 32
+    input_dim = 784
+    x = torch.randn(batch_size, input_dim)
+    return (x,)
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_gather_object_test(rank, world_size):
+    setup(rank, world_size)
+    
+    model = get_default_model()
+    model.eval()
+    inputs = get_sample_inputs()
+    
+    # Run model in eager mode to get the tuple output
+    with torch.no_grad():
+        output_tuple = model(*inputs)
+    
+    # Verify local output structure
+    assert isinstance(output_tuple, tuple)
+    assert len(output_tuple) == 3
+    reconstruction, mu, log_var = output_tuple
+    print(f"Rank {rank} - Local output shapes: {reconstruction.shape}, {mu.shape}, {log_var.shape}")
+
+    # Prepare list for gathering
+    gathered_list = [None] * world_size if rank == 0 else None
+    
+    # Use torch.distributed.gather_object to collect the tuple outputs
+    dist.gather_object(output_tuple, gathered_list, dst=0)
+    
+    if rank == 0:
+        print(f"Rank {rank} - Gathered list type: {type(gathered_list)}")
+        assert isinstance(gathered_list, list), "Gathered output should be a list"
+        assert len(gathered_list) == world_size, f"Expected {world_size} items in gathered list"
+        
+        # Verify the contents of the gathered list
+        for i, item in enumerate(gathered_list):
+            assert isinstance(item, tuple), f"Item {i} should be a tuple"
+            recon, mu, log_var = item
+            
+            # Verify shapes of the tensors inside the tuple
+            assert recon.shape == torch.Size([32, 784]), f"Rank {i} reconstruction shape mismatch"
+            assert mu.shape == torch.Size([32, 20]), f"Rank {i} mu shape mismatch"
+            assert log_var.shape == torch.Size([32, 20]), f"Rank {i} log_var shape mismatch"
+            
+            print(f"Rank {rank} - Verified gathered item from rank {i}: {recon.shape}, {mu.shape}, {log_var.shape}")
+
+        # Verify that accessing .shape on the list itself raises AttributeError
+        # This mimics the behavior described in the original bug report where a tuple/list was confused for a tensor
+        try:
+            _ = gathered_list.shape
+            assert False, "List object should not have 'shape' attribute"
+        except AttributeError:
+            print("Rank 0 - Correctly raised AttributeError when accessing .shape on the gathered list.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(run_gather_object_test, args=(world_size,), nprocs=world_size, join=True)
+```

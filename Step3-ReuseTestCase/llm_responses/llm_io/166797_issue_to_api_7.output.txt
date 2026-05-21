@@ -1,0 +1,102 @@
+```python
+#!/usr/bin/env python3
+
+"""
+Test case to verify that torch.onnx.export with dynamo=True produces correct ONNX graphs,
+specifically checking that Convolution layer bias shapes are correct.
+Based on Issue ID: 166797
+"""
+
+import torch
+import torch.onnx
+from torchvision.models import resnet50, ResNet50_Weights
+import onnx
+import onnx.numpy_helper
+import os
+
+def test_resnet50_dynamo_export_bias_shape():
+    """
+    Test that exporting ResNet50 with dynamo=True does not produce incorrect bias shapes
+    in Convolution layers.
+    """
+    # Setup: Create ResNet50 model
+    weights = ResNet50_Weights.DEFAULT
+    model = resnet50(weights=weights)
+    model.eval()
+
+    # Create dummy input
+    dummy_input = torch.randn(1, 3, 224, 224)
+    
+    # Path for the exported model
+    onnx_path = "resnet50_dynamo_test.onnx"
+
+    try:
+        # Action: Export using dynamo
+        # This is the path reported to be buggy in Issue 166797
+        torch.onnx.export(
+            model=model,
+            args=dummy_input,
+            f=onnx_path,
+            export_params=True,
+            opset_version=21,
+            do_constant_folding=True,
+            input_names=['input'],
+            output_names=['output'],
+            dynamo=True,
+            fallback=False,
+        )
+
+        # Verification: Load the ONNX model and inspect Conv nodes
+        onnx_model = onnx.load(onnx_path)
+        
+        # Create a map of initializer names to tensors for easy lookup
+        initializer_map = {init.name: init for init in onnx_model.graph.initializer}
+        
+        found_incorrect_bias = False
+        details = []
+
+        for node in onnx_model.graph.node:
+            if node.op_type == 'Conv':
+                # A Conv node has inputs: [input, weight, bias]
+                # Bias is optional (index 2)
+                if len(node.input) > 2:
+                    bias_name = node.input[2]
+                    weight_name = node.input[1]
+                    
+                    bias_tensor = initializer_map.get(bias_name)
+                    weight_tensor = initializer_map.get(weight_name)
+                    
+                    if bias_tensor and weight_tensor:
+                        # Weight shape is [out_channels, in_channels, H, W]
+                        out_channels = weight_tensor.dims[0]
+                        
+                        # Bias shape should be [out_channels]
+                        bias_shape = list(bias_tensor.dims)
+                        
+                        # The bug report mentions "bias tensor shape is obviously incorrect"
+                        # We assert that the bias is 1D and matches the output channels
+                        if len(bias_shape) != 1 or bias_shape[0] != out_channels:
+                            found_incorrect_bias = True
+                            details.append(
+                                f"Node {node.name}: Expected bias shape [{out_channels}], "
+                                f"got {bias_shape}. Weight shape: {list(weight_tensor.dims)}"
+                            )
+                            
+                            # Specific check for the node mentioned in the bug report if it exists
+                            if "649" in node.name:
+                                print(f"Found specific problematic node from bug report: {node.name}")
+
+        # Assert that no incorrect biases were found
+        assert not found_incorrect_bias, \
+            f"ONNX Dynamo export produced incorrect bias shapes:\n" + "\n".join(details)
+
+        print("Test Passed: Dynamo export produced correct Conv bias shapes.")
+
+    finally:
+        # Cleanup
+        if os.path.exists(onnx_path):
+            os.remove(onnx_path)
+
+if __name__ == "__main__":
+    test_resnet50_dynamo_export_bias_shape()
+```

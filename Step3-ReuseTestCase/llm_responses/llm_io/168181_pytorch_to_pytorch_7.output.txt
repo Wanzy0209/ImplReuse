@@ -1,0 +1,95 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+import unittest
+
+try:
+    import triton
+    import triton.language as tl
+
+    @triton.jit
+    def add_kernel(
+        x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+except ImportError:
+    print("Triton not available, skipping test.")
+    exit(0)
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use gloo backend for CPU communication in the test setup, 
+    # but tensors will be on CUDA.
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+    
+    if rank == 0:
+        # Sender
+        x = torch.randn(4, 4, device="cuda")
+        y = torch.randn(4, 4, device="cuda")
+        
+        # Define the function to be tested
+        # Adapted from original: out.cpu() -> dist.send_object_list([out])
+        def f(x, y):
+            out = torch.zeros_like(x)
+            add_kernel[(1,)](x, y, out, 16, 16)
+            # send_object_list implicitly handles device movement (serialization)
+            # which is similar to the .cpu() call in the original bug.
+            dist.send_object_list([out], dst=1)
+
+        # Run Eager
+        f(x, y)
+        
+        # Synchronize to ensure receiver is ready for the next message
+        # (In a real distributed test, barriers are used, here we rely on sync nature of send/recv)
+        
+        # Run Compiled
+        f_compiled = torch.compile(f)
+        f_compiled(x, y)
+        
+    else:
+        # Receiver
+        # Receive Eager Result
+        eager_res_container = [None]
+        dist.recv_object_list(eager_res_container, src=0)
+        eager_out = eager_res_container[0]
+        
+        # Receive Compiled Result
+        compiled_res_container = [None]
+        dist.recv_object_list(compiled_res_container, src=0)
+        compiled_out = compiled_res_container[0]
+        
+        # Verify correctness
+        # The original bug was a mismatch between eager and compiled.
+        if not torch.allclose(eager_out, compiled_out):
+            print(f"Test Failed: Eager and Compiled outputs do not match.")
+            print(f"Eager:\n{eager_out}")
+            print(f"Compiled:\n{compiled_out}")
+        else:
+            print("Test Passed: Eager and Compiled outputs match.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Check for CUDA availability
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+    else:
+        mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+```

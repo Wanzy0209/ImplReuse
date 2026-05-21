@@ -1,0 +1,72 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import torch.nn as nn
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+    
+    if rank == 0:
+        # Adapted from the bug report: creating a learnable scalar and a batched parameter
+        # Bug report context: Flex Attention failed with scalar parameter but worked with batched.
+        # Here we test if send_object_list can handle both types of parameters.
+        scalar_param = nn.Parameter(torch.tensor(0.0))
+        batched_param = nn.Parameter(torch.randn(2)) # Batch size 2
+        
+        # The API under test: torch.distributed.send_object_list
+        # We send a list containing these learnable parameters
+        object_list = [scalar_param, batched_param]
+        
+        try:
+            dist.send_object_list(object_list, dst=1)
+            print("Rank 0: Successfully sent parameters.")
+        except Exception as e:
+            print(f"Rank 0: Failed to send parameters. Error: {e}")
+
+    elif rank == 1:
+        # Prepare a list to receive objects
+        object_list = [None, None]
+        
+        try:
+            dist.recv_object_list(object_list, src=0)
+            
+            # Verify the received objects
+            received_scalar = object_list[0]
+            received_batched = object_list[1]
+            
+            # Assertions to ensure data integrity
+            assert isinstance(received_scalar, torch.Tensor), "Scalar parameter not received as Tensor"
+            assert received_scalar.item() == 0.0, f"Scalar value mismatch: expected 0.0, got {received_scalar.item()}"
+            
+            assert isinstance(received_batched, torch.Tensor), "Batched parameter not received as Tensor"
+            assert received_batched.shape == (2,), f"Batched shape mismatch: expected (2,), got {received_batched.shape}"
+            
+            print("Rank 1: Successfully received and verified parameters.")
+        except Exception as e:
+            print(f"Rank 1: Failed to receive or verify parameters. Error: {e}")
+
+    cleanup()
+
+def test_distributed_send_object_list():
+    """
+    Test function to verify torch.distributed.send_object_list handles
+    learnable parameters (both scalar and batched) correctly.
+    """
+    world_size = 2
+    # Start multiprocessing
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    test_distributed_send_object_list()
+```

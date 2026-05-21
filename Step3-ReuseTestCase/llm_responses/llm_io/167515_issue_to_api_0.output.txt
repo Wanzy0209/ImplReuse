@@ -1,0 +1,52 @@
+```python
+import tensorflow as tf
+import numpy as np
+import pytest
+
+def test_variable_synchronization_4d_mask_stability():
+    """
+    Test to ensure that using VariableSynchronization (specifically ON_READ)
+    with a 4D attention mask does not yield NaN values, mirroring the
+    stability check performed in the PyTorch MPS issue (Issue 167515).
+    
+    The original issue involved torch.no_grad() causing NaNs on MPS with 4D masks.
+    Here we test the TensorFlow equivalent of controlling variable access/update
+    behavior using VariableSynchronization during a similar operation.
+    """
+    # Recreate the 4D attention mask from the PyTorch issue
+    # Shape: (Batch, Heads, SeqLen, SeqLen)
+    attention_mask = tf.constant([
+        [[[1, 0, 0, 0],
+          [1, 1, 0, 0],
+          [0, 0, 0, 0],
+          [0, 0, 0, 0]]],
+        [[[1, 0, 0, 0],
+          [1, 1, 0, 0],
+          [1, 1, 1, 0],
+          [1, 1, 1, 1]]]], dtype=tf.float32)
+
+    # Define a variable with ON_READ synchronization.
+    # This mode aggregates the variable when read, which is a specific
+    # execution flow control. We test this to ensure it doesn't introduce
+    # instability (NaNs) similar to the torch.no_grad() context issue.
+    var = tf.Variable(
+        initial_value=tf.random.normal((2, 1, 4, 4)),
+        trainable=False,
+        synchronization=tf.VariableSynchronization.ON_READ,
+        aggregation=tf.VariableAggregation.MEAN
+    )
+
+    # Perform the masked operation
+    # We use tf.stop_gradient to mimic the 'no_grad' context explicitly,
+    # ensuring we are testing the forward pass stability with the specific synchronization.
+    masked_output = tf.stop_gradient(var) * attention_mask
+    
+    # Simulate a reduction to produce logits/output
+    logits = tf.reduce_sum(masked_output, axis=[-1, -2])
+
+    # Assert no NaNs
+    assert not tf.reduce_any(tf.math.is_nan(logits)), "Logits contain NaN values with VariableSynchronization.ON_READ"
+
+if __name__ == "__main__":
+    test_variable_synchronization_4d_mask_stability()
+```

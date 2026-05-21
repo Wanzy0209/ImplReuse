@@ -1,0 +1,65 @@
+```python
+import torch
+import torch.nn as nn
+from torch.nn.attention.flex_attention import flex_attention
+
+def test_flex_attention_compile_scalar_param():
+    """
+    Test case to verify that flex_attention supports learnable scalars
+    inside score_mod, specifically when used with torch.compile.
+    
+    This addresses the issue where:
+    1. Without compiling: Backward pass fails with vmap error.
+    2. With compiling: Forward pass fails.
+    """
+    
+    # Setup inputs
+    B, H, S, D = 2, 2, 8, 4
+    q = torch.randn(B, H, S, D, requires_grad=True)
+    k = torch.randn(B, H, S, D, requires_grad=True)
+    v = torch.randn(B, H, S, D, requires_grad=True)
+
+    # Define the learnable scalar parameter (the bug trigger)
+    temp = nn.Parameter(torch.tensor(0.0))
+
+    def score_mod(score, b, h, q_idx, kv_idx):
+        # Adding a scalar parameter to the score
+        return score + temp
+
+    # --- Test Case 1: Without torch.compile ---
+    # The bug report stated backward failed here.
+    print("Testing flex_attention without compile...")
+    out = flex_attention(q, k, v, score_mod=score_mod)
+    loss = out.sum()
+    loss.backward()
+    
+    # Assertions to verify execution
+    assert out is not None, "Forward pass failed without compile"
+    assert temp.grad is not None, "Backward pass failed without compile (no gradient for scalar)"
+    print("Passed: Forward and Backward without compile.")
+
+    # Reset gradients for the next test
+    temp.grad = None
+    q.grad = None
+    k.grad = None
+    v.grad = None
+
+    # --- Test Case 2: With torch.compile ---
+    # The bug report stated forward failed here.
+    print("Testing flex_attention with torch.compile...")
+    compiled_flex = torch.compile(flex_attention)
+    
+    # Run forward pass
+    out_compiled = compiled_flex(q, k, v, score_mod=score_mod)
+    assert out_compiled is not None, "Forward pass failed with compile"
+    print("Passed: Forward with compile.")
+
+    # Run backward pass
+    loss_compiled = out_compiled.sum()
+    loss_compiled.backward()
+    assert temp.grad is not None, "Backward pass failed with compile (no gradient for scalar)"
+    print("Passed: Backward with compile.")
+
+if __name__ == "__main__":
+    test_flex_attention_compile_scalar_param()
+```

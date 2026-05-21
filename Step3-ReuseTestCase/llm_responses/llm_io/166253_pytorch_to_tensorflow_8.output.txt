@@ -1,0 +1,55 @@
+```python
+import tensorflow as tf
+import tf.experimental.dtensor as dt
+
+# Setup a simple mesh for DTensor operations
+# This is required to use dtensor.pack and dtensor.unpack
+devices = tf.config.list_physical_devices()
+if not devices:
+    # Fallback for environments without visible devices (e.g. some CI setups)
+    # In a real scenario, physical devices are required for DTensor.
+    # We assume a standard environment for this test case.
+    raise RuntimeError("No physical devices found to run DTensor operations.")
+
+mesh = dt.create_mesh([("x", 1)], devices=devices)
+
+def func_nojit(x):
+    """
+    Mimics the structure of the original torch.full test.
+    Instead of filling a tensor, we pack a tensor into a DTensor
+    and then unpack it.
+    """
+    # Pack the input tensor into a DTensor
+    dtensor = dt.pack(x, mesh=mesh, layout=[dt.UNSHARDED])
+    # Unpack the DTensor back to components
+    return dt.unpack(dtensor)
+
+# TensorFlow equivalent of torch.compile
+func_jit = tf.function(func_nojit)
+
+# Inputs matching the original test case (float64)
+# Original: torch.full((2, ), x, dtype=torch.float64)
+# We create tensors of shape (2,) to match the output shape of the original API.
+x1 = tf.constant([5.0, 5.0], dtype=tf.float64)
+x2 = tf.constant([10.0, 10.0], dtype=tf.float64)
+
+print("--- Testing No JIT ---")
+res1_nojit = func_nojit(x1)
+res2_nojit = func_nojit(x2)
+print(f"Input 5.0 -> {res1_nojit[0]}")  # unpack returns a list of components
+print(f"Input 10.0 -> {res2_nojit[0]}")
+
+print("\n--- Testing JIT (tf.function) ---")
+res1_jit = func_jit(x1)
+res2_jit = func_jit(x2)
+print(f"Input 5.0 -> {res1_jit[0]}")
+print(f"Input 10.0 -> {res2_jit[0]}")
+
+# Assertions to verify the bug reproduction logic
+# The original bug caused the second call to return the result of the first call (5.0).
+# We assert that the values are actually different and correct.
+assert tf.reduce_all(res1_jit[0] == 5.0).numpy(), "JIT result for x1 should be 5.0"
+assert tf.reduce_all(res2_jit[0] == 10.0).numpy(), "JIT result for x2 should be 10.0 (Bug if 5.0)"
+
+print("\nTest passed: JIT correctly updates values.")
+```
