@@ -1,0 +1,68 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_stop_gradient_compilation():
+    """
+    Adapted test case for tf.keras.ops.stop_gradient based on the 
+    torch.addmm bug report.
+    
+    Original Bug Logic: The compiler (torch.compile) ignored specific 
+    parameters (alpha/beta) of the addmm operation, leading to incorrect 
+    numerical results.
+    
+    Adapted Logic: We verify that the TensorFlow compiler (tf.function) 
+    does not ignore the semantic behavior of stop_gradient (blocking gradients).
+    """
+    
+    # 1. Setup inputs
+    # Mimicking the tensor creation from the PyTorch example
+    x = tf.constant(np.random.rand(2, 3), dtype=tf.float32)
+
+    # 2. Define function using the API
+    # PyTorch: lambda x, a, b: torch.nn.functional.relu(torch.addmm(x, a, b, alpha=0.5, beta=0.5))
+    # TF: We use stop_gradient. Since it doesn't have alpha/beta, we verify its 
+    # core functionality: gradient blocking.
+    f = lambda x: tf.nn.relu(tf.keras.ops.stop_gradient(x))
+
+    # 3. Compile the function
+    # tf.function is the TensorFlow equivalent to torch.compile
+    fc = tf.function(f)
+
+    # 4. Execute Eager and Compiled versions
+    res_eager = f(x)
+    res_compiled = fc(x)
+
+    print("Eager Result:\n", res_eager)
+    print("Compiled Result:\n", res_compiled)
+
+    # 5. Verification
+    
+    # Check Forward Pass: Values should be identical
+    # stop_gradient does not change forward pass values, so they must match exactly.
+    assert tf.reduce_all(tf.equal(res_eager, res_compiled)).numpy(), \
+        "Forward pass mismatch: Eager and Compiled results differ."
+
+    # Check Backward Pass: Gradients should be blocked (None)
+    # This is the semantic equivalent of checking if alpha/beta were ignored.
+    # If stop_gradient is ignored by the compiler, gradients will flow.
+    
+    with tf.GradientTape() as tape:
+        y = f(x)
+    grad_eager = tape.gradient(y, x)
+
+    with tf.GradientTape() as tape:
+        y = fc(x)
+    grad_compiled = tape.gradient(y, x)
+
+    print("Eager Gradient:\n", grad_eager)
+    print("Compiled Gradient:\n", grad_compiled)
+
+    # Assert gradients are None (disconnected)
+    assert grad_eager is None, "Eager mode failed: Gradient was not stopped."
+    assert grad_compiled is None, "Compiled mode failed: Gradient was not stopped (Bug detected)."
+
+    print("\nTest Passed: tf.keras.ops.stop_gradient behaves correctly under tf.function.")
+
+if __name__ == "__main__":
+    test_stop_gradient_compilation()

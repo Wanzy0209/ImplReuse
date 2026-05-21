@@ -1,0 +1,91 @@
+import torch
+import tensorflow as tf
+import os
+
+# Attempt to initialize TPU for the test case
+# Note: This code requires a TPU environment to execute the compiled path successfully.
+tpu_initialized = False
+try:
+    resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(resolver)
+    tf.tpu.experimental.initialize_tpu_system(resolver)
+    tpu_initialized = True
+    print(" TPU initialized")
+except ValueError:
+    print(" TPU not found. The compiled test case requires a TPU environment to run.")
+
+def computation_fn(arg_0, sentinel):
+    """
+    Translated logic from the PyTorch fuzzed_program.
+    Original operations:
+    - var_node_2 = -6 (int)
+    - var_node_3 = arg_0 (int32)
+    - var_node_1 = var_node_2 * var_node_3 (int32)
+    - var_node_5 = torch.full((), 1, dtype=torch.int64) -> Tensor int64
+    - var_node_4 = var_node_5.item() -> Scalar extraction
+    - var_node_0 = var_node_1 / var_node_4 -> Division
+    - result = var_node_0 * sentinel
+    """
+    # var_node_2 = -6
+    var_node_2 = tf.constant(-6, dtype=tf.int32)
+    
+    # var_node_3 = arg_0
+    var_node_3 = arg_0
+    
+    # var_node_1 = var_node_2 * var_node_3
+    var_node_1 = tf.multiply(var_node_2, var_node_3)
+
+    # var_node_5 = torch.full((), 1, dtype=torch.int64)
+    var_node_5 = tf.fill((), 1)
+    var_node_5 = tf.cast(var_node_5, tf.int64)
+
+    # var_node_4 = var_node_5.item()
+    # In TensorFlow graph/TPU mode, we cannot extract a Python scalar item() and use it 
+    # in subsequent graph operations without breaking the graph or using tf.py_function.
+    # To preserve the graph structure for compilation, we treat var_node_4 as a scalar tensor.
+    var_node_4 = var_node_5
+
+    # var_node_0 = var_node_1 / var_node_4
+    # PyTorch '/' is true division. We cast to float to mimic standard division behavior
+    # between integers, as TF divide promotes to float.
+    var_node_0 = tf.divide(tf.cast(var_node_1, tf.float32), tf.cast(var_node_4, tf.float32))
+
+    # result = var_node_0 * sentinel
+    result = tf.multiply(var_node_0, sentinel)
+
+    # if result.is_complex(): result = result.real
+    if result.dtype.is_complex:
+        result = tf.math.real(result)
+
+    return result
+
+# Setup inputs
+# arg_0 = torch.tensor(torch.randn(()), dtype=torch.int32).item()
+# In TF, we pass a scalar tensor.
+arg_0 = tf.constant(0, dtype=tf.int32) 
+sentinel = tf.constant(1.0)
+
+# 1. Run Eager
+print("Running eager...")
+try:
+    result_eager = computation_fn(arg_0, sentinel)
+    print(f' eager success: {result_eager.numpy()}')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# 2. Run Compiled (tf.compat.v1.tpu.rewrite)
+# This API compiles the computation for TPU execution.
+if tpu_initialized:
+    print("Running compiled (tpu.rewrite)...")
+    try:
+        # tf.compat.v1.tpu.rewrite expects inputs as a list of lists of tensors
+        compiled_result = tf.compat.v1.tpu.rewrite(
+            computation_fn,
+            inputs=[[arg_0, sentinel]]
+        )
+        # rewrite returns a list of tensors corresponding to the function's return values
+        print(f' compile success: {compiled_result[0].numpy()}')
+    except Exception as e:
+        print(f' compile failed: {e}')
+else:
+    print("Skipping compiled run due to missing TPU.")

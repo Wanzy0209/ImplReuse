@@ -1,0 +1,69 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+class ErfModule(tf.Module):
+    """
+    TensorFlow equivalent of the PyTorch Foo module, adapted for tf.math.erf.
+    """
+    def __init__(self, name=None):
+        super().__init__(name=name)
+
+    def __call__(self, x: tf.Tensor) -> tf.Tensor:
+        # Adapted from torch.searchsorted(self.q, x.T).T
+        # to tf.math.erf(x)
+        return tf.math.erf(x)
+
+def test_device(device_name, x):
+    print(f'\n--- Testing on device: {device_name} ---')
+    
+    # Use the specified device
+    with tf.device(device_name):
+        module = ErfModule()
+        
+        # Create a compiled version of the module.
+        # tf.function with jit_compile=True is the equivalent of torch.compile(..., fullgraph=True)
+        compiled_module = tf.function(module, jit_compile=True)
+
+        # Warm up
+        y_eager = module(x)
+        y_compiled = compiled_module(x)
+
+        # Proper inference
+        y_eager = module(x)
+        y_compiled = compiled_module(x)
+
+        # Calculate difference
+        diff = tf.reduce_max(tf.abs(y_eager - y_compiled))
+        print(f'Max difference: {diff.numpy()}')
+        
+        # Print samples for visual verification
+        print('Eager (first 5):', y_eager.numpy()[:5, :5])
+        print('Compiled (first 5):', y_compiled.numpy()[:5, :5])
+
+        # Assert that results are close (numerical precision)
+        # tf.math.erf is deterministic, so diff should be negligible
+        assert diff < 1e-5, f"Difference too large between eager and compiled modes: {diff}"
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    
+    # Set seed for reproducibility
+    tf.random.set_seed(42)
+    
+    # Generate data
+    x = tf.random.normal((batch_size, feature_dim), dtype=tf.float32)
+    
+    # Test CPU
+    test_device('/CPU:0', x)
+    
+    # Test GPU if available
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        test_device('/GPU:0', x)
+    else:
+        print("No GPU found, skipping GPU test.")
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,53 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_ndim_in_compiled_function():
+    """
+    Test case adapted from PyTorch Issue 166888.
+    
+    Original Bug: torch.compile failed with a NameError when .item() was called 
+    on a float tensor argument inside the compiled function.
+    
+    Adaptation: This test uses tf.function (TensorFlow's compilation equivalent)
+    and the similar API tf.keras.ops.ndim to verify that extracting a scalar 
+    property from a tensor argument inside a compiled graph works correctly.
+    """
+    
+    # Mimic torch.compile with tf.function
+    @tf.function
+    def f(x, ref_tensor):
+        # Original logic: max_val.item() (extracts scalar from tensor arg)
+        # Adapted logic: tf.keras.ops.ndim(ref_tensor) (extracts scalar rank from tensor arg)
+        scalar_val = tf.keras.ops.ndim(ref_tensor)
+        
+        # Original logic: torch.clamp(x, 0, max_val.item())
+        # Adapted logic: tf.clip_by_value using the extracted scalar.
+        # We cast the integer rank to float to match x's dtype for the operation.
+        y = tf.clip_by_value(x, 0.0, tf.cast(scalar_val, x.dtype))
+        return y
+
+    # Setup inputs
+    # x is a float tensor
+    x = tf.random.normal((10, 20, 30))
+    
+    # ref_tensor is a tensor argument from which we extract a scalar.
+    # We use a vector (rank 1) so the extracted scalar is 1.0.
+    ref_tensor = tf.constant([1.0, 2.0, 3.0])
+
+    # Execute the compiled function
+    result = f(x, ref_tensor)
+
+    # Assertions
+    # Verify the shape is preserved
+    assert result.shape == x.shape
+    
+    # Verify the logic: rank of [1.0, 2.0, 3.0] is 1. Max clip is 1.0.
+    # So any value > 1 becomes 1. Any value < 0 stays same.
+    expected = tf.clip_by_value(x, 0.0, 1.0)
+    np.testing.assert_allclose(result.numpy(), expected.numpy())
+    
+    print("Test passed: tf.keras.ops.ndim works correctly inside tf.function.")
+
+if __name__ == "__main__":
+    test_ndim_in_compiled_function()

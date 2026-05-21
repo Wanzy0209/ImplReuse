@@ -1,0 +1,43 @@
+import torch
+import tensorflow as tf
+
+def test_data_dependent_guard_in_graph():
+    """
+    Test case derived from PyTorch Issue 165081.
+    
+    The PyTorch issue involves a failure to guard on a data-dependent 
+    expression 'Ne(u0, 9)' during compilation (torch._dynamo).
+    
+    This test translates that scenario to TensorFlow. In TensorFlow, 
+    using a data-dependent expression (like a tensor comparison in a 
+    Python boolean context) inside a tf.function (graph mode) is 
+    explicitly disallowed and raises tf.errors.OperatorNotAllowedInGraphError.
+    """
+    
+    @tf.function
+    def func_with_data_dependent_guard(arg_0):
+        # Simulate some tensor operations similar to the fuzzer output
+        # (matmuls and fulls)
+        x = tf.matmul(arg_0, tf.ones((3, 3), dtype=tf.float64))
+        
+        # The specific logic from the PyTorch error: "Ne(u0, 9)"
+        # u0 represents a value derived from the tensor.
+        # In TF, this triggers OperatorNotAllowedInGraphError.
+        if x[0, 0] != 9.0:
+            return x + 1.0
+        return x
+
+    # Create a dummy input
+    input_tensor = tf.ones((3, 3), dtype=tf.float64)
+
+    # Expect the specific error related to graph execution constraints
+    try:
+        func_with_data_dependent_guard(input_tensor)
+        assert False, "Expected OperatorNotAllowedInGraphError was not raised."
+    except tf.errors.OperatorNotAllowedInGraphError as e:
+        # Success: The API correctly identifies the data-dependent operation
+        # is not allowed in graph mode, mirroring the constraint implied by the PyTorch bug.
+        print(f"Test passed. Caught expected error: {e}")
+
+if __name__ == "__main__":
+    test_data_dependent_guard_in_graph()

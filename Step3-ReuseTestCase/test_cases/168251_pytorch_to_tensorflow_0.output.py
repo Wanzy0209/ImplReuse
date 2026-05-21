@@ -1,0 +1,113 @@
+import tensorflow as tf
+import numpy as np
+
+class VAE(tf.Module):
+    """
+    A TensorFlow implementation of the VAE model to mimic the PyTorch structure.
+    """
+    def __init__(self, input_dim, hidden_dim, latent_dim):
+        super(VAE, self).__init__()
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        self.encoder = tf.keras.Sequential([
+            tf.keras.layers.Dense(hidden_dim, activation='relu'),
+            tf.keras.layers.Dense(hidden_dim, activation='relu')
+        ])
+        self.fc_mu = tf.keras.layers.Dense(latent_dim)
+        self.fc_var = tf.keras.layers.Dense(latent_dim)
+        self.decoder = tf.keras.Sequential([
+            tf.keras.layers.Dense(hidden_dim, activation='relu'),
+            tf.keras.layers.Dense(hidden_dim, activation='relu'),
+            tf.keras.layers.Dense(input_dim, activation='sigmoid')
+        ])
+
+    def encode(self, x):
+        h = self.encoder(x)
+        mu = self.fc_mu(h)
+        log_var = self.fc_var(h)
+        return (mu, log_var)
+
+    def reparameterize(self, mu, log_var):
+        std = tf.exp(0.5 * log_var)
+        eps = tf.random.normal(shape=tf.shape(std))
+        return mu + eps * std
+
+    def decode(self, z):
+        return self.decoder(z)
+
+    def __call__(self, x):
+        # Reshape input
+        x = tf.reshape(x, [-1, self.input_dim])
+        mu, log_var = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        reconstruction = self.decode(z)
+        # Return a tuple, similar to the PyTorch forward pass
+        return (reconstruction, mu, log_var)
+
+def get_default_model():
+    input_dim = 784
+    hidden_dim = 400
+    latent_dim = 20
+    return VAE(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim)
+
+def get_sample_inputs():
+    batch_size = 32
+    input_dim = 784
+    # tf.compat.v1.tpu.rewrite expects inputs as a list of tensors
+    x = tf.random.normal((batch_size, input_dim))
+    return [x]
+
+def main():
+    # Initialize TPU if available
+    # Note: tf.compat.v1.tpu.rewrite is designed for TPU execution.
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        print("TPU initialized successfully.")
+    except ValueError:
+        print("Warning: No TPU found. The code will attempt to run, but tpu.rewrite requires TPU hardware/context.")
+
+    model = get_default_model()
+    inputs = get_sample_inputs()
+
+    # --- Eager Execution ---
+    print("--- Eager Mode ---")
+    # Unpacking the tuple works fine here
+    reconstruction, mu, log_var = model(inputs[0])
+    print(f'Input shape: {inputs[0].shape}')
+    print(f'Reconstruction shape: {reconstruction.shape}')
+    print(f'Mu shape: {mu.shape}')
+    print(f'Log_var shape: {log_var.shape}')
+    
+    # Calculate parameters
+    model_params = sum([np.prod(v.shape) for v in model.trainable_variables])
+    print(f'Model parameters: {model_params}')
+
+    # --- TPU Rewrite (Compilation) ---
+    print("\n--- TPU Rewrite Mode ---")
+    
+    # tf.compat.v1.tpu.rewrite compiles and runs the computation.
+    # It returns the result of the computation function.
+    # According to docs, it returns a list of tensors corresponding to the output.
+    try:
+        output_compile = tf.compat.v1.tpu.rewrite(model, inputs)
+        
+        print(f'Compile output type: {type(output_compile)}')
+        
+        # Bug Reproduction Logic:
+        # The original PyTorch bug occurs when the user assumes the compiled output
+        # is a single tensor (or has a .shape attribute) when the model returns a tuple.
+        # In TensorFlow, tpu.rewrite returns a list of tensors if the function returns multiple.
+        # Accessing .shape on a list/tuple will trigger an AttributeError.
+        
+        print(f'Compile shape: {output_compile.shape}')
+        
+    except AttributeError as e:
+        print(f"Caught AttributeError (Expected behavior for tuple/list output): {e}")
+    except Exception as e:
+        # Catching other potential errors (e.g., TPU not found during execution)
+        print(f"Caught Exception: {e}")
+
+if __name__ == '__main__':
+    main()

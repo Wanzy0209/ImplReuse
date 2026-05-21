@@ -1,0 +1,64 @@
+import torch
+import torch.nn as nn
+import collections
+
+# Reusing the code pattern of the similar API (tf.io.VarLenFeature) 
+# which is a namedtuple configuration class, to define test scenarios.
+LoadTestConfig = collections.namedtuple("LoadTestConfig", ["param_shape", "load_shape", "expect_error"])
+
+def test_load_state_dict_shape_mismatch():
+    """
+    Test that load_state_dict correctly handles shape mismatches.
+    Specifically verifies the fix for the bug where loading a 1D tensor 
+    into a scalar Parameter did not raise an error.
+    """
+    
+    # Define test configurations using the VarLenFeature-like pattern
+    test_configs = [
+        # Bug scenario: Scalar parameter initialized, 1D tensor loaded
+        LoadTestConfig(param_shape=(), load_shape=(10,), expect_error=True),
+        
+        # Other mismatch scenarios
+        LoadTestConfig(param_shape=(10,), load_shape=(), expect_error=True),
+        LoadTestConfig(param_shape=(5, 5), load_shape=(25,), expect_error=True),
+        
+        # Valid scenarios
+        LoadTestConfig(param_shape=(), load_shape=(), expect_error=False),
+        LoadTestConfig(param_shape=(10,), load_shape=(10,), expect_error=False),
+    ]
+
+    class SimpleModule(nn.Module):
+        def __init__(self, shape):
+            super().__init__()
+            # Initialize parameter with zeros of the specified shape
+            self.threshold = nn.Parameter(torch.zeros(shape))
+        
+        def forward(self, x):
+            return x
+
+    for config in test_configs:
+        module = SimpleModule(config.param_shape)
+        
+        # Create a state dict with a tensor of the target load shape
+        large_tensor = torch.randn(config.load_shape)
+        state_dict = {"threshold": large_tensor}
+
+        if config.expect_error:
+            # We expect a RuntimeError to be raised for shape mismatches
+            try:
+                module.load_state_dict(state_dict, strict=True)
+                # If we reach here, the bug is present (no error raised)
+                raise AssertionError(
+                    f"Bug reproduced: No error raised for param_shape={config.param_shape}, "
+                    f"load_shape={config.load_shape}. Expected RuntimeError."
+                )
+            except RuntimeError as e:
+                # Verify the error message is related to size mismatch
+                assert "size mismatch" in str(e).lower() or "shape" in str(e).lower()
+        else:
+            # Should load successfully without error
+            module.load_state_dict(state_dict, strict=True)
+            assert module.threshold.shape == torch.Size(config.load_shape)
+
+if __name__ == "__main__":
+    test_load_state_dict_shape_mismatch()

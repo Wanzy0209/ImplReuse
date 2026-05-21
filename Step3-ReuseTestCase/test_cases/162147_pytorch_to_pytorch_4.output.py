@@ -1,0 +1,168 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+
+class FastLearnedCellCummin(nn.Module):
+    """
+    Adapted from FastLearnedCellX3 to use torch.cummin instead of torch.topk.
+    This tests the behavior and performance of torch.cummin in a complex graph context.
+    """
+    def __init__(self, D_in, H, D_out,
+                 L_w1=12, L_w2=12, L_b2=12,
+                 k1=3, k2=3, k3=3, tau1=1.0, tau2=1.0, tau3=1.0,
+                 d_addr=64,           # address bottleneck
+                 learn_addr=False,
+                 learn_tape_w1=True, learn_tape_w2=True, learn_tape_b2=True):
+        super().__init__()
+        self.D_in, self.H, self.D_out = D_in, H, D_out
+
+        # keep sizes as plain Python ints (compile-friendly)
+        self.L_w1, self.L_w2, self.L_b2 = int(L_w1), int(L_w2), int(L_b2)
+        self.k1, self.k2, self.k3 = int(k1), int(k2), int(k3)
+        self.t1, self.t2, self.t3 = float(tau1), float(tau2), float(tau3)
+
+        # address bottleneck
+        self.P = nn.Linear(D_in, d_addr, bias=False)
+        if not learn_addr:
+            for p in self.P.parameters():
+                p.requires_grad = False
+            with torch.no_grad():
+                nn.init.normal_(self.P.weight, std=1.0/math.sqrt(D_in))
+
+        def init_U(L, d, learn):
+            U = torch.randn(L, d)
+            U = U - U.mean(dim=1, keepdim=True)
+            U = U / (U.norm(dim=1, keepdim=True) + 1e-8)
+            return nn.Parameter(U, requires_grad=learn)
+
+        # three unembeddings in addr-space
+        self.U1 = init_U(self.L_w1, d_addr, learn_addr)
+        self.U2 = init_U(self.L_w2, d_addr, learn_addr)
+        self.U3 = init_U(self.L_b2, d_addr, learn_addr)
+
+        # value tapes
+        self.W1 = nn.Parameter(F.normalize(torch.randn(self.L_w1, H, D_in), dim=(1,2)), requires_grad=learn_tape_w1)
+        self.W2 = nn.Parameter(F.normalize(torch.randn(self.L_w2, D_out, H), dim=(1,2)), requires_grad=learn_tape_w2)
+        self.b2 = nn.Parameter(F.normalize(torch.randn(self.L_b2, D_out), dim=1),      requires_grad=learn_tape_b2)
+
+        self.act = nn.GELU()
+
+    @staticmethod
+    def _cummin_op(z: torch.Tensor, k: int, tau: float) -> tuple:
+        """
+        Replaces torch.topk with torch.cummin.
+        torch.cummin returns the cumulative minimum along a dimension.
+        To adapt to the 'k' requirement of the original architecture, 
+        we take the last 'k' elements of the cumulative minimum sequence.
+        """
+        # values: [N, L], indices: [N, L]
+        values, indices = torch.cummin(z, dim=1)
+        
+        # Select the last k elements to match the expected shape [N, k]
+        # This simulates selecting the 'best' k items in a running minimum context
+        topk_values = values[:, -k:]
+        topk_indices = indices[:, -k:]
+        
+        w = torch.softmax(topk_values / (tau + 1e-8), dim=1)
+        return topk_indices, w
+
+    def _address(self, x_addr: torch.Tensor):
+        # fused logits for all three heads
+        U_pack = torch.cat([self.U1, self.U2, self.U3], dim=0)          # [Ltot, d]
+        Z = x_addr @ U_pack.t()                                         # [N, Ltot]
+        s1, s2, s3 = self.L_w1, self.L_w2, self.L_b2
+        z1, z2, z3 = torch.split(Z, (s1, s2, s3), dim=1)
+        
+        # Using the adapted cummin operation
+        i1, w1 = FastLearnedCellCummin._cummin_op(z1, self.k1, self.t1)
+        i2, w2 = FastLearnedCellCummin._cummin_op(z2, self.k2, self.t2)
+        i3, w3 = FastLearnedCellCummin._cummin_op(z3, self.k3, self.t3)
+        return (i1, w1), (i2, w2), (i3, w3)
+
+    @staticmethod
+    def _apply_mixture(x_flat, topi, weights, W):
+        """
+        Mix-then-apply (avoids replicating x):
+        x_flat : [N, in]
+        topi   : [N, k]
+        weights: [N, k]
+        W      : [L, out, in]
+        return : [N, out]
+        """
+        N, k = topi.shape
+        L, out_dim, in_dim = W.shape
+        
+        # Flatten indices to use index_select
+        flat_indices = topi.reshape(-1) # [N*k]
+        
+        # Select weights from W using index_select
+        # W is [L, out, in], we select based on flat_indices
+        selected_W = torch.index_select(W, 0, flat_indices) # [N*k, out, in]
+        
+        # Reshape to [N, k, out, in]
+        selected_W = selected_W.view(N, k, out_dim, in_dim)
+        
+        # Compute weighted sum
+        # x_flat: [N, in] -> [N, 1, 1, in]
+        # selected_W: [N, k, out, in]
+        # We want to perform matrix multiplication for each of the k selections
+        
+        # Efficient einsum approach
+        # 'ni,nkoi->nko' -> batch matmul of x with each selected W
+        out_features = torch.einsum('ni,nkoi->nko', x_flat, selected_W)
+        
+        # Apply weights: 'nk,nko->no'
+        result = torch.einsum('nk,nko->no', weights, out_features)
+        
+        return result
+
+    def forward(self, x):
+        x_addr = self.P(x)
+        (i1, w1), (i2, w2), (i3, w3) = self._address(x_addr)
+        
+        # Layer 1
+        h = self._apply_mixture(x, i1, w1, self.W1)
+        h = self.act(h)
+        
+        # Layer 2
+        out = self._apply_mixture(h, i2, w2, self.W2)
+        
+        # Bias
+        b = self._apply_mixture(torch.ones_like(x), i3, w3, self.b2)
+        out = out + b
+        
+        return out
+
+def test_cummin_in_complex_graph():
+    # Setup parameters
+    D_in, H, D_out = 128, 256, 10
+    batch_size = 16
+    
+    # Initialize model
+    model = FastLearnedCellCummin(D_in, H, D_out)
+    model.train()
+    
+    # Create dummy input
+    x = torch.randn(batch_size, D_in)
+    
+    # Forward pass
+    output = model(x)
+    
+    # Assertions
+    assert output.shape == (batch_size, D_out), f"Output shape mismatch: {output.shape}"
+    
+    # Backward pass to verify gradient flow through cummin
+    loss = output.sum()
+    loss.backward()
+    
+    # Check if gradients were computed for the addressing parameters (U1, U2, U3)
+    # which are involved in the cummin operation path
+    assert model.U1.grad is not None, "Gradient not computed for U1"
+    assert model.U2.grad is not None, "Gradient not computed for U2"
+    assert model.U3.grad is not None, "Gradient not computed for U3"
+    
+    print("Test Passed: torch.cummin integrated successfully in FastLearnedCellCummin.")
+
+if __name__ == "__main__":
+    test_cummin_in_complex_graph()

@@ -1,0 +1,43 @@
+import torch
+import torch.distributed as dist
+import os
+
+def main():
+    # Setup for a minimal single-process distributed environment
+    # This is required to use torch.distributed.reduce
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    
+    # Initialize the process group
+    if not dist.is_initialized():
+        dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+    # The original issue is about debug information in LazyVariableTrackers
+    # when using torch.compile. We adapt the test to use torch.distributed.reduce
+    # inside a compiled function to verify the behavior/logging for this API.
+    
+    @torch.compile(backend="eager")
+    def fn(x):
+        # Adapted call site: using torch.distributed.reduce instead of inner(x)
+        # Note: reduce is an in-place operation for the tensor on the dst rank
+        dist.reduce(x, dst=0)
+        return x
+
+    # Create input tensor
+    input_tensor = torch.ones(3)
+    
+    # Execute the compiled function
+    # With TORCH_LOGS=trace_bytecode set, this should trigger the logging
+    # mentioned in the bug report for the LazyVariableTracker
+    result = fn(input_tensor)
+    
+    # Basic assertion to verify execution
+    assert torch.equal(result, input_tensor)
+    print("Test passed.")
+
+    # Cleanup
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

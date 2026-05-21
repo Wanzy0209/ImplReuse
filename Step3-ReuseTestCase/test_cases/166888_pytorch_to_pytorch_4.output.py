@@ -1,0 +1,17 @@
+import torch
+
+def f(x, max_val):
+    # Adapted to use torch.all instead of torch.clamp, 
+    # maintaining the pattern of calling .item() on a float tensor argument.
+    return torch.all(x < max_val.item())
+
+compiled_func = torch.compile(f, backend='inductor', fullgraph=True)
+x = torch.randn(10, 20, 30, device='cuda')
+max_val = torch.tensor(5.0, device='cuda')
+
+# Run the compiled function
+result = compiled_func(x, max_val)
+
+# Verify the result against eager execution to ensure correctness
+expected = f(x, max_val)
+assert torch.equal(result, expected), "Results differ between compiled and eager execution"

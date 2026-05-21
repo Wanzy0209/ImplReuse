@@ -1,0 +1,64 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_argmax_bfloat16_compile_divergence():
+    """
+    Test case for tf.keras.backend.argmax inspired by PyTorch Issue 164063.
+    
+    The original issue involves a TypeError('unexpected type fp32') when running
+    torch.var on bfloat16 tensors under torch.compile (inductor). This test
+    translates the scenario to TensorFlow, using tf.keras.backend.argmax
+    (the similar API) on bfloat16 inputs within a tf.function (compiled) context
+    to check for similar type handling or compilation issues.
+    """
+    
+    # 1. Setup inputs mimicking the original bug's dtype and structure
+    # Original: size=(36, 7112, 1, 1), dtype=bfloat16
+    # We use smaller dimensions for a minimal test case while preserving the rank.
+    input_shape = (36, 10, 1, 1)
+    data = np.random.rand(*input_shape).astype(np.float32)
+    t0 = tf.constant(data, dtype=tf.bfloat16)
+
+    # 2. Define the computation graph
+    # We use tf.function to mimic the 'compile' aspect of the original bug.
+    @tf.function
+    def compiled_op(x):
+        # Original logic: reshape -> reduction
+        # Original: t1 = t0.reshape((28, 24, 3, 127))
+        # We adjust reshape dimensions to match the element count of our smaller input.
+        # 36 * 10 = 360. Target reshape: (15, 6, 4, 1) -> 15*6*4*1 = 360.
+        t1 = tf.reshape(x, (15, 6, 4, 1))
+        
+        # Original: t2 = t1.var(dim=2)
+        # Similar API: tf.keras.backend.argmax(x, axis=2)
+        # We perform the reduction along axis 2.
+        t2 = tf.keras.backend.argmax(t1, axis=2)
+        
+        return t2
+
+    # 3. Execute and Validate
+    try:
+        # Run in compiled mode
+        result = compiled_op(t0)
+        
+        # Verify output shape
+        # Input (15, 6, 4, 1) reduced on axis 2 -> (15, 6, 1)
+        expected_shape = (15, 6, 1)
+        assert result.shape == expected_shape, f"Shape mismatch: expected {expected_shape}, got {result.shape}"
+        
+        # Verify output dtype (argmax typically returns int64)
+        assert result.dtype == tf.int64, f"Dtype mismatch: expected int64, got {result.dtype}"
+        
+        print("Test Passed: tf.keras.backend.argmax handled bfloat16 input in compiled context successfully.")
+        
+    except TypeError as e:
+        # Catching the specific error type mentioned in the original bug
+        print(f"Test Failed with TypeError: {e}")
+        raise
+    except Exception as e:
+        print(f"Test Failed with unexpected error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_argmax_bfloat16_compile_divergence()

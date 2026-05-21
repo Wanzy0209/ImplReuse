@@ -1,0 +1,37 @@
+import torch
+import tensorflow as tf
+
+# Sentinel tensor to ensure gradient computation context
+sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+# Input argument
+arg_0 = tf.constant([True], dtype=tf.bool)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = arg_0
+    var_node_1 = tf.squeeze(var_node_2) # size=(), dtype=bool
+    # Mimic .item() to get a Python scalar
+    var_node_0 = var_node_1.numpy() # dtype=bool (Python)
+
+    # Original API: torch.mul -> Similar API: tf.math.add
+    # Operation: var_node_0 * sentinel -> var_node_0 + sentinel
+    result = tf.math.add(var_node_0, sentinel)
+
+    return result
+
+# Test Eager
+print("Testing Eager Execution...")
+try:
+    result_original = fuzzed_program(arg_0, sentinel)
+    print(f' eager success: {result_original.numpy()}')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# Test Compiled (tf.function)
+print("\nTesting Compiled Execution...")
+try:
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(arg_0, sentinel)
+    print(f' compile success: {result_compiled.numpy()}')
+except Exception as e:
+    print(f' compile failed: {e}')

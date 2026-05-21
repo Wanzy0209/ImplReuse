@@ -1,0 +1,46 @@
+import os
+import time
+import tensorflow as tf
+from tensorflow import keras
+
+# List of threads to test
+threads_list = [1, 2, 4, 8, 16, 32, 48]
+
+# Size of the large tensors
+# Scatter operations update specific indices, so we define a large data tensor
+# and a significant number of updates to simulate load.
+tensor_shape = (10000, 10000)
+num_updates = 50000
+
+# Store results
+times = []
+
+# Benchmark for each thread count
+for threads in threads_list:
+    # Set TensorFlow thread configuration
+    # Note: In TensorFlow, thread configuration often needs to be set before 
+    # the runtime initializes. Setting it inside the loop mimics the user's 
+    # attempt in the PyTorch bug report to control threads dynamically.
+    tf.config.threading.set_intra_op_parallelism_threads(threads)
+    os.environ['OMP_NUM_THREADS'] = str(threads)
+    os.environ['MKL_NUM_THREADS'] = str(threads)
+
+    # Create random tensors for the scatter operation
+    # data: The tensor to scatter values into
+    data = tf.zeros(tensor_shape, dtype=tf.float32)
+    # indices: The coordinates to update
+    indices = tf.random.uniform((num_updates, 2), maxval=tensor_shape[0], dtype=tf.int32)
+    # updates: The values to scatter at the indices
+    updates = tf.random.normal((num_updates,), dtype=tf.float32)
+
+    # Warm up
+    # Execute the operation once to ensure any lazy initialization is completed
+    _ = keras.ops.scatter(data, indices, updates)
+
+    # Time scatter operation
+    start_time = time.time()
+    _ = keras.ops.scatter(data, indices, updates)
+    elapsed_time = time.time() - start_time
+
+    print(f"Threads: {threads}, Time: {elapsed_time:.4f} s")
+    times.append(elapsed_time)

@@ -1,0 +1,38 @@
+import torch
+import tensorflow as tf
+
+# Define the custom class similar to the PyTorch example
+class Config:
+    def __repr__(self):
+        return "Config()"
+
+# Define the function to be traced/compiled
+# In TensorFlow, tf.function is the equivalent of torch.compile for tracing
+@tf.function
+def forward(config):
+    # Calling repr() on non-constant user object
+    # This is the core logic from the bug report
+    limit = len(repr(config))
+
+    # Using the result in the similar API: tf.compat.v1.train.range_input_producer
+    # This API produces integers from 0 to limit-1.
+    return tf.compat.v1.train.range_input_producer(limit)
+
+# Setup
+config = Config()
+
+# Execution
+# Note: range_input_producer is a legacy v1 API.
+# It typically requires a session to run, but we are testing the tracing/compilation step here.
+# We wrap the call in a try-except to catch potential tracing errors similar to the PyTorch bug.
+try:
+    # Attempt to trace the function
+    # In TF 2.x, calling the function triggers tracing.
+    # Note: range_input_producer might raise warnings about being deprecated or requiring a session.
+    # We are primarily interested if the 'repr' call breaks the tracing.
+    result = forward(config)
+    print("Function traced successfully.")
+    # To actually run the queue ops, one would typically need a Session and QueueRunners,
+    # but for the purpose of reproducing the "tracing repr" bug, the call above is sufficient.
+except Exception as e:
+    print(f"Tracing failed with error: {e}")

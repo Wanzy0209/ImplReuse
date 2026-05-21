@@ -1,0 +1,57 @@
+import torch
+import torch.special
+
+def test_gammaincc_large_dimensions():
+    """
+    Test torch.special.gammaincc with tensor dimensions larger than uint16 max (2**16).
+    This is adapted from a bug report where torch.nn.functional.pad (reflect mode)
+    failed with such dimensions on CUDA.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        return
+
+    print("Testing torch.special.gammaincc with large dimensions on CUDA...")
+
+    # Test Case 1: First dimension is 2**16
+    # Original bug: F.pad(x, (1, 1), mode="reflect") failed here
+    x = torch.rand(2**16, 2, device="cuda")
+    y = torch.rand(2**16, 2, device="cuda")
+    try:
+        res = torch.special.gammaincc(x, y)
+        print("Case 1 (2**16, 2): Passed")
+    except Exception as e:
+        print(f"Case 1 (2**16, 2): Failed with error: {e}")
+
+    # Test Case 2: Middle dimension is 2**16
+    # Original bug: F.pad(x, (1, 1), mode="reflect") failed here
+    x = torch.rand(1, 2**16, 2, device="cuda")
+    y = torch.rand(1, 2**16, 2, device="cuda")
+    try:
+        res = torch.special.gammaincc(x, y)
+        print("Case 2 (1, 2**16, 2): Passed")
+    except Exception as e:
+        print(f"Case 2 (1, 2**16, 2): Failed with error: {e}")
+
+    # Test Case 3: Broadcasting with large dimension
+    # Resulting tensor will have shape (2**16, 10)
+    x = torch.rand(2**16, 1, device="cuda")
+    y = torch.rand(1, 10, device="cuda")
+    try:
+        res = torch.special.gammaincc(x, y)
+        print("Case 3 (Broadcasting 2**16): Passed")
+    except Exception as e:
+        print(f"Case 3 (Broadcasting 2**16): Failed with error: {e}")
+
+    # Test Case 4: Control case (2**16 - 1)
+    # Original bug: This was fine for F.pad
+    x = torch.rand(2**16 - 1, 2, device="cuda")
+    y = torch.rand(2**16 - 1, 2, device="cuda")
+    try:
+        res = torch.special.gammaincc(x, y)
+        print("Case 4 (2**16 - 1, 2): Passed")
+    except Exception as e:
+        print(f"Case 4 (2**16 - 1, 2): Failed with error: {e}")
+
+if __name__ == "__main__":
+    test_gammaincc_large_dimensions()

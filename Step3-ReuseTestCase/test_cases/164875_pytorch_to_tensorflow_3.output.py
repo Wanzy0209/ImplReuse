@@ -1,0 +1,52 @@
+import torch
+import tensorflow as tf
+
+# Set seed for reproducibility
+tf.random.set_seed(1014698)
+
+# Define the program logic
+# We use jit_compile=True to mimic the behavior of torch.compile
+@tf.function(jit_compile=True)
+def fuzzed_program(arg_0, sentinel):
+    # arg_0: size=(20, 0), dtype=int64
+    # var_node_2: size=(20, 0), dtype=int64
+    # Mimicking the creation of the second tensor with the problematic shape
+    var_node_2 = tf.zeros((20, 0), dtype=tf.int64)
+
+    # Original API: torch.add(var_node_1, var_node_2)
+    # Target API: tf.concat([var_node_1, var_node_2], axis=0)
+    # We adapt the operation to the target API. 
+    # Concatenating two (20, 0) tensors along axis 0 results in (40, 0).
+    var_node_0 = tf.concat([arg_0, var_node_2], axis=0)
+
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+# arg_0: size=(20, 0)
+# PyTorch equivalent: torch.as_strided(torch.randint(5, 30, (20,)).to(torch.int64), (20, 0), (1, 20))
+# TensorFlow equivalent: Reshape a random int tensor
+arg_0 = tf.reshape(tf.random.uniform((20,), maxval=30, dtype=tf.int64), (20, 0))
+
+# Test Eager Execution
+print("Testing Eager...")
+try:
+    # We execute the logic directly without the decorator to test eager mode
+    var_node_2_eager = tf.zeros((20, 0), dtype=tf.int64)
+    var_node_0_eager = tf.concat([arg_0, var_node_2_eager], axis=0)
+    result_eager = var_node_0_eager * sentinel
+    print(f" eager success, shape: {result_eager.shape}")
+except Exception as e:
+    print(f" eager failed: {e}")
+
+# Test Compiled Execution
+print("Testing Compiled...")
+try:
+    compiled_program = fuzzed_program
+    result_compiled = compiled_program(arg_0, sentinel)
+    print(f" compile success, shape: {result_compiled.shape}")
+except Exception as e:
+    print(f" compile failed: {e}")

@@ -1,0 +1,57 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Parameters from the original PyTorch bug report
+M = 16384
+K = 16384
+BLOCK_SIZE = 32
+
+def test_tf_compat_v1_name_scope_large_tensor():
+    """
+    Adapts the torch.compile mxfp8 quantization regression test to
+    tf.compat.v1.name_scope.
+    
+    Original Bug: Performance regression in torch.compile for mxfp8 quantization.
+    Target API: tf.compat.v1.name_scope (Context manager for namespacing).
+    
+    Since name_scope is for graph organization and not compilation/quantization,
+    we verify that the large tensor operations (mimicking the benchmark workload)
+    can be correctly encapsulated and named within the scope.
+    """
+    
+    # Use graph mode to fully utilize name_scope functionality
+    # (name_scope returns NullContext in eager mode by default)
+    tf.compat.v1.disable_eager_execution()
+
+    with tf.compat.v1.Session() as sess:
+        # The original bug uses a specific mode 'dim0_mxfp8_floor'.
+        # We use this as the scope name to preserve the context.
+        with tf.compat.v1.name_scope("dim0_mxfp8_floor"):
+            # Create the large tensor as per the benchmark (M=16384, K=16384)
+            # Using float32 as the base type
+            x = tf.random.normal([M, K], dtype=tf.float32, name="input_tensor")
+            
+            # Simulate the quantization/casting operation.
+            # Note: TensorFlow does not natively support mxfp8 in standard ops.
+            # We use tf.cast to float16 to simulate a precision reduction operation
+            # similar to the quantization step in the original bug.
+            y = tf.cast(x, tf.float16, name="quantized_output")
+
+        # Assertions to verify the API behavior
+        # 1. Check that the operation is correctly namespaced
+        assert "dim0_mxfp8_floor" in y.name, f"Expected scope name in {y.name}"
+        assert "quantized_output" in y.name, f"Expected op name in {y.name}"
+        
+        # 2. Execute the operation (Repro step 5: Run benchmark)
+        # This ensures the graph is valid and can run on the device.
+        result = sess.run(y)
+        
+        # 3. Verify output properties
+        assert result.shape == (M, K), f"Shape mismatch: expected {(M, K)}, got {result.shape}"
+        assert result.dtype == np.float16, f"Dtype mismatch: expected float16, got {result.dtype}"
+
+        print("Test passed: Operations successfully scoped and executed.")
+
+if __name__ == "__main__":
+    test_tf_compat_v1_name_scope_large_tensor()

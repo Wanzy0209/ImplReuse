@@ -1,0 +1,57 @@
+import torch
+import tensorflow as tf
+import gc
+
+def test_name_scope_graph_growth():
+    """
+    Adapted test case for tf.compat.v1.name_scope based on PyTorch torch.compile memory leak.
+    
+    Original Bug: torch.compile with flash_attn_varlen_func caused an increase in the number 
+    of live tensors (ghosts) every step, indicating a memory leak in the Inductor backend.
+    
+    Adapted Logic: In TensorFlow v1 graph mode, repeatedly defining operations inside a 
+    name_scope without resetting the graph causes the graph to grow indefinitely. 
+    This test mimics the "Step" loop and monitors the count of graph operations 
+    (analogous to Tensors in PyTorch) to verify resource accumulation behavior.
+    """
+    
+    # Disable eager execution to ensure we are testing Graph behavior (v1 style)
+    tf.compat.v1.disable_eager_execution()
+    
+    # Get the default graph
+    graph = tf.compat.v1.get_default_graph()
+    
+    # Initial state
+    initial_ops = len(graph.get_operations())
+    print(f"Initial | Ops: {initial_ops}")
+
+    # Simulate the training loop steps from the original bug report
+    steps = [150, 200, 250, 300]
+    
+    for step in steps:
+        # Use tf.compat.v1.name_scope to group operations
+        # This is the API under test, analogous to the scope managed by torch.compile
+        with tf.compat.v1.name_scope(f"training_step_{step}"):
+            # Create operations to simulate the forward pass and loss calculation
+            # In TF v1, defining these in a loop adds them to the graph permanently
+            input_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, 10], name=f"input_{step}")
+            weights = tf.compat.v1.get_variable(f"weights_{step}", shape=[10, 10])
+            logits = tf.matmul(input_ph, weights, name=f"matmul_{step}")
+            loss = tf.reduce_sum(logits, name=f"loss_{step}")
+
+        # Check current graph size (analogous to checking # of Tensors in PyTorch)
+        current_ops = len(graph.get_operations())
+        
+        # Mimic the output format of the original bug report
+        # Note: 'Alloc' and 'Res' are omitted as they are PyTorch specific memory metrics.
+        # We focus on the 'Tensors' -> 'Ops' count increase.
+        print(f"Step {step} | Ops: {current_ops} (Growth: {current_ops - initial_ops})")
+        
+        # In the original bug, the assertion would be that this count should NOT increase,
+        # but it does, indicating a leak. Here, we assert that it DOES increase to 
+        # verify we are reproducing the resource accumulation pattern in TF v1.
+        assert current_ops > initial_ops, \
+            f"Graph operations did not increase at step {step}. Expected accumulation behavior."
+
+if __name__ == "__main__":
+    test_name_scope_graph_growth()

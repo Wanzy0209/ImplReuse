@@ -1,0 +1,23 @@
+import torch
+import torch.nn.functional as F
+
+# Test case for torch.nn.functional.grid_sample with 0-shaped input
+# Based on Issue 168071: torch.nn.functional.pad crashes with 0-shape input
+
+# Setup: Create an input tensor with a 0-sized dimension (Height=0)
+# Input shape: (Batch, Channel, Height, Width) -> (1, 1, 0, 10)
+input_tensor = torch.zeros(1, 1, 0, 10)
+
+# Setup: Create a grid for sampling
+# Grid shape: (Batch, Height_out, Width_out, 2) -> (1, 5, 5, 2)
+grid_tensor = torch.zeros(1, 5, 5, 2)
+
+# Execute: Call grid_sample
+# Expected: Should not raise RuntimeError regarding negative size.
+# Output shape should match grid spatial dimensions: (1, 1, 5, 5)
+try:
+    output = F.grid_sample(input_tensor, grid_tensor)
+    assert output.shape == (1, 1, 5, 5), f"Expected shape (1, 1, 5, 5), got {output.shape}"
+    print("Test passed: grid_sample handles 0-sized input dimension correctly.")
+except RuntimeError as e:
+    print(f"Test failed with RuntimeError: {e}")

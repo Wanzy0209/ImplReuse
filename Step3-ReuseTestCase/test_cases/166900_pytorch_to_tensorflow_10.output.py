@@ -1,0 +1,73 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_range_input_producer():
+    """
+    Adapted test case for tf.compat.v1.train.range_input_producer.
+    
+    The original PyTorch issue involved torch.compile failing to generate guards 
+    for temporary variables involving custom objects and side effects.
+    
+    Since tf.compat.v1.train.range_input_producer is a data pipeline API 
+    (unlike torch.compile which is a JIT compiler), we adapt the test to verify
+    the API's behavior regarding state management (epochs) and queue operations,
+    which are the closest semantic equivalents to the "state" and "flow" 
+    aspects of the original bug.
+    """
+    
+    # Disable eager execution to use compat.v1 queue runners
+    tf.compat.v1.reset_default_graph()
+    tf.compat.v1.disable_eager_execution()
+
+    # Define parameters
+    limit = 5
+    num_epochs = 2
+    shuffle = False
+
+    # Call the API
+    # range_input_producer produces integers from 0 to limit-1
+    # We use num_epochs to introduce state (local variables), similar to the 
+    # stateful nature of the original PyTorch test case.
+    range_producer = tf.compat.v1.train.range_input_producer(
+        limit=limit,
+        num_epochs=num_epochs,
+        shuffle=shuffle,
+        capacity=32,
+        name="test_range_producer"
+    )
+
+    # Dequeue elements to verify output
+    dequeue_op = range_producer.dequeue()
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize local variables (required for num_epochs counter)
+        # and global variables
+        sess.run(tf.compat.v1.global_variables_initializer())
+        sess.run(tf.compat.v1.local_variables_initializer())
+
+        # Start queue runners to populate the queue
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+        results = []
+        try:
+            # We expect 'limit' items per epoch
+            for _ in range(limit * num_epochs):
+                val = sess.run(dequeue_op)
+                results.append(val)
+        except tf.errors.OutOfRangeError:
+            # Expected when num_epochs is exhausted
+            pass
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+    # Verify the results
+    # With shuffle=False, we expect [0, 1, 2, 3, 4] repeated twice
+    expected = list(range(limit)) * num_epochs
+    assert results == expected, f"Expected {expected}, but got {results}"
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_range_input_producer()

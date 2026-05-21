@@ -1,0 +1,62 @@
+import tensorflow as tf
+import traceback
+
+# The original bug report highlights a divergence between Eager execution and Compiled (Inductor) execution.
+# The target API, tf.compat.v1.train.add_queue_runner, is designed for Graph Mode (TF1) and is explicitly 
+# incompatible with Eager execution (TF2). 
+# This test case adapts the structure: Test Eager -> Test Graph -> Verify, 
+# translating the "fill_diagonal_" mutation logic to "enqueue" registration logic.
+
+def test_queue_runner_behavior():
+    # --- Part 1: Eager Execution (TF2 default) ---
+    # In the original PyTorch bug, Eager execution succeeds.
+    # For this TensorFlow API, Eager execution is expected to fail or behave differently
+    # because add_queue_runner relies on a global graph context which is absent in Eager.
+    print("--- Testing in Eager Mode ---")
+    try:
+        # Ensure we are in eager mode
+        if not tf.executing_eagerly():
+            tf.compat.v1.enable_eager_execution()
+
+        # Setup inputs analogous to arg0, arg1
+        # t0 -> Queue
+        # t1 -> Data
+        q = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.float32], shapes=[()])
+        data = tf.constant(1.0) # Scalar value like t1.item()
+        enqueue_op = q.enqueue([data])
+
+        # Create the runner
+        qr = tf.compat.v1.train.QueueRunner(q, [enqueue_op])
+
+        # Call the API under test
+        tf.compat.v1.train.add_queue_runner(qr)
+        print('Eager Success (Unexpected in TF2)! ')
+    except Exception as e:
+        # Expected behavior: QueueRunners are not compatible with eager execution
+        print(f'Eager Failed (Expected): {str(e)[:50]}...')
+
+    # --- Part 2: Graph Execution (TF1 style / Compiled) ---
+    # In the original PyTorch bug, Compiled execution fails.
+    # For this TensorFlow API, Graph mode is the intended success path.
+    print("\n--- Testing in Graph Mode ---")
+    with tf.compat.v1.Graph().as_default():
+        # Setup inputs
+        q = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.float32], shapes=[()])
+        data = tf.constant(1.0)
+        enqueue_op = q.enqueue([data])
+
+        # Create the runner
+        qr = tf.compat.v1.train.QueueRunner(q, [enqueue_op])
+
+        # Call the API under test
+        tf.compat.v1.train.add_queue_runner(qr)
+
+        # Verify: Check if the runner was added to the collection
+        # This mimics the verification of the tensor output in the original test
+        runners = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+        assert qr in runners, "QueueRunner was not added to the collection"
+
+        print('Graph Mode Success! ')
+
+if __name__ == '__main__':
+    test_queue_runner_behavior()

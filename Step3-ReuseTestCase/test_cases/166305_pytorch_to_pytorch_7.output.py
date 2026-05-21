@@ -1,0 +1,47 @@
+import os
+import torch
+import torch.distributed as dist
+
+# Setup similar to the original bug report
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+backend = "nccl" if dist.is_nccl_available() else "gloo"
+dist.init_process_group(backend=backend)
+
+# Define a custom object to test picklability (similar to the custom autograd function in the bug)
+class CustomData:
+    def __init__(self, value):
+        self.value = value
+
+def main():
+    # We need at least 2 ranks for send/recv
+    if dist.get_world_size() < 2:
+        print("Test requires at least 2 ranks. Skipping.")
+        dist.destroy_process_group()
+        return
+
+    # Create a list of objects to send
+    # Includes a custom object, a string, and a tensor
+    obj_list = [CustomData(42), "test_string", torch.tensor([1.0, 2.0, 3.0])]
+
+    if LOCAL_RANK == 0:
+        # Rank 0 sends the object list to Rank 1
+        torch.distributed.send_object_list(obj_list, dst=1)
+        print(f"[Rank {LOCAL_RANK}] Sent object list.")
+    elif LOCAL_RANK == 1:
+        # Rank 1 receives the object list from Rank 0
+        # The receiving list must be pre-allocated with the correct size
+        recv_list = [None, None, None]
+        torch.distributed.recv_object_list(recv_list, src=0)
+
+        # Verify the received data
+        assert isinstance(recv_list[0], CustomData), "Custom object type mismatch"
+        assert recv_list[0].value == 42, "Custom object value mismatch"
+        assert recv_list[1] == "test_string", "String mismatch"
+        assert torch.equal(recv_list[2], torch.tensor([1.0, 2.0, 3.0])), "Tensor mismatch"
+
+        print(f"[Rank {LOCAL_RANK}] Received and verified object list successfully.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

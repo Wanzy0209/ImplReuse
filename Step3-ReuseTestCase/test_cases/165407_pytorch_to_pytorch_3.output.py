@@ -1,0 +1,79 @@
+import torch
+import torch.library
+import gc
+
+def test_impl_abstract_memory_leak():
+    """
+    Test case to verify that using torch.library.impl_abstract to register
+    a custom operator does not cause a memory leak when used with torch.compile.
+    This mimics the scenario described in Issue #165407 involving flash_attn_varlen_func.
+    """
+    
+    # 1. Define a custom operator to mimic flash_attn_varlen_func
+    lib = torch.library.Library("test_flash_attn", "DEF")
+    lib.define("varlen_func(Tensor q, Tensor k, Tensor v, Tensor cu_seqlens, int max_seqlen) -> Tensor")
+
+    # 2. Register the abstract implementation using torch.library.impl_abstract
+    # This is the API under test. It provides the meta kernel required for torch.compile.
+    @torch.library.impl_abstract("test_flash_attn::varlen_func")
+    def varlen_func_abstract(q, k, v, cu_seqlens, max_seqlen):
+        # Abstract implementation: return a tensor with the same shape as q
+        return torch.empty_like(q)
+
+    # 3. Register a concrete implementation for execution
+    lib_impl = torch.library.Library("test_flash_attn", "IMPL")
+    def varlen_func_impl(q, k, v, cu_seqlens, max_seqlen):
+        # Dummy implementation for testing purposes
+        return q
+    lib_impl.impl("varlen_func", varlen_func_impl)
+
+    # 4. Define the function to be compiled
+    def model(q, k, v, cu_seqlens, max_seqlen):
+        return torch.ops.test_flash_attn.varlen_func(q, k, v, cu_seqlens, max_seqlen)
+
+    # Compile the function
+    compiled_model = torch.compile(model)
+
+    # 5. Run the loop to detect memory leaks
+    print("Starting memory leak test for torch.library.impl_abstract...")
+    
+    # Warmup run
+    q = torch.randn(10, 10)
+    k = torch.randn(10, 10)
+    v = torch.randn(10, 10)
+    cu_seqlens = torch.tensor([0, 10], dtype=torch.int32)
+    compiled_model(q, k, v, cu_seqlens, 10)
+    
+    # Force garbage collection before monitoring
+    del q, k, v, cu_seqlens
+    gc.collect()
+    
+    # Monitor tensor counts over steps
+    # Note: We use gc.get_objects() as a proxy for tensor count monitoring.
+    for i in range(10):
+        # Create new inputs for the step
+        q = torch.randn(10, 10, requires_grad=True)
+        k = torch.randn(10, 10, requires_grad=True)
+        v = torch.randn(10, 10, requires_grad=True)
+        cu_seqlens = torch.tensor([0, 10], dtype=torch.int32)
+        
+        # Run compiled step
+        out = compiled_model(q, k, v, cu_seqlens, 10)
+        loss = out.sum()
+        loss.backward()
+        
+        # Cleanup references to allow garbage collection
+        del q, k, v, cu_seqlens, out, loss
+        gc.collect()
+        
+        # Count live tensors
+        # In the original bug, this count increased linearly (2266 -> 2602 -> 3034).
+        # With the fix, this count should stabilize or fluctuate within a small range.
+        current_tensor_count = len([obj for obj in gc.get_objects() if isinstance(obj, torch.Tensor)])
+        
+        print(f"Step {i*50} | Tensors: {current_tensor_count}")
+
+    print("Test completed. If tensor counts increased significantly every step, a leak is present.")
+
+if __name__ == "__main__":
+    test_impl_abstract_memory_leak()

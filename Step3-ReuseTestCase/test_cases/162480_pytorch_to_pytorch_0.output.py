@@ -1,0 +1,40 @@
+import torch
+import torch._dynamo
+
+def test_rebind_unbacked_float_handling():
+    """
+    Test case for Issue #162480: missing float handling in rebind_unbacked().
+    
+    This test verifies that torch.compile handles scenarios where symbolic shape 
+    calculations might result in float values, specifically targeting the fix in 
+    torch.fx.experimental.symbolic_shapes.py.
+    """
+    
+    def model(x):
+        # Perform a shape calculation that involves a float.
+        # x.size(0) is an int (or SymInt), multiplying by 1.0 makes it a float.
+        # We cast it back to int for the view operation.
+        # This interaction between symbolic ints and floats can trigger 
+        # the rebind_unbacked logic.
+        new_size = int(x.size(0) * 1.0)
+        return x.view(new_size, -1)
+
+    # Compile with dynamic=True to ensure symbolic shapes are active.
+    # The bug report mentions AOTInductor, but the fix is in the core 
+    # symbolic_shapes logic used by TorchDynamo/Inductor.
+    compiled_model = torch.compile(model, dynamic=True)
+
+    # Test with input size 10
+    input1 = torch.randn(10, 20)
+    output1 = compiled_model(input1)
+    assert output1.shape == (10, 20), f"Expected shape (10, 20), got {output1.shape}"
+
+    # Test with input size 15 to trigger potential rebinds/guards
+    input2 = torch.randn(15, 30)
+    output2 = compiled_model(input2)
+    assert output2.shape == (15, 30), f"Expected shape (15, 30), got {output2.shape}"
+
+    print("Test passed: float handling in rebind_unbacked works correctly.")
+
+if __name__ == "__main__":
+    test_rebind_unbacked_float_handling()

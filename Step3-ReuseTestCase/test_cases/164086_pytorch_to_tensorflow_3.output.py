@@ -1,0 +1,75 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_lecun_uniform_divergence():
+    """
+    Adapted test case for tf.keras.initializers.LecunUniform based on the 
+    PyTorch bug report involving torch.tanh and mixed-precision type errors.
+    
+    The original bug involved an IncompatibleTypeErrorImpl between pointer<fp16> 
+    and float64 during eager/compile divergence. This test subjects the 
+    LecunUniform initializer to a similar mixed-precision stress test.
+    """
+    
+    # Original API Under Test: torch.tanh
+    # Similar API: tf.keras.initializers.LecunUniform
+    # Adaptation: Use LecunUniform to generate the base tensor, then apply 
+    # mixed-precision operations (fp16/fp64) to check for graph compilation issues.
+
+    def foo(shape):
+        # Initialize the similar API
+        initializer = tf.keras.initializers.LecunUniform(seed=42)
+        
+        # Generate tensor using the initializer
+        # Note: Original bug used int64 input for tanh, but LecunUniform generates float32.
+        # We proceed with float32 and cast to mimic the mixed-precision environment.
+        t = initializer(shape)
+        
+        # Mimic the mixed precision environment from the bug report
+        # The bug error mentioned: pointer<fp16> and triton.language.float64
+        t_fp16 = tf.cast(t, tf.float16)
+        t_fp64 = tf.cast(t, tf.float64)
+        
+        # Perform complex operations similar to the original bug
+        # Original: t11 = torch.pow(torch.pow(torch.pow(torch.pow(t5, t7), t10), t5), t7)
+        # We apply a chain of pow operations to stress the compiler
+        p1 = tf.pow(t_fp16, 2.0)
+        p2 = tf.pow(p1, 1.5)
+        p3 = tf.pow(p2, 0.5)
+        
+        # Attempt to mix types to trigger potential IncompatibleTypeError
+        # Adding a float64 tensor (cast to fp16) to the fp16 result
+        output = p3 + tf.cast(t_fp64, tf.float16)
+        
+        return output
+
+    # Define shape from the original bug report
+    shape = (42, 56)
+
+    # 1. Eager Execution
+    try:
+        out_eager = foo(shape)
+        print('Eager Success! ')
+    except Exception as e:
+        print(f'Eager Failed: {e}')
+        return
+
+    # 2. Compiled Execution (Graph Mode)
+    try:
+        compiled_foo = tf.function(foo)
+        out_compiled = compiled_foo(shape)
+        print('Compile Success! ')
+
+        # 3. Verify Divergence
+        # Check if results are close enough to ensure no eager/compile divergence
+        if np.allclose(out_eager.numpy(), out_compiled.numpy()):
+            print('Results Match! ')
+        else:
+            print('Divergence Detected! ')
+            print(f"Max Diff: {np.max(np.abs(out_eager.numpy() - out_compiled.numpy()))}")
+    except Exception as e:
+        print(f'Compile Failed: {e}')
+
+if __name__ == '__main__':
+    test_lecun_uniform_divergence()

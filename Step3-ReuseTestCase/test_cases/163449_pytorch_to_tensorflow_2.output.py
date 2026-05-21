@@ -1,0 +1,104 @@
+import torch
+import tensorflow as tf
+import sys
+import numpy as np
+
+# Note: TensorFlow does not have direct equivalents for all PyTorch Dynamo/Inductor configs.
+# We focus on the core logic: Eager vs tf.function (Graph/Compiled mode) divergence.
+
+def foo(arg0, arg1, arg2, arg3, arg4):
+    # Adapted to use tf.keras.ops.stop_gradient as the primary op under test
+    # replacing the role of torch.addmm in the original structure.
+    
+    # t0 = arg0 # size=(5, 4), dtype=bfloat16
+    t0 = arg0
+    
+    # Original: t3 = torch.addmm(t0, t1, t2)
+    # Adapted: Apply stop_gradient to t0. 
+    # We pass t0 through stop_gradient. To maintain the tensor flow similar to the original
+    # (where t3 is used later), we assign the result to t3.
+    t3 = tf.keras.ops.stop_gradient(t0)
+    
+    # t4 = t3.norm() # size=(), dtype=bfloat16
+    # tf.norm returns float32 by default for bfloat16 inputs in some contexts, 
+    # but we try to maintain dtype logic where possible or let TF handle promotion.
+    t4 = tf.norm(t3)
+    
+    # t5 = arg3 # size=(3, 4, 5, 2), dtype=float32
+    t5 = arg3
+    
+    # t6 = t5.var(dim=0) # size=(4, 5, 2), dtype=float32
+    t6 = tf.math.reduce_variance(t5, axis=0)
+    
+    # t7 = t6.var() # size=(), dtype=float32
+    t7 = tf.math.reduce_variance(t6)
+    
+    # t8 = arg4 # size=(), dtype=float32
+    t8 = arg4
+    
+    # t9 = torch.nn.functional.relu(t8)
+    t9 = tf.nn.relu(t8)
+    
+    # t10 = t7 + t4 + t9
+    # Note: t4 might be float32 if norm promoted it. t7 is float32. t9 is float32.
+    # We cast t4 to float32 to ensure compatibility if it wasn't already.
+    t4_float = tf.cast(t4, tf.float32)
+    t10 = t7 + t4_float + t9
+    
+    # t11 = torch.pow(torch.pow(t4, t7), t10)
+    # Using t4_float for consistency in the power operation
+    t11 = tf.pow(tf.pow(t4_float, t7), t10)
+    
+    output = t11
+    return output
+
+# Generate inputs matching the original shapes and dtypes
+# arg0: size=(5, 4), dtype=bfloat16
+arg0 = tf.random.uniform([5, 4], minval=-1.0, maxval=1.0, dtype=tf.bfloat16)
+
+# arg1: size=(5, 1024), dtype=bfloat16
+# Note: In the adapted function, arg1 is not strictly used by stop_gradient, 
+# but kept to match signature if needed, or we can omit if the logic allows.
+# The original addmm used (t0, t1, t2). Here we only use t0 for stop_gradient.
+# We will define it to respect the original signature structure.
+arg1 = tf.random.uniform([5, 1024], minval=-1.0, maxval=1.0, dtype=tf.bfloat16)
+
+# arg2: size=(1024, 4), dtype=bfloat16
+arg2 = tf.random.uniform([1024, 4], minval=-1.0, maxval=1.0, dtype=tf.bfloat16)
+
+# arg3: size=(3, 4, 5, 2), dtype=float32
+arg3 = tf.random.uniform([3, 4, 5, 2], minval=-1.0, maxval=1.0, dtype=tf.float32)
+
+# arg4: size=(), dtype=float32
+arg4 = tf.random.uniform([], minval=-1.0, maxval=1.0, dtype=tf.float32)
+
+if __name__ == '__main__':
+    # Run Eager
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4)
+    print('Eager Success! ')
+
+    # Run Compiled (tf.function is the TF equivalent of torch.compile)
+    compiled_foo = tf.function(foo)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4)
+    print('Compile Success! ')
+
+    # Compare outputs (forward)
+    # The original test compares the sum of the output.
+    out_eager_sum = tf.reduce_sum(out_eager)
+    out_compiled_sum = tf.reduce_sum(out_compiled)
+    
+    # Calculate difference
+    diff = tf.abs(out_eager_sum - out_compiled_sum).numpy()
+    rel_diff = diff / (np.abs(out_eager_sum.numpy()) + 1e-12) * 100
+    
+    print(f'Relative diff (sum): {rel_diff:.6f}%')
+    
+    if rel_diff > 5:
+        print(f' Forward output sums differ significantly (relative)!')
+        print('out_eager_sum:', out_eager_sum.numpy())
+        print('out_compiled_sum:', out_compiled_sum.numpy())
+        print('Absolute diff:', diff)
+        print('Relative diff (%):', rel_diff)
+        sys.exit(1)
+    else:
+        print(' Test Passed: No significant divergence detected.')

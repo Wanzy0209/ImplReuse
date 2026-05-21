@@ -1,0 +1,43 @@
+import torch
+import unittest
+
+class TestNestedTensorShareMemory(unittest.TestCase):
+    """
+    Test case for share_memory_() support in NestedTensor.
+    This test verifies that calling share_memory_() does not cause a segmentation fault
+    and correctly updates the tensor's memory state, while preserving metadata integrity.
+    """
+
+    def test_nested_tensor_share_memory_jagged_layout(self):
+        # Reproduce the setup from the bug report
+        a = torch.randn(3)
+        b = torch.randn(5)
+        
+        # Create NestedTensor with jagged layout
+        nt = torch.nested.nested_tensor([a, b], layout=torch.jagged)
+        
+        # Verify initial state
+        self.assertIsInstance(nt, torch.nested._internal.nested_tensor.NestedTensor)
+        self.assertEqual(nt.layout, torch.jagged)
+        
+        # The bug: calling share_memory_() caused Segmentation fault (core dumped)
+        # We expect this call to succeed without crashing
+        nt.share_memory_()
+        
+        # Verify the tensor is now in shared memory
+        self.assertTrue(nt.is_shared())
+        
+        # Verify metadata integrity (similar to how TPUSystemMetadata describes system state)
+        # Check offsets to ensure the structure remains valid after memory sharing
+        expected_offsets = torch.tensor([0, 3, 8])
+        # Note: offsets() might return a tensor depending on the version, 
+        # here we check the representation or property if available.
+        # In the bug report, offsets were visible in repr.
+        self.assertTrue(torch.equal(nt.offsets(), expected_offsets))
+        
+        # Verify size metadata
+        # The bug report showed size=(2, j1). We check the batch size.
+        self.assertEqual(nt.size(0), 2)
+
+if __name__ == '__main__':
+    unittest.main()

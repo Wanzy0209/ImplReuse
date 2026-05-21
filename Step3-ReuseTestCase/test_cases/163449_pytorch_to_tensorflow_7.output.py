@@ -1,0 +1,75 @@
+import torch
+import tensorflow as tf
+import numpy as np
+import sys
+
+# Configure seeds to ensure reproducibility for random operations
+# This is critical when comparing eager vs compiled execution of random ops
+SEED = 42
+tf.random.set_seed(SEED)
+
+def foo():
+    # Original: t3 = torch.addmm(t0, t1, t2) # size=(5, 4), dtype=bfloat16
+    # Adapted: Use tf.keras.backend.random_uniform to generate the tensor
+    # We mimic the shape and dtype of the original addmm output
+    t3 = tf.keras.backend.random_uniform(
+        shape=(5, 4), 
+        minval=0.0, 
+        maxval=1.0, 
+        dtype=tf.float32
+    )
+    t3 = tf.cast(t3, tf.bfloat16)
+
+    # Original: t4 = t3.norm()
+    t4 = tf.norm(t3)
+
+    # Original: t5 = arg3 ... t6 = t5.var(dim=0) ... t7 = t6.var()
+    # We generate t5 here to keep the test self-contained, mimicking the original arg3
+    t5 = tf.random.uniform((3, 4, 5, 2), dtype=tf.float32)
+    t6 = tf.math.reduce_variance(t5, axis=0)
+    t7 = tf.math.reduce_variance(t6)
+
+    # Original: t8 = arg4 ... t9 = relu(t8)
+    # We generate t8 here to keep the test self-contained, mimicking the original arg4
+    t8 = tf.random.uniform([], dtype=tf.float32)
+    t9 = tf.nn.relu(t8)
+
+    # Original: t10 = t7 + t4 + t9
+    # Note: t4 is bfloat16, t7 and t9 are float32. This mixed precision is
+    # part of the "core bug reproduction logic" (precision sensitivity).
+    t10 = t7 + t4 + t9
+
+    # Original: t11 = torch.pow(torch.pow(t4, t7), t10)
+    t11 = tf.pow(tf.pow(t4, t7), t10)
+
+    return t11
+
+if __name__ == '__main__':
+    # 1. Run Eager
+    tf.random.set_seed(SEED)
+    out_eager = foo()
+    print('Eager Success! ')
+
+    # 2. Run Compiled (using tf.function with XLA)
+    tf.random.set_seed(SEED)
+    compiled_foo = tf.function(foo, jit_compile=True)
+    out_compiled = compiled_foo()
+    print('Compile Success! ')
+
+    # 3. Compare outputs
+    # We compare the scalar values as in the original test
+    out_eager_val = out_eager.numpy()
+    out_compiled_val = out_compiled.numpy()
+    
+    diff = np.abs(out_eager_val - out_compiled_val)
+    rel_diff = diff / (np.abs(out_eager_val) + 1e-12) * 100
+    
+    print(f'Relative diff: {rel_diff:.6f}%')
+    
+    if rel_diff > 5:
+        print(f' Forward outputs differ significantly (relative)!')
+        print('out_eager:', out_eager_val)
+        print('out_compiled:', out_compiled_val)
+        print('Absolute diff:', diff)
+        print('Relative diff (%):', rel_diff)
+        sys.exit(1)

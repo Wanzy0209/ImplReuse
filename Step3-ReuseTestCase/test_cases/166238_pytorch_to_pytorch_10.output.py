@@ -1,0 +1,73 @@
+import torch
+import torch.distributed as dist
+import collections
+import multiprocessing
+import os
+
+def worker(rank, world_size, file_descriptor):
+    """
+    Worker function to initialize process group and test gather_object with defaultdict.
+    """
+    # Initialize the process group using the file descriptor passed from the parent
+    dist.init_process_group(
+        backend="gloo",
+        init_method=f"file://{file_descriptor}",
+        rank=rank,
+        world_size=world_size
+    )
+
+    # Create a collections.defaultdict object
+    # This mirrors the object type causing the regression in the original bug report
+    dd = collections.defaultdict(list)
+    dd['data'].append(rank)
+    dd['metadata'] = f"rank_{rank}"
+
+    # Prepare the gather list
+    if rank == 0:
+        gather_list = [None for _ in range(world_size)]
+    else:
+        gather_list = None
+
+    # Call the similar API: torch.distributed.gather_object
+    # We verify that gather_object can handle the defaultdict type that caused issues in Dynamo
+    dist.gather_object(dd, gather_list, dst=0)
+
+    # Verification on the destination rank (rank 0)
+    if rank == 0:
+        assert len(gather_list) == world_size
+        for i, obj in enumerate(gather_list):
+            assert isinstance(obj, collections.defaultdict), f"Expected defaultdict, got {type(obj)}"
+            assert 'data' in obj
+            assert i in obj['data']
+            assert obj['metadata'] == f"rank_{i}"
+
+    dist.destroy_process_group()
+
+def test_gather_object_with_defaultdict():
+    """
+    Test case for torch.distributed.gather_object using collections.defaultdict.
+    Adapted from Issue 166238 regarding defaultdict creation regression.
+    """
+    if not dist.is_available():
+        print("Skipping test as torch.distributed is not available.")
+        return
+
+    world_size = 2
+    # Create a temporary file for process group initialization
+    import tempfile
+    with tempfile.NamedTemporaryFile(delete=True) as tmp_file:
+        file_descriptor = tmp_file.name
+
+        ctx = multiprocessing.get_context("spawn")
+        processes = []
+        for rank in range(world_size):
+            p = ctx.Process(target=worker, args=(rank, world_size, file_descriptor))
+            p.start()
+            processes.append(p)
+
+        for p in processes:
+            p.join()
+            assert p.exitcode == 0
+
+if __name__ == "__main__":
+    test_gather_object_with_defaultdict()

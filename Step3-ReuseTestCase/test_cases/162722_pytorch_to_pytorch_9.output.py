@@ -1,0 +1,58 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use 'gloo' backend for CPU compatibility in this test
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_broadcast_object_list(rank, world_size):
+    setup(rank, world_size)
+
+    # Create a list of objects to broadcast.
+    # Only rank 0 initializes the data with specific tensors to test numerical consistency.
+    if rank == 0:
+        # Simulating model parameters or data batches
+        object_list = [
+            torch.randn(10, 10), 
+            {"key": torch.randn(5, 5)}, 
+            "metadata_string"
+        ]
+        print(f"Rank {rank} initialized objects for broadcast.")
+    else:
+        # Other ranks initialize with empty placeholders
+        object_list = [None, None, None]
+
+    # Call the API under test: torch.distributed.broadcast_object_list
+    # This broadcasts the picklable objects from src (0) to all other ranks
+    dist.broadcast_object_list(object_list, src=0)
+
+    # Verification: Ensure data consistency across ranks
+    # We check that the objects received match the expected types and shapes
+    if rank != 0:
+        assert isinstance(object_list[0], torch.Tensor), "Rank 0 object mismatch"
+        assert object_list[0].shape == (10, 10), "Rank 0 tensor shape mismatch"
+        
+        assert isinstance(object_list[1], dict), "Rank 1 object type mismatch"
+        assert "key" in object_list[1], "Rank 1 dict key missing"
+        assert isinstance(object_list[1]["key"], torch.Tensor), "Rank 1 dict value type mismatch"
+        
+        assert object_list[2] == "metadata_string", "Rank 2 string mismatch"
+        
+        print(f"Rank {rank} successfully verified broadcasted objects.")
+    else:
+        print(f"Rank {rank} broadcast complete.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    # Spawn 2 processes to simulate a distributed environment
+    world_size = 2
+    mp.spawn(test_broadcast_object_list, args=(world_size,), nprocs=world_size, join=True)

@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+
+# Replicating the class structure from the original bug report
+class Foo:
+    pass
+
+class Bar:
+    def __eq__(self, other):
+        return super().__eq__(other)
+
+    def __hash__(self):
+        return 0
+
+# Note: pytree.register_constant is specific to PyTorch's torch.utils._pytree.
+# TensorFlow handles nested structures differently (e.g., tf.nest), but for this
+# adaptation, we focus on the execution context provided by the similar API.
+
+# Adaptation: Using tf.name_scope as the context manager, analogous to the
+# context provided by torch.compile.
+def fn(x, obj):
+    with tf.name_scope("test_scope"):
+        # Replicate the side effect logic
+        obj.attr = {3: Bar()}
+        # Replicate the tensor operation
+        return x + 1
+
+# Test execution
+if __name__ == "__main__":
+    # Create inputs
+    x = tf.ones(3)
+    obj = Foo()
+
+    # Execute the function
+    result = fn(x, obj)
+
+    # Assertions to verify behavior
+    # Check tensor operation result
+    expected = tf.constant([2.0, 2.0, 2.0])
+    assert tf.reduce_all(tf.equal(result, expected)).numpy(), "Tensor operation failed"
+
+    # Check side effect on object
+    assert hasattr(obj, 'attr'), "Attribute 'attr' not set"
+    assert 3 in obj.attr, "Key 3 not found in attr"
+    assert isinstance(obj.attr[3], Bar), "Value is not instance of Bar"
+
+    print("Test case executed successfully.")

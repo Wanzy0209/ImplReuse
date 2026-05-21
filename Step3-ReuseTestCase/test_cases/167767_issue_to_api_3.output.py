@@ -1,0 +1,68 @@
+import torch
+import unittest
+
+class TestClampBackendBehavior(unittest.TestCase):
+    """
+    Test case to verify torch.clamp behavior on different backends (MPS and CUDA).
+    This test preserves the logic from the original bug report (Issue 167767) 
+    and leverages the similar API (torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed)
+    to verify backend state and behavior.
+    """
+
+    def test_mps_clamp_regression(self):
+        """
+        Reproduces the logic from the original bug report for the MPS backend.
+        The bug was that clamping 0.0 to min=1e-7 resulted in 0.0 instead of 1e-7.
+        """
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS backend not available")
+
+        # Trigger line from the bug report
+        a = torch.zeros(1, device='mps')
+        a_clamped = a.clamp(min=0.0)
+
+        # Test cases from the bug report
+        b = torch.zeros(1, device='mps')
+        c = b.clamp(min=1e-7)
+        # Expected behavior: 0.0 clamped to 1e-7 should be 1e-7
+        self.assertTrue(torch.allclose(c, torch.tensor([1e-7], device='mps')), 
+                        "MPS clamp(min=1e-7) failed to raise zero to min value")
+
+        b = torch.zeros(1, device='mps')
+        c = b.clamp(min=1e-7, max=None)
+        self.assertTrue(torch.allclose(c, torch.tensor([1e-7], device='mps')), 
+                        "MPS clamp(min=1e-7, max=None) failed")
+
+        b = torch.zeros(1, device='mps')
+        c = b.clamp(min=1e-7, max=torch.inf)
+        self.assertTrue(torch.allclose(c, torch.tensor([1e-7], device='mps')), 
+                        "MPS clamp(min=1e-7, max=inf) failed")
+
+        b = torch.zeros(1, device='mps')
+        c = b.clamp_min(1e-7)
+        self.assertTrue(torch.allclose(c, torch.tensor([1e-7], device='mps')), 
+                        "MPS clamp_min(1e-7) failed")
+
+    def test_cuda_clamp_with_backend_flags(self):
+        """
+        Leverages the similar API torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+        to check backend state and verify clamp behavior on CUDA.
+        """
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA backend not available")
+
+        # Leverage the similar API to check the backend configuration
+        # This relates to the issue by checking backend-specific flags, 
+        # similar to how the original issue was specific to the MPS backend.
+        sdp_allowed = torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
+        self.assertIsInstance(sdp_allowed, bool, 
+                              "Similar API fp16_bf16_reduction_math_sdp_allowed should return bool")
+
+        # Verify clamp works correctly on CUDA (ensuring the MPS bug doesn't affect CUDA)
+        b = torch.zeros(1, device='cuda')
+        c = b.clamp(min=1e-7)
+        self.assertTrue(torch.allclose(c, torch.tensor([1e-7], device='cuda')), 
+                        "CUDA clamp(min=1e-7) failed")
+
+if __name__ == '__main__':
+    unittest.main()

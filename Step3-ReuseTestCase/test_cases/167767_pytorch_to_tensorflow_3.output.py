@@ -1,0 +1,41 @@
+import tensorflow as tf
+import numpy as np
+
+def test_truncated_normal_bounds():
+    # The original bug involves clamping a zero tensor to a minimum value.
+    # We adapt this to TruncatedNormal by setting the mean to the target minimum
+    # and stddev to 0 to ensure deterministic behavior, mimicking the "clamping" effect.
+
+    # 1. Trigger line equivalent: mean=0, stddev=0 (clamping 0 to 0)
+    # This line in the original bug report triggers the incorrect behavior for subsequent calls.
+    init = tf.keras.initializers.TruncatedNormal(mean=0.0, stddev=0.0)
+    a = init(shape=(1,))
+    # print(a) # Expected: [0.]
+
+    # 2. Clamp(min=1e-7) equivalent: mean=1e-7, stddev=0
+    # We expect the value to be 1e-7. If a similar bug exists, it might remain 0.
+    init = tf.keras.initializers.TruncatedNormal(mean=1e-7, stddev=0.0)
+    b = init(shape=(1,))
+    print(b)
+    assert np.allclose(b.numpy(), [1e-7]), f"Expected 1e-7, got {b.numpy()}"
+
+    # 3. Clamp(min=1e-7, max=None) equivalent
+    init = tf.keras.initializers.TruncatedNormal(mean=1e-7, stddev=0.0)
+    b = init(shape=(1,))
+    print(b)
+    assert np.allclose(b.numpy(), [1e-7]), f"Expected 1e-7, got {b.numpy()}"
+
+    # 4. Clamp(min=1e-7, max=inf) equivalent
+    init = tf.keras.initializers.TruncatedNormal(mean=1e-7, stddev=0.0)
+    b = init(shape=(1,))
+    print(b)
+    assert np.allclose(b.numpy(), [1e-7]), f"Expected 1e-7, got {b.numpy()}"
+
+    # 5. clamp_min(1e-7) equivalent
+    init = tf.keras.initializers.TruncatedNormal(mean=1e-7, stddev=0.0)
+    b = init(shape=(1,))
+    print(b)
+    assert np.allclose(b.numpy(), [1e-7]), f"Expected 1e-7, got {b.numpy()}"
+
+if __name__ == "__main__":
+    test_truncated_normal_bounds()

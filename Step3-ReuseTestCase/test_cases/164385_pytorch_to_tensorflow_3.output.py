@@ -1,0 +1,49 @@
+import tensorflow as tf
+import numpy as np
+
+"""
+Test HeUniform to verify the division logic in its initialization.
+The original bug involved FloorDiv (integer division) being simplified to Rational (fraction).
+HeUniform uses division (scale / fan_in) to determine bounds. We verify this division
+results in correct float bounds and not integer division artifacts.
+"""
+
+print("Testing HeUniform initialization logic...")
+
+# Create the initializer
+# HeUniform uses scale=2.0, mode='fan_in', distribution='uniform'
+initializer = tf.keras.initializers.HeUniform(seed=164385)
+
+# Define a shape where fan_in is known
+# For a 2D tensor (rows, cols), fan_in is cols.
+# Let's use a shape that mimics the complexity or specific numbers if possible,
+# but here we just need a valid fan_in.
+shape = (10, 20) # fan_in = 20
+
+# Generate the values
+values = initializer(shape=shape)
+print(f"Generated values shape: {values.shape}")
+print(f"Generated values dtype: {values.dtype}")
+
+# Calculate the expected limit manually
+# Formula: limit = sqrt(6 / fan_in)
+# Note: scale is 2.0 for HeUniform, so variance = 2.0 / fan_in
+# stddev = sqrt(variance)
+# limit = stddev * sqrt(3) = sqrt(6 / fan_in)
+fan_in = 20.0
+expected_limit = np.sqrt(6.0 / fan_in)
+
+print(f"Expected limit: {expected_limit}")
+
+# Verify the values are within the correct bounds
+# This implicitly checks that the division 6.0 / fan_in was a float division
+# and not an integer division (which would be 0 in this case if 6//20).
+assert np.all(values.numpy() >= -expected_limit), "Values found below lower bound"
+assert np.all(values.numpy() <= expected_limit), "Values found above upper bound"
+
+# Verify the internal configuration
+config = initializer.get_config()
+print(f"Initializer config: {config}")
+assert config['scale'] == 2.0, "Scale should be 2.0"
+
+print("Test passed: HeUniform division logic is correct.")

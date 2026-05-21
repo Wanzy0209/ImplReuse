@@ -1,0 +1,57 @@
+import torch
+import sys
+
+# Reproduce the configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def resize_volumes_pt(x, depth_factor, height_factor, width_factor, data_format):
+    """
+    PyTorch implementation of tf.keras.backend.resize_volumes logic.
+    Uses repeat_interleave to mimic repeat_elements.
+    """
+    if data_format == 'channels_first':
+        # (Batch, Channels, Depth, Height, Width)
+        x = torch.repeat_interleave(x, depth_factor, dim=2)
+        x = torch.repeat_interleave(x, height_factor, dim=3)
+        x = torch.repeat_interleave(x, width_factor, dim=4)
+    elif data_format == 'channels_last':
+        # (Batch, Depth, Height, Width, Channels)
+        x = torch.repeat_interleave(x, depth_factor, dim=1)
+        x = torch.repeat_interleave(x, height_factor, dim=2)
+        x = torch.repeat_interleave(x, width_factor, dim=3)
+    return x
+
+def foo(arg0, sentinel):
+    # Original bug reproduction logic: torch.tanh on int64
+    t0 = arg0 # size=(42, 56), dtype=int64, device=cuda
+    t1 = torch.tanh(t0) # size=(42, 56), dtype=float (promoted from int64)
+
+    # Leverage the similar API logic (resize_volumes)
+    # We reshape the 2D tensor to 5D to fit the resize_volumes API signature
+    # Shape: (Batch, Channels, Depth, Height, Width) -> (1, 1, 42, 56, 1)
+    t1_5d = t1.unsqueeze(0).unsqueeze(0).unsqueeze(-1)
+    
+    # Apply resize_volumes logic
+    t2 = resize_volumes_pt(t1_5d, depth_factor=2, height_factor=2, width_factor=1, data_format='channels_first')
+    
+    # Add sentinel for gradient flow
+    output = t2 + sentinel
+    return output
+
+# Setup inputs matching the original bug's dtype characteristics
+arg0 = torch.randint(0, 1000, [42, 56], dtype=torch.int64, device='cuda')
+sentinel = torch.tensor(0.0, dtype=torch.float16, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    # Test Eager Mode
+    out_eager = foo(arg0, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+
+    # Test Compiled Mode (where the divergence occurred)
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ')

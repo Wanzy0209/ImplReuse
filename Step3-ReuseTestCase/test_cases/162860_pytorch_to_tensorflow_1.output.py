@@ -1,0 +1,38 @@
+import tensorflow as tf
+
+# Define the computation logic
+# Mimics the structure of the original 'fn' which calls 'inner' twice
+def computation(x):
+    x = x + 1
+    return x + 1
+
+# Initialize TPU (Required for tf.compat.v1.tpu.batch_parallel)
+# Note: This code requires a TPU environment to execute fully.
+try:
+    resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(resolver)
+    tf.tpu.experimental.initialize_tpu_system(resolver)
+    strategy = tf.distribute.TPUStrategy(resolver)
+
+    # Define inputs
+    # batch_parallel expects a list of inputs corresponding to the computation's arguments
+    inputs = [tf.ones((3,))]
+
+    # Execute the similar API
+    # The original test compiles a function and executes it.
+    # Here, batch_parallel compiles and shards the computation for TPU execution.
+    with strategy.scope():
+        result = tf.compat.v1.tpu.batch_parallel(
+            computation,
+            inputs=inputs,
+            num_shards=1
+        )
+
+    # Trigger execution to verify behavior
+    # batch_parallel returns a list of outputs (one per shard)
+    print("Result:", result)
+
+except (ValueError, tf.errors.NotFoundError) as e:
+    # Handle cases where TPU is not available (e.g., running on CPU/GPU only)
+    print(f"TPU not available or initialization failed: {e}")
+    print("This test case is intended for a TPU environment.")

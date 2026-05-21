@@ -1,0 +1,33 @@
+import torch
+import unittest
+import math
+
+class TestRebindUnbackedFloatHandling(unittest.TestCase):
+    """
+    Test case for Issue #162480: Missing float handling in rebind_unbacked().
+    
+    This test verifies that torch.compile (specifically AOTInductor) handles
+    float values encountered during symbolic shape rebinding gracefully.
+    
+    The fix ensures that if a float (e.g., resulting from a calculation or NaN)
+    is encountered in the rebind_unbacked logic, it is discarded/logged rather
+    than causing a compilation crash.
+    
+    This relates to the similar API tf.compat.v1.train.NanLossDuringTrainingError
+    by addressing the handling of float/NaN values in critical paths, though
+    PyTorch's approach is to handle it gracefully during compilation rather than
+    raising a runtime error during training.
+    """
+
+    def test_compile_with_float_shape_logic(self):
+        # Define a function that might trigger float values in shape rebinding.
+        # Using torch.where on sizes or math operations on shapes can sometimes
+        # introduce floats in symbolic tracing if not strictly guarded.
+        def model(x):
+            # Simulate a scenario where a size calculation might result in a float
+            # or a symbolic value that resolves to a float during tracing.
+            # Note: In eager mode, sizes must be integers, but symbolic tracing
+            # can produce intermediate float representations.
+            
+            # Example: using a float in a dynamic shape context
+            # This pattern is common in

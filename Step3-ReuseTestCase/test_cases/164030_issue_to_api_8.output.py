@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_relu_naming_and_operations():
+    """
+    Test case for tf.keras.activations.relu inspired by PyTorch Issue 164030.
+    
+    The original issue describes a naming collision where HOP and pipelining both
+    name generated submodules 'submod_i', stepping on each other's toes.
+    
+    This test verifies that tf.keras.activations.relu allows explicit naming
+    (via the 'name' parameter) to avoid such collisions, while preserving the
+    logic structure (Context -> Op -> Sum) found in the original bug report.
+    """
+    # Setup input data
+    # Mimicking 'expert_counts' from the original issue
+    input_tensor = tf.constant([-1.0, 0.0, 1.0, 2.0], dtype=tf.float32)
+
+    # Context: Mimicking the 'with torch.no_grad():' or the module scopes
+    # In TF, name_scope is the standard context for organizing ops/names.
+    with tf.name_scope("model_partition"):
+        # Operation 1: Use the Similar API (tf.keras.activations.relu)
+        # The bug highlights issues with auto-generated names (submod_i).
+        # Here we explicitly name the operation to demonstrate control over naming,
+        # preventing the collision described in the issue.
+        activated = tf.keras.activations.relu(input_tensor, name="custom_relu")
+
+        # Operation 2: Mimic 'tokens_per_expert = expert_counts.sum(dim=0)'
+        # This preserves the logic from the original test case.
+        result_sum = tf.reduce_sum(activated)
+
+    # Assertions
+    # 1. Verify the operation logic (ReLU + Sum)
+    expected_values = [0.0, 0.0, 1.0, 2.0]
+    np.testing.assert_array_almost_equal(activated.numpy(), expected_values)
+    assert result_sum.numpy() == 3.0
+
+    # 2. Verify the naming mechanism (Addressing the bug)
+    # Ensure the explicit name is respected, preventing the 'submod_i' collision issue.
+    # The name format in TF is usually "scope/name:0"
+    assert "custom_relu" in activated.name, \
+        f"Expected 'custom_relu' in tensor name, got {activated.name}"
+
+if __name__ == "__main__":
+    test_relu_naming_and_operations()
+    print("Test passed.")

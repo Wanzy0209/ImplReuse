@@ -1,0 +1,48 @@
+import unittest
+import torch
+import platform
+from unittest import mock
+
+# This test verifies the fix for the MPS backend version check on macOS 13.7.4.
+# The bug was that the backend was unavailable despite the OS version being >= 13.0.
+# We leverage the version checking pattern (retrieve -> compare) seen in similar APIs
+# like tf.test.main to structure this verification.
+
+class TestMPSVersionCompatibility(unittest.TestCase):
+
+    def _get_version_tuple(self, version_str):
+        """
+        Helper to convert version string to tuple for comparison.
+        This mirrors the 'convert_version_to_int' logic pattern found in 
+        similar API implementations like tf.test.main.
+        """
+        return tuple(map(int, version_str.split('.')))
+
+    @mock.patch('platform.mac_ver', return_value=('13.7.4', ('', '', ''), 'arm64'))
+    def test_mps_availability_on_macos_13_7_4(self, mock_mac_ver):
+        """
+        Test that MPS backend is available on macOS 13.7.4.
+        This reproduces the scenario from the bug report where version 13.7.4
+        was incorrectly flagged as unsupported.
+        """
+        # Verify our mock setup is logically correct (13.7.4 >= 13.0)
+        current_ver = self._get_version_tuple('13.7.4')
+        required_ver = self._get_version_tuple('13.0')
+        self.assertGreaterEqual(current_ver, required_ver, "Mocked version should be valid")
+
+        # Original bug reproduction logic
+        try:
+            foo = torch.tensor([[1]])
+            # Note: If MPS is not available on the actual hardware (e.g. running on CI),
+            # .to('mps') might still fail with a different error.
+            # We are specifically checking for the VERSION error mentioned in the bug.
+            foo = foo.to('mps')
+        except RuntimeError as e:
+            error_msg = str(e)
+            if "13.0+" in error_msg and "MacOS" in error_msg:
+                self.fail(f"Bug reproduced: MPS backend incorrectly rejected macOS 13.7.4. Error: {error_msg}")
+            # If it's a different error (e.g. "MPS device not found"), we ignore it for this specific logic test
+            # as we are mocking the OS version, not the hardware presence.
+
+if __name__ == '__main__':
+    unittest.main()

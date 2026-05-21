@@ -1,0 +1,55 @@
+import torch
+
+# Reproduce the configuration from the original bug
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch.manual_seed(19989)
+
+def fuzzed_program(arg_0, sentinel):
+    # Logic from original bug: creating a scalar tensor and extracting its value
+    var_node_5 = torch.full((), 1, dtype=torch.int64)
+    var_node_4 = var_node_5.item() # dtype=int64
+
+    # Logic from original bug: using arg_0 (int32)
+    # We use arg_0 directly as part of the shape to mix types (int32 vs int64)
+    # similar to the original arithmetic operation.
+    
+    # Use the similar API: torch.broadcast_to
+    # We construct a shape using the mixed types to potentially trigger the divergence
+    # similar to the division operation in the original bug.
+    shape = (arg_0, var_node_4)
+
+    # Create a tensor to broadcast
+    data = torch.randn(1)
+
+    # Apply the similar API
+    # This replaces the division 'var_node_1 / var_node_4' from the original
+    result = torch.broadcast_to(data, shape)
+
+    # Ensure gradient computation by multiplying with sentinel
+    result = result * sentinel
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+# Input argument: int32 scalar
+# Ensure positive value for valid shape in broadcast_to
+arg_0 = torch.tensor(torch.randn(()), dtype=torch.int32).abs().item() + 1
+
+args = (arg_0,) + (sentinel,)
+
+# Test Eager
+try:
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# Test Compiled
+try:
+    compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+    result_compiled = compiled_program(*args)
+    print(' compile success')
+except Exception as e:
+    print(f' compile failed: {e}')

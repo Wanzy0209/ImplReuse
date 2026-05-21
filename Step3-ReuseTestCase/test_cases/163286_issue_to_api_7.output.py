@@ -1,0 +1,49 @@
+import torch
+import tensorflow as tf
+
+def test_mlir_preserves_bitcast_dtype():
+    """
+    Test case to verify that tf.mlir.experimental.convert_function preserves 
+    dtype view (bitcast) information.
+
+    This test is analogous to the PyTorch Inductor bug where as_strided lowering 
+    threw away .view(dtype). In that bug, a tensor viewed as uint8 was incorrectly 
+    passed to a kernel as float8. Here, we verify that the TensorFlow MLIR 
+    conversion correctly represents the bitcast operation (equivalent to view) 
+    in the generated MLIR text.
+    """
+    
+    @tf.function
+    def func_with_bitcast(x):
+        # In PyTorch, this is equivalent to: x.view(torch.uint8)
+        # tf.bitcast changes the dtype interpretation without modifying data.
+        return tf.bitcast(x, tf.uint8)
+
+    # Define the input specification (e.g., a float32 tensor)
+    # The PyTorch issue involved float8_e8m0fnu, but float32 is standard for TF testing.
+    input_spec = tf.TensorSpec(shape=[16, 16], dtype=tf.float32)
+    
+    # Get the ConcreteFunction
+    concrete_func = func_with_bitcast.get_concrete_function(input_spec)
+
+    # Convert the ConcreteFunction to MLIR using the similar API
+    mlir_output = tf.mlir.experimental.convert_function(concrete_func)
+
+    # Assertions
+    # 1. Ensure the conversion produced a valid string
+    assert isinstance(mlir_output, str), "MLIR conversion did not return a string."
+    assert len(mlir_output) > 0, "MLIR output is empty."
+
+    # 2. Verify that the dtype view (bitcast) is preserved in the MLIR representation.
+    # The PyTorch bug manifested as the kernel receiving the wrong dtype.
+    # Here, we check if the MLIR text contains the target type 'ui8' (unsigned 8-bit integer),
+    # indicating the conversion process respected the bitcast operation.
+    # We also check for the original 'f32' to ensure the input context is present.
+    assert 'f32' in mlir_output, "Input dtype (float32) missing from MLIR output."
+    assert 'ui8' in mlir_output or 'uint8' in mlir_output, \
+        "Target dtype (uint8) missing from MLIR output. The bitcast (view) may have been lost."
+
+    print("Test Passed: MLIR conversion preserves dtype view (bitcast).")
+
+if __name__ == "__main__":
+    test_mlir_preserves_bitcast_dtype()

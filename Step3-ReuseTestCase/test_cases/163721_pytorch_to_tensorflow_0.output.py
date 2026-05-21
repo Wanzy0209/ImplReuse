@@ -1,0 +1,59 @@
+import tensorflow as tf
+from tensorflow.compat.v1 import graph_util
+
+# Disable eager execution to work within a graph context where device placement logic is applicable
+tf.compat.v1.disable_eager_execution()
+
+def test_must_run_on_cpu_behavior():
+    """
+    Test case adapted to verify the behavior of tf.compat.v1.graph_util.must_run_on_cpu.
+    This mirrors the intent of the original PyTorch test which verified device availability 
+    and usage, by verifying device placement constraints in TensorFlow.
+    """
+    print("Starting test for tf.compat.v1.graph_util.must_run_on_cpu...")
+
+    with tf.compat.v1.Session() as sess:
+        # Scenario 1: Constant operations producing a string must run on CPU.
+        # This corresponds to the logic: if node_def.op == "Const" and dtype is string -> True
+        string_const = tf.constant("Hello MPS", dtype=tf.string)
+        assert graph_util.must_run_on_cpu(string_const.op) == True, \
+            "String constants must be identified as CPU-only."
+        print(" String constant correctly identified as CPU-only.")
+
+        # Scenario 2: Constant operations producing int32 must run on CPU.
+        int32_const = tf.constant(42, dtype=tf.int32)
+        assert graph_util.must_run_on_cpu(int32_const.op) == True, \
+            "Int32 constants must be identified as CPU-only."
+        print(" Int32 constant correctly identified as CPU-only.")
+
+        # Scenario 3: Constant operations producing float32 can run on GPU (not forced to CPU).
+        float_const = tf.constant(3.14, dtype=tf.float32)
+        assert graph_util.must_run_on_cpu(float_const.op) == False, \
+            "Float32 constants should not be forced to CPU."
+        print(" Float32 constant correctly identified as GPU-compatible.")
+
+        # Scenario 4: Variable-related ops with pin_variables_on_cpu=True.
+        var = tf.Variable([1.0, 2.0], dtype=tf.float32)
+        # The initializer op is a variable-related op.
+        assert graph_util.must_run_on_cpu(var.initializer, pin_variables_on_cpu=True) == True, \
+            "Variables must be identified as CPU-only when pin_variables_on_cpu is True."
+        print(" Variable correctly identified as CPU-only when pinned.")
+
+        # Scenario 5: Variable-related ops with pin_variables_on_cpu=False.
+        assert graph_util.must_run_on_cpu(var.initializer, pin_variables_on_cpu=False) == False, \
+            "Variables should not be forced to CPU when pin_variables_on_cpu is False."
+        print(" Variable correctly identified as GPU-compatible when not pinned.")
+
+        # Scenario 6: Standard operations (e.g., MatMul) are not forced to CPU.
+        # This mimics the general usage of custom ops on GPU in the original PyTorch code.
+        a = tf.constant([[1.0]])
+        b = tf.constant([[2.0]])
+        matmul_op = tf.matmul(a, b).op
+        assert graph_util.must_run_on_cpu(matmul_op) == False, \
+            "MatMul operations should not be forced to CPU."
+        print(" MatMul operation correctly identified as GPU-compatible.")
+
+    print("All test cases passed successfully.")
+
+if __name__ == "__main__":
+    test_must_run_on_cpu_behavior()

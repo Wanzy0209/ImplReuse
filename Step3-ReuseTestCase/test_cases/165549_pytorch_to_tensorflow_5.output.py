@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_broadcast_to_shape_preservation():
+    """
+    Adapted test case based on PyTorch Issue 165549.
+    
+    Original Bug: Operations like abs() dispatched via CompositeExplicitAutograd 
+    return empty tensors (shape [0]) when run through cpu_fallback, instead of 
+    preserving the input shape.
+    
+    Target API: tf.experimental.numpy.broadcast_to
+    Logic: Verify that the operation returns the correct requested shape and 
+    does not return an empty/incorrectly shaped tensor.
+    """
+    
+    # Create an input tensor on a specific device to mimic the device context of the original bug
+    # Note: PyTorch bug used 'privateuse1', here we use standard CPU/GPU placement.
+    with tf.device('/CPU:0'):
+        # Input tensor analogous to torch.randn(4, 4)
+        input_tensor = tf.random.normal((4, 4))
+    
+    # Target shape for broadcasting
+    target_shape = (4, 4)
+    
+    # Perform the operation
+    # In the PyTorch bug, result.shape was [0] instead of [4, 4]
+    result = tf.experimental.numpy.broadcast_to(input_tensor, target_shape)
+    
+    # 1. Check if the shape matches the target (Core logic of the bug report)
+    assert result.shape == target_shape, (
+        f"Shape mismatch detected. Expected {target_shape}, but got {result.shape}. "
+        "This mimics the PyTorch bug where the output tensor had an incorrect shape."
+    )
+    
+    # 2. Verify the tensor is not empty (PyTorch bug returned size 0)
+    assert tf.size(result).numpy() > 0, "Result tensor is empty (size 0)."
+    
+    # 3. Verify values are broadcasted correctly (sanity check)
+    # Since we broadcast (4,4) to (4,4), values should be identical
+    assert np.array_equal(result.numpy(), input_tensor.numpy()), "Values mismatch after broadcasting."
+
+    print("Test passed: tf.experimental.numpy.broadcast_to preserves shape correctly.")
+
+if __name__ == "__main__":
+    test_broadcast_to_shape_preservation()

@@ -1,0 +1,84 @@
+import unittest
+import tempfile
+import os
+import shutil
+import torch
+import torch.export
+import torch._inductor
+
+class TestAotiCompileMultiDevice(unittest.TestCase):
+    """
+    Test case for Issue 166841:
+    Verifies that aoti_compile_and_package correctly generates CPU kernels
+    for CPU operations (scatter_add_) even when the model contains CUDA operations.
+    """
+
+    @unittest.skipIf(not torch.cuda.is_available(), "Requires CUDA")
+    def test_scatter_add_cpu_cuda_mixed(self):
+        # --- 1. Minimal Model Definition ---
+        class MyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                # Buffers are explicitly on CPU
+                self.register_buffer(
+                    "index",
+                    torch.tensor([1, 4, 1, 7], device='cpu', dtype=torch.int64)
+                )
+                self.register_buffer(
+                    "src",
+                    torch.ones(4, device='cpu', dtype=torch.int64)
+                )
+
+            def forward(self, matrix, vector):
+                # Inputs are on CUDA
+
+                # 1. Operation on CPU tensors
+                # This operation must use the CPU kernel, not the CUDA kernel
+                z = torch.zeros((vector.shape[0],), device='cpu', dtype=torch.int64)
+                scatter_result = z.scatter_add(0, self.index, self.src)
+
+                # 2. Move result to CUDA and continue on CUDA
+                v = vector + scatter_result.to(vector.dtype).to('cuda')
+                return torch.matmul(matrix, v)
+
+        # --- 2. Setup and Compile ---
+        model = MyModel().eval()
+        matrix = torch.randn(10, 10, device='cuda')
+        vector = torch.randn(10, device='cuda')
+        example_args = (matrix, vector)
+
+        # Calculate expected output using eager execution
+        expected_output = model(*example_args)
+
+        print("Exporting model...")
+        ep = torch.export.export(model, example_args)
+
+        # Use a temporary directory for the package
+        with tempfile.TemporaryDirectory() as output_dir:
+            package = os.path.join(output_dir, "model_package.pt2")
+
+            print("Starting AOTInductor compilation...")
+            # This is the API under test
+            torch._inductor.aoti_compile_and_package(
+                ep,
+                package_path=package,
+            )
+            print(f"Compiled package at: {package}")
+
+            # --- 3. Load and Run ---
+            print("\nAttempting to load and run compiled model...")
+            loaded = torch._inductor.aoti_load_package(package)
+            print("Model package loaded successfully.")
+
+            # Run the loaded model
+            # If the bug is present, this will raise:
+            # "CUDAGuardImpl initialized with non-CUDA DeviceType: cpu"
+            actual_output = loaded(*example_args)
+            
+            print("Model ran successfully with the loaded package.")
+
+            # Verify correctness
+            self.assertTrue(torch.allclose(actual_output, expected_output))
+
+if __name__ == '__main__':
+    unittest.main()

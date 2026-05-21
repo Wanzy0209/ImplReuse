@@ -1,0 +1,67 @@
+import torch
+import sys
+
+# Original configurations from the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+# Configuration to handle torch.nonzero in compilation based on the provided similar API info.
+# This enables the meta implementation which assumes all elements are non-zero but returns
+# a fake tensor (empty values), likely causing divergence with eager mode.
+try:
+    torch.fx.experimental._config.meta_nonzero_assume_all_nonzero = True
+except AttributeError:
+    # In case the config path differs or does not exist in the specific environment
+    pass
+
+def foo(arg0, arg1, arg2, arg3, arg4):
+    t0 = arg0 # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda
+    
+    # Adaptation: Replace torch.addmm with torch.nonzero
+    # Original: t3 = torch.addmm(t0, t1, t2)
+    # torch.nonzero returns indices (Long). We cast to float to allow subsequent 
+    # math operations (norm, pow) to proceed, maintaining the test structure.
+    t3 = torch.nonzero(t0).float() 
+    
+    t4 = t3.norm() # size=(), stride=(), dtype=float32, device=cuda
+    t5 = arg3 # size=(3, 4, 5, 2), stride=(40, 10, 2, 1), dtype=float32, device=cuda
+    t6 = t5.var(dim=0) # size=(4, 5, 2), stride=(10, 2, 1), dtype=float32, device=cuda
+    t7 = t6.var() # size=(), stride=(), dtype=float32, device=cuda
+    t8 = arg4 # size=(), stride=(), dtype=float32, device=cuda
+    t9 = torch.nn.functional.relu(t8) # size=(), stride=(), dtype=float32, device=cuda
+    t10 = t7 + t4 + t9 # size=(), stride=(), dtype=float32, device=cuda
+    t11 = torch.pow(torch.pow(t4, t7), t10) # size=(), stride=(), dtype=float32, device=cuda
+    output = t11  # output tensor
+    return output
+
+arg0 = torch.rand([5, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5, 4), stride=(4, 1), dtype=bfloat16, device=cuda
+arg1 = torch.rand([5, 1024], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(5, 1024), stride=(1024, 1), dtype=bfloat16, device=cuda
+arg2 = torch.rand([1024, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True) # size=(1024, 4), stride=(4, 1), dtype=bfloat16, device=cuda
+arg3 = torch.rand([3, 4, 5, 2], dtype=torch.float32, device='cuda', requires_grad=True) # size=(3, 4, 5, 2), stride=(40, 10, 2, 1), dtype=float32, device=cuda
+arg4 = torch.rand([], dtype=torch.float32, device='cuda', requires_grad=True) # size=(), stride=(), dtype=float32, device=cuda
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+    
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4)
+    out_compiled.sum().backward()
+    print('Compile Success! ')
+    
+    # Compare outputs (forward)
+    out_eager_sum = out_eager.sum()
+    out_compiled_sum = out_compiled.sum()
+    diff = (out_eager_sum - out_compiled_sum).abs().item()
+    rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100
+    print(f'Relative diff (sum): {rel_diff:.6f}%')
+    
+    if rel_diff > 5:
+        print(f' Forward output sums differ significantly (relative)!')
+        print('out_eager_sum:', out_eager_sum.item())
+        print('out_compiled_sum:', out_compiled_sum.item())
+        print('Absolute diff:', diff)
+        print('Relative diff (%):', rel_diff)
+        sys.exit(1)

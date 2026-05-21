@@ -1,0 +1,34 @@
+import torch
+
+def test_compile_item_on_float_tensor_arg():
+    """
+    Regression test for Issue #166888.
+    Verifies that torch.compile with the inductor backend handles .item() on
+    float tensor arguments correctly without raising NameError in generated code.
+    """
+    # The bug is specific to Triton kernels, so CUDA is required
+    if not torch.cuda.is_available():
+        print("Test skipped: CUDA not available")
+        return
+
+    def f(x, max_val):
+        # Calling .item() on a tensor argument inside the compiled function
+        # was causing 'NameError: zuf0 is not defined' in the generated Triton kernel.
+        return torch.clamp(x, 0, max_val.item())
+
+    # Compile with the specific backend and mode that triggered the bug
+    compiled_func = torch.compile(f, backend='inductor', fullgraph=True)
+
+    x = torch.randn(10, 20, 30, device='cuda')
+    max_val = torch.tensor(5.0, device='cuda')
+
+    # Execute the compiled function
+    result = compiled_func(x, max_val)
+
+    # Verify the result is correct
+    expected = torch.clamp(x, 0, max_val.item())
+    assert torch.allclose(result, expected), "Compiled function output does not match expected output"
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_compile_item_on_float_tensor_arg()

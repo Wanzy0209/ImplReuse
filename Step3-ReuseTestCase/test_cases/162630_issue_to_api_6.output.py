@@ -1,0 +1,64 @@
+import torch
+import torch.utils.dlpack
+import threading
+from torch.backends.cuda import is_flash_attention_available
+
+def test_dlpack_thread_safe_caching():
+    """
+    Test that DLPack conversion is thread-safe and benefits from caching
+    (addressing the overhead described in the issue).
+    
+    This test leverages the similar API 'is_flash_attention_available' to 
+    determine if we are in a CUDA-enabled environment where such optimizations
+    are most critical, though the logic applies to CPU tensors as well.
+    """
+    # Leverage the similar API to check for CUDA capabilities
+    # This mirrors the pattern of checking availability before performing 
+    # an operation that might have specific backend requirements.
+    cuda_available = is_flash_attention_available() and torch.cuda.is_available()
+    device = "cuda" if cuda_available else "cpu"
+
+    # Create a tensor to be shared across threads
+    # The issue mentions overhead in "frequent tensor exchanges"
+    shared_tensor = torch.randn(100, 100, device=device)
+
+    # Container for thread results/errors
+    errors = []
+    success_count = [0]
+
+    def worker():
+        try:
+            # Simulate frequent tensor exchanges
+            # The fix (intrusive caching) ensures that repeated calls to ToDLPack
+            # on the same tensor are fast and thread-safe.
+            for _ in range(50):
+                dl_capsule = torch.utils.dlpack.to_dlpack(shared_tensor)
+                converted_back = torch.utils.dlpack.from_dlpack(dl_capsule)
+                
+                # Verify data integrity
+                if not torch.equal(shared_tensor, converted_back):
+                    errors.append("Data mismatch detected")
+                    return
+            
+            success_count[0] += 1
+        except Exception as e:
+            errors.append(str(e))
+
+    # Spawn multiple threads to trigger the race condition mentioned in the C++ fix
+    # ("this creation may race among multiple threads")
+    threads = []
+    num_threads = 10
+    for _ in range(num_threads):
+        t = threading.Thread(target=worker)
+        threads.append(t)
+        t.start()
+
+    for t in threads:
+        t.join()
+
+    # Assert no errors occurred during the concurrent conversions
+    assert not errors, f"Threaded DLPack conversion failed: {errors}"
+    assert success_count[0] == num_threads, "Not all threads completed successfully"
+
+if __name__ == "__main__":
+    test_dlpack_thread_safe_caching()

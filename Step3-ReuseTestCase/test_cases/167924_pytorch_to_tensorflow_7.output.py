@@ -1,0 +1,38 @@
+import torch
+import tensorflow as tf
+import tensorflow.experimental.numpy as tnp
+
+def test_repeat_with_sliced_counts():
+    """
+    Adapted test case for Issue 167924.
+    Original PyTorch issue: Crash on MPS when using repeat_interleave with sliced tensor.
+    This test adapts the logic to TensorFlow, using tf.experimental.numpy.full_like
+    to replace torch.arange, and verifies behavior with tf.repeat.
+    """
+    # Setup: Create the counts tensor
+    # Original: counts = torch.tensor([0, 1, 0], device="mps")
+    counts = tf.constant([0, 1, 0])
+
+    # Setup: Create the data tensor using the Similar API
+    # Original: data = torch.arange(2, device="mps")
+    # Adaptation: Use tf.experimental.numpy.full_like to create a tensor of shape (2,)
+    # We use a template of zeros and fill it with 1s to create the data tensor.
+    template = tf.zeros(2)
+    data = tnp.full_like(template, 1)
+
+  # Perform the operation that caused the crash in the original bug report.
+  # The crash was triggered by passing a non-prefix slice (counts[1:3]) to the repeat function.
+  # Original: data.repeat_interleave(counts[1:3], dim=0)
+  # Adaptation: Use tf.repeat with the sliced counts.
+  sliced_counts = counts[1:3]
+  result = tf.repeat(data, sliced_counts, axis=0)
+
+  # Verification: Ensure the operation completes without crashing and produces the correct result.
+  # counts[1:3] is [1, 0]. data is [1, 1].
+  # Repeating element 0 once and element 1 zero times should result in [1].
+  expected = tf.constant([1])
+  assert tf.reduce_all(result == expected).numpy(), f"Expected {expected.numpy()}, but got {result.numpy()}"
+
+if __name__ == "__main__":
+    test_repeat_with_sliced_counts()
+    print("Test passed successfully.")

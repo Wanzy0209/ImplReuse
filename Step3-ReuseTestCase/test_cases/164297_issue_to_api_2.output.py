@@ -1,0 +1,34 @@
+import tensorflow as tf
+from tensorflow.experimental import dispatch_for_binary_elementwise_apis, ExtensionType
+
+# Define a custom type to mimic the specific type handling in the original issue.
+# The original bug involved accessing a method (__int__) on a specific C++ bound type.
+# Here we define a custom ExtensionType to test the dispatch mechanism's stability.
+class CustomIntType(ExtensionType):
+    value: tf.Tensor
+
+# Register a dispatcher for this custom type.
+# This is analogous to the binding setup in PyTorch that caused the segfault.
+@dispatch_for_binary_elementwise_apis(CustomIntType, CustomIntType)
+def custom_int_handler(api_func, x, y):
+    # Perform the operation on the underlying values.
+    # This mimics the internal access that caused the segfault in PyTorch.
+    return api_func(x.value, y.value)
+
+# Test the dispatch mechanism
+def test_dispatch_for_custom_types():
+    # Create instances of the custom type
+    a = CustomIntType(tf.constant(5))
+    b = CustomIntType(tf.constant(3))
+
+    # Trigger the dispatch. 
+    # In the original bug, calling __int__ triggered the segfault.
+    # Here, calling tf.add triggers the registered dispatcher.
+    result = tf.add(a, b)
+
+    # Verify the result is correct and no crash occurred
+    assert result == 8
+
+if __name__ == "__main__":
+    test_dispatch_for_custom_types()
+    print("Test passed.")

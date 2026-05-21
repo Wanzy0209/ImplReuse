@@ -1,0 +1,60 @@
+import torch
+import torch.profiler.itt as itt
+
+# Reproduce the configuration from the original bug report (Issue 166042)
+# which triggered an assertion/divergence related to scalar outputs.
+torch._dynamo.config.capture_scalar_outputs = True
+torch.manual_seed(1352030645)
+
+def test_itt_range_pop_dynamo():
+    """
+    Test case for torch.profiler.itt.range_pop under torch.compile.
+    
+    Context: Issue 166042 reported an assertion failure ("int" in str(indices.get_dtype()))
+    and eager/compile divergence involving scalar outputs in torch._dynamo.
+    
+    Similarity: torch.profiler.itt.range_pop returns a scalar (int depth), making it
+    a candidate for similar issues when capture_scalar_outputs is enabled.
+    """
+    
+    def program_with_range_pop():
+        # Setup a range to pop
+        itt.range_push("test_scope")
+        
+        # range_pop returns the depth (int), which is a scalar output.
+        # This interacts with torch._dynamo.config.capture_scalar_outputs.
+        depth = itt.range_pop()
+        
+        return depth
+
+    # Compile the function using torch._dynamo (via torch.compile)
+    compiled_program = torch.compile(program_with_range_pop)
+
+    # Execute in eager mode
+    try:
+        eager_result = program_with_range_pop()
+        print(f"Eager result: {eager_result}")
+    except Exception as e:
+        print(f"Eager execution failed: {e}")
+        return
+
+    # Execute in compiled mode
+    try:
+        compiled_result = compiled_program()
+        print(f"Compiled result: {compiled_result}")
+    except AssertionError as e:
+        # Catching the specific type of error mentioned in the original issue
+        print(f"Compiled execution failed with AssertionError: {e}")
+        raise
+    except Exception as e:
+        print(f"Compiled execution failed: {e}")
+        raise
+
+    # Verify no divergence between eager and compiled modes
+    assert eager_result == compiled_result, \
+        f"Divergence detected: Eager={eager_result}, Compiled={compiled_result}"
+    
+    print("Test Passed: No divergence or assertion failure.")
+
+if __name__ == "__main__":
+    test_itt_range_pop_dynamo()

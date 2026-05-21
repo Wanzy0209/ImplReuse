@@ -1,0 +1,106 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_queue_runner_with_linear_algebra():
+    """
+    Adapts the PyTorch MPS bug reproduction logic to TensorFlow's 
+    tf.compat.v1.train.add_queue_runner API.
+    
+    The original bug involved torch.compile, vmap, grad, and linear algebra 
+    operations (Cholesky, Inverse) on the MPS backend.
+    
+    This test case constructs a TensorFlow graph (the TF1 equivalent of a 
+    compiled/static graph) and uses a QueueRunner to feed data into the 
+    same mathematical operations.
+    """
+    
+    # Disable eager execution to use TF1 graph mode (required for QueueRunners)
+    tf.compat.v1.disable_eager_execution()
+
+    with tf.compat.v1.Session() as sess:
+        # Define placeholders for inputs
+        # Corresponds to: data = torch.zeros((2, 5, 3))
+        x_ph = tf.compat.v1.placeholder(tf.float32, shape=(2, 5, 3), name="x_input")
+        # Corresponds to: p = torch.diag(...)
+        matrix_ph = tf.compat.v1.placeholder(tf.float32, shape=(3, 3), name="matrix_input")
+
+        # Create a FIFOQueue to manage the data flow
+        queue = tf.compat.v1.FIFOQueue(
+            capacity=2, 
+            dtypes=[tf.float32, tf.float32], 
+            shapes=[(2, 5, 3), (3, 3)]
+        )
+
+        # Operation to enqueue data
+        enqueue_op = queue.enqueue([x_ph, matrix_ph])
+
+        # Create a QueueRunner
+        # This manages the threads that will run the enqueue_op
+        qr = tf.compat.v1.train.QueueRunner(queue, [enqueue_op])
+
+        # --- API Under Test ---
+        # Adds the QueueRunner to the graph collection
+        tf.compat.v1.train.add_queue_runner(qr)
+        # ---------------------
+
+        # Dequeue the tensors for computation
+        x, matrix = queue.dequeue()
+
+        # --- Core Logic from PyTorch Bug ---
+        # Original: p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+        p_mat_sqrt = tf.linalg.cholesky(matrix)
+
+        # Original: p_mat_sqrt_inv = p_mat_sqrt.inverse()
+        p_mat_sqrt_inv = tf.linalg.inv(p_mat_sqrt)
+
+        # Original: val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+        # x[0, :] extracts the first row of the batch
+        # tf.matmul handles the matrix-vector multiplication
+        matmul_res = tf.matmul(p_mat_sqrt_inv, x[0, :])
+        val = tf.reduce_sum(tf.square(matmul_res))
+
+        # Original: return -val/2
+        result = -val / 2
+        # ----------------------------------
+
+        # Initialize variables
+        init_op = tf.compat.v1.global_variables_initializer()
+        sess.run(init_op)
+
+        # Start the queue runner threads
+        coord = tf.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord)
+
+        try:
+            # Prepare data matching the PyTorch example
+            # data = torch.zeros((2, 5, 3), device=device, dtype=dtype)
+            data_np = np.zeros((2, 5, 3), dtype=np.float32)
+            
+            # p = torch.diag(torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)**2)
+            diag_vals = np.array([20., 0.5, 5.], dtype=np.float32) ** 2
+            p_np = np.diag(diag_vals)
+
+            # Feed data into the queue
+            sess.run(enqueue_op, feed_dict={x_ph: data_np, matrix_ph: p_np})
+
+            # Execute the computation
+            output = sess.run(result)
+
+            # Verification
+            # Since input x is zeros, the result of the linear algebra operations 
+            # should result in 0.0.
+            print(f"Computed Result: {output}")
+            assert np.isclose(output, 0.0), f"Expected 0.0, but got {output}"
+            print("Test passed: QueueRunner successfully fed data for linear algebra ops.")
+
+        except Exception as e:
+            print(f"Test failed with error: {e}")
+            raise
+        finally:
+            # Stop the queue runner threads
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_queue_runner_with_linear_algebra()

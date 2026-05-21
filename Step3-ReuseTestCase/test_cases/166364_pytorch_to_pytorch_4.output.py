@@ -1,0 +1,33 @@
+import torch
+import torch.nn as nn
+
+def test_torch_all_with_learnable_scalar():
+    """
+    Test torch.all with a learnable scalar parameter.
+    This test is adapted from Issue 166364 (Flex Attention) to verify
+    if torch.all handles learnable scalars correctly in both eager and compiled modes.
+    """
+    # Learnable scalar parameter
+    temp = nn.Parameter(torch.tensor(0.0))
+
+    def check_fn(x):
+        # Adapted logic: use torch.all with the learnable scalar
+        # instead of adding it to the score.
+        return torch.all(x > temp)
+
+    # Input tensor
+    x = torch.randn(4, 4)
+
+    # Test Eager mode
+    out_eager = check_fn(x)
+    assert isinstance(out_eager, torch.Tensor)
+
+    # Test Compiled mode
+    # The original bug reported failures with torch.compile
+    compiled_check_fn = torch.compile(check_fn)
+    out_compiled = compiled_check_fn(x)
+    
+    assert torch.equal(out_eager, out_compiled)
+
+if __name__ == "__main__":
+    test_torch_all_with_learnable_scalar()

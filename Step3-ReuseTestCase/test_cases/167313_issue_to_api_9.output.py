@@ -1,0 +1,55 @@
+import torch
+import torch.nn.functional as F
+
+def test_addmm_scaling_with_pointwise():
+    """
+    Test case for torch.addmm to verify alpha and beta parameters are respected
+    during compilation, especially when followed by a pointwise operation.
+    
+    This test is inspired by the pattern found in tf.compat.v1.train.GradientDescentOptimizer,
+    where a variable is updated by a scaled gradient: var = var - lr * grad.
+    In torch.addmm terms, this maps to: out = beta * input + alpha * (mat1 @ mat2).
+    
+    The bug (Issue #167313) occurs when the compiler optimizes addmm -> add(mm)
+    and silently ignores alpha and beta, effectively treating them as 1.0.
+    """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Setup tensors mimicking weights and gradients
+    # input (x) acts as the current weights
+    # mat1 (a) and mat2 (b) act as the gradient components
+    x = torch.rand(2, device=device)
+    a = torch.rand(2, 3, device=device)
+    b = torch.rand(3, 2, device=device)
+    
+    # Define scaling factors
+    # In an optimizer context, alpha would be the learning rate (negative for descent)
+    # and beta would be the momentum or simply 1.0 to retain the current weight.
+    alpha = 0.5
+    beta = 0.5
+    
+    # Define the function using addmm followed by a pointwise operation (relu).
+    # The pointwise operation is required to trigger the specific optimization pass
+    # mentioned in the bug report.
+    def update_fn(x, a, b):
+        # Math: ReLU(beta * x + alpha * (a @ b))
+        return F.relu(torch.addmm(x, a, b, alpha=alpha, beta=beta))
+    
+    # Compile the function
+    compiled_update_fn = torch.compile(update_fn)
+    
+    # Execute in eager mode
+    result_eager = update_fn(x, a, b)
+    
+    # Execute in compiled mode
+    result_compiled = compiled_update_fn(x, a, b)
+    
+    # Assert that the results are close.
+    # If the bug is present, the compiled version will ignore alpha/beta (treat as 1.0),
+    # resulting in a significantly different output (approx double in this case).
+    assert torch.allclose(result_eager, result_compiled, atol=1e-5), \
+        f"Bug detected: addmm ignored alpha/beta in compiled mode. " \
+        f"Eager sum: {result_eager.sum()}, Compiled sum: {result_compiled.sum()}"
+
+if __name__ == "__main__":
+    test_addmm_scaling_with_pointwise()

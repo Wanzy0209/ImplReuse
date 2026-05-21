@@ -1,0 +1,51 @@
+import torch
+import collections
+import unittest
+
+# Pattern from similar API: tf.config.LogicalDevice uses collections.namedtuple
+# We reuse this pattern to define a structure within the test scope.
+LogicalDevice = collections.namedtuple("LogicalDevice", ["name", "device_type"])
+
+class TestDynamoCollectionsRegression(unittest.TestCase):
+    """
+    Test case for Issue #166238: Regression about collections.defaultdict creation.
+    
+    This test leverages the code pattern from tf.config.LogicalDevice (collections.namedtuple)
+    to verify that torch.compile can handle various collections module types, specifically
+    addressing the reported failure with collections.defaultdict.
+    """
+
+    def test_defaultdict_creation_in_compile(self):
+        """
+        Reproduces the bug where torch.compile fails to trace collections.defaultdict.
+        """
+        
+        def fn(x):
+            # 1. Reuse pattern from similar API: Using namedtuple
+            device = LogicalDevice(name="cpu:0", device_type="CPU")
+            
+            # 2. Original Bug Logic: Creating a defaultdict inside the compiled function
+            # The error log indicated: "Unsupported function call ... <class 'collections.defaultdict'>"
+            # and issues with 'default_factory'.
+            dd = collections.defaultdict(list)
+            dd[device.name].append(x + 1)
+            
+            return dd
+
+        # Compile the function
+        compiled_fn = torch.compile(fn, backend="eager")
+        
+        # Input tensor
+        input_val = torch.tensor(5.0)
+        
+        # Execute compiled function
+        result = compiled_fn(input_val)
+        
+        # Assertions to verify correct behavior
+        self.assertIsInstance(result, collections.defaultdict)
+        self.assertIn("cpu:0", result)
+        # Check the value stored in the defaultdict
+        self.assertTrue(torch.equal(result["cpu:0"][0], torch.tensor(6.0)))
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,80 @@
+import torch
+import torch.distributed as dist
+import os
+
+def setup():
+    """
+    Initializes the process group for single-process testing.
+    This allows the test to run without external orchestration like torchrun.
+    """
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    if not dist.is_initialized():
+        # Use 'gloo' backend for CPU compatibility to ensure the test is runnable
+        dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+def cleanup():
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+def test_gather_object_with_int64_and_max():
+    """
+    Verifies that torch.distributed.gather_object handles the specific 
+    tensor types (int64, bfloat16) and operations (max) that caused 
+    a crash in the original torch.compile bug report.
+    """
+    setup()
+    
+    # Reproduce the data types from the bug report
+    # Original: torch.ops.prims.iota.default(..., dtype=torch.int64, ...)
+    # Adapted: torch.arange(..., dtype=torch.int64)
+    int64_tensor = torch.arange(36, dtype=torch.int64)
+    
+    # Original: torch.randn(..., dtype=torch.bfloat16)
+    bfloat16_tensor = torch.randn(64, 3072, dtype=torch.bfloat16)
+    
+    # Perform the operation sequence that was in the crash path
+    view = int64_tensor.view(1, 36)
+    max_val = torch.max(view)
+    
+    # Test gather_object with the int64 tensor
+    if dist.get_rank() == 0:
+        gather_list_int64 = [None] * dist.get_world_size()
+    else:
+        gather_list_int64 = None
+        
+    dist.gather_object(int64_tensor, gather_list_int64, dst=0)
+    
+    # Test gather_object with the bfloat16 tensor
+    if dist.get_rank() == 0:
+        gather_list_bf16 = [None] * dist.get_world_size()
+    else:
+        gather_list_bf16 = None
+        
+    dist.gather_object(bfloat16_tensor, gather_list_bf16, dst=0)
+    
+    # Test gather_object with the max value (scalar)
+    if dist.get_rank() == 0:
+        gather_list_max = [None] * dist.get_world_size()
+    else:
+        gather_list_max = None
+        
+    dist.gather_object(max_val, gather_list_max, dst=0)
+    
+    # Assertions to verify correctness
+    if dist.get_rank() == 0:
+        assert len(gather_list_int64) == 1
+        assert gather_list_int64[0].equal(int64_tensor), "int64 tensor gathering failed"
+        
+        assert len(gather_list_bf16) == 1
+        assert gather_list_bf16[0].equal(bfloat16_tensor), "bfloat16 tensor gathering failed"
+        
+        assert len(gather_list_max) == 1
+        assert gather_list_max[0] == max_val, "max value gathering failed"
+        
+        print("Test passed: gather_object handles int64 and bfloat16 tensors correctly.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    test_gather_object_with_int64_and_max()

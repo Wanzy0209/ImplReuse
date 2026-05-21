@@ -1,0 +1,48 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Use 'gloo' backend for CPU tensors to ensure the test runs on most machines
+    # If CUDA is available and desired, 'nccl' can be used, but requires proper setup
+    backend = 'gloo' 
+    dist.init_process_group(backend, rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_send_object_list(rank, world_size):
+    setup(rank, world_size)
+    
+    # Create a list of objects to send
+    # Adapting the context of the original bug (tensors), we send a list of tensors
+    if rank == 0:
+        tensor_list = [torch.randn(10, 10) for _ in range(5)]
+        print(f"Rank {rank}: Sending object list...")
+        
+        # The API under test: torch.distributed.send_object_list
+        dist.send_object_list(tensor_list, dst=1)
+        
+    elif rank == 1:
+        print(f"Rank {rank}: Receiving object list...")
+        recv_list = [None] * 5
+        
+        # Corresponding receive call
+        dist.recv_object_list(recv_list, src=0)
+        
+        # Verify reception
+        assert all(isinstance(obj, torch.Tensor) for obj in recv_list), "Received objects are not tensors"
+        assert all(obj.shape == (10, 10) for obj in recv_list), "Received tensors have incorrect shape"
+        print(f"Rank {rank}: Successfully received and verified object list.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Run the test in 2 processes
+    mp.spawn(test_send_object_list, args=(world_size,), nprocs=world_size)

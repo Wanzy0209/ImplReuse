@@ -1,0 +1,58 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+class Foo(tf.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def __call__(self, x: tf.Tensor) -> tf.Tensor:
+        # Using the similar API: tf.keras.ops.conjugate
+        return tf.keras.ops.conjugate(x)
+
+def test_device(device_name, x):
+    with tf.device(device_name):
+        foo = Foo()
+        # tf.function is the TensorFlow equivalent to torch.compile
+        foo_compiled = tf.function(foo)
+
+        # warm up (tracing the graph)
+        y_eager = foo(x)
+        y_compiled = foo_compiled(x)
+
+        # proper inference
+        y_eager = foo(x)
+        y_compiled = foo_compiled(x)
+
+        diff = tf.reduce_max(tf.abs(y_eager - y_compiled)).numpy()
+        print(f'device: {device_name}, diff: {diff}')
+        print('eager', y_eager[:5, :5])
+        print('compiled', y_compiled[:5, :5])
+        
+        # Assert to verify behavior matches between eager and compiled modes
+        assert diff < 1e-6, f"Mismatch found on {device_name}"
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    
+    # Set seed for reproducibility
+    tf.random.set_seed(42)
+    
+    # Create complex input data since conjugate operates on complex numbers
+    real = tf.random.normal((batch_size, feature_dim), dtype=tf.float32)
+    imag = tf.random.normal((batch_size, feature_dim), dtype=tf.float32)
+    x = tf.complex(real, imag)
+
+    # Test CPU
+    test_device('/CPU:0', x)
+
+    # Test GPU if available
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        test_device('/GPU:0', x)
+    else:
+        print("No GPU found, skipping GPU test.")
+
+if __name__ == "__main__":
+    main()

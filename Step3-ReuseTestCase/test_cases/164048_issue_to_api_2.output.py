@@ -1,0 +1,37 @@
+import tensorflow as tf
+
+# Reuse the code pattern from the similar API (tf.keras.ops.custom_gradient)
+# This defines a function with a custom gradient, as shown in the API information.
+@tf.keras.ops.custom_gradient
+def log1pexp(x):
+  e = tf.exp(x)
+  def grad(dy):
+    return dy * (1 - 1 / (1 + e))
+  return tf.math.log(1 + e), grad
+
+# Adapt the test case to reflect the bug's context (large tensor on CUDA)
+# The original bug involved a tensor of shape (4, 87, 1056, 736) on device="cuda".
+shape = (4, 87, 1056, 736)
+
+# Check for GPU availability to match the bug's "device='cuda'" requirement
+gpus = tf.config.list_physical_devices('GPU')
+device_name = '/GPU:0' if gpus else '/CPU:0'
+
+with tf.device(device_name):
+    # Create a large tensor. 
+    # Note: The original bug used integers (randint), but the similar API example 
+    # (log1pexp) requires floats for mathematical operations. We adapt the data type 
+    # to fit the API's requirements while maintaining the large tensor size.
+    x = tf.random.uniform(shape, minval=0.0, maxval=5.0)
+
+    with tf.GradientTape() as tape:
+        tape.watch(x)
+        y = log1pexp(x)
+
+    dy_dx = tape.gradient(y, x)
+
+    # Assertions to verify the operation completes without the "invalid configuration" 
+    # or similar errors, and produces valid results.
+    assert dy_dx is not None
+    assert not tf.reduce_any(tf.math.is_nan(dy_dx)), "Gradient contains NaN"
+    assert not tf.reduce_any(tf.math.is_inf(dy_dx)), "Gradient contains Inf"

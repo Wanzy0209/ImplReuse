@@ -1,0 +1,31 @@
+import torch
+import tensorflow as tf
+
+# Reproduce the logic of checking precision differences between 
+# eager execution, compiled execution (XLA), and a float64 reference.
+
+# Generate input data
+inp = tf.random.normal((8192,), dtype=tf.float32)
+inp_float64 = tf.cast(inp, tf.float64)
+
+# 1. Eager execution (float32)
+out1 = tf.math.exp(inp)
+
+# 2. Compiled execution (float32)
+# Using tf.function with jit_compile=True to mimic torch.compile's optimizations
+@tf.function(jit_compile=True)
+def compiled_exp(x):
+    return tf.math.exp(x)
+
+out2 = compiled_exp(inp)
+
+# 3. High precision reference (float64)
+out3_high = tf.math.exp(inp_float64)
+
+# Calculate maximum absolute errors
+# Cast float32 outputs to float64 for accurate comparison against the reference
+err_eager = tf.reduce_max(tf.abs(out3_high - tf.cast(out1, tf.float64)))
+err_compiled = tf.reduce_max(tf.abs(out3_high - tf.cast(out2, tf.float64)))
+
+print(f"Max error (eager vs float64): {err_eager.numpy()}")
+print(f"Max error (compiled vs float64): {err_compiled.numpy()}")

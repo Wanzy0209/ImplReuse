@@ -1,0 +1,73 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_xla_data_dependent_nonzero():
+    """
+    Test case generated based on PyTorch Issue 165081 and similar API patterns.
+    
+    Original Issue: torch._dynamo fails to guard on data-dependent expression 
+                   (specifically involving torch.nonzero after matmul operations).
+    Similar API:   TensorFlow XLA serialization/compilation patterns 
+                   (tensorflow.compiler.tests.xla_call_module_test.serialize).
+    
+    This test verifies if TensorFlow's XLA compiler (via tf.function) can handle
+    operations with data-dependent output shapes (like tf.where/nonzero) 
+    following a chain of matrix multiplications, mirroring the logic in the 
+    original PyTorch bug report.
+    """
+    
+    # Setup inputs similar to the original fuzzed_program
+    # Dimensions and dtypes match the PyTorch issue: (9, 9, 9), (9, 9, 11), etc.
+    # Using float64 as in the original issue.
+    arg_0 = tf.random.uniform((9, 9, 9), minval=-1.0, maxval=1.0, dtype=tf.float64, seed=52676)
+    arg_1 = tf.random.uniform((9, 9, 11), minval=-1.0, maxval=1.0, dtype=tf.float64, seed=52676)
+    arg_2 = tf.random.uniform((9, 12, 8), minval=-1.0, maxval=1.0, dtype=tf.float64, seed=52676)
+
+    # Define the computation logic, wrapped in tf.function to trigger compilation (XLA)
+    @tf.function(jit_compile=True)
+    def compiled_program(a0, a1, a2):
+        # Replicate the matmul chain from the bug report
+        # var_node_5 = torch.matmul(var_node_6, var_node_7)
+        var_node_5 = tf.matmul(a0, a1)
+        
+        # var_node_9 = torch.full((9, 11, 12), 1.57...)
+        var_node_9 = tf.fill((9, 11, 12), tf.cast(1.5758497316910556, tf.float64))
+        
+        # var_node_8 = torch.matmul(var_node_9, var_node_10)
+        var_node_8 = tf.matmul(var_node_9, a2)
+        
+        # var_node_4 = torch.matmul(var_node_5, var_node_8)
+        var_node_4 = tf.matmul(var_node_5, var_node_8)
+        
+        # The critical operation: torch.nonzero equivalent
+        # In the PyTorch issue, the error "Could not guard on data-dependent expression" 
+        # occurred when the compiler encountered an op where the output shape depends on the data.
+        # tf.where(condition) returns the indices of True values, analogous to torch.nonzero.
+        # We create a condition based on the matmul result.
+        condition = var_node_4 > 0.0
+        indices = tf.where(condition)
+        
+        return indices
+
+    # Execute the test
+    try:
+        # Run the compiled program
+        result = compiled_program(arg_0, arg_1, arg_2)
+        
+        # Assertions to verify correct behavior
+        # The result of tf.where on a 3D tensor should be a 2D tensor of shape (N, 3)
+        # where N is the number of elements satisfying the condition.
+        assert result.shape.rank == 2, "Output rank should be 2 for indices"
+        assert result.shape[1] == 3, "Output dimension 1 should be 3 for 3D input indices"
+        
+        print("Test Passed: XLA compilation handled data-dependent shape (tf.where) successfully.")
+        
+    except Exception as e:
+        # If TF also fails here, it indicates a similar divergence/bug in the TF compiler
+        # regarding data-dependent shapes in XLA mode.
+        print(f"Test Failed: XLA compilation failed with data-dependent shape. Error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_tf_xla_data_dependent_nonzero()

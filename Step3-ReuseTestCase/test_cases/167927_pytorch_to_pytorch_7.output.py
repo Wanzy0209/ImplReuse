@@ -1,0 +1,60 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Create a list of objects to send
+    # Using tensors and basic python objects to test pickling functionality
+    obj_list = [torch.tensor([1, 2, 3]), "test_string", 42]
+
+    # Define the function containing the API call
+    def send_func(obj_list, dst):
+        # The bug report context: using torch.compiler.disable inside fullgraph=True
+        # to allow intentional graph breaks (like distributed ops often are).
+        # This should NOT raise torch._dynamo.exc.Unsupported.
+        with torch.compiler.disable():
+            dist.send_object_list(obj_list, dst=dst)
+
+    # Compile with fullgraph=True
+    # The bug report states this should accept torch.compiler.disable
+    compiled_send = torch.compile(send_func, fullgraph=True)
+
+    if rank == 0:
+        # Rank 0 sends to Rank 1
+        try:
+            compiled_send(obj_list, dst=1)
+            print("Rank 0: Send successful with fullgraph=True and disable.")
+        except Exception as e:
+            print(f"Rank 0: Error - {e}")
+            raise
+    elif rank == 1:
+        # Rank 1 receives to unblock Rank 0
+        # Note: We are not testing recv_object_list, but it's necessary for flow.
+        recv_list = [None, None, None]
+        dist.recv_object_list(recv_list, src=0)
+        print("Rank 1: Receive successful.")
+        
+        # Verify data integrity
+        assert torch.equal(recv_list[0], obj_list[0])
+        assert recv_list[1] == obj_list[1]
+        assert recv_list[2] == obj_list[2]
+        print("Rank 1: Data integrity verified.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Start multiprocessing
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

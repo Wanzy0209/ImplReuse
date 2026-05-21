@@ -1,0 +1,80 @@
+import torch
+import torch.nn as nn
+from torch.nn import DataParallel
+from unittest import mock
+
+# 1. Define the Model (from Issue)
+class SimpleModel(nn.Module):
+    def __init__(self, input_size=10, hidden_size=20, output_size=5):
+        super(SimpleModel, self).__init__()
+        self.linear1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.linear2(x)
+        return x
+
+def test_dataparallel_custom_backend_dispatch():
+    """
+    Test case for torch.nn.DataParallel with a custom backend.
+    
+    This test leverages the 'Registry/Dispatch' pattern found in the similar API 
+    (tf.keras.initializers.deserialize). In that API, a registry (PROTO_CLASS_TO_PY_CLASS) 
+    is iterated to find a matching handler. Here, we simulate a custom backend 
+    by mocking the underlying communication functions (scatter, gather, etc.) 
+    and verifying that DataParallel dispatches to them correctly.
+    """
+    
+    # 2. Define Custom Backend Registry (Pattern from Similar API)
+    # Mimicking the registry lookup logic by defining our custom implementations.
+    custom_backend_registry = {
+        'scatter': mock.MagicMock(return_value=[torch.randn(5, 5), torch.randn(5, 5)]),
+        'gather': mock.MagicMock(return_value=torch.randn(10, 5)),
+        'broadcast_coalesced': mock.MagicMock(return_value=[torch.randn(5, 5), torch.randn(5, 5)])
+    }
+
+    # 3. Setup Environment (from Issue)
+    # Mocking CUDA availability to simulate the user's environment with multiple devices
+    with mock.patch('torch.cuda.is_available', return_value=True), \
+         mock.patch('torch.cuda.device_count', return_value=2), \
+         mock.patch('torch.cuda.current_device', return_value=0):
+
+        # 4. Monkey Patch Custom Backend (from Issue)
+        # The user patched torch._C. We patch torch.cuda.comm which DataParallel uses internally.
+        # This simulates the "binding to python" step.
+        with mock.patch('torch.cuda.comm.scatter', side_effect=custom_backend_registry['scatter']), \
+             mock.patch('torch.cuda.comm.gather', side_effect=custom_backend_registry['gather']), \
+             mock.patch('torch.cuda.comm.broadcast_coalesced', side_effect=custom_backend_registry['broadcast_coalesced']):
+
+            model = SimpleModel()
+            model = model.cuda()  # Move to GPU 0
+
+            # 5. Execute DataParallel (from Issue)
+            model = DataParallel(model, device_ids=[0, 1])
+
+            batch_size = 10
+            input_data = torch.randn(batch_size, 10).cuda()
+
+            # Run forward pass
+            output = model(input_data)
+
+            # 6. Verify Custom Backend Usage (Pattern from Similar API)
+            # Just as tf.keras.initializers.deserialize verifies the correct class is found and used,
+            # we verify that our custom backend functions were called by DataParallel.
+            
+            # Check if scatter was called (Input distribution)
+            custom_backend_registry['scatter'].assert_called()
+            
+            # Check if broadcast_coalesced was called (Model replication)
+            custom_backend_registry['broadcast_coalesced'].assert_called()
+            
+            # Check if gather was called (Output collection)
+            custom_backend_registry['gather'].assert_called()
+
+            print("Test Passed: DataParallel successfully dispatched to custom backend functions.")
+
+if __name__ == "__main__":
+    test_dataparallel_custom_backend_dispatch()

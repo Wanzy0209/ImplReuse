@@ -1,0 +1,66 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Reproduce the setup
+tf.random.set_seed(19989)
+
+def fuzzed_program(arg_0, sentinel):
+    # Use tf.keras.backend.name_scope as the context manager, 
+    # which is the target API identified as similar.
+    with tf.keras.backend.name_scope("fuzzed_scope"):
+        var_node_2 = tf.constant(-6, dtype=tf.int64)
+        var_node_3 = tf.constant(arg_0, dtype=tf.int32)
+        
+        # PyTorch comment indicates dtype=int32 for the result of int64 * int32.
+        # TF promotes to int64, so we cast explicitly to match the bug report's type constraints.
+        var_node_1 = tf.cast(var_node_2 * var_node_3, dtype=tf.int32)
+        
+        var_node_5 = tf.constant(1, dtype=tf.int64)
+        # In TF graph mode, we cannot extract a python scalar via .item() and use it in math 
+        # without breaking the graph trace. We keep it as a tensor to maintain graph validity.
+        var_node_4 = var_node_5 
+        
+        # PyTorch code uses '/' but comment says int64. 
+        # In TF, '/' on integers results in float. '//' results in int.
+        # We use '/' to match the code operator exactly.
+        var_node_0 = var_node_1 / var_node_4
+        
+        # Ensure gradient computation by multiplying with sentinel
+        result = var_node_0 * sentinel
+        
+        # Check for complex type
+        if result.dtype.is_complex:
+            result = tf.math.real(result)
+            
+        return result
+
+# Prepare inputs
+# arg_0 is a random int32 scalar
+arg_0 = int(tf.random.normal((), dtype=tf.float32).numpy())
+# Sentinel tensor to ensure gradient computation
+sentinel = tf.constant(1.0, dtype=tf.float32)
+
+# 1. Run in Eager Mode
+print("Running Eager Mode...")
+with tf.GradientTape() as tape:
+    tape.watch(sentinel)
+    result_eager = fuzzed_program(arg_0, sentinel)
+print(f' eager success: {result_eager.numpy()}')
+
+# 2. Run in Graph Mode (tf.function) - Equivalent to torch.compile
+print("Running Graph Mode (tf.function)...")
+# Using experimental_relax_shapes to mimic torch.compile dynamic=True
+compiled_program = tf.function(fuzzed_program, experimental_relax_shapes=True)
+
+with tf.GradientTape() as tape:
+    tape.watch(sentinel)
+    result_compiled = compiled_program(arg_0, sentinel)
+print(f' compile success: {result_compiled.numpy()}')
+
+# Verify consistency (checking for eager/compile divergence)
+try:
+    np.testing.assert_allclose(result_eager.numpy(), result_compiled.numpy())
+    print(" Test passed: No divergence detected")
+except AssertionError as e:
+    print(f" Divergence detected: {e}")

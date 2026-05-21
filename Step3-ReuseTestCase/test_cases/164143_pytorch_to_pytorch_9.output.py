@@ -1,0 +1,37 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_broadcast_in_dispatch_mode(rank, world_size):
+    """
+    Test that torch.distributed.broadcast_object_list works correctly
+    when a non-infra torch dispatch mode (like DebugMode or detect_anomaly) is active.
+    This adapts the original bug context (DebugMode disabling torch.compile) 
+    to the similar API (torch.distributed.broadcast_object_list).
+    """
+    # Setup distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # The bug report mentions "non-infra torch dispatch mode present".
+    # We use torch.autograd.detect_anomaly as a public proxy for such a mode
+    # to ensure the test is runnable, though the original bug referred to internal DebugMode.
+    with torch.autograd.detect_anomaly():
+        # Original call site adaptation: torch.distributed.broadcast_object_list
+        object_list = [rank] if rank == 0 else [None]
+        
+        # Perform the broadcast
+        dist.broadcast_object_list(object_list, src=0)
+        
+        # Verify correctness
+        # Rank 0 broadcasts [0], so all ranks should have [0]
+        assert object_list[0] == 0, f"Rank {rank} failed. Expected 0, got {object_list[0]}"
+        print(f"Rank {rank} passed: received {object_list[0]}")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_broadcast_in_dispatch_mode, args=(world_size,), nprocs=world_size, join=True)

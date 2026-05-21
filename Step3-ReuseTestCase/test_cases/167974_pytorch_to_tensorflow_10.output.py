@@ -1,0 +1,17 @@
+import torch
+import tensorflow as tf
+
+# Adapted from the original PyTorch test case:
+# Original: input = torch.tensor([[1, 2, 4, 5], [4, 3, 2, 9]], dtype=torch.long)
+# We use 2D tensors here to match the dimensionality of the original bug report.
+target = tf.constant([[0.0, 1.0], [1.0, 0.0]])
+output = tf.constant([[0.9, 0.1], [0.2, 0.8]])
+
+# Original: embedding_sum = torch.nn.EmbeddingBag(..., include_last_offset=True)
+# Original: embedding_sum(input)
+# We call the similar API with its boolean flag (from_logits) to mirror the usage of include_last_offset.
+# The original bug was that the flag was ignored; here we verify the function accepts the flag.
+result = tf.keras.ops.binary_crossentropy(target, output, from_logits=False)
+
+# Verify the output shape matches the input shape
+assert result.shape == target.shape

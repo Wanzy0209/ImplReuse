@@ -1,0 +1,55 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use 'gloo' backend for compatibility, though 'nccl' is preferred for CUDA
+    backend = 'nccl' if torch.cuda.is_available() else 'gloo'
+    dist.init_process_group(backend, rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def worker(rank, world_size):
+    setup(rank, world_size)
+    
+    # Adapted from the original bug report's data
+    # Original: x = torch.randn(10, 20, 30, device='cuda')
+    # Original: max_val = torch.tensor(5.0, device='cuda')
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    x = torch.randn(10, 20, 30, device=device)
+    max_val = torch.tensor(5.0, device=device)
+
+    if rank == 0:
+        # Adapted call site: replacing compiled_func(x, max_val) 
+        # with torch.distributed.send_object_list(...)
+        # We send the list of objects [x, max_val] to rank 1
+        dist.send_object_list([x, max_val], dst=1)
+    elif rank == 1:
+        # Receive the objects
+        req_list = [None, None]
+        dist.recv_object_list(req_list, src=0)
+        
+        # Verify the received objects match the original tensors
+        received_x, received_max_val = req_list
+        
+        assert torch.allclose(received_x, x), "Received x does not match original x"
+        assert torch.allclose(received_max_val, max_val), "Received max_val does not match original max_val"
+        assert received_max_val.item() == 5.0, "Received max_val value is incorrect"
+        
+        print(f"Rank {rank}: Test passed. Objects received and verified.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Check for CUDA availability as the original bug was CUDA-specific
+    if not torch.cuda.is_available():
+        print("CUDA not available. Falling back to CPU for distributed test.")
+    
+    # Spawn processes to run the worker function
+    mp.spawn(worker, args=(world_size,), nprocs=world_size, join=True)

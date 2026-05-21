@@ -1,0 +1,31 @@
+import torch
+import tensorflow as tf
+
+class Config:
+    def __repr__(self):
+        return "Config()"
+
+def forward(x, config):
+    # Calling repr() on non-constant user object
+    # This triggers the bug in PyTorch Dynamo
+    return x * tf.cast(len(repr(config)), tf.float32)
+
+config = Config()
+x = tf.constant([[1.0, 2.0], [3.0, 4.0]])
+
+# Using the similar API: tf.compat.v1.name_scope
+# We wrap the execution in a tf.function to trigger tracing,
+# similar to torch.compile, and place it within the name_scope.
+with tf.compat.v1.name_scope("test_scope"):
+    # tf.function is the TensorFlow equivalent to torch.compile for tracing
+    compiled_forward = tf.function(forward)
+    
+    # Execute the compiled function
+    result = compiled_forward(x, config)
+    
+    # Verify the result
+    # len("Config()") is 8
+    expected = x * 8.0
+    assert tf.reduce_all(tf.equal(result, expected)).numpy(), "Test failed"
+    
+print("Test passed successfully.")

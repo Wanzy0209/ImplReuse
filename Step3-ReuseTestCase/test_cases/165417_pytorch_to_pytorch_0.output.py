@@ -1,0 +1,53 @@
+import torch
+import torch.nn as nn
+import unittest
+
+class TestTorchUniqueFullgraph(unittest.TestCase):
+    def test_unique_dynamic_shape_rejection(self):
+        """
+        Test case for Issue 165417:
+        Verifies that torch.unique (aten._unique2.default) is rejected 
+        as a "Dynamic shape operator" when using torch.compile with fullgraph=True.
+        """
+        
+        class UniqueModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.relu = nn.ReLU()
+
+            def forward(self, x):
+                # This call triggers aten._unique2.default
+                _x, _i = torch.unique(x, sorted=True, return_inverse=True)
+                # Clone to ensure simple graph structure
+                _x = _x.clone().detach()
+                return self.relu(_x), _i
+
+        model = UniqueModel()
+        model.eval()
+        
+        # Input tensor
+        x = torch.randn(8)
+
+        # 1. Verify Eager mode works (Baseline)
+        with torch.no_grad():
+            eager_output = model(x)
+        
+        self.assertIsNotNone(eager_output)
+        self.assertIsInstance(eager_output, tuple)
+        self.assertEqual(len(eager_output), 2)
+
+        # 2. Verify torch.compile with fullgraph=True raises the expected error
+        # The bug report indicates this fails with torch._dynamo.exc.Unsupported
+        compiled_model = torch.compile(model, fullgraph=True)
+
+        with self.assertRaises(torch._dynamo.exc.Unsupported) as context:
+            with torch.no_grad():
+                compiled_model(x)
+
+        # Check the error message content matches the bug report
+        exception_message = str(context.exception)
+        self.assertIn("Dynamic shape operator", exception_message)
+        self.assertIn("aten._unique2.default", exception_message)
+
+if __name__ == "__main__":
+    unittest.main()

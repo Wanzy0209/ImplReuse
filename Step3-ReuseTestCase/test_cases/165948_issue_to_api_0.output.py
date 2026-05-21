@@ -1,0 +1,47 @@
+import torch
+from torch._dynamo.functional_export import _dynamo_graph_capture_for_export
+
+# Define a module that uses the similar API (torch.logaddexp)
+# We adapt the forward signature to accept a kwarg, mirroring the 
+# 'block_mask' kwarg usage in the original bug report.
+class LogAddExpModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, a, b, scale=1.0):
+        # Using torch.logaddexp as the core operation, similar to how 
+        # flex_attention was used in the original issue.
+        # We apply the kwarg 'scale' to mimic the dependency on the kwarg.
+        return torch.logaddexp(a * scale, b * scale)
+
+# Instantiate the model
+logaddexp_model = LogAddExpModule()
+
+# Create inputs. We use shapes similar to the original issue to maintain context.
+batch_size = 2
+num_heads = 4
+seq_len = 128
+head_dim = 64
+
+a = torch.randn(batch_size, num_heads, seq_len, head_dim)
+b = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+# Define inputs and kwargs, preserving the pattern of the original bug reproduction
+# where a specific kwarg was passed to the dynamo capture function.
+logaddexp_inputs = (a, b)
+logaddexp_kwargs = {"scale": 1.0}
+
+# Run eager execution to get baseline
+eager_out = logaddexp_model(*logaddexp_inputs, **logaddexp_kwargs)
+
+# Attempt to capture the graph using the API from the issue.
+# This tests if the dynamo capture works for the similar API (torch.logaddexp)
+# when kwargs are involved, reflecting the original bug scenario.
+with torch._dynamo.config.patch(install_free_tensors=True):
+    gm = _dynamo_graph_capture_for_export(logaddexp_model)(*logaddexp_inputs, **logaddexp_kwargs)
+
+# Verify the captured graph produces the same result
+dynamo_out = gm(*logaddexp_inputs, **logaddexp_kwargs)
+
+# Assertion to ensure correctness of the export
+assert torch.allclose(eager_out, dynamo_out)

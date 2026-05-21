@@ -1,0 +1,78 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_name_scope_in_compiled_context():
+    """
+    Adapted from PyTorch Issue 161904 (ZeroBubble/DualPipeV with torch.compile).
+    
+    This test verifies the behavior of the similar API `tf.compat.v1.name_scope`
+    within a compiled model context (using `tf.function`). 
+    While the original bug involved pipeline parallelism schedules failing during 
+    compilation, this test ensures that the scoping logic (analogous to structural 
+    organization in pipelines) holds up when the TensorFlow graph is compiled/traced.
+    """
+    
+    # Define a model structure similar to the original Transformer
+    class Transformer(tf.Module):
+        def __init__(self):
+            super().__init__()
+            
+            # Use tf.compat.v1.name_scope to organize layers, 
+            # analogous to how pipeline stages might be organized.
+            with tf.compat.v1.name_scope("stage_embeddings"):
+                self.tok_embeddings = tf.keras.layers.Embedding(128, 32)
+
+            self.layers = []
+            for layer_id in range(4):
+                # Create distinct scopes for each layer
+                with tf.compat.v1.name_scope(f"stage_layer_{layer_id}"):
+                    self.layers.append(tf.keras.layers.Dense(32, use_bias=False))
+
+            with tf.compat.v1.name_scope("stage_output"):
+                self.output = tf.keras.layers.Dense(128, use_bias=False)
+
+        # Mimic torch.compile by decorating with tf.function
+        @tf.function
+        def __call__(self, x):
+            x = self.tok_embeddings(x)
+            for layer in self.layers:
+                x = layer(x)
+            return self.output(x)
+
+    # Initialize model
+    model = Transformer()
+    
+    # Create dummy input
+    input_ids = tf.constant(np.random.randint(0, 128, (8, 16)), dtype=tf.int32)
+
+    # 1. Test Eager Execution (Baseline)
+    print("Testing eager execution...")
+    output_eager = model(input_ids)
+    assert output_eager.shape == (8, 16, 128), "Eager execution output shape mismatch"
+
+    # 2. Test Compiled Execution (tf.function)
+    # This corresponds to the "torch.compiled" part of the original bug report.
+    print("Testing compiled execution (tf.function)...")
+    output_compiled = model(input_ids)
+    assert output_compiled.shape == (8, 16, 128), "Compiled execution output shape mismatch"
+
+    # 3. Verify Scoping Integrity
+    # Ensure that the name scopes were correctly applied and preserved 
+    # during the graph tracing/compilation process.
+    print("Verifying name scopes...")
+    assert "stage_embeddings" in model.tok_embeddings.name, \
+        f"Embedding scope incorrect: {model.tok_embeddings.name}"
+    
+    assert "stage_output" in model.output.name, \
+        f"Output scope incorrect: {model.output.name}"
+
+    for i, layer in enumerate(model.layers):
+        expected_scope = f"stage_layer_{i}"
+        assert expected_scope in layer.name, \
+            f"Layer {i} scope incorrect: {layer.name}"
+
+    print("Test passed: tf.compat.v1.name_scope behaves correctly in compiled context.")
+
+if __name__ == "__main__":
+    test_name_scope_in_compiled_context()

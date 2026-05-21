@@ -1,0 +1,54 @@
+import tensorflow as tf
+import time
+
+def test_session_tensor_cleanup():
+    """
+    Test case adapted from PyTorch Issue 163741 (Unexpected cuda context after dist.destroy_process_group).
+    
+    This test checks for resource persistence (similar to the CUDA context leak) after the 
+    TensorFlow session is closed. The original issue observed memory leaks after destroying 
+    a process group. Here, we verify that session tensors/handles are properly invalidated 
+    after session closure, mimicking the lifecycle check: Init -> Use -> Destroy -> Verify Cleanup.
+    """
+    
+    # Enable v1 compatibility mode to use Session and get_session_tensor
+    tf.compat.v1.disable_eager_execution()
+    
+    # Create a session (equivalent to init_process_group)
+    with tf.compat.v1.Session() as sess:
+        # Create a tensor and get a handle (equivalent to setting up CUDA context/communication)
+        a = tf.constant(5.0, name="a")
+        h = tf.compat.v1.get_session_handle(a)
+        handle = sess.run(h)
+        
+        # Retrieve the tensor using the handle (equivalent to using the process group)
+        p, val = tf.compat.v1.get_session_tensor(handle.handle, tf.float32)
+        result = sess.run(val)
+        assert result == 5.0, "Initial tensor retrieval failed"
+        
+        print("Tensor retrieved successfully. Closing session...")
+
+    # Session is now closed (equivalent to dist.destroy_process_group())
+    # We sleep briefly to allow resources to potentially release, similar to the original bug report
+    time.sleep(1)
+
+    # Attempt to access the tensor state after session closure
+    # In the original bug, memory persisted. Here, we expect the session to be closed.
+    # If resources were leaked improperly, accessing the session state might be ambiguous or raise errors.
+    # We assert that the session is indeed closed.
+    
+    try:
+        # Check if session is closed
+        assert sess._closed, "Session should be closed after exiting the context manager"
+        print("Session closed successfully.")
+    except Exception as e:
+        print(f"Unexpected state after session closure: {e}")
+        raise
+
+    # Note: Unlike the PyTorch bug where memory persisted on the GPU, 
+    # tf.compat.v1.Session typically cleans up resources upon close. 
+    # This test verifies the expected behavior (cleanup) corresponding to the 
+    # bug report's scenario (checking state after destruction).
+
+if __name__ == '__main__':
+    test_session_tensor_cleanup()

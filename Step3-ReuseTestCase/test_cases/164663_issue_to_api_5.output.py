@@ -1,0 +1,78 @@
+import os
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.tensor.experimental import implicit_replication
+from torch.distributed._tools.fsdp2_mem_tracker import FSDPMemTracker
+
+
+class RMSNormLinearModule(nn.Module):
+    """
+    A test module combining nn.RMSNorm and nn.Linear.
+    The bug (Issue 164663) occurs when FSDPMemTracker attempts to track
+    memory during the backward pass for this specific module structure
+    when wrapped with fully_shard.
+    """
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.norm = nn.RMSNorm(d_model)
+        self.output = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = self.output(x)
+        return x
+
+
+def test_fsdp_mem_tracker_rmsnorm_backward():
+    """
+    Reproduces the KeyError in FSDPMemTracker when using RMSNorm.
+    This test ensures that the tracker correctly handles the state dict
+    and backward hooks for RMSNorm layers.
+    """
+    # Ensure the script is run in a distributed environment
+    assert "RANK" in os.environ and "WORLD_SIZE" in os.environ, \
+        "This test must be launched with torchrun or similar distributed launcher."
+
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+
+    torch.cuda.set_device(local_rank)
+    dist.init_process_group(backend="nccl")
+
+    d_model = 128
+
+    model = RMSNormLinearModule(d_model)
+    model = model.to(f'cuda:{local_rank}')
+    mesh = init_device_mesh("cuda", (world_size,))
+
+    # The bug specifically triggers when RMSNorm is wrapped with another Linear module
+    # in a single fully_shard() call.
+    fully_shard([model.norm, model.output], mesh=mesh)
+    fully_shard(model, mesh=mesh)
+
+    tracker = FSDPMemTracker(model)
+
+    try:
+        # The error occurred during pre-backward/inside the backward pass
+        with tracker, implicit_replication():
+            x = torch.randn(16, d_model, device=f'cuda:{local_rank}')
+            y = model(x)
+            loss = y.sum()
+            loss.backward()
+        
+        # If we reach here without raising KeyError, the test passes
+        print(f"Rank {rank}: Test passed. FSDPMemTracker successfully tracked RMSNorm backward.")
+    except KeyError as e:
+        print(f"Rank {rank}: Test FAILED with KeyError: {e}")
+        raise
+    finally:
+        dist.destroy_process_group()
+
+
+if __name__ == "__main__":
+    test_fsdp_mem_tracker_rmsnorm_backward()

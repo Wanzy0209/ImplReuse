@@ -1,0 +1,101 @@
+import torch
+import torch.hub
+import os
+import warnings
+import tempfile
+import shutil
+from unittest.mock import patch
+
+# The original issue involves a stack trace bug where metadata (annotations/stack traces)
+# associated with graph nodes were incorrect after a transformation process.
+# The similar API, torch.hub.get_dir, determines a path based on environment metadata.
+# This test case preserves the logic of verifying "correctness of output/metadata"
+# by ensuring torch.hub.get_dir returns the correct path based on the hierarchy of
+# environment variables and internal state, analogous to checking the graph nodes.
+
+class HubDirModule(torch.nn.Module):
+    """
+    A module wrapper to mimic the structure of the original bug's 'inner_f' class.
+    This allows us to test the API within a context similar to the bug report.
+    """
+    def forward(self):
+        # Call the similar API
+        dir_path = torch.hub.get_dir()
+        return dir_path
+
+def test_torch_hub_get_dir_correctness():
+    """
+    Test that torch.hub.get_dir correctly resolves the directory path
+    based on environment variables and internal state, ensuring no "wrong"
+    path is returned (analogous to the wrong stack trace in the bug).
+    """
+    module = HubDirModule()
+    
+    # Save original state to restore later
+    original_hub_dir = torch.hub._hub_dir
+    original_env = os.environ.copy()
+
+    try:
+        # Scenario 1: Default behavior (no env vars set)
+        with patch.dict(os.environ, {}, clear=True):
+            torch.hub._hub_dir = None
+            # On Linux/Mac default is ~/.cache/torch/hub, Windows is different.
+            # We check if it ends with the expected suffix.
+            result = module()
+            # Assuming default cache dir logic for the test environment
+            # Note: expanduser("~") depends on the user running the test
+            expected_suffix = os.path.join(".cache", "torch", "hub")
+            # We check the structure rather than absolute path due to CI environment differences
+            assert "torch" in result and "hub" in result, f"Default path incorrect: {result}"
+            print(f"Scenario 1 (Default): Passed - {result}")
+
+        # Scenario 2: XDG_CACHE_HOME is set
+        with patch.dict(os.environ, {"XDG_CACHE_HOME": "/tmp/xdg_test"}, clear=True):
+            torch.hub._hub_dir = None
+            result = module()
+            expected = os.path.join("/tmp/xdg_test", "torch", "hub")
+            assert result == expected, f"XDG_CACHE_HOME path incorrect: {result} != {expected}"
+            print(f"Scenario 2 (XDG_CACHE_HOME): Passed - {result}")
+
+        # Scenario 3: TORCH_HOME is set (higher priority than XDG)
+        with patch.dict(os.environ, {"TORCH_HOME": "/tmp/torch_home_test", "XDG_CACHE_HOME": "/tmp/xdg_test"}, clear=True):
+            torch.hub._hub_dir = None
+            result = module()
+            expected = os.path.join("/tmp/torch_home_test", "hub")
+            assert result == expected, f"TORCH_HOME path incorrect: {result} != {expected}"
+            print(f"Scenario 3 (TORCH_HOME): Passed - {result}")
+
+        # Scenario 4: TORCH_HUB is set (deprecated, should warn but not override logic if TORCH_HOME is set)
+        # Note: The provided code snippet for get_dir warns on TORCH_HUB but doesn't use it for the path.
+        with patch.dict(os.environ, {"TORCH_HUB": "/tmp/old_torch_hub", "TORCH_HOME": "/tmp/torch_home_test"}, clear=True):
+            torch.hub._hub_dir = None
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                result = module()
+                # Check for deprecation warning
+                assert len(w) == 1
+                assert "deprecated" in str(w[0].message).lower()
+                # Check path is still TORCH_HOME
+                expected = os.path.join("/tmp/torch_home_test", "hub")
+                assert result == expected, f"Path should respect TORCH_HOME even with TORCH_HUB set: {result}"
+            print(f"Scenario 4 (TORCH_HUB deprecated): Passed - Warning raised, path correct")
+
+        # Scenario 5: torch.hub.set_dir is called (highest priority)
+        torch.hub.set_dir("/custom/set_dir_path")
+        # Even with env vars set, set_dir should win
+        with patch.dict(os.environ, {"TORCH_HOME": "/tmp/torch_home_test"}, clear=True):
+            result = module()
+            expected = "/custom/set_dir_path"
+            assert result == expected, f"set_dir priority incorrect: {result} != {expected}"
+            print(f"Scenario 5 (set_dir): Passed - {result}")
+
+        print("\nAll scenarios passed. torch.hub.get_dir correctly handles metadata hierarchy.")
+
+    finally:
+        # Restore environment and state
+        os.environ.clear()
+        os.environ.update(original_env)
+        torch.hub._hub_dir = original_hub_dir
+
+if __name__ == "__main__":
+    test_torch_hub_get_dir_correctness()

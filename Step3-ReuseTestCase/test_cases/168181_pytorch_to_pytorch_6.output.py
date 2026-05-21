@@ -1,0 +1,26 @@
+import torch
+import unittest
+from torch.testing._internal.common_utils import TestCase, run_tests, requires_gpu
+
+class TestLobpcgCompile(TestCase):
+    @requires_gpu
+    def test_lobpcg_to_cpu(self):
+        # Create a symmetric positive definite matrix on GPU
+        # lobpcg requires the input matrix A to be symmetric
+        A = torch.randn(16, 16, device='cuda')
+        A = A @ A.T + torch.eye(16, device='cuda')
+
+        def f(A):
+            # Call the similar API: torch.lobpcg
+            # We extract eigenvalues to test the tensor output behavior
+            eigenvalues, _ = torch.lobpcg(A, k=4)
+            # Mimic the original bug pattern: move output to CPU and perform an operation
+            eigenvalues_cpu = eigenvalues.cpu() + 1
+            return eigenvalues_cpu
+
+        eager_out = f(A)
+        compiled_out = torch.compile(f)(A)
+        self.assertEqual(compiled_out, eager_out)
+
+if __name__ == '__main__':
+    run_tests()

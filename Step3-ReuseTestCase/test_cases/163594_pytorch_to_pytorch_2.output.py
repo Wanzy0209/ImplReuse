@@ -1,0 +1,36 @@
+import torch
+import unittest
+
+class TestTorchProd(unittest.TestCase):
+    def test_prod_basic(self):
+        """
+        Test case for torch.prod, adapted from the context of 
+        test_dtensor_compile_redistribute which involved torch.compile.
+        This verifies the basic functionality of torch.prod.
+        """
+        # Create a simple tensor
+        x = torch.arange(1, 5, dtype=torch.float32)
+        
+        # Test torch.prod
+        result = torch.prod(x)
+        expected = 24.0
+        
+        self.assertEqual(result.item(), expected)
+        
+        # Test with dim argument
+        y = torch.tensor([[1, 2], [3, 4]], dtype=torch.float32)
+        result_dim = torch.prod(y, dim=1)
+        expected_dim = torch.tensor([2.0, 12.0])
+        
+        self.assertTrue(torch.equal(result_dim, expected_dim))
+
+        # Test compilation with torch.prod (since original issue was with torch.compile)
+        def fn(x):
+            return torch.prod(x)
+        
+        compiled_fn = torch.compile(fn)
+        result_compiled = compiled_fn(x)
+        self.assertEqual(result_compiled.item(), expected)
+
+if __name__ == '__main__':
+    unittest.main()

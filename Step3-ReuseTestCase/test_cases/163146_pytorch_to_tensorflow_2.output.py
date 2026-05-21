@@ -1,0 +1,79 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_dynamic_slice_with_check_numerics():
+    """
+    Adapts the PyTorch dynamic slice export bug to TensorFlow's 
+    tf.debugging.enable_check_numerics API.
+    
+    Original Bug Context:
+    torch.export.export failed with a "Data dependent error" when encountering
+    a slice operation where the stop index was a Tensor value:
+        selected_item_embedding = item_embedding[:, :max_item_num, :]
+    
+    Adaptation Logic:
+    Since tf.debugging.enable_check_numerics is a validation/debugging API 
+    (similar to how torch.export performs strict validation), this test 
+    verifies that TensorFlow can handle the same data-dependent slicing 
+    operation correctly when strict numerics checking is enabled.
+    """
+    
+    # 1. Enable the similar API (Strict checking mode)
+    tf.debugging.enable_check_numerics()
+
+    # 2. Setup data mimicking the bug report variables
+    # item_embedding: Tensor(shape: torch.Size([s10, s64, 64]))
+    batch_size = 10
+    seq_len = 64
+    hidden_dim = 64
+    
+    # Create a tensor with valid data
+    item_embedding = tf.random.normal((batch_size, seq_len, hidden_dim))
+    
+    # max_item_num is a Tensor (Data dependent), not a static int.
+    # In the PyTorch bug, this dynamic nature caused the export to fail.
+    max_item_num = tf.constant(50, dtype=tf.int32)
+
+    # 3. Perform the operation that caused the error in PyTorch
+    # Code: selected_item_embedding = item_embedding[:, :max_item_num, :]
+    try:
+        # In TensorFlow, slicing with a tensor is supported natively.
+        # We verify this works under the strict numerics checking context.
+        selected_item_embedding = item_embedding[:, :max_item_num, :]
+        
+        # Verify the operation succeeded and shape is correct
+        # In eager mode, the shape should be fully known.
+        assert selected_item_embedding.shape[0] == batch_size
+        assert selected_item_embedding.shape[1] == 50
+        assert selected_item_embedding.shape[2] == hidden_dim
+        
+        print("Test Passed: Dynamic slice executed successfully with numerics checking enabled.")
+
+    except Exception as e:
+        print(f"Test Failed: {e}")
+        raise
+
+def test_dynamic_slice_detects_invalid_numerics():
+    """
+    Secondary test to verify the 'checking' capability of the similar API.
+    Ensures that enable_check_numerics actually catches errors in the data flow.
+    """
+    tf.debugging.enable_check_numerics()
+    
+    # Create data with NaN
+    item_embedding = tf.constant([[[1.0, 2.0], [float('nan'), 4.0]]])
+    max_item_num = tf.constant(1)
+    
+    try:
+        # Perform the slice
+        x = item_embedding[:, :max_item_num, :]
+        # Perform an operation to trigger the numerics check on the NaN
+        y = x + 1.0 
+        print("Test Failed: Did not detect NaN")
+    except tf.errors.InvalidArgumentError as e:
+        print("Test Passed: Correctly detected NaN with numerics checking enabled.")
+
+if __name__ == "__main__":
+    test_dynamic_slice_with_check_numerics()
+    test_dynamic_slice_detects_invalid_numerics()

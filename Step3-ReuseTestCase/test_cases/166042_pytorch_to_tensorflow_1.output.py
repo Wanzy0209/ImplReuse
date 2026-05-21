@@ -1,0 +1,40 @@
+import tensorflow as tf
+import numpy as np
+
+def test_sparse_segment_sqrt_n_indices_dtype():
+    """
+    Adapted from PyTorch Issue 166042.
+    
+    The original bug report indicates an assertion failure in PyTorch's embedding
+    implementation when indices are not integers (specifically bfloat16):
+    assert "int" in str(indices.get_dtype())
+    
+    This test verifies the behavior of the similar TensorFlow API
+    tf.compat.v1.sparse_segment_sqrt_n when provided with non-integer indices.
+    """
+    
+    # Setup data tensor
+    # Using float32 for data, though the fuzzer context involved bfloat16 matrices
+    data = tf.constant([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=tf.float32)
+
+    # Setup indices with bfloat16 dtype (mimicking the fuzzer's problematic input)
+    # The PyTorch bug was triggered because the indices tensor dtype was bfloat16.
+    # We simulate passing bfloat16 indices here.
+    indices_bf16 = tf.constant([0.0, 1.0, 2.0], dtype=tf.bfloat16)
+
+    # Setup segment_ids (must be integers)
+    segment_ids = tf.constant([0, 0, 1], dtype=tf.int32)
+
+    # Attempt to call the API
+    # We expect this to raise an error because indices must be int32 or int64.
+    # TensorFlow ops generally have strict type registration for index arguments.
+    try:
+        result = tf.compat.v1.sparse_segment_sqrt_n(data, indices_bf16, segment_ids)
+        print("FAIL: Operation succeeded with bfloat16 indices.")
+        print("Result:", result)
+        assert False, "Expected an error for non-integer indices"
+    except (TypeError, ValueError, tf.errors.InvalidArgumentError) as e:
+        print(f"PASS: Caught expected error for non-integer indices: {type(e).__name__}: {e}")
+
+if __name__ == "__main__":
+    test_sparse_segment_sqrt_n_indices_dtype()

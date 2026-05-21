@@ -1,0 +1,67 @@
+import torch
+import sys
+
+# Reproduce the specific configuration from the bug report that triggers the divergence
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1):
+    # arg0: size=(5, 4), dtype=bfloat16, device=cuda
+    # arg1: size=(), dtype=float32, device=cuda
+    
+    # Use torch.linalg.svd (the modern equivalent of torch.svd) as the similar API
+    # This mirrors the structure of the original bug where a linear algebra op 
+    # is followed by reductions and scalar mixing.
+    U, S, Vh = torch.linalg.svd(arg0)
+    
+    # t3 = torch.addmm(...) in original -> SVD result here
+    # t4 = t3.norm() in original -> Norm of singular values
+    t_svd_norm = S.norm()
+    
+    # t9 = torch.nn.functional.relu(t8) in original -> ReLU on scalar
+    t_relu = torch.nn.functional.relu(arg1)
+    
+    # t10 = t7 + t4 + t9 in original -> Mixing float32 scalar with bfloat16-derived result
+    # Note: S is typically float32 even if input is bfloat16, but we mix explicitly here.
+    output = t_svd_norm + t_relu
+    
+    return output
+
+# Setup inputs mirroring the original bug's types and devices
+# bfloat16 input for the main operation
+arg0 = torch.randn([5, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+# float32 scalar for mixing
+arg1 = torch.rand([], dtype=torch.float32, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0, arg1)
+    # We skip backward() here to focus on the forward numerical divergence mentioned in the title,
+    # but keep requires_grad=True to match the setup.
+    print('Eager Success! ')
+    
+    # Compiled execution
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    print('Compile Success! ')
+    
+    # Compare outputs (forward)
+    # The original bug checks the sum of the output, but here output is already a scalar.
+    # We compare the scalar values directly.
+    diff = (out_eager - out_compiled).abs().item()
+    
+    # Calculate relative difference, handling division by zero
+    denominator = out_eager.abs().item() + 1e-12
+    rel_diff = (diff / denominator) * 100
+    
+    print(f'Relative diff: {rel_diff:.6f}%')
+    
+    # The original bug reports > 8% difference, we use 5% as the threshold
+    if rel_diff > 5:
+        print(f' Forward outputs differ significantly!')
+        print('out_eager:', out_eager.item())
+        print('out_compiled:', out_compiled.item())
+        print('Absolute diff:', diff)
+        print('Relative diff (%):', rel_diff)
+        sys.exit(1)

@@ -1,0 +1,48 @@
+import torch
+import torch.distributed as dist
+import os
+
+def main():
+    # Initialize the process group
+    # This script is intended to be run with torchrun, e.g.:
+    # torchrun --nproc_per_node=2 script.py
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        dist.init_process_group(backend="gloo")
+    else:
+        # Fallback for single process testing if env vars are not set,
+        # though isend typically requires multiple ranks.
+        print("Warning: Distributed environment variables not found. Skipping test.")
+        return
+
+    # Create the non-contiguous tensor on MPS as described in the bug report
+    shape = (5, 499, 768)
+    stride = (0, 768, 1)
+    storage_offset = 0
+    numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+    base = torch.arange(numel, dtype=torch.float32, device="mps")
+    input = torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    
+    # Determine destination rank (send to next rank, loop back to 0)
+    dst = (rank + 1) % world_size
+
+    try:
+        # Call the similar API: torch.distributed.isend
+        # Note: Depending on the backend, sending MPS tensors might not be directly supported
+        # or might trigger implicit copies. This test verifies the behavior with the 
+        # specific non-contiguous tensor structure.
+        handle = dist.isend(input, dst=dst)
+        
+        # Wait for the operation to complete
+        handle.wait()
+        
+        print(f"Rank {rank}: isend completed successfully.")
+    except Exception as e:
+        print(f"Rank {rank}: isend failed with error: {e}")
+    
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

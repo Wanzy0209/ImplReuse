@@ -1,0 +1,37 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_relu_empty_input():
+    """
+    Test case for tf.keras.ops.relu with empty input.
+    Adapted from Issue 162798: torch.nanmedian returns 0 for empty input.
+    
+    The original bug involved a reduction operation (nanmedian) returning a scalar 0
+    instead of NaN for an empty tensor. For an element-wise operation like relu,
+    the expected behavior for an empty input is an empty tensor.
+    This test verifies that relu does not return an incorrect scalar (like 0) 
+    and handles the empty shape correctly.
+    """
+    # Create an empty tensor
+    x = tf.constant([], dtype=tf.float32)
+    
+    # Apply relu
+    result = tf.keras.ops.relu(x)
+    
+    # Assert that the result is an empty tensor, not a scalar (e.g., 0)
+    assert result.shape == (0,), f"Expected shape (0,), but got {result.shape}"
+    assert result.dtype == tf.float32, f"Expected dtype float32, but got {result.dtype}"
+    
+    # Verify the tensor is indeed empty
+    assert tf.size(result) == 0, "Expected result size to be 0"
+
+    # Additional check: Ensure relu handles NaNs correctly (max(0, nan) = nan)
+    # This mirrors the 'nan' aspect of the original 'nanmedian' issue.
+    x_nan = tf.constant([float('nan')], dtype=tf.float32)
+    result_nan = tf.keras.ops.relu(x_nan)
+    assert tf.math.is_nan(result_nan[0]), "relu(nan) should return nan"
+
+if __name__ == "__main__":
+    test_relu_empty_input()
+    print("Test passed.")

@@ -1,0 +1,75 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+class TestSqueezeCompileDivergence(tf.test.TestCase):
+    """
+    Adapted test case for the divergence between eager and compiled execution
+    involving squeeze, stack, and reshape operations.
+    """
+
+    def setUp(self):
+        super(TestSqueezeCompileDivergence, self).setUp()
+        # Set seed for reproducibility
+        tf.random.set_seed(1061983224)
+
+    def _fuzzed_program(self, arg_0, sentinel):
+        """
+        Core logic adapted from the PyTorch fuzzed_program.
+        Sequence: chunk -> squeeze -> stack -> reshape
+        """
+        # PyTorch: var_node_3 = torch.chunk(var_node_4, 4, dim=0)[0]
+        # TensorFlow: tf.split
+        var_node_3 = tf.split(arg_0, 4, axis=0)[0]
+
+        # PyTorch: var_node_2 = torch.squeeze(var_node_3)
+        # TensorFlow: tf.squeeze
+        var_node_2 = tf.squeeze(var_node_3)
+
+        # PyTorch: var_node_1 = torch.stack([var_node_2], dim=0)
+        # TensorFlow: tf.stack
+        var_node_1 = tf.stack([var_node_2], axis=0)
+
+        # PyTorch: var_node_0 = torch.reshape(var_node_1, [1])
+        # TensorFlow: tf.reshape
+        var_node_0 = tf.reshape(var_node_1, [1])
+
+        # PyTorch: result = var_node_0 * sentinel
+        result = var_node_0 * sentinel
+
+        # PyTorch: complex check
+        if tf.math.is_complex(result):
+            result = tf.math.real(result)
+
+        return result
+
+    def test_eager_vs_compiled_execution(self):
+        # Create input tensor
+        # PyTorch: arg_0 = torch.as_strided(..., (4,), (1,))
+        # TensorFlow: Create a bool tensor of shape (4,)
+        # Note: TF does not expose arbitrary strides in the same way, 
+        # but a standard 1D tensor suffices to test the shape manipulation logic.
+        arg_0 = tf.cast(tf.random.uniform((4,), 0, 2, dtype=tf.int32), tf.bool)
+
+        # Sentinel tensor
+        # PyTorch: torch.tensor(1.0, requires_grad=True)
+        # TensorFlow: tf.constant (or tf.Variable if testing gradients explicitly)
+        sentinel = tf.constant(1.0)
+
+        # 1. Run in Eager mode
+        result_eager = self._fuzzed_program(arg_0, sentinel)
+        print(' eager success')
+
+        # 2. Run in Compiled mode (Graph mode / XLA)
+        # PyTorch: torch.compile(..., fullgraph=True, dynamic=True)
+        # TensorFlow: tf.function (AutoGraph)
+        compiled_program = tf.function(self._fuzzed_program, jit_compile=True)
+        result_compiled = compiled_program(arg_0, sentinel)
+        print(' compile success')
+
+        # 3. Verify results match (checking for divergence)
+        self.assertAllEqual(result_eager, result_compiled)
+        self.assertShapeEqual(result_eager.numpy(), result_compiled)
+
+if __name__ == '__main__':
+    tf.test.main()

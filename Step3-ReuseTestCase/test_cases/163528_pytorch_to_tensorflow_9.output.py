@@ -1,0 +1,60 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+class Foo(tf.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    # Mimic torch.compile behavior using tf.function with XLA compilation
+    @tf.function(jit_compile=True)
+    def __call__(self, x: tf.Tensor) -> tf.Tensor:
+        # Using the similar API: tf.experimental.numpy.cosh
+        return tf.experimental.numpy.cosh(x)
+
+def test_device(device_name, x):
+    # Map generic device names to TF specific device strings
+    tf_device = '/CPU:0' if device_name == 'cpu' else '/GPU:0'
+    
+    # Check if GPU is available if requested
+    if device_name == 'cuda' and not tf.config.list_physical_devices('GPU'):
+        print(f"Device: {device_name} not available, skipping.")
+        return
+
+    with tf.device(tf_device):
+        # Eager execution (Original behavior)
+        def eager_forward(x):
+            return tf.experimental.numpy.cosh(x)
+
+        # Compiled execution (torch.compile equivalent)
+        foo_compiled = Foo()
+
+        # warm up
+        with tf.device(tf_device):
+            y_original = eager_forward(x)
+            y_compiled = foo_compiled(x)
+
+        # proper inference
+        with tf.device(tf_device):
+            y_original = eager_forward(x)
+            y_compiled = foo_compiled(x)
+
+        diff = tf.reduce_max(tf.abs(y_original - y_compiled))
+        print(f'device: {device_name}, diff: {diff.numpy()}')
+        print('original', y_original[:5, :5].numpy())
+        print('compiled', y_compiled[:5, :5].numpy())
+        
+        # Assert that the difference is negligible (verifying correct behavior)
+        assert diff < 1e-5, f"Discrepancy found on {device_name}"
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    tf.random.set_seed(42)
+    x = tf.random.normal((batch_size, feature_dim), dtype=tf.float32)
+    
+    test_device('cpu', x)
+    test_device('cuda', x)
+
+if __name__ == '__main__':
+    main()

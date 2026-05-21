@@ -1,0 +1,21 @@
+import torch
+import torch.nn.functional as F
+
+# Reproduce the specific tensor configurations from the bug report
+# These shapes are highly mismatched (6D vs 3D) and types are non-standard for similarity (int8 vs int32)
+# This logic is preserved from the original bug report to test for similar memory safety issues.
+input1 = torch.empty((5, 7, 4, 3, 7, 6), dtype=torch.int8)
+input2 = torch.empty((4, 9, 2), dtype=torch.int32)
+
+# Attempt to compute cosine similarity using the similar API
+# The original bug passed extra arguments ((), False) which were specific to max_unpool1d.
+# Here we pass the mismatched tensors to check if CosineSimilarity handles them safely.
+try:
+    # Using the functional API to match the original bug's style
+    result = F.cosine_similarity(input1, input2)
+    print("Result:", result)
+except RuntimeError as e:
+    # Expected to fail due to shape mismatch, but we are checking for crashes (segfaults/asan)
+    print(f"RuntimeError (Expected): {e}")
+except Exception as e:
+    print(f"Exception: {e}")

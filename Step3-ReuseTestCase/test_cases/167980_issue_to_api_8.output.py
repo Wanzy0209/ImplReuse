@@ -1,0 +1,88 @@
+import tensorflow as tf
+import numpy as np
+
+def test_mnist_train_eval_with_pad_ops():
+    """
+    Test case adapted from PyTorch Issue 167980.
+    Verifies stability during the transition from training to evaluation
+    while using tf.keras.ops.pad for tensor manipulation.
+    """
+    # 1. Setup Device (Mimic device selection)
+    # Note: TensorFlow handles device placement implicitly or via tf.device contexts.
+    # We rely on the default configuration (GPU if available, else CPU).
+    print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+
+    # 2. Load Data
+    (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+    
+    # Normalize to [0, 1]
+    x_train = x_train.astype('float32') / 255.0
+    x_test = x_test.astype('float32') / 255.0
+
+    # 3. Leverage Similar API: tf.keras.ops.pad
+    # The original bug involved a native crash. Padding changes tensor memory layout.
+    # We pad the 28x28 images to 32x32 to test backend stability with modified shapes.
+    # paddings: [[top, bottom], [left, right]]
+    paddings = tf.constant([[2, 2], [2, 2]]) 
+    
+    def preprocess_pad(images):
+        # Expand dims to add channel if needed, though MNIST is grayscale (H, W)
+        # tf.keras.ops.pad expects the tensor and paddings
+        return tf.keras.ops.pad(images, paddings, mode="CONSTANT", constant_values=0)
+
+    # Apply padding
+    x_train_padded = preprocess_pad(x_train)
+    x_test_padded = preprocess_pad(x_test)
+
+    # Create Datasets (Mimic DataLoader)
+    batch_size = 80
+    train_ds = tf.data.Dataset.from_tensor_slices((x_train_padded, y_train)).shuffle(60000).batch(batch_size)
+    test_ds = tf.data.Dataset.from_tensor_slices((x_test_padded, y_test)).batch(batch_size)
+
+    # 4. Define Model (Mimic nn.Module)
+    # Input shape is now 32x32 = 1024 features after flatten
+    class Net(tf.keras.Model):
+        def __init__(self):
+            super().__init__()
+            self.flatten = tf.keras.layers.Flatten()
+            self.layers = tf.keras.Sequential([
+                tf.keras.layers.Dense(256, activation='relu'),
+                tf.keras.layers.Dense(256, activation='relu'),
+                tf.keras.layers.Dense(10)
+            ])
+
+        def call(self, x):
+            x = self.flatten(x)
+            return self.layers(x)
+
+    model = Net()
+    loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    optimizer = tf.keras.optimizers.SGD(learning_rate=0.01)
+
+    # 5. Training Step (Mimic TRAIN loop)
+    print("=== TRAIN ===")
+    for X, y in train_ds.take(1): # Run one batch
+        with tf.GradientTape() as tape:
+            pred = model(X, training=True)
+            loss = loss_fn(y, pred)
+        grads = tape.gradient(loss, model.trainable_variables)
+        optimizer.apply_gradients(zip(grads, model.trainable_variables))
+        print(f"Train Loss: {loss.numpy()}")
+
+    # 6. Evaluation Step (Mimic EVAL loop - CRASH POINT in original bug)
+    print("=== EVAL (CRASH POINT CHECK) ===")
+    # We iterate to ensure we hit the execution phase
+    for batch, (X, y) in enumerate(test_ds.take(1)):
+        print(f"batch {batch}")
+        # In TF, we simply call the model without training=True or inside a strategy
+        pred = model(X, training=False)
+        
+        # Assertions to verify correctness and that we reached this point
+        assert pred is not None, "Prediction failed (returned None)"
+        assert pred.shape[0] == batch_size, f"Batch size mismatch: {pred.shape[0]} vs {batch_size}"
+        assert pred.shape[1] == 10, f"Output dimension mismatch: {pred.shape[1]} vs 10"
+        
+        print("Eval batch passed.")
+
+if __name__ == "__main__":
+    test_mnist_train_eval_with_pad_ops()

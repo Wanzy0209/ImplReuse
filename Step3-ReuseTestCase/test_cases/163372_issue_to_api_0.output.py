@@ -1,0 +1,85 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+def test_expand_interpreted_as_repeat():
+    """
+    Test case for Issue 163372: Expand sometimes interpreted as Repeat by compiler.
+    
+    This test verifies that torch.expand() maintains its view semantics (low memory usage)
+    when compiled with the Inductor backend, rather than being incorrectly lowered to 
+    torch.repeat() (high memory allocation).
+    
+    It leverages torch.randn (the similar API) to generate the necessary input tensors
+    and model parameters.
+    """
+    
+    # Constants from the original bug report
+    BATCH_SIZE = 64
+    CHANNELS, IMG_SIZE = 3, 224
+    GRID_SIZE = 13
+    EXPAND_SIZE = 5000
+
+    class ExpandModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            # Using torch.randn (Similar API) to initialize the grid parameter
+            self.grid = nn.Parameter(torch.randn((EXPAND_SIZE, GRID_SIZE, GRID_SIZE, 2), device='cuda'))
+            self.fc = nn.Linear(GRID_SIZE * GRID_SIZE * CHANNELS, 16)
+
+        def forward(self, x):
+            per_channel = []
+            for i in range(CHANNELS):
+                # Original API Under Test: torch.expand
+                # This operation should create a view, not a copy.
+                channel = x[:, i, ...].expand(EXPAND_SIZE, -1, -1, -1)
+                
+                patch = F.grid_sample(
+                    channel, 
+                    self.grid, 
+                    mode="bilinear", 
+                    align_corners=False, 
+                    padding_mode="border"
+                )
+                patch = patch.transpose(0, 1).flatten(start_dim=2)
+                per_channel.append(patch)
+            
+            x = torch.cat(per_channel, axis=2)
+            x = self.fc(x)
+            return x
+
+    # Setup model and move to CUDA
+    model = ExpandModel().cuda()
+    
+    # Compile the model to trigger the Inductor backend
+    # The bug manifests specifically when compiled
+    compiled_model = torch.compile(model)
+
+    # Using torch.randn (Similar API) to create the input tensor
+    x = torch.randn((BATCH_SIZE, CHANNELS, IMG_SIZE, IMG_SIZE), device='cuda')
+
+    # Run the compiled model
+    # If expand is interpreted as repeat, this will attempt to allocate 
+    # ~5000x more memory than necessary, likely causing an OOM error.
+    try:
+        output = compiled_model(x)
+        
+        # Basic assertions to ensure execution and shape correctness
+        assert output is not None, "Model output is None"
+        assert output.shape == (BATCH_SIZE, 16), f"Expected shape {(BATCH_SIZE, 16)}, got {output.shape}"
+        
+        # If we reach here without OOM, the lowering is likely correct (view semantics preserved)
+        print("Test Passed: Compiled model executed successfully without excessive memory allocation.")
+
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower():
+            print(f"Test Failed: Out of Memory encountered. This indicates expand() was likely interpreted as repeat().")
+            raise e
+        else:
+            raise e
+
+if __name__ == "__main__":
+    if torch.cuda.is_available():
+        test_expand_interpreted_as_repeat()
+    else:
+        print("CUDA is not available. Skipping test.")

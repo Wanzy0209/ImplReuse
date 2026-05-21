@@ -1,0 +1,72 @@
+import torch
+import torch.nn as nn
+import unittest
+
+class SearchSortedCompileTest(unittest.TestCase):
+    """
+    Test case to verify torch.searchsorted behavior with torch.compile.
+    Based on Issue #163528.
+    """
+    
+    def setUp(self):
+        self.batch_size = 32
+        self.feature_dim = 10
+        self.quantile_size = 100
+        torch.manual_seed(42)
+        
+        # Generate random input data
+        self.x = torch.randn(self.batch_size, self.feature_dim, dtype=torch.float32)
+        self.quantiles = torch.randn(self.quantile_size, self.feature_dim, dtype=torch.float32)
+        # searchsorted requires sorted sequences (boundaries)
+        self.quantiles = torch.sort(self.quantiles, dim=0)[0]
+
+    def _run_test(self, device):
+        """
+        Helper to run the comparison between eager and compiled modes.
+        """
+        x = self.x.to(device)
+        quantiles = self.quantiles.to(device)
+
+        # Define the model using torch.searchsorted
+        # The bug report highlights the usage of .T (transpose) which relates
+        # to axis manipulation patterns similar to diagonal operations.
+        class Foo(nn.Module):
+            def __init__(self, quantiles: torch.Tensor) -> None:
+                super().__init__()
+                # Store transposed quantiles
+                self.q = nn.Parameter(quantiles.T, requires_grad=False)
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                # Perform searchsorted on transposed inputs
+                return torch.searchsorted(self.q, x.T).T
+
+        # Instantiate models
+        model_eager = Foo(quantiles).to(device)
+        model_compiled = torch.compile(Foo(quantiles).to(device), fullgraph=True)
+
+        # Warmup runs
+        with torch.no_grad():
+            _ = model_eager(x)
+            _ = model_compiled(x)
+
+        # Actual inference
+        with torch.no_grad():
+            y_eager = model_eager(x)
+            y_compiled = model_compiled(x)
+
+        # Assert that the results are close
+        # The bug report indicates a mismatch on CUDA.
+        torch.testing.assert_close(y_compiled, y_eager, rtol=1e-5, atol=1e-5)
+
+    def test_cpu(self):
+        """Test on CPU - should pass."""
+        self._run_test('cpu')
+
+    def test_cuda(self):
+        """Test on CUDA - expected to fail on buggy versions."""
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available")
+        self._run_test('cuda')
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,35 @@
+import torch
+
+def test_tolist_graphing():
+    """
+    Test case to verify the graphing behavior of tolist() vs item() 
+    within torch.compile.
+    """
+    # Case 1: tolist() unpacking
+    @torch.compile(fullgraph=False, backend="eager")
+    def func(a):
+        u0, u1 = a.tolist()
+        return a*u0*u1
+
+    # Case 2: item() call
+    @torch.compile(fullgraph=False, backend="eager")
+    def func2(a):
+        u0 = a.item()
+        return a*u0
+
+    # Execute and verify tolist case
+    input_tensor = torch.tensor([1, 2])
+    result = func(input_tensor)
+    expected = input_tensor * input_tensor[0] * input_tensor[1]
+    assert torch.equal(result, expected), f"tolist case failed: expected {expected}, got {result}"
+
+    # Execute and verify item case
+    input_tensor_2 = torch.tensor([1])
+    result_2 = func2(input_tensor_2)
+    expected_2 = input_tensor_2 * input_tensor_2.item()
+    assert torch.equal(result_2, expected_2), f"item case failed: expected {expected_2}, got {result_2}"
+
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_tolist_graphing()

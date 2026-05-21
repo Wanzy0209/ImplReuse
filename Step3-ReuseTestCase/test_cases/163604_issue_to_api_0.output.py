@@ -1,0 +1,45 @@
+import torch
+import sys
+
+# Configuration from the original bug report to ensure the same environment
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1):
+    t0 = arg0
+    t1 = t0.mean(dim=0)
+    
+    # Replacing torch.nn.functional.relu with the similar API: torch.nn.Sigmoid
+    # This tests if the eager/compile divergence persists or is resolved 
+    # when using Sigmoid in the same pipeline position.
+    sigmoid = torch.nn.Sigmoid()
+    t2 = sigmoid(t1)
+    
+    t3 = arg1
+    t4 = t3.sum(dim=0)
+    t5 = t4.transpose(2, 1)
+    t6 = torch.nn.functional.conv1d(t2, t5, stride=1, padding=0)
+    output = t6
+    return output
+
+# Inputs from the original bug report
+# Note: torch.rand creates contiguous tensors, but the operations inside foo
+# (specifically transpose) will introduce non-contiguous strides that trigger the bug.
+arg0 = torch.rand([4, 503, 64, 504], dtype=torch.float32, device='cuda', requires_grad=True)
+arg1 = torch.rand([5, 16, 1, 64], dtype=torch.float32, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0, arg1)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+
+    # Compiled execution
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    out_compiled.sum().backward()
+    print('Compile Success! ')
+
+    # Assertion to verify consistency between eager and compiled modes
+    torch.testing.assert_close(out_eager, out_compiled)

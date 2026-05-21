@@ -1,0 +1,72 @@
+import torch
+import torch.nn as nn
+import unittest
+import sys
+
+class TestDataParallelDynamicSlicing(unittest.TestCase):
+    def setUp(self):
+        # DataParallel requires CUDA to be effective, though it can run on CPU in some contexts
+        # or with specific device_ids configurations. We check for CUDA availability.
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available, skipping DataParallel test")
+
+    def test_data_parallel_with_dynamic_slice(self):
+        """
+        Test torch.nn.DataParallel with a model that performs dynamic slicing
+        similar to the one described in the bug report (Issue 163146).
+        
+        The original bug involved a data-dependent error during export:
+        `selected_item_embedding = item_embedding[:, :max_item_num, :]`
+        where `max_item_num` is a Tensor.
+        """
+        
+        class DynamicSliceModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = nn.Linear(64, 64)
+
+            def forward(self, item_embedding, max_item_num):
+                # Replicate the logic from the bug report:
+                # Slicing based on a tensor value (max_item_num)
+                selected_item_embedding = item_embedding[:, :max_item_num, :]
+                return self.linear(selected_item_embedding)
+
+        # Initialize model and move to CUDA
+        model = DynamicSliceModel().cuda()
+        
+        # Wrap model with DataParallel
+        # Using device_ids=[0] to explicitly target the first GPU
+        dp_model = nn.DataParallel(model, device_ids=[0])
+
+        # Prepare inputs
+        batch_size = 10
+        max_seq_len = 200
+        dim = 64
+        
+        # item_embedding: Tensor with shape [batch, seq, dim]
+        item_embedding = torch.randn(batch_size, max_seq_len, dim).cuda()
+        
+        # max_item_num: Scalar tensor determining the slice size
+        # This represents the dynamic data dependency
+        slice_limit = 100
+        max_item_num = torch.tensor(slice_limit).cuda()
+
+        # Run forward pass
+        try:
+            output = dp_model(item_embedding, max_item_num)
+            
+            # Verify output shape
+            # The model slices the sequence dimension down to slice_limit
+            # Output shape should be [batch_size, slice_limit, dim]
+            expected_shape = (batch_size, slice_limit, dim)
+            self.assertEqual(output.shape, expected_shape, 
+                             f"Output shape mismatch. Expected {expected_shape}, got {output.shape}")
+            
+            print("Test passed: DataParallel handled dynamic slicing correctly.")
+
+        except Exception as e:
+            self.fail(f"DataParallel failed with dynamic slicing: {e}")
+
+if __name__ == '__main__':
+    unittest.main()

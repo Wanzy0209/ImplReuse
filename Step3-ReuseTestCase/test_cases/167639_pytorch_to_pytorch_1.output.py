@@ -1,0 +1,77 @@
+import torch
+import torch.distributed as dist
+import os
+
+def get_sample_inputs(rank, world_size, device):
+    # Create a tensor filled with (rank + 1) to verify reduction
+    x = torch.ones(4, 10, device=device) * (rank + 1)
+    return (x,)
+
+def main():
+    # Initialize distributed environment
+    if not dist.is_available():
+        print("Distributed package is not available. Skipping test.")
+        return
+
+    # Check if environment variables for distributed launch are set
+    if 'RANK' not in os.environ or 'WORLD_SIZE' not in os.environ:
+        print("Distributed environment variables not found. Please run with torchrun (e.g., torchrun --nproc_per_node=2 script.py). Skipping test.")
+        return
+
+    try:
+        dist.init_process_group(backend="nccl")
+    except Exception as e:
+        print(f"Failed to initialize process group: {e}")
+        return
+
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    device = torch.device(f'cuda:{rank}' if torch.cuda.is_available() else 'cpu')
+
+    inputs = get_sample_inputs(rank, world_size, device)
+    x = inputs[0]
+
+    # 1. Run original operation (outside graph)
+    # We clone the tensor to keep original values for the graph capture step
+    x_original = x.clone()
+    with torch.no_grad():
+        dist.reduce(x_original, dst=0)
+    
+    if rank == 0:
+        print('Original reduced tensor (first element):', x_original[0, 0].item())
+
+    # Reset inputs for graph capture
+    x = inputs[0]
+
+    # 2. Capture CUDA Graph with the similar API (torch.distributed.reduce)
+    if torch.cuda.is_available():
+        graph = torch.cuda.CUDAGraph()
+        # Note: Distributed collectives in CUDA graphs require specific backend support
+        # and often a warmup step or specific configuration.
+        try:
+            with torch.cuda.graph(graph):
+                # Call the similar API: torch.distributed.reduce
+                dist.reduce(x, dst=0)
+            
+            # 3. Replay the graph
+            graph.replay()
+
+            if rank == 0:
+                print('Captured graph reduced tensor (first element):', x[0, 0].item())
+                # Verify correctness: Sum of ranks 1 to world_size
+                # e.g. if world_size is 2, sum is 1+2 = 3
+                expected_sum = sum(range(1, world_size + 1))
+                assert torch.allclose(x, torch.full_like(x, expected_sum)), "Output mismatch between original and graph execution"
+                print("Assertion passed: Graph output matches original output.")
+            else:
+                print(f"Rank {rank}: Graph captured and replayed successfully.")
+
+        except Exception as e:
+            print(f"Error during CUDA graph capture/replay with torch.distributed.reduce: {e}")
+    else:
+        print("CUDA not available, skipping graph capture")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

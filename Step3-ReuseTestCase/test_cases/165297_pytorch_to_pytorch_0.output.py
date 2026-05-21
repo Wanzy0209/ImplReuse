@@ -1,0 +1,49 @@
+import torch
+import torch.nn as nn
+
+def test_maxpool2d_channels_last():
+    """
+    Test case for Issue 165297:
+    Verifies that MaxPool2d with channels_last memory format does not produce NaNs
+    or crash with large tensors on CUDA for bfloat16 and float32.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        return
+
+    device = torch.device("cuda")
+    # Large input dimensions from the bug report
+    N, C, H, W = 84, 64, 512, 960
+    
+    # Pooling parameters from the bug report
+    kernel_size = 3
+    stride = 2
+    padding = 1
+
+    pool = nn.MaxPool2d(kernel_size=kernel_size, stride=stride, padding=padding).to(device)
+
+    # --- Test Case 1: bfloat16 + channels_last ---
+    # Expected behavior: No NaNs
+    print("Testing bfloat16 with channels_last memory format...")
+    x_bf16 = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+    x_bf16 = x_bf16.to(memory_format=torch.channels_last)
+    
+    y_bf16 = pool(x_bf16)
+    
+    assert not torch.isnan(y_bf16).any(), "Bug detected: NaNs found in bfloat16 MaxPool2d output with channels_last"
+    assert not torch.isinf(y_bf16).any(), "Bug detected: Inf found in bfloat16 MaxPool2d output with channels_last"
+    print("  bfloat16 test passed.")
+
+    # --- Test Case 2: float32 + channels_last ---
+    # Expected behavior: No illegal memory access (crash) or NaNs
+    print("Testing float32 with channels_last memory format...")
+    x_fp32 = torch.randn(N, C, H, W, device=device) # default float32
+    x_fp32 = x_fp32.to(memory_format=torch.channels_last)
+    
+    y_fp32 = pool(x_fp32)
+    
+    assert not torch.isnan(y_fp32).any(), "Bug detected: NaNs found in float32 MaxPool2d output with channels_last"
+    print("  float32 test passed.")
+
+if __name__ == "__main__":
+    test_maxpool2d_channels_last()

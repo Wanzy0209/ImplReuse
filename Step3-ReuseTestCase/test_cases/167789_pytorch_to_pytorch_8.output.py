@@ -1,0 +1,46 @@
+import sys
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+# Helper to create a deeply nested structure to trigger recursion during unpickling
+def create_nested_list(depth):
+    if depth == 0:
+        return 0
+    return [create_nested_list(depth - 1)]
+
+def run_test(rank, world_size):
+    # Initialize distributed environment
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Set recursion limit high to avoid RecursionError during unpickling
+    # This mimics the original bug report's setup where sys.setrecursionlimit
+    # is expected to allow deep recursion.
+    sys.setrecursionlimit(10000000)
+
+    if rank == 0:
+        # Sender: Create a deeply nested object
+        # Default recursion limit is often 1000, so 2000 ensures we need the increased limit
+        nested_obj = create_nested_list(2000)
+        # Send the object
+        dist.send_object_list([nested_obj], dst=1)
+    elif rank == 1:
+        # Receiver: Prepare list to receive into
+        obj_list = [None]
+        
+        # Call the similar API: torch.distributed.recv_object_list
+        # If the bug (recursion limit not respected in C extensions) applies here,
+        # this call might raise a RecursionError despite setting the limit.
+        dist.recv_object_list(obj_list, src=0)
+        
+        # Basic assertion to ensure data was received
+        assert obj_list[0] is not None
+        print("Test passed: Object received successfully with high recursion limit.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use spawn to run the distributed test
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

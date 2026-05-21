@@ -1,0 +1,48 @@
+import tensorflow as tf
+import tensorflow.distribute as distribute
+
+def test_in_cross_replica_context_state():
+    """
+    Test case for tf.distribute.in_cross_replica_context.
+    
+    This test is derived from the similarity to the PyTorch issue #164297,
+    where accessing internal state (OperatorExportTypes) during initialization
+    caused a segfault. Here, we verify that accessing the cross-replica context
+    state handles different initialization and scope transitions correctly
+    without crashing.
+    """
+    
+    # 1. Check context outside of any strategy (Default state)
+    # This mirrors the initial import/initialization phase in the PyTorch bug.
+    is_cross_replica = distribute.in_cross_replica_context()
+    assert is_cross_replica is False, \
+        "Expected to be outside cross-replica context before strategy scope."
+
+    # 2. Initialize strategy and check context inside scope
+    strategy = tf.distribute.MirroredStrategy()
+    
+    with strategy.scope():
+        # Inside scope, we should be in a cross-replica context
+        is_cross_replica = distribute.in_cross_replica_context()
+        assert is_cross_replica is True, \
+            "Expected to be in cross-replica context inside strategy.scope()."
+
+        # 3. Check context inside a replica function (strategy.run)
+        # This tests the transition of state, similar to how the PyTorch bug
+        # involved a specific type conversion/call chain.
+        def replica_fn():
+            is_replica_context = distribute.in_cross_replica_context()
+            # Inside run(), we are in a replica context, not cross-replica
+            assert is_replica_context is False, \
+                "Expected to be in replica context (not cross-replica) inside strategy.run()."
+        
+        strategy.run(replica_fn)
+
+    # 4. Verify state returns to default after exiting scope
+    is_cross_replica = distribute.in_cross_replica_context()
+    assert is_cross_replica is False, \
+        "Expected to return to default context after exiting strategy scope."
+
+if __name__ == "__main__":
+    test_in_cross_replica_context_state()
+    print("Test passed successfully.")

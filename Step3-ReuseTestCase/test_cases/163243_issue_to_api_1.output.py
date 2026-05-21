@@ -1,0 +1,38 @@
+import torch
+
+
+def repro():
+    n = 8
+
+    dtype = torch.complex64
+
+    # Leverage torch.logspace to generate the complex tensor data
+    # instead of torch.randn, preserving the dtype usage pattern.
+    # logspace generates a 1D tensor, so we view it to match the required shape.
+    start = 1.0 + 1.0j
+    stop = 10.0 + 10.0j
+    num = 4 * n * n
+    A_flat = torch.logspace(start, stop, num, dtype=dtype)
+    A = A_flat.view(4, n, n)
+    A.requires_grad = True
+
+    # Ensure contiguity as attempted in the original bug report
+    A = A.clone(memory_format=torch.contiguous_format)
+
+    I0 = torch.eye(n, dtype=A.dtype, device=A.device)
+    I = I0.unsqueeze(0).expand(A.shape[0], n, n).contiguous()
+
+    # The problematic operation involving .mH (Hermitian transpose)
+    # which triggers the stride/view issue in the inductor backend
+    A = I + 0.5 * (A @ A.mH)
+
+    R = torch.linalg.cholesky(A, upper=True)
+    loss = R.abs().sum()
+    loss.backward()
+
+
+if __name__ == '__main__':
+    # The bug manifests specifically with the 'inductor' backend
+    repro = torch.compile(repro, backend="inductor")
+
+    repro()

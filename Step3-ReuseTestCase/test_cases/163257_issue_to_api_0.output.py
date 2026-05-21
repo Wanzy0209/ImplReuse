@@ -1,0 +1,65 @@
+import torch
+import pytest
+
+# Attempt to import the RMM library required for the bug reproduction.
+# If not available, the test will be skipped.
+try:
+    import rmm
+    from rmm.allocators.torch import rmm_torch_allocator
+    HAS_RMM = True
+except ImportError:
+    HAS_RMM = False
+
+@pytest.mark.skipif(not HAS_RMM, reason="RMM library is not installed")
+def test_pluggable_allocator_compile_with_logaddexp():
+    """
+    Test case for Issue #163257: Support checkPoolLiveAllocations with pluggable device.
+    
+    This test verifies that torch.compile works correctly when using a custom memory 
+    allocator (RMM) instead of the default PyTorch allocator. It uses torch.logaddexp
+    as the representative operation to exercise the compilation and memory allocation paths.
+    
+    Original Bug:
+        RuntimeError: pluggable does not yet support checkPoolLiveAllocations.
+    
+    Expected Behavior:
+        The model should compile and execute successfully with the custom allocator.
+    """
+    
+    # 1. Setup the custom allocator (Original bug reproduction logic)
+    # Reinitialize RMM with a pool allocator and set it as the current PyTorch allocator.
+    rmm.reinitialize(pool_allocator=True)
+    torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+
+    # 2. Define a model using the Similar API: torch.logaddexp
+    # We use logaddexp because it involves complex tensor operations (masking, where, etc.)
+    # which are representative of the workload described in the issue.
+    def model(x, y):
+        return torch.logaddexp(x, y)
+
+    # 3. Prepare inputs
+    x = torch.randn(10, 10, device='cuda')
+    y = torch.randn(10, 10, device='cuda')
+
+    try:
+        # 4. Attempt to compile the model
+        # In the original bug, this step triggers the checkPoolLiveAllocations error.
+        compiled_model = torch.compile(model)
+        
+        # 5. Execute the compiled model
+        result = compiled_model(x, y)
+        
+        # 6. Verify correctness
+        expected = torch.logaddexp(x, y)
+        assert torch.allclose(result, expected), "Output mismatch between compiled and eager execution"
+
+    except RuntimeError as e:
+        # Check if we hit the specific error mentioned in the bug report
+        if "checkPoolLiveAllocations" in str(e):
+            pytest.fail(f"Issue #163257 reproduced: {e}")
+        else:
+            # Re-raise other RuntimeErrors
+            raise
+    finally:
+        # Cleanup: Reset allocator to default to prevent side effects on other tests
+        torch.cuda.memory.change_current_allocator(torch.cuda.memory._get_default_allocator())

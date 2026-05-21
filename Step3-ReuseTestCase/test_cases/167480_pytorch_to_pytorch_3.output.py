@@ -1,0 +1,78 @@
+import torch
+import torch.distributed as dist
+import os
+import tempfile
+import sys
+
+def test_new_group_command_injection():
+    """
+    Adapted test case for Issue 167480 (OS command injection).
+    
+    Original Issue: torch.utils.cpp_extension.load_inline allowed OS command injection 
+    via extra_cflags due to subprocess.check_output(..., shell=True).
+    
+    This test verifies if torch.distributed.new_group is susceptible to similar 
+    injection vectors when handling string arguments like 'group_desc'.
+    """
+    
+    # Setup a single-process distributed environment using file:// init method
+    # to ensure the test is runnable without external environment variables.
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        init_method = f"file://{tmp_file.name}"
+    
+    # Payload attempting command injection (shell metacharacters)
+    # Adapted from the original issue's context (extra_cflags)
+    malicious_payload = "desc; touch /tmp/pwned_by_pytorch; echo"
+    
+    # File to check for side effects of command injection
+    injection_indicator = "/tmp/pwned_by_pytorch"
+    
+    # Clean up just in case
+    if os.path.exists(injection_indicator):
+        os.remove(injection_indicator)
+
+    try:
+        # Initialize process group
+        dist.init_process_group(
+            backend='gloo', # gloo is generally available for CPU tests
+            init_method=init_method,
+            rank=0,
+            world_size=1
+        )
+
+        # Call the similar API with the potentially malicious payload
+        # We inject into 'group_desc' as it accepts arbitrary strings
+        group = dist.new_group(
+            ranks=[0],
+            group_desc=malicious_payload
+        )
+
+        # Verify the group was created (API functionality)
+        assert group is not None, "new_group failed to create a group"
+
+        # Verify the vulnerability did not occur
+        # If the command was executed via shell=True, the file would exist
+        if os.path.exists(injection_indicator):
+            raise AssertionError(
+                f"OS Command Injection vulnerability detected! "
+                f"File '{injection_indicator}' was created."
+            )
+            
+        print("Test passed: No OS command injection detected.")
+
+    except ImportError:
+        print("Skipped: torch.distributed not available or backend missing.")
+    except Exception as e:
+        print(f"Test failed with exception: {e}")
+        raise
+    finally:
+        # Cleanup
+        if dist.is_initialized():
+            dist.destroy_process_group()
+        if os.path.exists(tmp_file.name):
+            os.remove(tmp_file.name)
+        if os.path.exists(injection_indicator):
+            os.remove(injection_indicator)
+
+if __name__ == "__main__":
+    test_new_group_command_injection()

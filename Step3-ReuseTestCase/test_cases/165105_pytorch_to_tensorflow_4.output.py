@@ -1,0 +1,80 @@
+import tensorflow as tf
+import numpy as np
+
+# Reproducibility setup matching the original PyTorch seed
+tf.random.set_seed(70609)
+np.random.seed(70609)
+
+def test_lstm_cell_matmul_divergence():
+    """
+    Adapted test case for tf.keras.layers.LSTMCell based on the PyTorch 
+    matmul decomposition bug (Issue 165105).
+    
+    The original bug involves a chain of float16 matrix multiplications 
+    causing divergence between eager and compiled modes. This test verifies
+    that the internal matmuls of the LSTMCell handle float16 operations 
+    consistently across execution modes.
+    """
+    
+    # Enable mixed precision to stress float16 paths, similar to the original bug's context
+    # Note: This requires a compatible GPU (usually NVIDIA with compute capability >= 7.0)
+    try:
+        policy = tf.keras.mixed_precision.Policy('mixed_float16')
+        tf.keras.mixed_precision.set_global_policy(policy)
+    except ValueError:
+        print("Warning: Mixed precision not supported on this device. Falling back to float32.")
+        policy = tf.keras.mixed_precision.Policy('float32')
+        tf.keras.mixed_precision.set_global_policy(policy)
+
+    # Dimensions extracted from the PyTorch fuzzer output:
+    # var_node_6: (14, 6) -> Batch=14, Input Features=6
+    # var_node_7: (6, 416) -> Projection to 416
+    # var_node_5: (14, 416) -> Resulting state/feature map
+    batch_size = 14
+    input_features = 6
+    units = 416
+
+    # Initialize the LSTMCell
+    # This layer performs internal matmuls: x @ kernel and h @ recurrent_kernel
+    lstm_cell = tf.keras.layers.LSTMCell(units=units)
+
+    # Create inputs matching the shapes in the PyTorch snippet
+    # var_node_6 corresponds to the input tensor
+    x = tf.constant(np.random.randn(batch_size, input_features), dtype=tf.float16)
+
+    # Initial states (h, c)
+    # var_node_5 corresponds to the hidden state dimensionality
+    h_state = tf.constant(np.random.randn(batch_size, units), dtype=tf.float16)
+    c_state = tf.constant(np.random.randn(batch_size, units), dtype=tf.float16)
+
+    # 1. Eager Execution
+    output_eager, (h_eager, c_eager) = lstm_cell(x, [h_state, c_state])
+
+    # 2. Compiled Execution (tf.function)
+    # The bug report specifically mentions "Eager/Compile Divergence"
+    @tf.function
+    def compiled_cell(inp, states):
+        return lstm_cell(inp, states)
+
+    output_comp, (h_comp, c_comp) = compiled_cell(x, [h_state, c_state])
+
+    # Verification
+    # Check for NaNs (common in float16 decomposition bugs)
+    assert not tf.reduce_any(tf.math.is_nan(output_eager)), "NaN found in Eager output"
+    assert not tf.reduce_any(tf.math.is_nan(output_comp)), "NaN found in Compiled output"
+
+    # Check for divergence between Eager and Compiled modes
+    # We allow a small tolerance for float16 precision, but large divergence indicates a bug.
+    diff_output = tf.reduce_max(tf.abs(output_eager - output_comp))
+    diff_h = tf.reduce_max(tf.abs(h_eager - h_comp))
+    diff_c = tf.reduce_max(tf.abs(c_eager - c_comp))
+
+    # Tolerance of 1e-2 is reasonable for float16 accumulation
+    assert diff_output < 1e-2, f"Eager/Compile divergence in output: {diff_output}"
+    assert diff_h < 1e-2, f"Eager/Compile divergence in hidden state: {diff_h}"
+    assert diff_c < 1e-2, f"Eager/Compile divergence in cell state: {diff_c}"
+
+    print("Test passed: No divergence detected between Eager and Compiled modes.")
+
+if __name__ == "__main__":
+    test_lstm_cell_matmul_divergence()

@@ -1,0 +1,24 @@
+import torch
+import tensorflow as tf
+
+# Create empty input tensors
+x = tf.constant([], dtype=tf.float32)
+y = tf.constant([], dtype=tf.float32)
+print("Input tensor x:", x)
+print("Input tensor y:", y)
+
+# Perform math.add
+# The original bug report tested torch.nanmedian on empty inputs, which incorrectly returned 0 on MPS.
+# Here we test tf.compat.v1.math.add with empty inputs to ensure it handles the edge case correctly.
+result = tf.compat.v1.math.add(x, y)
+print("Result:", result)
+
+# Assertion
+# Expected behavior: The result should be an empty tensor.
+# Bug-like behavior (analogous to the original issue): Returning a scalar 0 or crashing.
+assert result.shape == tf.TensorShape([0]), \
+    f"Expected empty tensor with shape (0,), but got shape {result.shape} and value {result}"
+
+# Ensure it is not a scalar (which would be the equivalent of returning 0 in the reduction context)
+assert result.shape.rank == 1, \
+    f"Expected 1D tensor, but got rank {result.shape.rank} (scalar 0 would be rank 0)"

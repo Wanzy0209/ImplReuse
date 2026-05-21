@@ -1,0 +1,71 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_keras_name_scope_quantization_simulation():
+    """
+    Adapts the PyTorch mxfp8 quantization regression test to verify 
+    tf.keras.name_scope behavior.
+    
+    Original Bug Context: torch.compile regression in mxfp8 quantization along rows.
+    Adaptation: Verify that tf.keras.name_scope correctly groups 
+    quantization-like operations (casting) in the TensorFlow graph.
+    """
+    
+    # Setup parameters similar to the original bug (scaled down for unit test)
+    # Original: M 16384 K 16384 BLOCK_SIZE 32
+    M, K = 128, 128
+    input_shape = (M, K)
+    
+    # Create input data
+    x = tf.random.normal(input_shape, dtype=tf.float32)
+    
+    # Define the scope name matching the original benchmark mode
+    scope_name = "dim0_mxfp8_floor"
+    
+    # Use tf.keras.name_scope
+    # The 'values' argument helps determine if we are in graph mode
+    with tf.keras.name_scope(scope_name, values=[x]) as scope:
+        # Simulate the quantization/casting operation
+        # Using bfloat16 as a proxy for low precision format (FP8)
+        y = tf.cast(x, tf.bfloat16)
+        # Simulate scaling (1 x block_size granularity)
+        scale = tf.constant(1.0, dtype=tf.bfloat16)
+        y = y * scale
+            
+    # Verification 1: Check that the scope context is active
+    assert scope is not None, "Name scope context was not returned."
+    
+    # Verification 2: Verify graph structure using tf.function
+    # This ensures the scope is applied correctly during compilation/tracing
+    @tf.function
+    def quantize_graph(input_tensor):
+        with tf.keras.name_scope(scope_name):
+            # Operations inside the scope
+            casted = tf.cast(input_tensor, tf.bfloat16)
+            scaled = casted * 0.5
+            return scaled
+
+    # Get the concrete function and graph
+    concrete_func = quantize_graph.get_concrete_function(x)
+    graph = concrete_func.graph
+    
+    # Check if operations in the graph contain the scope name
+    # This verifies the "core logic" of name_scope: organizing the graph.
+    ops_in_graph = [op.name for op in graph.get_operations()]
+    
+    # We expect at least one operation to be prefixed with the scope name
+    # e.g., 'dim0_mxfp8_floor/Cast'
+    has_scoped_ops = any(scope_name in op_name for op_name in ops_in_graph)
+    
+    assert has_scoped_ops, \
+        f"Expected operations to be scoped under '{scope_name}'. Found ops: {ops_in_graph}"
+        
+    # Verification 3: Run the function to ensure correctness (no crash)
+    result = quantize_graph(x)
+    assert result.shape == input_shape, "Output shape mismatch."
+    
+    print("Test Passed: tf.keras.name_scope correctly grouped operations.")
+
+if __name__ == "__main__":
+    test_tf_keras_name_scope_quantization_simulation()

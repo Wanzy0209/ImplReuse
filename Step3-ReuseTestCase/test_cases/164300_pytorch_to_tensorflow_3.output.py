@@ -1,0 +1,50 @@
+import torch
+import tensorflow as tf
+import functools
+
+# Define a helper class similar to CustomPolicy in the original bug report
+class HelperClass:
+    def __init__(self, value):
+        self.value = value
+
+    def compute(self, x):
+        return x + self.value
+
+# Define the body function that accepts the helper instance as an argument
+def loop_body(i, x, helper):
+    return i + 1, helper.compute(x)
+
+# Define the condition function
+def loop_cond(i, x):
+    return i < 5
+
+# Create a partial function, similar to context_fn1 in the bug report
+# This binds the HelperClass instance to the loop_body function
+helper_instance = HelperClass(1.0)
+partial_body = functools.partial(loop_body, helper=helper_instance)
+
+# Wrap the execution in tf.function (equivalent to torch.compile)
+@tf.function
+def run_loop(initial_x):
+    return tf.while_loop(
+        cond=loop_cond,
+        body=partial_body,  # Passing the functools.partial object here
+        loop_vars=(0, initial_x)
+    )
+
+# Test execution and gradients
+x = tf.constant(2.0)
+
+with tf.GradientTape() as tape:
+    _, result = run_loop(x)
+
+# Verify the forward pass result
+# Loop runs 5 times (i=0 to 4), adding 1.0 each time: 2.0 + 5.0 = 7.0
+assert result == 7.0, f"Expected 7.0, got {result}"
+
+# Verify gradients
+# d(7.0)/d(x) = 1.0
+grads = tape.gradient(result, x)
+assert grads == 1.0, f"Expected gradient 1.0, got {grads}"
+
+print("Test passed: tf.while_loop handles functools.partial correctly.")

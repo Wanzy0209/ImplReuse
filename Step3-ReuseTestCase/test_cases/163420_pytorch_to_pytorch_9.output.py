@@ -1,0 +1,38 @@
+import torch
+import torch.distributed as dist
+import os
+
+# Initialize distributed environment for single-process testing
+# This makes the test runnable without torchrun
+if not dist.is_initialized():
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(arg0, arg1):
+    # arg0: list of objects to broadcast
+    # arg1: source rank
+    # Adapted from t2.fill_diagonal_(t1.item()) to dist.broadcast_object_list
+    dist.broadcast_object_list(arg0, src=arg1)
+    return arg0
+
+# Inputs
+# Original: arg0 = tensor, arg1 = scalar
+# Adapted: arg0 = list, arg1 = int (rank)
+arg0 = [1, 2, 3]
+arg1 = 0
+
+if __name__ == '__main__':
+    # Eager execution
+    list_eager = foo(arg0.copy(), arg1)
+    print('Eager Success! ', list_eager)
+
+    # Compiled execution
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    list_compiled = compiled_foo(arg0.copy(), arg1)
+    print('Compile Success! ', list_compiled)
+
+    # Cleanup
+    dist.destroy_process_group()

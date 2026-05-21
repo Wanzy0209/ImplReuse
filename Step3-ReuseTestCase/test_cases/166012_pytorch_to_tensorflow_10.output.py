@@ -1,0 +1,96 @@
+import torch
+import tensorflow.compat.v1 as tf
+import sys
+
+# Disable v2 behavior to use compat.v1 queue APIs
+tf.disable_v2_behavior()
+
+def test_range_input_producer_consistency():
+    """
+    Adapts the logic of checking for inconsistencies between cache hits and misses
+    to the TensorFlow range_input_producer API.
+    
+    In the original PyTorch bug (Issue 166012), running `torch.compile` twice 
+    (cache miss vs cache hit) resulted in inconsistent 'tlparse' log entries.
+    
+    For `tf.compat.v1.train.range_input_producer`, we verify that multiple 
+    executions (simulating the repeated runs) produce consistent, deterministic 
+    output sequences when using a fixed seed. This ensures the internal state 
+    (epochs, shuffling) is handled consistently across runs.
+    """
+    
+    # Configuration parameters
+    limit = 10
+    num_epochs = 2
+    shuffle = True
+    seed = 42
+    capacity = 32
+
+    def run_producer_session():
+        """
+        Executes the range_input_producer pipeline and returns the generated sequence.
+        """
+        with tf.Graph().as_default():
+            # Create the range input producer
+            # Note: num_epochs requires local_variables_initializer
+            q = tf.compat.v1.train.range_input_producer(
+                limit=limit,
+                num_epochs=num_epochs,
+                shuffle=shuffle,
+                seed=seed,
+                capacity=capacity
+            )
+            
+            # Dequeue elements to get the output
+            dequeue_op = q.dequeue()
+            
+            outputs = []
+            with tf.Session() as sess:
+                # Initialize local variables (epochs counter) and global variables
+                sess.run([tf.local_variables_initializer(), tf.global_variables_initializer()])
+                
+                # Start queue runners
+                coord = tf.train.Coordinator()
+                threads = tf.train.start_queue_runners(coord=coord)
+                
+                try:
+                    while True:
+                        outputs.append(sess.run(dequeue_op))
+                except tf.errors.OutOfRangeError:
+                    # Expected when num_epochs is exhausted
+                    pass
+                finally:
+                    coord.request_stop()
+                    coord.join(threads)
+            
+            return outputs
+
+    # --- Run 1: Simulate "Cache Miss" (First execution) ---
+    # In the original bug, this generated a full set of logs.
+    outputs_run_1 = run_producer_session()
+
+    # --- Run 2: Simulate "Cache Hit" (Second execution) ---
+    # In the original bug, this generated inconsistent/missing logs.
+    # We verify that the behavior here is consistent with the first run.
+    outputs_run_2 = run_producer_session()
+
+    # --- Verification ---
+    # 1. Check Consistency: The sequence should be identical due to the fixed seed.
+    assert outputs_run_1 == outputs_run_2, (
+        f"Inconsistency detected between runs!\n"
+        f"Run 1 (Miss): {outputs_run_1}\n"
+        f"Run 2 (Hit):  {outputs_run_2}\n"
+        "The API produced different results for the same seed/parameters."
+    )
+
+    # 2. Check Correctness: Ensure the total count matches limit * num_epochs
+    expected_count = limit * num_epochs
+    assert len(outputs_run_1) == expected_count, (
+        f"Expected {expected_count} outputs (limit * epochs), "
+        f"but got {len(outputs_run_1)}."
+    )
+
+    print("Test Passed: range_input_producer behavior is consistent across runs.")
+
+if __name__ == "__main__":
+    test_range_input_producer_consistency()

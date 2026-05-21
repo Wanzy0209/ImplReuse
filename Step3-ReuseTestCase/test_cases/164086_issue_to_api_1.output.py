@@ -1,0 +1,56 @@
+import torch
+import tensorflow as tf
+
+# The original bug report (Issue 164086) demonstrates a divergence between Eager 
+# and Compile modes in PyTorch, specifically involving type handling (int64 vs float16)
+# and complex tensor operations.
+#
+# This test case adapts that logic to the similar API 'tf.shape_n'.
+# We verify that tf.shape_n behaves consistently in Eager and Compiled (XLA) modes,
+# specifically when dealing with int64 output types (mirroring the int64 input in the bug)
+# and lists of mixed tensors.
+
+def test_shape_n_int64_compile_divergence():
+    # Setup inputs mimicking the bug report's tensor types and shapes
+    # Bug report: arg0 is int64 (42, 56), others are float16
+    t_int64 = tf.ones([42, 56], dtype=tf.int64)
+    t_float16_1 = tf.ones([50000, 128], dtype=tf.float16)
+    t_float16_2 = tf.ones([46, 128], dtype=tf.float16)
+
+    inputs = [t_int64, t_float16_1, t_float16_2]
+
+    # 1. Eager Execution
+    # Using out_type=tf.int64 to match the int64 context of the bug report
+    eager_result = tf.shape_n(inputs, out_type=tf.int64)
+
+    # 2. Compiled Execution (tf.function with JIT)
+    # This corresponds to torch.compile in the original issue
+    @tf.function(jit_compile=True)
+    def compiled_shape_n(tensors):
+        return tf.shape_n(tensors, out_type=tf.int64)
+
+    compiled_result = compiled_shape_n(inputs)
+
+    # 3. Verification
+    # Check for divergence (Eager vs Compile)
+    assert len(eager_result) == len(compiled_result), \
+        f"Length mismatch: Eager {len(eager_result)} vs Compiled {len(compiled_result)}"
+
+    for i, (e_tensor, c_tensor) in enumerate(zip(eager_result, compiled_result)):
+        # Check shape values
+        if not tf.reduce_all(tf.equal(e_tensor, c_tensor)):
+            raise AssertionError(
+                f"Divergence detected at index {i}. "
+                f"Eager: {e_tensor.numpy()}, Compiled: {c_tensor.numpy()}"
+            )
+        # Check dtype (Bug report involved fp16/float64 mismatch, here we check int64 consistency)
+        if e_tensor.dtype != c_tensor.dtype:
+            raise AssertionError(
+                f"Dtype mismatch at index {i}. "
+                f"Eager: {e_tensor.dtype}, Compiled: {c_tensor.dtype}"
+            )
+
+    print("Test Passed: No divergence between Eager and Compile modes for tf.shape_n.")
+
+if __name__ == "__main__":
+    test_shape_n_int64_compile_divergence()

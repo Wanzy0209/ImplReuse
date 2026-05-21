@@ -1,0 +1,59 @@
+import torch
+import torch.nn.functional as F
+import sys
+
+# Configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+    # Adaptation: local_response_norm requires 3D input.
+    # Original arg0 was (42, 56). We adapt to (42, 56, 1).
+    # Adaptation: local_response_norm requires floating point input.
+    # Original arg0 was int64. We adapt to float16 to match the error message's fp16 context.
+    t0 = arg0 
+
+    # Replace torch.tanh with torch.nn.functional.local_response_norm
+    t1 = F.local_response_norm(t0, size=5)
+
+    t2 = t1.clone()
+    t2.zero_()
+
+    t3 = arg1
+    t4 = arg2
+    t5 = torch.nn.functional.linear(t3, t4)
+    t6 = arg3
+    t7 = t6.max(dim=1).values
+    t8 = arg4
+    t9 = arg5
+    t10 = torch.cat([t8, t9], dim=0)
+    t11 = torch.pow(torch.pow(torch.pow(torch.pow(t5, t7), t10), t5), t7)
+
+    # t2 is float16, clamp and cast to long for embedding
+    t12 = torch.nn.functional.embedding(torch.clamp(t2, 0, t11.size(0) - 1).to(torch.long), t11)
+
+    output = t12 + sentinel
+    return output
+
+# Adapted inputs
+# arg0: Changed to float16 and 3D for local_response_norm compatibility
+arg0 = torch.rand([42, 56, 1], dtype=torch.float16, device='cuda')
+arg1 = torch.rand([50000, 128], dtype=torch.float16, device='cuda', requires_grad=True)
+arg2 = torch.rand([46, 128], dtype=torch.float16, device='cuda', requires_grad=True)
+arg3 = torch.rand([50000, 4, 46], dtype=torch.float16, device='cuda', requires_grad=True)
+arg4 = torch.rand([25786, 46], dtype=torch.float16, device='cuda', requires_grad=True)
+arg5 = torch.rand([24214, 46], dtype=torch.float16, device='cuda', requires_grad=True)
+sentinel = torch.tensor(0.0, dtype=torch.float16, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+
+    # Compiled execution
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ')

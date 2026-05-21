@@ -1,0 +1,55 @@
+import torch
+import torch.distributed as dist
+from torch.distributed.tensor import distribute_tensor, init_device_mesh, Replicate
+from torch.distributed.tensor.placement_types import _StridedShard
+from torch.nn.utils.prune import L1Unstructured
+from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
+from torch.testing._internal.distributed.test_dtensor import DTensorTestBase
+
+class TestStridedShardWithPruning(DTensorTestBase):
+    @skip_if_lt_x_gpu(2)
+    def test_strided_shard_with_l1_pruning(self):
+        # Preserves the original bug reproduction logic setup
+        assert self.world_size == 2
+        device_mesh = init_device_mesh(self.device_type, (2, ))
+        
+        # Original tensor from the bug report
+        global_tensor = torch.arange(5, dtype=torch.float32) # [0, 1, 2, 3, 4]
+
+        # Leverage the similar API: L1Unstructured
+        # We use L1Unstructured to prune the tensor before sharding to test interaction
+        # Pruning 20% (1 element). The lowest L1 norm is 0.
+        pruner = L1Unstructured(amount=0.2)
+        # Create a default mask of ones
+        default_mask = torch.ones_like(global_tensor, dtype=torch.bool)
+        # Compute the mask using the similar API
+        mask = pruner.compute_mask(global_tensor, default_mask)
+        # Apply the mask
+        pruned_tensor = global_tensor * mask # Result: [0, 1, 2, 3, 4] (0 is pruned/zeroed)
+
+        # Original Bug Reproduction Logic: Redistribution with _StridedShard
+        # The bug manifests when split_factor (2) does not evenly divide tensor size (5)
+        dtensor = distribute_tensor(pruned_tensor, device_mesh, (Replicate(),)).redistribute(
+            device_mesh, (_StridedShard(0, split_factor=2),)
+        )
+
+        # Assertions based on the expected fix behavior
+        # Expected logic: (5,) -> unflatten -> (2, 3,) -> S(1) -> flatten
+        # Rank 0 should get indices corresponding to the first column of the unflattened matrix
+        # Rank 1 should get indices corresponding to the second column
+        
+        rank = dist.get_rank()
+        local_tensor = dtensor._local_tensor
+
+        if rank == 0:
+            # Expected: [0, 1, 3, 4] (Indices 0, 1, 3, 4 of original)
+            # Note: 0 is pruned (value 0), but the index is still part of the shard
+            expected = torch.tensor([0., 1., 3., 4.], device=self.device_type)
+        else:
+            # Expected: [2, pad] (Index 2 of original)
+            # Assuming pad is 0.0 for assertion
+            expected = torch.tensor([2., 0.], device=self.device_type)
+
+        # Check if the local tensor matches the expected distribution
+        # Using assert_close to handle potential floating point differences if any
+        torch.testing.assert_close(local_tensor, expected)

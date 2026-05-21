@@ -1,0 +1,77 @@
+import tensorflow as tf
+import numpy as np
+
+def test_conv2d_transpose_layout_handling():
+    """
+    Adapted from PyTorch Issue #164491.
+    
+    Original Issue: _scaled_mm and _int_mm are slow or raise errors with row-major RHS matrices.
+    The issue arises because weights in Linear layers can be transposed, leading to row-major 
+    layouts which some internal kernels do not handle efficiently.
+    
+    Similar API: tf.compat.v1.nn.conv2d_transpose
+    Adaptation Logic: 
+    In TensorFlow, the equivalent of memory layout (row-major vs column-major) for tensors 
+    is controlled by the 'data_format' argument ('NHWC' vs 'NCHW'). 
+    This test verifies that conv2d_transpose handles both standard layouts correctly 
+    without raising errors, mimicking the check for the "row-major rhs" issue.
+    """
+    
+    # Setup dimensions
+    batch_size = 1
+    height = 8
+    width = 8
+    in_channels = 3
+    out_channels = 16
+    kernel_size = 3
+
+    # --- Test Case 1: NHWC (Channels Last - Row-Major for spatial dimensions) ---
+    # This corresponds to the "row-major" scenario in the bug report.
+    print("Testing tf.compat.v1.nn.conv2d_transpose with data_format='NHWC' (Row-Major spatial)...")
+    
+    input_nhwc = tf.random.normal([batch_size, height, width, in_channels])
+    # Kernel shape for conv2d_transpose is [filter_height, filter_width, out_channels, in_channels]
+    kernel = tf.random.normal([kernel_size, kernel_size, out_channels, in_channels])
+    output_shape_nhwc = [batch_size, height * 2, width * 2, out_channels]
+    
+    try:
+        # Disable eager execution if necessary to mimic graph mode, but eager is fine for error checking
+        result_nhwc = tf.compat.v1.nn.conv2d_transpose(
+            input_nhwc,
+            kernel,
+            output_shape=output_shape_nhwc,
+            strides=[1, 2, 2, 1],
+            padding='SAME',
+            data_format='NHWC'
+        )
+        # Verify output shape
+        assert result_nhwc.shape == tuple(output_shape_nhwc), f"Shape mismatch: {result_nhwc.shape} vs {output_shape_nhwc}"
+        print("NHWC Test Passed: No error raised with row-major layout.")
+    except Exception as e:
+        print(f"NHWC Test Failed: {e}")
+
+    # --- Test Case 2: NCHW (Channels First - Column-Major for spatial dimensions) ---
+    # This corresponds to the "column-major" scenario.
+    print("\nTesting tf.compat.v1.nn.conv2d_transpose with data_format='NCHW' (Column-Major spatial)...")
+    
+    # Transpose input to NCHW
+    input_nchw = tf.transpose(input_nhwc, [0, 3, 1, 2])
+    output_shape_nchw = [batch_size, out_channels, height * 2, width * 2]
+    
+    try:
+        result_nchw = tf.compat.v1.nn.conv2d_transpose(
+            input_nchw,
+            kernel, # Note: TF kernel shape definition usually remains [H, W, O, I]
+            output_shape=output_shape_nchw,
+            strides=[1, 1, 2, 2], # Strides format changes to NCHW
+            padding='SAME',
+            data_format='NCHW'
+        )
+        # Verify output shape
+        assert result_nchw.shape == tuple(output_shape_nchw), f"Shape mismatch: {result_nchw.shape} vs {output_shape_nchw}"
+        print("NCHW Test Passed: No error raised with column-major layout.")
+    except Exception as e:
+        print(f"NCHW Test Failed: {e}")
+
+if __name__ == "__main__":
+    test_conv2d_transpose_layout_handling()

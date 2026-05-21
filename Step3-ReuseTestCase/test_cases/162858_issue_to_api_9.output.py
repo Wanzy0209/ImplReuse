@@ -1,0 +1,54 @@
+import torch
+import tensorflow as tf
+
+def test_assert_logs_context():
+    """
+    Test case based on Issue 162858 (PyTorch) and tf.raw_ops.Assert (TensorFlow).
+    
+    The PyTorch issue requests that when a graph break occurs, the system logs
+    the recent bytecode and stack state (context) to help debugging.
+    
+    This test verifies that the similar TensorFlow API, `tf.raw_ops.Assert`,
+    provides analogous functionality by logging the provided tensor data (context)
+    when the assertion condition fails.
+    """
+    
+    # Setup: Define data representing the "state" we want to inspect.
+    # This is analogous to the Python stack/bytecode state in the PyTorch issue.
+    tensor_a = tf.constant([1.0, 2.0, 3.0, 4.0, 5.0])
+    tensor_b = tf.constant([10.0, 20.0, 30.0, 40.0, 50.0])
+
+    # The condition that triggers the "break" (assertion failure).
+    # In the PyTorch issue, this is `torch._dynamo.graph_break()`.
+    condition = False
+
+    try:
+        # Call the similar API: tf.raw_ops.Assert
+        # This mirrors the behavior of interrupting execution to provide debug info.
+        # The 'summarize' parameter acts like the 'k' in the PyTorch issue,
+        # controlling how much of the context is printed.
+        tf.raw_ops.Assert(
+            condition=condition,
+            data=[tensor_a, tensor_b],
+            summarize=3  # Print first 3 entries of each tensor
+        )
+    except tf.errors.InvalidArgumentError as e:
+        error_msg = str(e)
+        print("Captured Error Message:\n", error_msg)
+
+        # Verification: Ensure the "context" (data) is actually present in the output.
+        # This validates the core intent of the PyTorch issue: ensuring developer
+        # context is available when a specific event (break/assert) occurs.
+        assert "1" in error_msg, "Expected context from tensor_a to be in error message"
+        assert "10" in error_msg, "Expected context from tensor_b to be in error message"
+        
+        # Check that summarize limited the output (optional, but good for precision)
+        # Note: TF error messages format can vary, so we check for presence of data.
+        print("Test Passed: Developer context (tensor data) was successfully logged upon assertion failure.")
+        return
+
+    # If we reach here, the assertion did not fail as expected.
+    raise AssertionError("tf.raw_ops.Assert should have raised an InvalidArgumentError for False condition")
+
+if __name__ == "__main__":
+    test_assert_logs_context()

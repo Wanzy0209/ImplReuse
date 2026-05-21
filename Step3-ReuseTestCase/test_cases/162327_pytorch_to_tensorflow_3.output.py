@@ -1,0 +1,52 @@
+import torch
+import tensorflow as tf
+
+def test_tf_experimental_numpy_outer():
+    """
+    Adapted test case for Issue 162327.
+    Original Bug: heap-buffer-overflow in torch.nn.functional.max_unpool1d
+    Target API: tf.experimental.numpy.outer
+    
+    The original bug involved passing tensors with specific shapes and dtypes 
+    (int8, int32) that caused memory access violations. This test adapts those 
+    tensor characteristics to the TensorFlow API to verify robustness.
+    """
+    
+    print(f"TensorFlow Version: {tf.__version__}")
+
+    # Replicate the tensor shapes and dtypes from the original PyTorch bug report.
+    # Original: torch.empty((5, 7, 4, 3, 7, 6), dtype=torch.int8)
+    # Original: torch.empty((4, 9, 2), dtype=torch.int32)
+    # We use tf.zeros to ensure the test is deterministic and runnable, 
+    # while preserving the shape and dtype constraints.
+    
+    input_a = tf.zeros((5, 7, 4, 3, 7, 6), dtype=tf.int8)
+    input_b = tf.zeros((4, 9, 2), dtype=tf.int32)
+
+    print(f"Input A shape: {input_a.shape}, dtype: {input_a.dtype}")
+    print(f"Input B shape: {input_b.shape}, dtype: {input_b.dtype}")
+
+    try:
+        # Call the similar API: tf.experimental.numpy.outer
+        # This function computes the outer product, effectively flattening inputs first.
+        # We pass the mismatched high-dimensional tensors to check for memory safety issues.
+        result = tf.experimental.numpy.outer(input_a, input_b)
+
+        # Verify the result
+        # Expected shape: (prod(input_a.shape), prod(input_b.shape))
+        # prod(5, 7, 4, 3, 7, 6) = 17640
+        # prod(4, 9, 2) = 72
+        expected_shape = (17640, 72)
+        
+        assert result.shape == expected_shape, \
+            f"Shape mismatch. Expected {expected_shape}, got {result.shape}"
+        
+        print("Test passed successfully.")
+        print(f"Result shape: {result.shape}")
+
+    except Exception as e:
+        print(f"Test failed with exception: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_tf_experimental_numpy_outer()

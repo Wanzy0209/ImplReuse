@@ -1,0 +1,43 @@
+import torch
+import unittest
+from torch.distributions.constraints import half_open_interval
+
+class TestHalfOpenIntervalSimilarity(unittest.TestCase):
+    def test_complex_uint_inputs_from_issue_163409(self):
+        """
+        Test case adapted from Issue 163409 (Segmentation fault in torch.nn.MaxUnpool3d).
+        
+        This test verifies that torch.distributions.constraints.half_open_interval
+        handles the specific tensor types (complex128, uint32) and shapes that caused
+        a crash in MaxUnpool3d gracefully, rather than causing a segmentation fault.
+        """
+        # Determine device (CUDA was used in the original bug report)
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
+        # Recreate the specific tensors from the bug report
+        # t1: complex128, shape (9, 6, 3, 6, 9)
+        # t2: uint32, shape (5, 7, 9, 8, 5)
+        t1 = torch.empty((9, 6, 3, 6, 9), dtype=torch.complex128, device=device)
+        t2 = torch.empty((5, 7, 9, 8, 5), dtype=torch.uint32, device=device)
+        
+        # Reproduce the input structure and unpacking logic from the bug report
+        # Original: input = [[()],{},[t1, t2],{}]
+        # Original: r1 = MaxUnpool3d(*input[0],**input[1]); r2 = r1(*input[2],**input[3])
+        # Adapted: We pass the tensors from input[2] to the similar API.
+        
+        input_args = [t1, t2]
+        input_kwargs = {}
+        
+        # We expect a RuntimeError because complex numbers do not support
+        # ordering comparisons (<=, <) required by the check() method.
+        # A segmentation fault would indicate a similar bug to the original issue.
+        with self.assertRaises(RuntimeError):
+            constraint = half_open_interval(*input_args, **input_kwargs)
+            
+            # If instantiation succeeds (e.g. if type checking is deferred),
+            # trigger the comparison logic via check()
+            val = torch.empty(1, device=device)
+            constraint.check(val)
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,24 @@
+import torch
+from torch import tensor
+
+# Adapted test case for torch.max based on the torch.aminmax issue.
+# The issue highlights that the string representation of the return type
+# looks like a valid constructor call but fails when executed.
+
+# 1. Call torch.max with a dimension to return the named tuple type
+result = torch.max(torch.tensor([1, -3, 5]), dim=0)
+print(f"API Call Result: {result}")
+
+# 2. Attempt to construct the return type using the representation format
+# This mimics the error scenario from the bug report (Issue ID: 162876)
+try:
+    torch.return_types.max(
+        values=tensor(5),
+        indices=tensor(2)
+    )
+    # If the following line is reached, the behavior differs from the original issue
+    assert False, "Expected TypeError when constructing return_types.max with keyword arguments"
+except TypeError as e:
+    # Verify the error is consistent with the structseq behavior mentioned in the issue
+    assert "structseq" in str(e) or "required argument" in str(e), f"Unexpected error message: {e}"
+    print(f"Caught expected error: {e}")

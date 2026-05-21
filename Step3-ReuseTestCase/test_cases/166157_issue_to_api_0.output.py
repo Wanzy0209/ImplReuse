@@ -1,0 +1,75 @@
+import tensorflow as tf
+import numpy as np
+
+def test_linear_operator_toeplitz_observability():
+    """
+    Test case for tf.linalg.LinearOperatorToeplitz.
+    
+    This test is derived from the logic of Issue 166157, which addresses the lack of 
+    observability (statistics) in the OpenRegDeviceAllocator. 
+    
+    Just as the PyTorch fix aims to expose memory statistics (allocated bytes, 
+    reserved bytes) to make the allocator a "white box" rather than a "black box", 
+    this test verifies that the LinearOperatorToeplitz correctly exposes its 
+    structural "statistics" (shape, dtype, batch dimensions). 
+    
+    This ensures that the user has visibility into the properties of the operator 
+    without necessarily materializing the full matrix, analogous to checking memory 
+    stats without inspecting every byte.
+    """
+    
+    # Define the components of a Toeplitz matrix
+    # Column: [a, e, f, g]
+    # Row:    [a, b, c, d]
+    # Resulting Matrix:
+    # | a b c d |
+    # | e a b c |
+    # | f e a b |
+    # | g f e a |
+    
+    col = tf.constant([1.0, 5.0, 6.0, 7.0], dtype=tf.float32)
+    row = tf.constant([1.0, 2.0, 3.0, 4.0], dtype=tf.float32)
+
+    # Initialize the operator
+    # This is analogous to initializing the OpenRegDeviceAllocator
+    operator = tf.linalg.LinearOperatorToeplitz(col, row)
+
+    # --- Verify "Statistics" / Properties ---
+    
+    # 1. Check Shape Statistic
+    # In the PyTorch issue, 'allocated_bytes' is a key stat. 
+    # For a LinearOperator, 'shape' is the primary stat defining resource usage.
+    expected_shape = tf.TensorShape([4, 4])
+    assert operator.shape == expected_shape, \
+        f"Shape statistic mismatch. Expected {expected_shape}, got {operator.shape}"
+
+    # 2. Check Batch Shape Statistic
+    # The PyTorch issue handles stats per device index (array of stats).
+    # Here we verify the operator handles batch dimensions correctly in its stats.
+    expected_batch_shape = tf.TensorShape([])
+    assert operator.batch_shape == expected_batch_shape, \
+        f"Batch shape statistic mismatch. Expected {expected_batch_shape}, got {operator.batch_shape}"
+
+    # 3. Check Dtype Statistic
+    # Ensures the type information is observable.
+    assert operator.dtype == tf.float32, \
+        f"Dtype statistic mismatch. Expected tf.float32, got {operator.dtype}"
+
+    # 4. Verify Internal Consistency (Materialization Check)
+    # This ensures the "stats" (properties) reflect the actual underlying logic,
+    # similar to how getDeviceStats() should reflect actual memory usage.
+    dense_matrix = operator.to_dense()
+    
+    expected_matrix = np.array([
+        [1., 2., 3., 4.],
+        [5., 1., 2., 3.],
+        [6., 5., 1., 2.],
+        [7., 6., 5., 1.]
+    ], dtype=np.float32)
+
+    np.testing.assert_allclose(dense_matrix.numpy(), expected_matrix, rtol=1e-5)
+    
+    print("Test passed: LinearOperatorToeplitz properties are observable and consistent.")
+
+if __name__ == "__main__":
+    test_linear_operator_toeplitz_observability()

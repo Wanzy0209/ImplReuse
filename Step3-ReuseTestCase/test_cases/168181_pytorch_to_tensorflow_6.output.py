@@ -1,0 +1,78 @@
+import torch
+import tensorflow as tf
+import numpy as np
+import unittest
+
+class TestNameScopeDeviceTransfer(unittest.TestCase):
+    """
+    Adapted from PyTorch test_triton_kernel_to_cpu.
+    Verifies that tf.compat.v1.name_scope correctly handles operations
+    involving custom kernel simulation and device transfers (GPU to CPU).
+    """
+
+    def setUp(self):
+        # Check for GPU availability, similar to @requires_gpu
+        self.gpus = tf.config.list_physical_devices('GPU')
+        if not self.gpus:
+            self.skipTest("GPU required for this test")
+
+    def test_name_scope_gpu_to_cpu(self):
+        """
+        Reproduces the logic of the original bug:
+        1. Perform an operation on GPU (simulating the Triton kernel).
+        2. Transfer the result to CPU.
+        3. Perform an operation on CPU.
+        4. Verify correctness in both eager and compiled (tf.function) modes.
+        """
+        
+        # Define the function using the target API: tf.compat.v1.name_scope
+        def logic_fn(x, y):
+            # Simulate the user-defined kernel scope
+            with tf.compat.v1.name_scope("triton_kernel_sim", skip_on_eager=False):
+                # Simulate the custom kernel output (e.g., add_kernel)
+                # In PyTorch: out = torch.zeros_like(x); add_kernel[(1,)](x, y, out, ...)
+                # In TF: We use a standard op to represent the kernel logic
+                out = tf.add(x, y, name="kernel_output")
+
+            # Simulate .cpu() transfer
+            # In PyTorch: out_cpu = out.cpu() + 1
+            # In TF: We explicitly place the subsequent operations on CPU
+            with tf.device("/CPU:0"):
+                with tf.compat.v1.name_scope("cpu_ops", skip_on_eager=False):
+                    # Explicit identity to ensure the tensor is materialized/moved
+                    out_cpu = tf.identity(out, name="transfer_to_cpu")
+                    result = tf.add(out_cpu, 1, name="add_one")
+            
+            return result
+
+        # Initialize inputs on GPU
+        with tf.device("/GPU:0"):
+            x = tf.random.normal((4, 4), seed=42)
+            y = tf.random.normal((4, 4), seed=43)
+
+        # 1. Eager Execution
+        # Corresponds to eager_out = f(x, y)
+        eager_out = logic_fn(x, y)
+
+        # 2. Compiled Execution
+        # Corresponds to compiled_out = torch.compile(f)(x, y)
+        # tf.function is the TensorFlow equivalent of torch.compile
+        compiled_fn = tf.function(logic_fn)
+        compiled_out = compiled_fn(x, y)
+
+        # Calculate expected result: (x + y) + 1
+        # We perform this calculation on the host to compare against the CPU output
+        expected = (x.numpy() + y.numpy()) + 1
+
+        # Assertions
+        # Verify eager execution correctness
+        np.testing.assert_allclose(eager_out.numpy(), expected, rtol=1e-5)
+        
+        # Verify compiled execution correctness
+        np.testing.assert_allclose(compiled_out.numpy(), expected, rtol=1e-5)
+        
+        # Verify eager and compiled results match
+        np.testing.assert_allclose(eager_out.numpy(), compiled_out.numpy(), rtol=1e-5)
+
+if __name__ == '__main__':
+    unittest.main()

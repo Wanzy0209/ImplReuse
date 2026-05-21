@@ -1,0 +1,96 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def get_vae_computation():
+    """
+    Defines a VAE-like computation function that returns a tuple of tensors.
+    This mimics the forward pass of the PyTorch VAE model in the bug report.
+    """
+    input_dim = 784
+    hidden_dim = 400
+    latent_dim = 20
+    
+    # Define weights (simplified for the test case)
+    # In a real scenario, these would be tf.Variables managed by a layer/model.
+    # We use constants here to ensure the test runs without complex variable initialization.
+    w_enc = tf.random.normal((input_dim, hidden_dim))
+    w_mu = tf.random.normal((hidden_dim, latent_dim))
+    w_var = tf.random.normal((hidden_dim, latent_dim))
+    w_dec = tf.random.normal((latent_dim, input_dim))
+
+    def computation(x):
+        # Encode
+        h = tf.nn.relu(tf.matmul(x, w_enc))
+        mu = tf.matmul(h, w_mu)
+        log_var = tf.matmul(h, w_var)
+        
+        # Reparameterize
+        std = tf.exp(0.5 * log_var)
+        eps = tf.random.normal(tf.shape(std))
+        z = mu + eps * std
+        
+        # Decode
+        reconstruction = tf.nn.sigmoid(tf.matmul(z, w_dec))
+        
+        # Return a tuple: (reconstruction, mu, log_var)
+        return (reconstruction, mu, log_var)
+    
+    return computation
+
+def main():
+    # Initialize TPU system
+    # Note: tf.compat.v1.tpu.batch_parallel requires a TPU context.
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        print("TPU system initialized.")
+    except ValueError:
+        print("This test case requires a TPU runtime to execute tf.compat.v1.tpu.batch_parallel.")
+        print("If running on CPU/GPU, this API is not available.")
+        return
+
+    # Prepare sample inputs
+    batch_size = 32
+    input_dim = 784
+    x = tf.random.normal((batch_size, input_dim))
+
+    # Get the computation function
+    vae_fn = get_vae_computation()
+
+    # Run the computation using batch_parallel
+    # We use num_shards=1 to mimic the single-device behavior of the original torch.compile test
+    print("Running tf.compat.v1.tpu.batch_parallel...")
+    output = tf.compat.v1.tpu.batch_parallel(
+        vae_fn, 
+        inputs=[x], 
+        num_shards=1
+    )
+
+    print(f"Output type: {type(output)}")
+
+    # --- Bug Reproduction Logic ---
+    # The original bug occurs because the user expects a single tensor output
+    # (or accesses .shape on the result), but the API returns a tuple.
+    try:
+        # This line attempts to access .shape on the tuple result
+        shape = output.shape
+        print(f"Output shape: {shape}")
+    except AttributeError as e:
+        print(f"Caught AttributeError: {e}")
+        print("Behavior confirmed: The API returns a tuple, which does not have a .shape attribute.")
+
+    # --- Correct Usage Verification ---
+    # Verify that we can unpack the tuple and access shapes of individual elements
+    if isinstance(output, (tuple, list)) and len(output) == 3:
+        reconstruction, mu, log_var = output
+        print("\nUnpacking successful:")
+        print(f"Reconstruction shape: {reconstruction.shape}")
+        print(f"Mu shape: {mu.shape}")
+        print(f"Log_var shape: {log_var.shape}")
+    else:
+        print("\nUnexpected output structure.")
+
+if __name__ == '__main__':
+    main()

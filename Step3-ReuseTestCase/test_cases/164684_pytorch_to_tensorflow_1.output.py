@@ -1,0 +1,58 @@
+import tensorflow as tf
+
+# Set seed for reproducibility
+tf.random.set_seed(19990)
+
+def fuzzed_program(arg_0, sentinel):
+    # arg_0: size=(1,), dtype=bool
+    var_node_2 = arg_0
+    # Squeeze to scalar
+    var_node_1 = tf.squeeze(var_node_2) # size=(), dtype=bool
+    
+    # In PyTorch, .item() extracts a Python bool. 
+    # In TensorFlow, we keep it as a Tensor to test graph behavior (tf.function).
+    # To mimic the multiplication logic (combining scalar and tensor), 
+    # we cast the bool to float and concatenate it with the sentinel tensor.
+    var_node_0 = tf.cast(var_node_1, dtype=sentinel.dtype)
+    
+    # Expand dims to make it compatible for concatenation with a 1D tensor
+    var_node_0_expanded = tf.expand_dims(var_node_0, axis=0)
+    
+    # Perform the operation similar to mul (combining elements)
+    # Concatenating the scalar value with the tensor
+    result = tf.concat([var_node_0_expanded, sentinel], axis=0)
+    
+    # Handle complex numbers if necessary (mimicking original logic)
+    if result.dtype.is_complex:
+        result = tf.math.real(result)
+        
+    return result
+
+# Sentinel tensor to ensure gradient computation
+# Using a 1D tensor to allow concatenation with the expanded scalar
+sentinel = tf.constant([1.0, 1.0, 1.0])
+
+# Generate random boolean argument
+arg_0 = tf.random.uniform((1,), 0, 2, dtype=tf.int32) > 0
+
+# Test Eager Execution
+print("Testing Eager Execution...")
+with tf.GradientTape() as tape:
+    tape.watch(sentinel)
+    result_original = fuzzed_program(arg_0, sentinel)
+grad_original = tape.gradient(result_original, sentinel)
+print(' eager success')
+
+# Test Compiled Execution (tf.function)
+print("Testing Compiled Execution...")
+compiled_program = tf.function(fuzzed_program)
+with tf.GradientTape() as tape:
+    tape.watch(sentinel)
+    result_compiled = compiled_program(arg_0, sentinel)
+grad_compiled = tape.gradient(result_compiled, sentinel)
+print(' compile success')
+
+# Verify results match
+assert tf.reduce_all(tf.equal(result_original, result_compiled)).numpy(), "Outputs mismatch"
+assert tf.reduce_all(tf.equal(grad_original, grad_compiled)).numpy(), "Gradients mismatch"
+print(" verification success: Eager and Compiled results match.")

@@ -1,0 +1,32 @@
+import torch
+
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1014698)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0 # size=(20, 0), stride=(1, 20), dtype=float32
+    # Replaced torch.add with torch.log
+    var_node_0 = torch.log(var_node_1)
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+# Adapted arg_0 to be float32 to support torch.log
+arg_0 = torch.as_strided(torch.randint(5, 30, (20,)).to(torch.float32), (20, 0), (1, 20))
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print(' eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print(' compile success')
+
+# Verify results match
+assert torch.allclose(result_original, result_compiled)

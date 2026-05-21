@@ -1,0 +1,54 @@
+import tensorflow as tf
+import numpy as np
+import io
+
+# Define a PythonState implementation to handle NumPy array serialization
+# This mimics the behavior of transferring tensor state, similar to all_gather
+class NumpyState(tf.train.experimental.PythonState):
+    def __init__(self, array):
+        self.array = array
+
+    def serialize(self):
+        # Serialize the array to a byte string
+        with io.BytesIO() as f:
+            np.save(f, self.array, allow_pickle=False)
+            return f.getvalue()
+
+    def deserialize(self, string_value):
+        # Deserialize the byte string back to an array
+        with io.BytesIO(string_value) as f:
+            self.array = np.load(f, allow_pickle=False)
+
+# Reproduce the scenario: Create a tensor (array) with specific memory ordering
+# PyTorch's channels_last implies a specific non-contiguous memory layout.
+# We use Fortran order (F) here to simulate a specific, non-default memory layout.
+x = np.arange(0, 16).reshape(2, 2, 2, 2)
+x = np.asfortranarray(x) # Enforce specific memory ordering
+
+# Wrap the data in the PythonState object
+state_obj = NumpyState(x)
+
+# Perform the "transfer" operation (Serialize -> Deserialize)
+# This is the TensorFlow equivalent of moving state around, analogous to gathering
+serialized_state = state_obj.serialize()
+restored_obj = NumpyState(None)
+restored_obj.deserialize(serialized_state)
+
+# Verify the results
+# 1. Check if the data content is equal
+data_equal = np.array_equal(x, restored_obj.array)
+
+# 2. Check if the memory ordering (strides/flags) is preserved
+# In the PyTorch bug, the memory format was lost. Here we check if C/F contiguity is preserved.
+c_order_preserved = (x.flags['C_CONTIGUOUS'] == restored_obj.array.flags['C_CONTIGUOUS'])
+f_order_preserved = (x.flags['F_CONTIGUOUS'] == restored_obj.array.flags['F_CONTIGUOUS'])
+
+print(f"Data Equal: {data_equal}")
+print(f"Memory Order (C-contiguous) Preserved: {c_order_preserved}")
+print(f"Memory Order (F-contiguous) Preserved: {f_order_preserved}")
+print(f"Original Strides: {x.strides}")
+print(f"Restored Strides: {restored_obj.array.strides}")
+
+# Assertion to catch the bug if memory ordering is not preserved
+assert data_equal, "Data content mismatch after serialization/deserialization"
+assert c_order_preserved and f_order_preserved, "Memory ordering (strides) changed during serialization/deserialization"

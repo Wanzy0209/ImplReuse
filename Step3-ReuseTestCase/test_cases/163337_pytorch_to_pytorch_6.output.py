@@ -1,0 +1,55 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Use 'gloo' backend for CPU-based testing or 'nccl' if GPUs are available
+    backend = 'gloo' 
+    dist.init_process_group(backend, rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_gather_object(rank, world_size):
+    setup(rank, world_size)
+    
+    # Create a picklable object specific to this rank
+    # This mimics passing complex objects, similar to how extensions might pass data
+    input_obj = {"rank": rank, "tensor": torch.tensor([rank * 10])}
+    
+    # Prepare the output list
+    # Only the destination rank (dst=0) needs to provide the list
+    if rank == 0:
+        output_list = [None] * world_size
+    else:
+        output_list = None
+        
+    # Call the similar API: torch.distributed.gather_object
+    # This replaces the torch.utils.cpp_extension.load call from the original issue
+    dist.gather_object(input_obj, output_list, dst=0)
+    
+    # Verify the results on the destination rank
+    if rank == 0:
+        expected_list = [{"rank": i, "tensor": torch.tensor([i * 10])} for i in range(world_size)]
+        for i in range(world_size):
+            assert output_list[i]["rank"] == expected_list[i]["rank"], f"Rank mismatch at index {i}"
+            assert torch.equal(output_list[i]["tensor"], expected_list[i]["tensor"]), f"Tensor mismatch at index {i}"
+        print(f"Rank {rank}: gather_object test passed.")
+    else:
+        # Non-dst ranks simply participate
+        pass
+
+    cleanup()
+
+def main():
+    world_size = 2
+    # Spawn processes to simulate a distributed environment
+    mp.spawn(test_gather_object, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()

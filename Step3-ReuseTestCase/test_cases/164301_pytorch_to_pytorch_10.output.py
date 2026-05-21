@@ -1,0 +1,52 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use 'gloo' backend for CPU-based testing or 'nccl' if GPUs are available and required
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+    
+    # Create a unique object for each rank to verify gathering
+    # We use a dictionary containing a tensor to test pickling of complex objects
+    local_obj = {
+        "rank": rank,
+        "data": torch.tensor([rank, rank * 2])
+    }
+    
+    # Prepare the output list
+    # Only the destination rank (dst=0) needs to provide a list
+    if rank == 0:
+        gathered_objects = [None] * world_size
+    else:
+        gathered_objects = None
+        
+    # Call the API: torch.distributed.gather_object
+    # This gathers picklable objects from all ranks to the dst rank
+    dist.gather_object(local_obj, gathered_objects, dst=0)
+    
+    # Verification
+    if rank == 0:
+        print(f"Rank 0 gathered objects: {gathered_objects}")
+        for i in range(world_size):
+            obj = gathered_objects[i]
+            assert obj["rank"] == i, f"Rank mismatch: expected {i}, got {obj['rank']}"
+            assert torch.equal(obj["data"], torch.tensor([i, i * 2])), \
+                f"Data mismatch for rank {i}"
+        print("Test passed: torch.distributed.gather_object verified successfully.")
+    
+    cleanup()
+
+if __name__ == "__main__":
+    # Run the test with 2 processes
+    world_size = 2
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

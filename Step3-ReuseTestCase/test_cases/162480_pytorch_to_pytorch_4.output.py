@@ -1,0 +1,32 @@
+import torch
+import unittest
+
+class TestRebindUnbackedFloatHandling(unittest.TestCase):
+    def test_torch_all_with_aot_inductor(self):
+        """
+        Test that torch.all works correctly with torch.compile (AOTInductor).
+        This verifies the fix for missing float handling in rebind_unbacked
+        in torch.fx.experimental.symbolic_shapes.py.
+        """
+        # Define a function using the similar API: torch.all
+        def fn(x):
+            return torch.all(x > 0)
+
+        # Compile with AOTInductor (using aot_eager for testing purposes)
+        # The bug is located in the symbolic shape logic used by AOTInductor.
+        compiled_fn = torch.compile(fn, backend="aot_eager")
+
+        # Create a standard input tensor
+        x = torch.randn(10, 10)
+
+        # Execute the compiled function
+        result = compiled_fn(x)
+        
+        # Execute the eager function for comparison
+        expected = fn(x)
+
+        # Assert that the results match
+        self.assertEqual(result, expected)
+
+if __name__ == "__main__":
+    unittest.main()

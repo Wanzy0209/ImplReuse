@@ -1,0 +1,99 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_queue_runner_dynamic_slicing():
+    """
+    Adapts the PyTorch dynamic slicing bug (Issue 163146) to TensorFlow's 
+    tf.compat.v1.train.QueueRunner.
+    
+    The original bug report indicates a failure in torch.export.export when 
+    encountering a data-dependent slice: `item_embedding[:, :max_item_num, :]`.
+    
+    This test verifies if the TensorFlow QueueRunner can construct a graph 
+    containing this specific dynamic slicing operation and execute it correctly.
+    """
+    # Disable eager execution to use TF 1.x graph features (required for QueueRunner)
+    tf.compat.v1.disable_eager_execution()
+
+    # 1. Define inputs matching the bug report's context
+    # item_embedding: Tensor with dynamic batch and sequence dimensions
+    # Corresponds to: Tensor(shape: torch.Size([s10, s64, 64]))
+    item_embedding = tf.compat.v1.placeholder(
+        dtype=tf.float32, 
+        shape=[None, None, 64], 
+        name="item_embedding"
+    )
+    
+    # max_item_num: Scalar tensor determining the slice size (Data dependent)
+    # Corresponds to: Tensor(shape: torch.Size([]))
+    max_item_num = tf.compat.v1.placeholder(
+        dtype=tf.int32, 
+        shape=[], 
+        name="max_item_num"
+    )
+
+    # 2. Reproduce the core logic from the bug report
+    # "selected_item_embedding = item_embedding[:, :max_item_num, :]"
+    # This is the operation that caused the "Data dependent error" in PyTorch export.
+    selected_item_embedding = item_embedding[:, :max_item_num, :]
+
+    # 3. Setup Queue and QueueRunner
+    # We use a FIFOQueue to simulate a pipeline processing these dynamic slices.
+    queue = tf.compat.v1.FIFOQueue(
+        capacity=10, 
+        dtypes=[tf.float32], 
+        shapes=[None, None, 64], # Explicitly allow dynamic shapes in the queue
+        name="slicing_queue"
+    )
+    
+    # The enqueue operation encapsulates the dynamic slice logic
+    enqueue_op = queue.enqueue(selected_item_embedding)
+    
+    # Create the QueueRunner
+    # In PyTorch, the error occurred during graph capture/export. 
+    # Here, we verify that the TF graph construction with QueueRunner succeeds.
+    qr = tf.compat.v1.train.QueueRunner(queue, [enqueue_op])
+
+    # 4. Execute the graph to verify behavior
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables
+        sess.run(tf.compat.v1.global_variables_initializer())
+        
+        # Coordinator for managing queue threads
+        coord = tf.train.Coordinator()
+        
+        # Create threads for the QueueRunner
+        threads = qr.create_threads(sess, coord=coord, start=True)
+
+        try:
+            # Prepare dummy data
+            # Shape: (2, 10, 64) -> Batch 2, Sequence 10
+            dummy_data = np.random.rand(2, 10, 64).astype(np.float32)
+            # Slice limit: 5
+            slice_limit = 5
+
+            # Run the slicing operation directly to verify correctness
+            # (Note: QueueRunner threads typically loop; we verify the op logic here)
+            result = sess.run(selected_item_embedding, feed_dict={
+                item_embedding: dummy_data,
+                max_item_num: slice_limit
+            })
+
+            # Assertions to verify the slice matches expectations
+            expected_shape = (2, 5, 64)
+            assert result.shape == expected_shape, \
+                f"Expected shape {expected_shape}, but got {result.shape}"
+            
+            assert np.allclose(result, dummy_data[:, :slice_limit, :]), \
+                "Sliced data does not match expected values"
+
+            print("Test Passed: QueueRunner graph handles dynamic slicing correctly.")
+
+        finally:
+            # Stop threads
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_queue_runner_dynamic_slicing()

@@ -1,0 +1,58 @@
+import torch
+import tensorflow as tf
+
+# Replicate the structure of the original test case, adapted for TensorFlow
+# The core logic involves handling tensors with zero-sized dimensions (e.g., (20, 0))
+
+def fuzzed_program(sp_inputs, axis):
+    """
+    Performs sparse concatenation.
+    Original PyTorch logic used torch.add on (20, 0) tensors.
+    Here we use tf.sparse.concat on sparse tensors with similar empty dimensions.
+    """
+    # tf.sparse.concat expects a list of SparseTensors
+    return tf.sparse.concat(sp_inputs, axis=axis)
+
+# Construct SparseTensors with shape (20, 0) and (10, 0)
+# A shape (20, 0) implies 20 rows and 0 columns. 
+# Since there are no columns, the indices and values must be empty.
+# Shape (20, 0)
+indices_1 = tf.zeros((0, 2), dtype=tf.int64)
+values_1 = tf.zeros((0,), dtype=tf.int64)
+dense_shape_1 = [20, 0]
+sp_tensor_1 = tf.sparse.SparseTensor(indices_1, values_1, dense_shape_1)
+
+# Shape (10, 0) to allow concatenation along axis 0
+indices_2 = tf.zeros((0, 2), dtype=tf.int64)
+values_2 = tf.zeros((0,), dtype=tf.int64)
+dense_shape_2 = [10, 0]
+sp_tensor_2 = tf.sparse.SparseTensor(indices_2, values_2, dense_shape_2)
+
+inputs = [sp_tensor_1, sp_tensor_2]
+axis = 0
+
+print("Testing Eager Execution...")
+try:
+    result_eager = fuzzed_program(inputs, axis)
+    print(f" eager success. Result shape: {result_eager.shape}")
+    # Verify the shape is correct: (20 + 10, 0) = (30, 0)
+    assert result_eager.shape == (30, 0), f"Expected shape (30, 0), got {result_eager.shape}"
+except Exception as e:
+    print(f" eager failed: {e}")
+
+print("\nTesting Compiled Execution (tf.function)...")
+try:
+    # tf.function is the TensorFlow equivalent of torch.compile
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(inputs, axis)
+    print(f" compile success. Result shape: {result_compiled.shape}")
+    assert result_compiled.shape == (30, 0), f"Expected shape (30, 0), got {result_compiled.shape}"
+except Exception as e:
+    print(f" compile failed: {e}")
+
+# Check for divergence
+if 'result_eager' in locals() and 'result_compiled' in locals():
+    if result_eager.shape == result_compiled.shape:
+        print(" No divergence detected between eager and compiled execution.")
+    else:
+        print(f" Divergence detected! Eager shape: {result_eager.shape}, Compiled shape: {result_compiled.shape}")

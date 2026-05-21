@@ -1,0 +1,71 @@
+import torch
+import os
+import tempfile
+from torch.utils.cpp_extension import load
+
+def test_rocwmma_static_cast_bug():
+    """
+    Test case to verify the compilation error with static_cast from float to __half
+    when building a PyTorch extension with rocWMMA on ROCm.
+    
+    This test attempts to JIT compile a minimal C++ extension that includes 
+    rocWMMA headers. If the bug exists, the compiler will fail to convert 
+    float literals to __half within the library headers.
+    """
+    
+    # Skip if not on ROCm
+    if not torch.version.hip:
+        print("Skipping test: ROCm (HIP) is not available.")
+        return
+
+    # Minimal C++ source code that triggers the inclusion of the problematic header
+    # The bug is located in rocwmma/internal/layout/../vector.hpp
+    source_code = r"""
+    #include <torch/extension.h>
+    #include <rocwmma/rocwmma.hpp>
+
+    // We define a dummy function to ensure the linker has something to grab,
+    # though the error occurs during the compilation phase (parsing headers).
+    void dummy_kernel_launch() {
+        // The inclusion of rocwmma headers triggers the template instantiation
+        // that leads to the static_cast<float> to __half error in vector.hpp
+    }
+
+    PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+        m.def("dummy_kernel_launch", &dummy_kernel_launch);
+    }
+    """
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_path = os.path.join(tmpdir, "test_extension.cpp")
+        
+        # Write the source code to a file
+        with open(source_path, "w") as f:
+            f.write(source_code)
+
+        try:
+            # Attempt to load the extension using the similar API
+            # This mimics the original call site in the bug report
+            module = load(
+                name="test_rocwmma_cast",
+                sources=[source_path],
+                extra_hip_cflags=["-O2"], # Passing standard optimization flags
+                build_directory=tmpdir,
+                verbose=True # Set to True to capture compilation output
+            )
+            
+            # If we reach here, the compilation succeeded (Bug might be fixed)
+            print("Extension compiled and loaded successfully.")
+            
+            # Verify the module is callable
+            assert hasattr(module, 'dummy_kernel_launch')
+            module.dummy_kernel_launch()
+            
+        except Exception as e:
+            # If the bug exists, this will catch the compilation error
+            # containing "no matching conversion for static_cast from 'float' to '__half'"
+            print(f"Extension loading failed: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_rocwmma_static_cast_bug()

@@ -1,0 +1,77 @@
+import torch
+import unittest
+import tensorflow as tf
+import multiprocessing
+import time
+
+def worker(queue):
+    """
+    Worker function to execute the test logic in a separate process.
+    This mimics the subprocess execution in the original PyTorch test.
+    """
+    try:
+        # Mimic the distributed environment (dtensor in PyTorch)
+        strategy = tf.distribute.MirroredStrategy()
+
+        # Mimic torch.compile using tf.function
+        @tf.function
+        def compiled_step(x):
+            # The API under test: tf.compat.v1.name_scope
+            # We test its behavior inside a compiled, distributed context.
+            with tf.compat.v1.name_scope("redistribute_scope"):
+                # Simulate some operations that might occur during redistribution
+                y = x * 2
+                z = tf.reduce_sum(y)
+                return z
+
+        with strategy.scope():
+            # Create a tensor
+            x = tf.constant([1.0, 2.0, 3.0, 4.0])
+            # Execute the compiled function
+            result = compiled_step(x)
+            queue.put(result.numpy())
+    except Exception as e:
+        queue.put(e)
+
+class TestNameScopeCompileRedistribute(unittest.TestCase):
+    def test_name_scope_compile_redistribute(self):
+        """
+        Adapted from test_dtensor_compile_redistribute.
+        
+        Original Bug: The test timed out (subprocess.TimeoutExpired) when running
+        torch.compile with distributed tensors.
+        
+        Adaptation: We verify that tf.compat.v1.name_scope does not cause a timeout
+        or deadlock when used within a tf.function (compile) inside a distributed
+        strategy scope.
+        """
+        ctx = multiprocessing.get_context('spawn')
+        q = ctx.Queue()
+        p = ctx.Process(target=worker, args=(q,))
+        
+        start_time = time.time()
+        p.start()
+        
+        # The original test timed out after 30 seconds. We use a shorter timeout
+        # for the unit test, but sufficient to catch hangs.
+        p.join(timeout=10)
+        
+        if p.is_alive():
+            p.terminate()
+            p.join()
+            raise self.failureException(
+                f"Test timed out after {time.time() - start_time:.2f} seconds. "
+                "This mimics the original subprocess.TimeoutExpired error."
+            )
+        
+        if not q.empty():
+            result = q.get()
+            if isinstance(result, Exception):
+                raise result
+            # Verify the result is correct
+            self.assertEqual(result, 20.0)
+        else:
+            raise self.failureException("Process finished without output")
+
+if __name__ == '__main__':
+    unittest.main()

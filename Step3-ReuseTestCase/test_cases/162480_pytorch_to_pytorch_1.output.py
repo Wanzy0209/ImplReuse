@@ -1,0 +1,34 @@
+import torch
+import torch._dynamo.polyfills.functools as dynamo_functools
+
+# Test case for torch._dynamo.polyfills.functools.reduce
+# Based on Issue 162480: missing float handling in rebind_unbacked()
+# The bug was fixed by adding a check for isinstance(u1, float).
+# This test verifies that the similar API (reduce) works correctly
+# when compiled with torch.compile (which triggers the rebind_unbacked logic).
+
+def test_reduce_with_compile():
+    # Define a function using the similar API: torch._dynamo.polyfills.functools.reduce
+    def fn(x):
+        # Using reduce on the shape dimensions. 
+        # This interacts with symbolic shapes during compilation.
+        # The fix ensures that if a float is encountered during rebind_unbacked,
+        # it is handled gracefully.
+        return dynamo_functools.reduce(lambda a, b: a + b, x.shape)
+
+    # Compile the function using the Original API Under Test: torch.compile
+    # This triggers the path where rebind_unbacked is used.
+    compiled_fn = torch.compile(fn)
+
+    # Create a dummy input tensor
+    input_tensor = torch.randn(5, 5)
+
+    # Run the compiled function
+    result = compiled_fn(input_tensor)
+
+    # Verify the result is correct (5 + 5 = 10)
+    assert result == 10, f"Expected 10, got {result}"
+    print("Test passed: torch._dynamo.polyfills.functools.reduce works with torch.compile")
+
+if __name__ == "__main__":
+    test_reduce_with_compile()

@@ -1,0 +1,42 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_experimental_numpy_diff_compilation():
+    """
+    Adapted from PyTorch Issue 163275 (torch.mm out_dtype bug).
+    
+    Original Issue: torch.compile failed to handle the out_dtype argument in torch.mm.
+    This test verifies the behavior of the similar API, tf.experimental.numpy.diff,
+    under TensorFlow's compilation mode (tf.function) with float16 inputs.
+    
+    Since tf.experimental.numpy.diff does not support an explicit 'out_dtype' argument,
+    this test ensures that the function compiles and executes correctly with float16
+    inputs, preserving the input dtype in the output.
+    """
+    
+    # Create input tensor matching the original dimensions and dtype (float16)
+    # Note: Using CPU for general compatibility, similar to the original context if CUDA wasn't strictly enforced
+    A = tf.random.uniform((1024, 1024), dtype=tf.float16)
+
+    # Use tf.function as the equivalent to torch.compile
+    @tf.function
+    def compute_diff(input_tensor):
+        # Call the similar API. 
+        # tf.experimental.numpy.diff signature: diff(a, n=1, axis=-1)
+        # It does not take an 'out_dtype' argument, so we rely on default type promotion/preservation.
+        return tf.experimental.numpy.diff(input_tensor, n=1, axis=-1)
+
+    # Execute the compiled function
+    result = compute_diff(A)
+
+    # Assertions to verify correct behavior
+    # diff reduces the size of the specified axis by n (default n=1)
+    assert result.shape == (1024, 1023), f"Expected shape (1024, 1023), got {result.shape}"
+    
+    # Verify dtype is preserved (float16), analogous to checking type handling in the original bug
+    assert result.dtype == tf.float16, f"Expected dtype float16, got {result.dtype}"
+
+if __name__ == "__main__":
+    test_tf_experimental_numpy_diff_compilation()
+    print("Test passed.")

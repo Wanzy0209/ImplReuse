@@ -1,0 +1,81 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_batch_parallel_index_put():
+    """
+    Adapted test case for tf.compat.v1.tpu.batch_parallel based on 
+    PyTorch torch.compile issue (index_put_ with in-place ops).
+    
+    This test verifies that the TPU batch parallel execution (which uses XLA compilation)
+    correctly handles index assignments and transformations, matching eager execution.
+    """
+    
+    # Initialize TPU system
+    # Note: This code requires a TPU runtime to execute.
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        strategy = tf.distribute.TPUStrategy(resolver)
+    except ValueError:
+        print("TPU not found. Skipping test as it requires a TPU runtime.")
+        return
+
+    def computation_fn(inputs):
+        """
+        Mimics the logic of the PyTorch function:
+        x[0].sin_()
+        x[1].sin_()
+        y = zeros_like(x)
+        y[2] = x[0]
+        y[3] = x[1]
+        return y
+        """
+        x = inputs[0]
+        
+        # Mimic in-place sin operations (functional equivalent in TF)
+        # PyTorch: x[0].sin_() -> TF: tf.math.sin(x[0])
+        x0_sin = tf.math.sin(x[0])
+        x1_sin = tf.math.sin(x[1])
+        
+        # Mimic y = torch.zeros_like(x)
+        y = tf.zeros_like(x)
+        
+        # Mimic index assignment: y[2] = x[0], y[3] = x[1]
+        # Using tensor_scatter_nd_update to place values at specific indices
+        indices = tf.constant([[2], [3]])
+        updates = tf.stack([x0_sin, x1_sin])
+        
+        y = tf.tensor_scatter_nd_update(y, indices, updates)
+        
+        return y
+
+    # Input data matching the PyTorch test case
+    x_data = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]], dtype=tf.float32)
+
+    with strategy.scope():
+        # 1. Run Eager execution (Baseline)
+        # We pass inputs as a list [x_data] to match the batch_parallel signature
+        eager_res = computation_fn([x_data])
+
+        # 2. Run via batch_parallel (Compiled/Parallel execution)
+        # We use num_shards=1 to test the compilation aspect on the whole tensor,
+        # similar to torch.compile on a single device.
+        compiled_res = tf.compat.v1.tpu.batch_parallel(
+            computation_fn,
+            inputs=[x_data],
+            num_shards=1
+        )
+
+        # 3. Verify results match
+        # The PyTorch bug resulted in mismatched elements (double application of sin).
+        # We assert that TF handles this correctly.
+        try:
+            tf.debugging.assert_near(eager_res, compiled_res, message="Eager and Batch Parallel results mismatch!")
+            print("Test Passed: Eager and Batch Parallel results are close.")
+        except tf.errors.InvalidArgumentError as e:
+            print(f"Test Failed: {e}")
+
+if __name__ == "__main__":
+    test_batch_parallel_index_put()

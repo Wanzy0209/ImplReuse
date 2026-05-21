@@ -1,0 +1,42 @@
+import torch
+import tensorflow as tf
+
+# range_input_producer is a TensorFlow v1 API and requires a session.
+# We disable eager execution to use it.
+tf.compat.v1.disable_eager_execution()
+
+def inner(limit):
+    # Adapted logic: range_input_producer produces integers 0 to limit-1
+    return tf.compat.v1.train.range_input_producer(limit)
+
+def fn(limit):
+    # Adapted logic: setup the producer
+    # In the original, inner is called twice. Here we just setup the queue.
+    # Calling it twice would create two queues, which is likely not the intent.
+    # We focus on the core API usage.
+    return inner(limit)
+
+# Test execution
+with tf.compat.v1.Session() as sess:
+    limit = 3
+    queue = fn(limit)
+
+    # Initialize local variables (required for num_epochs if used, good practice)
+    sess.run(tf.compat.v1.local_variables_initializer())
+
+    # Start queue runners to enqueue data
+    coord = tf.train.Coordinator()
+    threads = tf.compat.v1.start_queue_runners(sess=sess, coord=coord)
+
+    # Verify the output
+    # The original test ran fn(torch.ones(3)).
+    # Here we dequeue items to verify the producer works.
+    results = []
+    for _ in range(limit):
+        results.append(sess.run(queue.dequeue()))
+
+    # Assert that we got the expected range [0, 1, 2] (order might vary if shuffled)
+    assert sorted(results) == list(range(limit))
+
+    coord.request_stop()
+    coord.join(threads)

@@ -1,0 +1,36 @@
+import torch
+import tensorflow as tf
+
+# Enable eager execution as per the similar API requirement
+# This must be called at the start of the program
+tf.compat.v1.enable_eager_execution()
+
+def func(a):
+    # Adapted from PyTorch: u0, u1 = a.tolist()
+    # In TensorFlow eager mode, we convert the tensor to a numpy array 
+    # and then to a list to extract Python scalars.
+    vals = a.numpy().tolist()
+    u0, u1 = vals[0], vals[1]
+    
+    # Adapted from PyTorch: return a*u0*u1
+    return a * u0 * u1
+
+def func2(a):
+    # Adapted from PyTorch: u0 = a.item()
+    # In TensorFlow eager mode, we use .numpy().item() to extract a Python scalar.
+    u0 = a.numpy().item()
+    return a * u0
+
+# Test case 1: Corresponds to func(torch.tensor([1,2]))
+# Expected: [1, 2] * 1 * 2 = [1, 4]
+t1 = tf.constant([1, 2])
+res1 = func(t1)
+assert tf.reduce_all(res1 == tf.constant([1, 4])).numpy(), "Test case 1 failed"
+print(f"Test 1 passed: {res1.numpy()}")
+
+# Test case 2: Corresponds to func2(torch.tensor([1]))
+# Expected: [1] * 1 = [1]
+t2 = tf.constant([1])
+res2 = func2(t2)
+assert tf.reduce_all(res2 == tf.constant([1])).numpy(), "Test case 2 failed"
+print(f"Test 2 passed: {res2.numpy()}")

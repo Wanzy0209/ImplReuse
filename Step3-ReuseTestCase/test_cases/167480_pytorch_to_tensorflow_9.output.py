@@ -1,0 +1,74 @@
+import torch
+import os
+import sys
+import tensorflow as tf
+from tensorflow.python.feature_column import feature_column_v2 as fc
+
+def test_os_command_injection_embedding_column():
+    """
+    Adapted from PyTorch Issue 167480 (OS command injection via cpp_extension).
+    
+    Original Bug Logic:
+    torch.utils.cpp_extension.load_inline(..., extra_cflags="; touch /tmp/pwned #", use_pch=True)
+    -> Executes shell command due to subprocess.check_output(..., shell=True).
+    
+    Adapted Test for tf.feature_column.embedding_column:
+    Attempts to inject shell metacharacters via string arguments (e.g., 'combiner')
+    to verify if the API is susceptible to OS command injection.
+    
+    Expected Behavior:
+    The TensorFlow API should validate inputs or handle them as data structures,
+    NOT execute them as shell commands. The test asserts that the malicious
+    command is NOT executed.
+    """
+    
+    # Setup: Define a marker file path to verify command execution
+    marker_file = "/tmp/tf_embedding_pwned"
+    
+    # Clean up before test
+    if os.path.exists(marker_file):
+        os.remove(marker_file)
+
+    # Prepare required arguments for embedding_column
+    # categorical_column_with_identity is a simple dependency for the test
+    cat_column = fc.categorical_column_with_identity(key='test_id', num_buckets=10)
+    
+    # Payload: Shell command to create a file (similar to the PyTorch PoC)
+    # In PyTorch, this was passed via 'extra_cflags'.
+    # Here we attempt to pass it via 'combiner' (a string configuration argument).
+    injection_payload = "; touch " + marker_file + " #"
+
+    print(f"Attempting to inject payload: '{injection_payload}' into combiner argument...")
+
+    try:
+        # Call the target API with the malicious payload
+        col = fc.embedding_column(
+            categorical_column=cat_column,
+            dimension=8,
+            combiner=injection_payload
+        )
+        
+        # If the API accepts the string without error, we must still verify no shell execution occurred.
+        # (Note: 'combiner' typically validates against allowed values like 'mean', 'sum', etc., 
+        # so this might raise a ValueError, which is safe behavior).
+        
+    except ValueError as e:
+        # This is the expected safe behavior: Input validation rejects the malformed string.
+        print(f"API safely rejected input via ValueError: {e}")
+    except Exception as e:
+        print(f"Unexpected exception occurred: {e}")
+    finally:
+        # Verification: Check if the marker file was created
+        if os.path.exists(marker_file):
+            print("FAIL: OS Command Injection vulnerability detected! Marker file created.")
+            # Clean up
+            os.remove(marker_file)
+            return False
+        else:
+            print("PASS: No OS command injection detected. System is secure.")
+            return True
+
+if __name__ == "__main__":
+    # Run the test
+    success = test_os_command_injection_embedding_column()
+    sys.exit(0 if success else 1)

@@ -1,0 +1,59 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_svd_numerical_stability():
+    """
+    Adapted test case for tf.linalg.svd based on the torch.clamp bug report.
+    The original bug involved incorrect handling of small values (1e-7) and zeros.
+    This test verifies that tf.linalg.svd correctly computes singular values
+    for matrices containing these small values, ensuring they are not incorrectly
+    zeroed out or clamped.
+    """
+    
+    print("--- Test Case 1: Matrix with small values (1e-7) ---")
+    # Analogous to b = torch.zeros(1, device='mps'); c = b.clamp(min=1e-7)
+    # We create a matrix where singular values should be 1e-7
+    a = tf.eye(2, dtype=tf.float32) * 1e-7
+    print("Input Matrix:\n", a.numpy())
+    
+    s, u, v = tf.linalg.svd(a)
+    print("Singular Values:\n", s.numpy())
+    
+    # Check if singular values are correctly computed as 1e-7 and not zero
+    # (Reproducing the logic of checking if the operation respected the small value)
+    expected_s = tf.constant([1e-7, 1e-7], dtype=tf.float32)
+    assert tf.reduce_all(tf.abs(s - expected_s) < 1e-9), \
+        f"Expected singular values to be {expected_s.numpy()}, but got {s.numpy()}"
+    print("Assertion Passed: Small values preserved.\n")
+
+    print("--- Test Case 2: Zero Matrix ---")
+    # Analogous to b = torch.zeros(1, device='mps')
+    b = tf.zeros((2, 2), dtype=tf.float32)
+    print("Input Matrix:\n", b.numpy())
+    
+    s, u, v = tf.linalg.svd(b)
+    print("Singular Values:\n", s.numpy())
+    
+    # Check if singular values are zero
+    assert tf.reduce_all(tf.equal(s, 0.0)), \
+        f"Expected singular values to be 0.0, but got {s.numpy()}"
+    print("Assertion Passed: Zero matrix handled correctly.\n")
+
+    print("--- Test Case 3: Mixed values ---")
+    # Testing a mix of standard and small values
+    c = tf.constant([[1.0, 0.0], [0.0, 1e-7]], dtype=tf.float32)
+    print("Input Matrix:\n", c.numpy())
+    
+    s, u, v = tf.linalg.svd(c)
+    print("Singular Values:\n", s.numpy())
+    
+    # Singular values should be 1.0 and 1e-7
+    # Note: SVD returns values in descending order
+    expected_s = tf.constant([1.0, 1e-7], dtype=tf.float32)
+    assert tf.reduce_all(tf.abs(s - expected_s) < 1e-9), \
+        f"Expected singular values to be {expected_s.numpy()}, but got {s.numpy()}"
+    print("Assertion Passed: Mixed values handled correctly.")
+
+if __name__ == "__main__":
+    test_svd_numerical_stability()

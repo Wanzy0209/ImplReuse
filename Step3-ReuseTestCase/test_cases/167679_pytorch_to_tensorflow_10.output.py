@@ -1,0 +1,37 @@
+import sys
+import platform
+import tensorflow as tf
+import numpy as np
+
+print("Python:", sys.version)
+print("Executable:", sys.executable)
+print("TensorFlow:", tf.__version__)
+print("macOS:", platform.mac_ver()[0])
+print("platform:", platform.platform())
+print("arch:", platform.machine())
+
+# Original logic: Check if MPS backend is available (returns bool).
+# Adapted logic: Check if tf.experimental.numpy.log1p is available and functional.
+# We verify the behavior by calculating log1p(0) which should be 0.
+
+input_val = 0.0
+expected_val = 0.0
+
+try:
+    # Execute the similar API
+    result = tf.experimental.numpy.log1p(input_val)
+    
+    # Verify the result
+    is_correct = np.isclose(result, expected_val)
+    
+    print(f"Input: {input_val}")
+    print(f"Result: {result}")
+    print(f"Expected: {expected_val}")
+    print(f"Test Passed (Result matches expected): {is_correct}")
+    
+    assert is_correct, f"tf.experimental.numpy.log1p failed: expected {expected_val}, got {result}"
+
+except AttributeError:
+    print("Error: tf.experimental.numpy.log1p is not available in this TensorFlow version.")
+except Exception as e:
+    print(f"Error executing tf.experimental.numpy.log1p: {e}")

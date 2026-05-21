@@ -1,0 +1,38 @@
+import torch
+import tensorflow as tf
+
+# Enable eager execution as per the target API
+# Note: This must be called at the very beginning of the program
+tf.compat.v1.enable_eager_execution()
+
+def test_sparse_ops():
+    """
+    Adapted test case to verify sparse tensor operations 
+    under eager execution (tf.compat.v1.enable_eager_execution).
+    """
+    # Create a random dense tensor (equivalent to torch.randn)
+    x = tf.random.normal((10, 10))
+
+    # PyTorch: x_sparse = x.to_sparse()
+    # TensorFlow: Convert dense tensor to sparse tensor
+    x_sparse = tf.sparse.from_dense(x)
+
+    # PyTorch: result = x_sparse * 2
+    # TensorFlow: Perform sparse multiplication
+    result_sparse = tf.sparse.multiply(x_sparse, 2.0)
+
+    # PyTorch: return result.to_dense()
+    # TensorFlow: Convert sparse tensor back to dense
+    result_dense = tf.sparse.to_dense(result_sparse)
+
+    # Verify the result matches the expected operation (x * 2)
+    expected = x * 2.0
+    
+    # Assert that the values are close
+    assert tf.reduce_all(tf.abs(result_dense - expected) < 1e-6).numpy(), \
+        "Eager execution failed to produce correct sparse/dense conversion results"
+
+    print("Eager output verified successfully.")
+
+if __name__ == "__main__":
+    test_sparse_ops()

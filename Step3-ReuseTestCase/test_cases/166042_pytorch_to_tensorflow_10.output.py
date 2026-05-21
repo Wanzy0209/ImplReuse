@@ -1,0 +1,56 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_stft_with_bfloat16_inputs():
+    """
+    Adapted from PyTorch Issue 166042.
+    
+    The original bug involves a fuzzer generating bfloat16 tensors and passing them
+    to torch.nn.functional.embedding, which expects integer indices, leading to an
+    assertion failure: assert "int" in str(indices.get_dtype()).
+    
+    This test adapts that logic to tf.keras.ops.stft. The STFT operation expects
+    float32 or float64 inputs. We verify the behavior when passing bfloat16 inputs
+    (mimicking the fuzzer's behavior) to check for similar type assertion issues
+    or handling divergences.
+    """
+    
+    # Mimic the random seed used in the original fuzzer output
+    tf.random.set_seed(1352030645)
+    np.random.seed(1352030645)
+
+    # The fuzzer generates a chain of operations resulting in bfloat16 tensors.
+    # We simulate a resulting signal tensor (e.g., var_node_1 with shape (4, 9))
+    # using bfloat16, which is the "poison" type in the original bug.
+    signal_shape = (4, 9)
+    signal = tf.constant(np.random.randn(*signal_shape), dtype=tf.bfloat16)
+
+    frame_length = 4
+    frame_step = 2
+
+    print(f"Input signal dtype: {signal.dtype}")
+
+    # Attempt to call the API with the mismatched dtype
+    try:
+        # tf.keras.ops.stft expects float32 or float64
+        result = tf.keras.ops.stft(signal, frame_length, frame_step)
+        
+        # If the call succeeds, the library might be performing implicit casting.
+        # We assert the output is valid (complex type).
+        print(f"Test Passed. Operation succeeded. Output dtype: {result.dtype}")
+        assert result.dtype in [tf.complex64, tf.complex128], \
+            "Output should be complex if operation succeeds."
+
+    except Exception as e:
+        # If the call fails, it mimics the PyTorch assertion failure.
+        # We check if the error is related to the dtype mismatch.
+        error_msg = str(e).lower()
+        print(f"Test Caught Error: {e}")
+        
+        # Verify the error is about type compatibility, similar to the PyTorch assert
+        assert "float" in error_msg or "dtype" in error_msg or "bfloat16" in error_msg, \
+            "Error should be related to dtype mismatch (expected float32/64, got bfloat16)."
+
+if __name__ == "__main__":
+    test_stft_with_bfloat16_inputs()

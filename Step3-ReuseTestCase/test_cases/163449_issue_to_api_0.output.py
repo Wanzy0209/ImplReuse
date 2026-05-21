@@ -1,0 +1,54 @@
+import torch
+import sys
+
+# Reproduce the specific configuration from the bug report that triggers the divergence
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1):
+    # arg0: float16 tensor to trigger the specific casting logic seen in the similar API
+    # The similar API (torch.quantile / torch._numpy._reductions_impl.quantile) 
+    # explicitly handles float16 -> float32 casting.
+    t0 = torch.quantile(arg0, arg1, dim=0)
+    
+    # Mimic the scalar operations and mixed precision chain from the original bug
+    # to stress the eager/compile divergence path.
+    t1 = t0.norm() 
+    t2 = torch.pow(t1, 2.0)
+    output = t2
+    return output
+
+# Setup inputs
+# Using float16 as per the similar API's specific handling logic (float16 -> float32)
+arg0 = torch.rand([5, 4], dtype=torch.float16, device='cuda')
+arg1 = torch.tensor(0.5, device='cuda')
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0, arg1)
+    print('Eager Success! ')
+
+    # Compiled execution
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    print('Compile Success! ')
+
+    # Comparison logic from the original bug
+    out_eager_sum = out_eager.sum()
+    out_compiled_sum = out_compiled.sum()
+    diff = (out_eager_sum - out_compiled_sum).abs().item()
+    
+    # Avoid division by zero
+    denominator = out_eager_sum.abs().item() + 1e-12
+    rel_diff = diff / denominator * 100
+    
+    print(f'Relative diff (sum): {rel_diff:.6f}%')
+
+    if rel_diff > 5:
+        print(f' Forward output sums differ significantly (relative)!')
+        print('out_eager_sum:', out_eager_sum.item())
+        print('out_compiled_sum:', out_compiled_sum.item())
+        print('Absolute diff:', diff)
+        print('Relative diff (%):', rel_diff)
+        sys.exit(1)

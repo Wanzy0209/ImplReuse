@@ -1,0 +1,65 @@
+import torch
+import torch.nn.functional as F
+
+def test_local_response_norm_layout_robustness():
+    """
+    Adapted test case based on Issue 164491.
+    
+    Original Issue: _scaled_mm and _int_mm are slow or raise errors with row-major rhs matrices
+    due to implicit transpositions or layout mismatches.
+    
+    Adaptation: Verify that torch.nn.functional.local_response_norm handles non-contiguous
+    (transposed) inputs correctly without raising errors or producing incorrect results,
+    ensuring robustness against different memory layouts.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Create a 4D input tensor (Batch, Channel, Height, Width)
+    # local_response_norm requires input.dim() >= 3
+    batch_size = 2
+    num_channels = 16
+    height = 10
+    width = 10
+    
+    x = torch.randn(batch_size, num_channels, height, width, device=device)
+    
+    # Create a non-contiguous version by transposing dimensions.
+    # This simulates the "row-major" vs "column-major" layout scenario mentioned in the bug,
+    # where the memory layout is not the default contiguous stride.
+    x_non_contiguous = x.transpose(1, 3)  # Shape: (2, 10, 10, 16)
+    
+    # Verify the tensor is indeed non-contiguous
+    assert not x_non_contiguous.is_contiguous(), "Test setup failed: Tensor should be non-contiguous."
+
+    # Test 1: Ensure the function runs without error on non-contiguous input
+    try:
+        output_non_contiguous = F.local_response_norm(
+            x_non_contiguous, 
+            size=5, 
+            alpha=1e-4, 
+            beta=0.75, 
+            k=1.0
+        )
+    except Exception as e:
+        raise AssertionError(
+            f"local_response_norm failed with non-contiguous input (layout mismatch). Error: {e}"
+        )
+
+    # Test 2: Verify correctness by comparing with the contiguous version
+    x_contiguous = x_non_contiguous.contiguous()
+    output_contiguous = F.local_response_norm(
+        x_contiguous, 
+        size=5, 
+        alpha=1e-4, 
+        beta=0.75, 
+        k=1.0
+    )
+    
+    # The outputs should be identical regardless of memory layout
+    assert torch.allclose(output_non_contiguous, output_contiguous, rtol=1e-5, atol=1e-6), \
+        "Outputs differ between contiguous and non-contiguous inputs."
+
+    print("Test passed: local_response_norm handles non-contiguous inputs correctly.")
+
+if __name__ == "__main__":
+    test_local_response_norm_layout_robustness()

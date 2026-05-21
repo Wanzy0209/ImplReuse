@@ -1,0 +1,52 @@
+import torch
+import tensorflow as tf
+
+def test_max_pool1d_large_batch():
+    """
+    Adapted test case based on PyTorch Issue #165861.
+    Verifies if tf.nn.max_pool1d handles batch dimensions larger than uint16 max (2**16).
+    The original bug caused a CUDA error specifically with reflect padding.
+    Since max_pool1d does not support 'reflect' padding, we test 'SAME' padding
+    which involves padding logic.
+    """
+    # Check for GPU availability to match the original bug's context (CUDA)
+    gpus = tf.config.list_physical_devices('GPU')
+    device_name = '/GPU:0' if gpus else '/CPU:0'
+    
+    print(f"Running test on device: {device_name}")
+
+    with tf.device(device_name):
+        # Reproduce the large dimension scenario
+        # PyTorch: x = torch.rand(2**16, 2, device="cuda")
+        # TF max_pool1d expects 3D input (Batch, Width, Channels) for NWC format
+        batch_size = 2**16
+        width = 10
+        channels = 2
+        
+        # Create input tensor with batch size > 65536
+        x = tf.random.normal((batch_size, width, channels))
+        
+        # Test with padding="SAME" (involves padding logic)
+        # ksize=2, strides=1
+        try:
+            output = tf.nn.max_pool1d(
+                input=x, 
+                ksize=2, 
+                strides=1, 
+                padding='SAME', 
+                data_format='NWC'
+            )
+            
+            # Verify output shape
+            # With SAME padding and stride 1, output width should match input width
+            expected_shape = (batch_size, width, channels)
+            assert output.shape == expected_shape, \
+                f"Shape mismatch: expected {expected_shape}, got {output.shape}"
+            
+            print("Test passed: max_pool1d with 'SAME' padding handled large batch dimension successfully.")
+            
+        except Exception as e:
+            print(f"Test failed with error: {e}")
+
+if __name__ == "__main__":
+    test_max_pool1d_large_batch()

@@ -1,0 +1,28 @@
+import torch
+
+# Check for CUDA availability to match the original bug's context
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Create a random input tensor
+x = torch.randn(2, 2, device=device)
+
+# Define the function using the similar API (hardshrink) with a specific parameter (lambd)
+# The default lambd is 0.5, we use 0.1 to check if the parameter is respected
+f = lambda x: torch.nn.functional.hardshrink(x, lambd=0.1)
+
+# Compile the function
+fc = torch.compile(f)
+
+# Execute eager and compiled versions
+res_eager = f(x)
+res_compiled = fc(x)
+
+# Verify that the results match
+# If the bug exists (parameter ignored), the compiled version might use the default lambd=0.5
+assert torch.allclose(res_eager, res_compiled), (
+    f"Test failed for torch.nn.functional.hardshrink.\n"
+    f"Eager result:\n{res_eager}\n"
+    f"Compiled result:\n{res_compiled}"
+)
+
+print("Test passed.")

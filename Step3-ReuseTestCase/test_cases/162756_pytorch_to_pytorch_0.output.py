@@ -1,0 +1,52 @@
+import torch
+import sys
+
+def test_compile_combo_kernels_cumsum():
+    """
+    Test that torch.compile works correctly with combo_kernels enabled
+    when operations requiring helper functions (like cumsum) are used.
+    
+    This test verifies the fix for the NameError regarding undefined 
+    Triton helper functions (e.g., _triton_helper_fn_add0).
+    """
+    # The bug is specific to Triton, which requires CUDA
+    if not torch.cuda.is_available():
+        print("Skipping test: CUDA is not available.")
+        return
+
+    # Enable the specific configuration that triggers the bug
+    torch._inductor.config.combo_kernels = True
+
+    try:
+        @torch.compile
+        def fn(x, y, z):
+            # cumsum triggers the generation of helper functions (associative_scan)
+            # sum and mean are included to encourage combo kernel fusion
+            return x.sum(1), y.mean(1), z.cumsum(1)
+
+        inps = (
+            torch.rand(16, 128, device="cuda"),
+            torch.rand(32, 128, device="cuda"),
+            torch.rand(32, 256, device="cuda"),
+        )
+
+        # Execute the compiled function.
+        # Prior to the fix, this raised:
+        # NameError: '_triton_helper_fn_add0 is not defined'
+        compiled_result = fn(*inps)
+
+        # Verify correctness by comparing with eager execution
+        expected_result = (inps[0].sum(1), inps[1].mean(1), inps[2].cumsum(1))
+
+        assert torch.allclose(compiled_result[0], expected_result[0]), "Sum mismatch"
+        assert torch.allclose(compiled_result[1], expected_result[1]), "Mean mismatch"
+        assert torch.allclose(compiled_result[2], expected_result[2]), "Cumsum mismatch"
+
+        print("Test passed: torch.compile with combo_kernels and cumsum executed successfully.")
+
+    finally:
+        # Reset config to avoid affecting other tests
+        torch._inductor.config.combo_kernels = False
+
+if __name__ == "__main__":
+    test_compile_combo_kernels_cumsum()

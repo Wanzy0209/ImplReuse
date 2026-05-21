@@ -1,0 +1,68 @@
+import torch
+import torch._dynamo
+
+def test_unique_divergence():
+    """
+    Test case for Issue 164876.
+    Verifies behavior of torch.unique when compiled with torch.compile
+    under specific dynamic shape configurations.
+    """
+    # Configure Dynamo settings as per the bug report
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+    torch.manual_seed(1012969)
+
+    def fuzzed_program(arg_0, arg_1, sentinel):
+        var_node_3 = arg_0
+        var_node_4 = arg_1
+        var_node_2 = torch.matmul(var_node_3.to(torch.float64), var_node_4.to(torch.float64))
+
+        # Call to the API under test: torch.unique
+        _inp_unique_wide = torch.arange(1, device=var_node_2.device, dtype=torch.int64)
+        _uniq_wide = torch.unique(_inp_unique_wide)
+        var_node_1 = _uniq_wide.to(var_node_2.dtype)
+
+        var_node_5 = torch.full((1, 18), 0.40330381448978797, dtype=torch.float64)
+        var_node_0 = torch.matmul(var_node_1.to(torch.float64), var_node_5.to(torch.float64))
+
+        result = var_node_0 * sentinel
+        if result.is_complex():
+            result = result.real
+        return result
+
+    # Sentinel tensor to ensure gradient computation
+    sentinel = torch.tensor(1.0, requires_grad=True)
+
+    # Input tensors
+    # Note: Bug report comments mention 'device=cuda', but the code creates CPU tensors.
+    # We use CPU here to ensure the test runs on all environments.
+    arg_0 = torch.as_strided(torch.randn(20).to(torch.float64), (2, 10), (10, 1))
+    arg_1 = torch.as_strided(torch.randn(30).to(torch.float64), (10, 3), (3, 1))
+
+    args = (arg_0, arg_1, sentinel)
+
+    # Run in Eager mode
+    print("Running eager mode...")
+    result_eager = fuzzed_program(*args)
+    print("Eager mode success.")
+
+    # Run in Compiled mode
+    print("Running compiled mode...")
+    compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+    try:
+        result_compiled = compiled_program(*args)
+        print("Compiled mode success.")
+        
+        # Verify results match
+        torch.testing.assert_close(result_eager, result_compiled)
+        print("Test Passed: Eager and compiled results match.")
+    except RuntimeError as e:
+        # Expected failure based on bug report:
+        # "The size of tensor a (u0) must match the size of tensor b (18)..."
+        print(f"Compiled mode failed with error: {e}")
+        print("Bug reproduced: Divergence detected.")
+        raise
+
+if __name__ == "__main__":
+    test_unique_divergence()

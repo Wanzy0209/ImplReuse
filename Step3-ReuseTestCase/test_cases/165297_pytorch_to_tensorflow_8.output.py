@@ -1,0 +1,64 @@
+import tensorflow as tf
+
+def test_linear_operator_large_tensor():
+    """
+    Adapted test case for tf.linalg.LinearOperator based on the PyTorch MaxPool2d bug.
+    
+    Original Bug: MaxPool2d with channels_last + bfloat16 on CUDA produces NaNs for large tensors.
+    Adaptation: 
+    - PyTorch 'channels_last' maps to TensorFlow's default 'NHWC' data format.
+    - We use tf.linalg.LinearOperatorIdentity to process the large tensor, 
+      treating spatial dimensions as batch dimensions to stress test memory handling.
+    """
+    
+    # Check for GPU availability
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        print("Test skipped: No GPU found.")
+        return
+
+    print(f"Using GPU: {gpus[0].name}")
+
+    # Dimensions from the original bug report
+    # PyTorch: N, C, H, W = 84, 64, 512, 960
+    # TensorFlow (NHWC): N, H, W, C
+    N, H, W, C = 84, 512, 960, 64
+
+    # Create large input tensor with bfloat16
+    # TensorFlow defaults to NHWC (channels_last), which matches the failing PyTorch config
+    x = tf.random.normal((N, H, W, C), dtype=tf.bfloat16)
+
+    print(f"Input tensor shape: {x.shape}")
+    print(f"Input tensor dtype: {x.dtype}")
+
+    # Adaptation: Use LinearOperator to process the tensor.
+    # Since MaxPool is non-linear, we use LinearOperatorIdentity to verify
+    # data integrity (NaNs) through the LinearOperator interface with large tensors.
+    # We treat the spatial dimensions (N, H, W) as the batch dimensions,
+    # and the channel dimension (C) as the matrix dimension.
+    
+    batch_shape = (N, H, W)
+    op = tf.linalg.LinearOperatorIdentity(
+        num_rows=C,
+        batch_shape=batch_shape,
+        dtype=tf.bfloat16
+    )
+
+    # Apply the operator
+    # x has shape (N, H, W, C), which matches the batch_shape + (C,)
+    y = op.matmul(x)
+
+    # Check for NaNs and Infs
+    has_nan = tf.reduce_any(tf.math.is_nan(y))
+    has_inf = tf.reduce_any(tf.math.is_inf(y))
+
+    print(f"Output contains NaN? {has_nan.numpy()}")
+    print(f"Output contains Inf? {has_inf.numpy()}")
+    print(f"Stats: min={tf.reduce_min(y).numpy()}, max={tf.reduce_max(y).numpy()}")
+
+    # Assertions
+    assert not has_nan, "Detected NaNs in LinearOperator output!"
+    assert not has_inf, "Detected Infs in LinearOperator output!"
+
+if __name__ == "__main__":
+    test_linear_operator_large_tensor()

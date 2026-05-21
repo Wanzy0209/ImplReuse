@@ -1,0 +1,30 @@
+import tensorflow as tf
+import traceback
+
+print("TensorFlow Version:", tf.__version__)
+
+# Adaptation of the bug reproduction logic:
+# The original PyTorch bug involved passing tensors with incompatible dimensions 
+# (6D input, 3D indices) and an empty output size to max_unpool1d.
+# 
+# For tf.signal.kaiser_window, we attempt to pass similarly malformed inputs:
+# - 'window_length' expects a scalar, we pass a 6D tensor.
+# - 'beta' expects a scalar, we pass a 3D tensor.
+
+# Mimicking the 6D input tensor from the PyTorch case: (5, 7, 4, 3, 7, 6)
+# We use a 6D tensor for window_length.
+malformed_window_length = tf.constant([[[[[[5]]]]]], dtype=tf.int32)
+
+# Mimicking the 3D indices tensor from the PyTorch case: (4, 9, 2)
+# We use a 3D tensor for beta.
+malformed_beta = tf.constant([[[12.0]]], dtype=tf.float32)
+
+try:
+    # Attempt to call the API with malformed inputs
+    output = tf.signal.kaiser_window(window_length=malformed_window_length, beta=malformed_beta)
+    print("Output:", output)
+except Exception as e:
+    print(f"Exception caught: {type(e).__name__}")
+    print(f"Message: {e}")
+    print("\nTraceback:")
+    traceback.print_exc()

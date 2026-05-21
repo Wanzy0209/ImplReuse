@@ -1,0 +1,28 @@
+import torch
+import pytest
+
+def test_torch_compile_with_debug_mode():
+    """
+    Test that torch.compile handles non-infra dispatch modes (like DebugMode) correctly.
+    
+    Based on Issue 164143: DebugMode silently disables torch.compile.
+    The expected behavior is to raise an error instead of silently skipping.
+    
+    The similar API (tf.keras.initializers.LecunUniform) involves configuration 
+    via a 'mode' parameter. This test adapts that concept by checking how a 
+    global 'mode' (DebugMode) interacts with the compilation API.
+    """
+    def simple_model(x):
+        return x + 1
+
+    # torch.autograd.detect_anomaly is a standard way to enable a debug dispatch mode
+    with torch.autograd.detect_anomaly():
+        # We expect torch.compile to raise a RuntimeError because a non-infra 
+        # dispatch mode is present, rather than silently skipping compilation.
+        with pytest.raises(RuntimeError, match="non-infra torch dispatch mode"):
+            compiled_fn = torch.compile(simple_model)
+            input_tensor = torch.randn(5)
+            compiled_fn(input_tensor)
+
+if __name__ == "__main__":
+    test_torch_compile_with_debug_mode()

@@ -1,0 +1,61 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Adapted from the PyTorch Transformer class in the original bug report
+class Transformer(tf.keras.Model):
+    def __init__(self):
+        super(Transformer, self).__init__()
+        
+        # Using tf.name_scope to organize the model graph, 
+        # acting as the structural counterpart to the original torch.compile context.
+        with tf.name_scope("embeddings"):
+            self.tok_embeddings = tf.keras.layers.Embedding(input_dim=128, output_dim=32)
+
+        self.layers_list = []
+        with tf.name_scope("transformer_layers"):
+            for layer_id in range(4):
+                self.layers_list.append(
+                    tf.keras.layers.Dense(32, use_bias=False, name=f"layer_{layer_id}")
+                )
+
+        with tf.name_scope("output"):
+            self.output = tf.keras.layers.Dense(128, use_bias=False)
+
+    def call(self, x):
+        x = self.tok_embeddings(x)
+        for layer in self.layers_list:
+            x = layer(x)
+        return self.output(x)
+
+def main():
+    # Mimic the distributed setup from the original bug report using MirroredStrategy
+    strategy = tf.distribute.MirroredStrategy()
+
+    with strategy.scope():
+        model = Transformer()
+        
+        # Compile the model to ensure it is executable
+        model.compile(optimizer='adam', loss='mse')
+
+    # Generate dummy input matching the original dimensions (8, 4096)
+    input_ids = tf.constant(np.random.randint(0, 128, (8, 4096)), dtype=tf.int32)
+
+    # Run the model
+    output = model(input_ids)
+
+    # Verify output shape matches expectations
+    assert output.shape == (8, 4096, 128), f"Expected shape (8, 4096, 128), got {output.shape}"
+
+    # Verify that tf.name_scope correctly applied naming to the graph variables
+    # This validates the behavior of the similar API in this context
+    var_names = [v.name for v in model.trainable_variables]
+    
+    assert any("embeddings" in name for name in var_names), "Embeddings scope not found in variables."
+    assert any("transformer_layers" in name for name in var_names), "Transformer layers scope not found in variables."
+    assert any("output" in name for name in var_names), "Output scope not found in variables."
+
+    print("Test passed: tf.name_scope behavior verified in distributed context.")
+
+if __name__ == "__main__":
+    main()

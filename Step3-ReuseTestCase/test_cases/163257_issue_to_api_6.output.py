@@ -1,0 +1,50 @@
+import torch
+import pytest
+
+# Attempt to import RMM, which is required for the bug reproduction logic
+try:
+    import rmm
+    from rmm.allocators.torch import rmm_torch_allocator
+    HAS_RMM = True
+except ImportError:
+    HAS_RMM = False
+
+@pytest.mark.skipif(not HAS_RMM, reason="RMM library is not installed")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+def test_renorm_with_pluggable_allocator():
+    """
+    Test that torch.renorm works correctly when using a pluggable memory allocator (RMM)
+    and torch.compile. 
+    
+    This test addresses the issue where pluggable allocators did not support
+    checkPoolLiveAllocations, which broke torch.compile. The similar API torch.renorm
+    is used here as the target operation to verify that internal checks and memory
+    management function correctly with the custom allocator.
+    """
+    # 1. Setup the custom allocator (Reproducing the bug environment)
+    rmm.reinitialize(pool_allocator=True)
+    torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+
+    # 2. Define a function using the similar API (torch.renorm)
+    # The renorm implementation involves torch._check calls, mirroring the 
+    # checking mechanism (checkPoolLiveAllocations) that was failing in the bug report.
+    def model(x):
+        return torch.renorm(x, p=2, dim=1, maxnorm=1.0)
+
+    # 3. Prepare input data
+    input_tensor = torch.randn(4, 4, device='cuda')
+
+    # 4. Compile the model (This is the context where the original RuntimeError occurred)
+    compiled_model = torch.compile(model)
+
+    # 5. Execute and verify
+    # If the bug is present, this raises:
+    # RuntimeError: pluggable does not yet support checkPoolLiveAllocations.
+    result = compiled_model(input_tensor)
+
+    # Basic sanity checks to ensure the operation ran successfully
+    assert result.shape == input_tensor.shape
+    assert result.device.type == 'cuda'
+
+    # Reset allocator to default to avoid side effects on other tests
+    torch.cuda.memory.change_current_allocator(torch.cuda.memory._get_default_allocator())

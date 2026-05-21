@@ -1,0 +1,42 @@
+import torch
+import collections
+import tensorflow as tf
+from tensorflow.python.framework import test_util
+
+# The bug report indicates an issue with tracing collections.defaultdict 
+# inside a compiled function (torch.compile). 
+# This test case uses the similar API (tf.test.with_eager_op_as_function) 
+# to verify the behavior of defaultdict creation within a TensorFlow 
+# compiled context (tf.function).
+
+@test_util.with_eager_op_as_function
+class TestDefaultDictCompilation(tf.test.TestCase):
+
+    def test_defaultdict_creation_in_tf_function(self):
+        """
+        Test that collections.defaultdict can be created and used 
+        inside a traced/compiled function.
+        """
+        # Using tf.function as the semantic equivalent to torch.compile
+        # for the purpose of reproducing the tracing logic.
+        @tf.function
+        def create_and_use_defaultdict():
+            # This is the operation that caused the regression in PyTorch Dynamo.
+            # We verify if the TensorFlow tracer handles it correctly.
+            d = collections.defaultdict(list)
+            d['key1'].append(10)
+            d['key2'].append(20)
+            return d
+
+        # Execute the compiled function
+        result = create_and_use_defaultdict()
+
+        # Assertions to verify correct behavior
+        self.assertIsInstance(result, collections.defaultdict)
+        self.assertEqual(result['key1'], [10])
+        self.assertEqual(result['key2'], [20])
+        # Verify default factory behavior
+        self.assertEqual(result['non_existent_key'], [])
+
+if __name__ == '__main__':
+    tf.test.main()

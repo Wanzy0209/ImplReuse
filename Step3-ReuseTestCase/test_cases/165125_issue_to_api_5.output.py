@@ -1,0 +1,30 @@
+import tensorflow as tf
+
+def test_readahead_file_path_return_type():
+    """
+    Test case inspired by PyTorch issue #165125.
+    The original issue highlighted a type mismatch where _jit_compile was
+    annotated to return None but actually returned a value (module or str).
+    This test verifies that the similar API, tf.compat.v1.resource_loader.readahead_file_path,
+    correctly returns a value (specifically a string path) and does not return None,
+    ensuring the return type matches the actual behavior.
+    """
+    # Setup
+    test_path = "/tmp/dummy_file.txt"
+
+    # Action
+    result = tf.compat.v1.resource_loader.readahead_file_path(test_path)
+
+    # Assertions
+    # 1. Ensure the function returns a value (not None), addressing the bug pattern
+    assert result is not None, "readahead_file_path should not return None"
+
+    # 2. Ensure the return type is a string (as per implementation 'return path')
+    assert isinstance(result, str), f"Expected return type str, got {type(result)}"
+
+    # 3. Ensure the return value matches the input
+    assert result == test_path, f"Expected return value '{test_path}', got '{result}'"
+
+if __name__ == "__main__":
+    test_readahead_file_path_return_type()
+    print("Test passed.")

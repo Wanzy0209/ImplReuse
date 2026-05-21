@@ -1,0 +1,117 @@
+import torch
+import unittest
+import logging
+import io
+
+# Attempt to import the similar API (TensorFlow)
+# If not available, we mock it to ensure the test case is runnable.
+try:
+    import tensorflow as tf
+except ImportError:
+    class MockTF:
+        class keras:
+            class backend:
+                @staticmethod
+                def image_data_format():
+                    return "channels_last"
+    tf = MockTF()
+
+class TestKerasBackendLogging(unittest.TestCase):
+    """
+    Test case adapted from PyTorch Issue 166630.
+    Verifies logging behavior for configuration dictionaries using the 
+    tf.keras.backend.image_data_format API.
+    """
+
+    def setUp(self):
+        # Configure a logger to capture output for verification
+        self.logger = logging.getLogger("test_keras_launcher")
+        self.logger.setLevel(logging.INFO)
+        
+        # Create a string stream to capture log output
+        self.log_stream = io.StringIO()
+        self.handler = logging.StreamHandler(self.log_stream)
+        self.logger.addHandler(self.handler)
+
+    def tearDown(self):
+        self.logger.removeHandler(self.handler)
+        self.log_stream.close()
+
+    def test_logging_config_with_image_data_format(self):
+        """
+        Tests logging the Keras backend configuration using a dictionary format string.
+        This mirrors the pattern in torch.distributed.launcher.api.py where a 
+        configuration dictionary is logged.
+        
+        The original bug involved a format string missing a key ('signals_to_handle') 
+        that existed in the dictionary. This test ensures that the format string 
+        correctly includes the key for 'image_data_format' so the value is logged.
+        """
+        # 1. Retrieve data using the Similar API
+        # This corresponds to accessing config attributes in the original bug
+        img_data_format = tf.keras.backend.image_data_format()
+        
+        # 2. Construct the configuration dictionary
+        # This mimics the dictionary passed to logger.info in the original bug
+        config_dict = {
+            "image_data_format": img_data_format,
+            "backend": "tensorflow",
+            "floatx": "float32",
+            "epsilon": 1e-07
+        }
+
+        # 3. Define the format string
+        # This mimics the multi-line format string in the original bug.
+        # We ensure 'image_data_format' is present in the string to avoid the bug.
+        log_format = (
+            "Starting Keras session with configs:\n"
+            "  image_data_format       : %(image_data_format)s\n"
+            "  backend                 : %(backend)s\n"
+            "  floatx                  : %(floatx)s\n"
+            "  epsilon                 : %(epsilon)s\n"
+        )
+
+        # 4. Execute the logging call
+        self.logger.info(log_format, config_dict)
+
+        # 5. Verify the output
+        log_contents = self.log_stream.getvalue()
+        
+        # Assertions to verify the logging worked as expected
+        self.assertIn("Starting Keras session with configs:", log_contents)
+        self.assertIn(f"image_data_format       : {img_data_format}", log_contents)
+        self.assertIn("backend                 : tensorflow", log_contents)
+
+    def test_logging_bug_reproduction_missing_key(self):
+        """
+        Reproduces the specific bug scenario from Issue 166630 where a key 
+        exists in the dictionary but is missing from the format string.
+        
+        In this case, 'epsilon' is in the dict but missing from the format string.
+        Standard Python logging ignores extra keys, so this verifies that the 
+        value is indeed absent from the log output (demonstrating the bug).
+        """
+        img_data_format = tf.keras.backend.image_data_format()
+        
+        config_dict = {
+            "image_data_format": img_data_format,
+            "epsilon": 1e-07  # This key is missing from the format string below
+        }
+
+        # Format string missing the 'epsilon' key
+        log_format = (
+            "Starting Keras session with configs:\n"
+            "  image_data_format       : %(image_data_format)s\n"
+            # 'epsilon' line is omitted here, reproducing the bug pattern
+        )
+
+        self.logger.info(log_format, config_dict)
+        log_contents = self.log_stream.getvalue()
+
+        # Verify that the value for the missing key is NOT in the log
+        self.assertNotIn("1e-07", log_contents)
+        # Verify that the present key IS in the log
+        self.assertIn(img_data_format, log_contents)
+
+if __name__ == "__main__":
+    unittest.main()

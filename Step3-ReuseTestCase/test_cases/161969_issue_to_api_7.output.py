@@ -1,0 +1,85 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_lu_solve_compiled_vectorized():
+    """
+    Test case for tf.linalg.lu_solve adapted from PyTorch Issue 161969.
+    
+    The original issue involves a linear algebra operation (Cholesky decomposition 
+    and matrix inversion) failing inside a compiled (torch.compile) and vectorized 
+    (torch.vmap) function on the MPS backend due to contiguity checks.
+    
+    This test adapts the logic to TensorFlow, using tf.linalg.lu and 
+    tf.linalg.lu_solve to perform the equivalent linear system solving, 
+    wrapped in tf.function (compilation) and tf.vectorized_map (vectorization).
+    """
+
+    # 1. Setup Data
+    # Mimicking the shapes from the bug report: data=(2, 5, 3), matrix=(3, 3)
+    dtype = tf.float32
+    # Create a batch of data (zeros, as in the bug report)
+    data = tf.zeros((2, 5, 3), dtype=dtype)
+    
+    # Create a diagonal matrix (positive definite)
+    # Bug: p = torch.diag(torch.tensor((20., 0.5, 5,))**2)
+    p_diag_values = tf.constant([20., 0.5, 5.], dtype=dtype) ** 2
+    matrix = tf.linalg.diag(p_diag_values)
+
+    # 2. Define the core function
+    # Bug: def logp(x, matrix): 
+    #          p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+    #          p_mat_sqrt_inv = p_mat_sqrt.inverse()
+    #          val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+    #          return -val/2
+    
+    # We replace the Cholesky/Inverse pattern with LU decomposition and Solve.
+    # Mathematically, solving A * y = x is equivalent to y = A_inverse * x.
+    def solve_and_compute(x, mat):
+        # Perform LU decomposition
+        lu, perm = tf.linalg.lu(mat)
+        
+        # Extract the specific slice used in the bug report: x[0, :]
+        # x shape is (5, 3) inside the map (mapped over dim 0 of data)
+        target = x[0, :]
+        
+        # Solve mat * y = target  =>  y = mat^-1 * target
+        # tf.linalg.lu_solve expects RHS to be at least 2D or handle broadcasting.
+        # target is (3,), we expand to (3, 1) for the solver, then squeeze.
+        y = tf.linalg.lu_solve(lu, perm, target[..., tf.newaxis])[..., 0]
+        
+        # Compute the value
+        val = tf.reduce_sum(y ** 2)
+        return -val / 2
+
+    # 3. Vectorization
+    # Bug: score_func = torch.vmap(torch.func.grad(logp, 0), (0, None))
+    # We use tf.vectorized_map. We omit the gradient part for simplicity as the bug
+    # was a runtime error in the forward pass (contiguous assertion).
+    
+    def vectorized_func(x_batch, mat):
+        # Map over the first dimension of x_batch
+        return tf.vectorized_map(lambda x: solve_and_compute(x, mat), x_batch)
+
+    # 4. Compilation
+    # Bug: compiled_function = torch.compile(...)
+    compiled_function = tf.function(vectorized_func, jit_compile=True)
+
+    # 5. Execution
+    # Bug: res = compiled_function(data, p)
+    res = compiled_function(data, matrix)
+
+    # 6. Assertions
+    # Check shape
+    assert res.shape == (2,), f"Expected shape (2,), got {res.shape}"
+    
+    # Check values (should be finite)
+    assert not tf.reduce_any(tf.math.is_nan(res)), "Result contains NaN values"
+    
+    # Check specific value (since data is zeros, result should be 0)
+    # Note: In the bug, data is zeros. 0 * inv = 0. sum(0) = 0.
+    assert tf.reduce_all(res == 0.0), f"Expected zeros, got {res}"
+
+if __name__ == "__main__":
+    test_tf_lu_solve_compiled_vectorized()
+    print("Test passed successfully.")

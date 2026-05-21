@@ -1,0 +1,66 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+# Replicate the configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def worker(rank, world_size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    if rank == 0:
+        # Rank 0: Sender
+        # Generate data similar to the types involved in the original bug report
+        # (float32, int32, int64)
+        torch.manual_seed(13653)
+        
+        # Mimic the types from the original fuzzed_program
+        val_float = torch.tensor(1.0, dtype=torch.float32).item() # float
+        val_int32 = torch.tensor(-3, dtype=torch.int32).item()    # int
+        val_int64 = torch.tensor(1, dtype=torch.int64).item()     # int
+        
+        data_to_send = [val_float, val_int32, val_int64]
+        
+        print(f"Rank {rank} sending data: {data_to_send}")
+        dist.send_object_list(data_to_send, dst=1)
+        
+    else:
+        # Rank 1: Receiver
+        # Define the function containing the similar API: torch.distributed.recv_object_list
+        def recv_program():
+            # Prepare a list to receive objects
+            obj_list = [None, None, None]
+            # Call the similar API
+            dist.recv_object_list(obj_list, src=0)
+            return obj_list
+
+        # 1. Test Eager Execution
+        print("Rank 1 testing eager execution...")
+        result_eager = recv_program()
+        print(f"Rank 1 eager result: {result_eager}")
+
+        # 2. Test Compiled Execution (Original API Under Test: torch.compile)
+        # We adapt the original call site to verify the similar API
+        print("Rank 1 testing compiled execution...")
+        try:
+            compiled_program = torch.compile(recv_program, fullgraph=True, dynamic=True)
+            result_compiled = compiled_program()
+            print(f"Rank 1 compiled result: {result_compiled}")
+            
+            # Verify results match
+            assert result_eager == result_compiled, "Eager and compiled results diverged!"
+            print(" compile success")
+        except Exception as e:
+            print(f" compile failed: {e}")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Use gloo backend for CPU compatibility in this test
+    world_size = 2
+    mp.spawn(worker, args=(world_size,), nprocs=world_size)

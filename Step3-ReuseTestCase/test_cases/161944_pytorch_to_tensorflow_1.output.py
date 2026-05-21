@@ -1,0 +1,31 @@
+import torch
+import tensorflow as tf
+
+# Adapt the test case to verify the behavior of tf.compat.v1.no_regularizer
+# in both eager and compiled (graph) modes, mirroring the structure of the
+# original PyTorch test case.
+
+# Setup input (mimicking the original tensor size)
+inp = tf.random.normal((8192,))
+
+# The API under test
+func = tf.compat.v1.no_regularizer
+
+# Eager execution
+out1 = func(inp)
+
+# Compiled execution (tf.function is analogous to torch.compile)
+@tf.function
+def compiled_func(x):
+    return func(x)
+
+out2 = compiled_func(inp)
+
+# Verification
+# The original test checked for numerical precision differences.
+# Since no_regularizer returns None, we verify that it returns None consistently
+# in both modes to ensure no unexpected behavior or compilation errors.
+assert out1 is None, "tf.compat.v1.no_regularizer should return None in eager mode"
+assert out2 is None, "tf.compat.v1.no_regularizer should return None in compiled mode"
+
+print("Test passed: Both eager and compiled executions returned None as expected.")

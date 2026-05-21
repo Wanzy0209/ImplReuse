@@ -1,0 +1,46 @@
+import torch
+import torch._dynamo
+from torch.utils._mode_utils import DebugMode
+
+def test_debugmode_torch_compile_interaction():
+    """
+    Test case for Issue 164143: DebugMode silently disables torch.compile.
+    
+    This test verifies that when DebugMode (a non-infra torch dispatch mode) is active,
+    torch.compile raises an error instead of silently skipping compilation.
+    The test also incorporates torch.profiler.itt.range_push to reflect the 
+    context of the original bug report found in LLaMA model testing.
+    """
+    
+    def model_fn(x):
+        # Leveraging the similar API (torch.profiler.itt.range_push) 
+        # as it appeared in the original bug's context.
+        torch.profiler.itt.range_push("computation")
+        y = x + 1
+        torch.profiler.itt.range_pop()
+        return y
+
+    # Compile the function
+    compiled_fn = torch.compile(model_fn, backend="aot_eager")
+
+    # Activate DebugMode
+    with DebugMode():
+        try:
+            input_tensor = torch.randn(10)
+            result = compiled_fn(input_tensor)
+            
+            # If we reach here, the bug (silent skip) might still be present, 
+            # or the "better" fix (support) is implemented.
+            # However, based on the issue description "At minimum we should error",
+            # we expect an exception to be raised.
+            assert False, "Expected an error when running torch.compile with DebugMode active, but execution succeeded."
+            
+        except RuntimeError as e:
+            # We expect a RuntimeError indicating the incompatibility with the dispatch mode.
+            error_msg = str(e).lower()
+            assert "dispatch mode" in error_msg or "debugmode" in error_msg, \
+                f"Expected error message about dispatch mode, but got: {e}"
+
+if __name__ == "__main__":
+    test_debugmode_torch_compile_interaction()
+    print("Test passed.")

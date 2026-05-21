@@ -1,0 +1,46 @@
+import torch
+import torch.special
+import torch._dynamo
+
+def test_airy_ai_dynamo_compatibility():
+    """
+    Test case for torch.special.airy_ai under torch.compile.
+    
+    Context: Issue 166238 describes a regression where collections.defaultdict 
+    caused an 'Unsupported function call' error in Dynamo (torch.compile).
+    
+    This test verifies that torch.special.airy_ai, identified as a similar API 
+    based on code structure/usage patterns, can be traced successfully by 
+    torch.compile without raising similar Unsupported errors.
+    """
+    
+    # Define a function using the similar API (torch.special.airy_ai)
+    def fn(x):
+        return torch.special.airy_ai(x)
+
+    # Create a sample input tensor
+    x = torch.randn(4, 4)
+
+    # 1. Execute in eager mode to get the expected result
+    expected_result = fn(x)
+
+    # 2. Compile the function using torch.compile
+    # The original bug (Issue 166238) manifested during the compilation/tracing phase
+    # when Dynamo encountered an unsupported class (collections.defaultdict).
+    compiled_fn = torch.compile(fn)
+
+    # 3. Execute the compiled function
+    # We expect this to run without raising torch._dynamo.exc.Unsupported
+    try:
+        actual_result = compiled_fn(x)
+    except torch._dynamo.exc.Unsupported as e:
+        print(f"Failed to trace torch.special.airy_ai: {e}")
+        raise
+
+    # 4. Verify that the compiled function produces the same result as eager mode
+    assert torch.allclose(expected_result, actual_result), \
+        "Output of compiled function does not match eager execution"
+
+if __name__ == "__main__":
+    test_airy_ai_dynamo_compatibility()
+    print("Test passed: torch.special.airy_ai is compatible with torch.compile.")

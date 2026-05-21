@@ -1,0 +1,122 @@
+import torch
+import tensorflow as tf
+import sys
+import time
+
+def test_batch_parallel_memory_leak():
+    """
+    Adapted test case for tf.compat.v1.tpu.batch_parallel based on 
+    PyTorch torch.compile memory leak issue (ID: 165407).
+    
+    This test attempts to reproduce a memory leak scenario where repeated 
+    execution of a parallelized computation causes tensor counts or memory 
+    allocation to increase indefinitely.
+    """
+    
+    # --- TPU Initialization ---
+    # tf.compat.v1.tpu.batch_parallel requires a TPU context.
+    # We attempt to initialize TPUs; if not available, we skip the test.
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        strategy = tf.distribute.TPUStrategy(resolver)
+        print(f"Running on TPU: {resolver.master()}")
+    except (ValueError, tf.errors.NotFoundError) as e:
+        print("Skipping test: TPU not found. tf.compat.v1.tpu.batch_parallel requires TPU hardware.")
+        print(f"Error details: {e}")
+        return
+
+    # --- Model Definition ---
+    # Mimicking the logic of flash_attn_varlen_func which takes inputs and sequence lengths.
+    def computation_fn(inputs):
+        # inputs is a list of tensors passed to batch_parallel
+        x = inputs[0]
+        seq_lens = inputs[1]
+        
+        # Perform a computation that mimics attention workload (MatMul)
+        # This creates intermediate tensors that could potentially leak if references are held
+        w = tf.random.normal([x.shape[-1], x.shape[-1]])
+        y = tf.matmul(x, w)
+        
+        # Use seq_lens to ensure dynamic shape logic is present (similar to varlen)
+        # Simple mask operation
+        mask = tf.sequence_mask(seq_lens, maxlen=tf.shape(x)[1])
+        mask = tf.cast(mask, x.dtype)
+        y = y * mask[:, :, tf.newaxis]
+        
+        return y
+
+    # --- Parallel Execution Wrapper ---
+    # We use tf.function to compile the graph, similar to torch.compile
+    @tf.function(experimental_compile=True)
+    def train_step(inputs):
+        # Call the specific API: tf.compat.v1.tpu.batch_parallel
+        # It shards the computation along the batch dimension (0-th dim)
+        outputs = tf.compat.v1.tpu.batch_parallel(
+            computation=computation_fn,
+            inputs=inputs, # List of Tensors
+            num_shards=strategy.num_replicas_in_sync
+        )
+        return outputs
+
+    # --- Test Loop ---
+    # Setup inputs
+    # Batch size must be divisible by num_shards
+    num_shards = strategy.num_replicas_in_sync
+    batch_size = 8 * num_shards
+    seq_len = 128
+    hidden_dim = 64
+    
+    # Create dummy inputs
+    # Input tensor
+    x = tf.random.normal([batch_size, seq_len, hidden_dim])
+    # Sequence lengths (variable length aspect)
+    seq_lens = tf.random.uniform([batch_size], minval=10, maxval=seq_len, dtype=tf.int32)
+    
+    inputs = [x, seq_lens]
+
+    print(f"Starting test loop with {num_shards} shards...")
+    
+    # Monitoring variables
+    steps = 300
+    start_time = time.time()
+    
+    try:
+        for step in range(steps):
+            # Execute the parallelized step
+            _ = train_step(inputs)
+            
+            # Periodic reporting (mimicking the original bug report output)
+            if step % 50 == 0 and step > 0:
+                elapsed = time.time() - start_time
+                # Note: TF doesn't expose a direct "number of live tensors" count like PyTorch's 
+                # internal garbage collector stats easily in Python.
+                # We check memory info if available (TPU memory info is often aggregated).
+                try:
+                    # Attempting to get memory usage for the first TPU device
+                    tpu_devices = tf.config.list_logical_devices('TPU')
+                    if tpu_devices:
+                        mem_info = tf.config.experimental.get_memory_info('TPU:0')
+                        alloc_gb = mem_info['current'] / (1024**3)
+                        res_gb = mem_info['peak'] / (1024**3)
+                    else:
+                        alloc_gb = 0
+                        res_gb = 0
+                except Exception:
+                    alloc_gb = 0
+                    res_gb = 0
+                
+                print(f"Step {step:4d} | Alloc: {alloc_gb:.3f}GB | Peak: {res_gb:.3f}GB | Time: {elapsed:.1f}s")
+
+        print("Test completed successfully.")
+        
+        # Assertion: In a non-leaky scenario, memory should stabilize or grow very slowly.
+        # If this test OOMs or memory grows linearly with steps, the bug is reproduced.
+        
+    except tf.errors.ResourceExhaustedError:
+        print("FAILURE: ResourceExhaustedError detected. Memory leak likely reproduced.")
+        raise
+
+if __name__ == "__main__":
+    test_batch_parallel_memory_leak()

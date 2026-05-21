@@ -1,0 +1,45 @@
+import torch
+import tensorflow as tf
+import tf.keras.applications as apps
+
+# Constants
+BATCH_SIZE = 4
+NUM_CLASSES = 10
+LEARNING_RATE = 0.01
+
+# Setup Model (ResNet50 is the standard equivalent in Keras applications)
+model = apps.ResNet50(weights=None, classes=NUM_CLASSES)
+
+# Setup Optimizer and Loss
+optimizer = tf.keras.optimizers.SGD(learning_rate=LEARNING_RATE)
+criterion = tf.keras.losses.SparseCategoricalCrossentropy()
+
+# Adapt the training function to use the similar API: tf.keras.backend.name_scope
+# This replaces the @torch.compile decorator in the original logic
+def train(images, labels):
+    # Using the similar API to scope the training operations
+    with tf.keras.backend.name_scope("training_step"):
+        with tf.GradientTape() as tape:
+            # Forward pass
+            outputs = model(images, training=True)
+            # Loss calculation
+            loss = criterion(labels, outputs)
+        
+        # Backward pass (Gradient calculation)
+        gradients = tape.gradient(loss, model.trainable_variables)
+        # Optimizer step
+        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+        
+        return loss
+
+# Generate dummy data
+# Note: TensorFlow typically uses channels_last format (Batch, Height, Width, Channels)
+images = tf.random.normal((BATCH_SIZE, 224, 224, 3))
+labels = tf.random.uniform((BATCH_SIZE,), 0, NUM_CLASSES, dtype=tf.int32)
+
+# Run the training step
+loss_value = train(images, labels)
+
+# Assertion to verify the behavior (loss should be a finite number)
+assert tf.math.is_finite(loss_value), "Loss is not finite, training step failed."
+print("Test passed. Training step completed successfully within name_scope.")

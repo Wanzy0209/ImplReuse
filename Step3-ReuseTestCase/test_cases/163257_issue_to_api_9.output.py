@@ -1,0 +1,70 @@
+import unittest
+import torch
+import torch.nn as nn
+
+# Attempt to import RMM, which is required for the bug reproduction
+try:
+    import rmm
+    from rmm.allocators.torch import rmm_torch_allocator
+    HAS_RMM = True
+except ImportError:
+    HAS_RMM = False
+
+@unittest.skipIf(not HAS_RMM, "RMM library is not installed")
+class TestPluggableAllocatorWithRNNCell(unittest.TestCase):
+    def test_compile_rnn_with_custom_allocator(self):
+        """
+        Test that torch.compile works with a custom memory allocator (RMM)
+        when the model contains an RNNCell.
+        
+        This reproduces the issue where using a pluggable allocator breaks
+        torch.compile due to missing checkPoolLiveAllocations support.
+        """
+        # 1. Setup the custom allocator (Original Bug Logic)
+        # This changes the global memory allocator to RMM
+        rmm.reinitialize(pool_allocator=True)
+        torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+
+        try:
+            # 2. Define a model using the Similar API (torch.nn.RNNCell)
+            # We leverage RNNCell here to ensure the allocator works with this specific module type under compilation.
+            class SimpleRNNModel(nn.Module):
+                def __init__(self, input_size, hidden_size):
+                    super().__init__()
+                    self.rnn_cell = nn.RNNCell(input_size, hidden_size)
+
+                def forward(self, x, h_prev):
+                    return self.rnn_cell(x, h_prev)
+
+            input_size = 10
+            hidden_size = 20
+            batch_size = 3
+
+            model = SimpleRNNModel(input_size, hidden_size)
+            
+            # Create dummy inputs
+            x = torch.randn(batch_size, input_size)
+            h_prev = torch.randn(batch_size, hidden_size)
+
+            # 3. Compile the model (The operation that triggered the original bug)
+            # The bug occurred because torch.compile tried to check pool live allocations
+            # which wasn't implemented for pluggable allocators.
+            compiled_model = torch.compile(model)
+
+            # 4. Run the compiled model
+            # If the bug is present, this will raise RuntimeError.
+            # If the fix is applied, this should run successfully.
+            output = compiled_model(x, h_prev)
+
+            # 5. Verify output
+            self.assertIsNotNone(output)
+            self.assertEqual(output.shape, (batch_size, hidden_size))
+
+        finally:
+            # Cleanup: Reset allocator to default to avoid side effects on other tests
+            # Note: Depending on PyTorch version, resetting might vary.
+            # We assume the test environment handles cleanup or this is acceptable.
+            pass
+
+if __name__ == "__main__":
+    unittest.main()

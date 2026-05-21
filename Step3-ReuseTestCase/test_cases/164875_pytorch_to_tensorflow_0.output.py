@@ -1,0 +1,52 @@
+import torch
+import tensorflow as tf
+
+def test_tf_strings_as_string_empty_dim():
+    """
+    Adapted test case for tf.strings.as_string based on the PyTorch bug report.
+    The original bug involved a divergence between eager and compiled modes
+    when handling tensors with a dimension of size 0 (specifically shape (20, 0)).
+    This test verifies that tf.strings.as_string handles this edge case correctly
+    in both eager and graph (tf.function) modes.
+    """
+    
+    # Replicate the specific shape (20, 0) found in the PyTorch bug report.
+    # In the original bug, var_node_2 (result of nonzero) had shape (20, 0).
+    # We create a tensor with this exact shape to test the API's robustness.
+    # Using int64 to match the dtype context of the original PyTorch tensors.
+    input_tensor = tf.zeros((20, 0), dtype=tf.int64)
+
+    # 1. Test Eager Execution
+    try:
+        result_eager = tf.strings.as_string(input_tensor)
+        print(f" Eager success. Shape: {result_eager.shape}, Dtype: {result_eager.dtype}")
+    except Exception as e:
+        print(f" Eager failed: {e}")
+        return
+
+    # 2. Test Compiled Execution (tf.function)
+    # This corresponds to torch.compile in the original bug report.
+    @tf.function
+    def compiled_program(x):
+        return tf.strings.as_string(x)
+
+    try:
+        result_compiled = compiled_program(input_tensor)
+        print(f" Compile success. Shape: {result_compiled.shape}, Dtype: {result_compiled.dtype}")
+    except Exception as e:
+        print(f" Compile failed: {e}")
+        return
+
+    # 3. Verify Consistency
+    # The original bug was a divergence (mismatch) between eager and compile results.
+    # We assert that the shapes match to ensure no divergence occurs here.
+    assert result_eager.shape == result_compiled.shape, \
+        f"Shape mismatch: Eager {result_eager.shape} vs Compiled {result_compiled.shape}"
+    
+    # Verify the output shape is preserved as expected for an element-wise operation
+    assert result_eager.shape == (20, 0), "Output shape is incorrect, expected (20, 0)"
+    
+    print(" Test passed: Eager and Compiled modes are consistent.")
+
+if __name__ == "__main__":
+    test_tf_strings_as_string_empty_dim()

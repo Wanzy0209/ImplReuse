@@ -1,0 +1,30 @@
+import torch
+
+torch.manual_seed(1337)
+
+@torch.compile()
+def pool_compiled(input):
+    # Using norm_type=2 to be similar to the default normalization in the original bug
+    return torch.nn.functional.lp_pool1d(input, norm_type=2, kernel_size=2)
+
+def pool_uncompiled(input):
+    return torch.nn.functional.lp_pool1d(input, norm_type=2, kernel_size=2)
+
+device='cuda'
+# Adapt input to 3D (Batch, Channel, Length) for lp_pool1d
+# Using the specific value from the bug report
+c=torch.tensor([[[3.799999 ,0.0, 0.0]]],device=device,dtype=torch.float32)
+
+print("Input vector",[x.item() for x in c[0,0] ])
+
+out_c=pool_compiled(c)
+print("Output (compile):",[x.item() for x in out_c[0,0] ])
+
+out_nc=pool_uncompiled(c)
+print("Output (without compile):",[x.item() for x in out_nc[0,0] ])
+
+# Check for numerical discrepancies similar to the original bug
+# The original bug resulted in a norm > 1, here we check if compilation
+# introduces numerical errors compared to the eager execution.
+assert torch.allclose(out_c, out_nc, atol=1e-6, rtol=1e-5), \
+    f"Discrepancy detected between compiled and uncompiled results: {out_c} vs {out_nc}"

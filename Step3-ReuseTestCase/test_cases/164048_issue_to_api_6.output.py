@@ -1,0 +1,34 @@
+import tensorflow as tf
+import tensorflow.experimental.numpy as tnp
+
+def test_tf_exp_large_tensor():
+    """
+    Test case adapted from PyTorch Issue 164048.
+    
+    The original bug involved indexing a large tensor on CUDA, which caused an 
+    invalid configuration argument. This test leverages the similar API 
+    (tf.experimental.numpy.exp) to verify stability with large tensors 
+    on the available device (GPU if present, otherwise CPU).
+    """
+    # Enable numpy behavior for tf.experimental.numpy
+    tnp.experimental_enable_numpy_behavior()
+
+    # Attempt to use GPU to mimic the "cuda" device in the original bug report
+    device = '/GPU:0' if tf.config.list_physical_devices('GPU') else '/CPU:0'
+
+    with tf.device(device):
+        # Create a large tensor with the same dimensions as the bug report: (4, 87, 1056, 736)
+        # We use float32 as exp is a floating-point operation
+        large_tensor = tnp.random.randint(0, 20, (4, 87, 1056, 736)).astype('float32')
+
+        # Apply the similar API: tf.experimental.numpy.exp
+        # This replaces the indexing operation from the original bug with the similar API
+        result = tnp.exp(large_tensor)
+
+    # Assertions to ensure the operation completed successfully
+    assert result.shape == (4, 87, 1056, 736), "Output shape should match input shape"
+    # exp(x) is always positive for real x
+    assert tnp.all(result > 0), "Exponential of real numbers should be positive"
+
+if __name__ == "__main__":
+    test_tf_exp_large_tensor()

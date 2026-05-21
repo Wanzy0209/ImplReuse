@@ -1,0 +1,69 @@
+import torch
+import tensorflow as tf
+
+def test_flex_attention_with_learnable_scalar(use_compile=False):
+    """
+    TensorFlow adaptation of the PyTorch Flex Attention bug reproduction.
+    Tests if a learnable scalar can be used inside a score modification function
+    wrapped in tf.name_scope (the identified similar API).
+    """
+    # 1. Define learnable scalar (equivalent to nn.Parameter(torch.tensor(0.0)))
+    temp = tf.Variable(0.0, name="learnable_scalar")
+
+    # 2. Define score_mod function
+    def score_mod(score, b, h, q, kv):
+        # The core logic from the bug report: adding a scalar to scores
+        return score + temp
+
+    # 3. Setup dummy data
+    B, H, N, D = 2, 4, 8, 16
+    q = tf.random.normal((B, H, N, D))
+    k = tf.random.normal((B, H, N, D))
+    v = tf.random.normal((B, H, N, D))
+
+    # 4. Define the computation block
+    # Using tf.name_scope as the primary wrapper as requested
+    def compute_attention():
+        with tf.name_scope("flex_attention"):
+            # Simplified attention logic to mimic flex_attention behavior
+            # score = q @ k.T
+            scores = tf.einsum('bhqd,bhkd->bhqk', q, k)
+            
+            # Apply score_mod
+            # In PyTorch, flex_attention handles the vmap/looping over b, h.
+            # Here we just call it directly for the batch.
+            modified_scores = score_mod(scores, 0, 0, q, v)
+            
+            # Softmax and value aggregation
+            attn_weights = tf.nn.softmax(modified_scores, axis=-1)
+            output = tf.einsum('bhqk,bhkd->bhqd', attn_weights, v)
+            return output
+
+    # Apply compilation if requested (mimicking torch.compile)
+    if use_compile:
+        compute_attention = tf.function(compute_attention)
+
+    # Test Forward Pass
+    print("Testing Forward Pass...")
+    output = compute_attention()
+    assert output.shape == (B, H, N, D), "Forward pass output shape mismatch"
+    print("Forward Pass Successful.")
+
+    # Test Backward Pass (Gradient calculation)
+    # PyTorch bug: "vmap... can not return a BatchedTensor when out_dim is None" in backward
+    print("Testing Backward Pass...")
+    with tf.GradientTape() as tape:
+        output = compute_attention()
+        loss = tf.reduce_sum(output)
+    
+    grads = tape.gradient(loss, temp)
+    assert grads is not None, "Gradient for learnable scalar is None (Backward failed)"
+    print(f"Backward Pass Successful. Gradient: {grads.numpy()}")
+
+# Execute the test
+if __name__ == "__main__":
+    # Test without explicit compilation (eager + name_scope)
+    test_flex_attention_with_learnable_scalar(use_compile=False)
+    
+    # Test with compilation (tf.function + name_scope)
+    test_flex_attention_with_learnable_scalar(use_compile=True)

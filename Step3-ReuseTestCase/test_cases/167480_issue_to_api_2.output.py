@@ -1,0 +1,57 @@
+import os
+import tensorflow as tf
+
+def test_forward_compatibility_horizon_command_injection():
+    """
+    Test case for OS command injection in tf.compat.forward_compatibility_horizon.
+    
+    This test is derived from a similar vulnerability in PyTorch's cpp_extension 
+    (Issue 167480), where user-supplied arguments were passed to a shell command 
+    via subprocess.check_output(shell=True). 
+    
+    Given the high code similarity score, this test checks if 
+    tf.compat.forward_compatibility_horizon might be vulnerable to a similar 
+    injection if it internally constructs and executes shell commands using 
+    its arguments (year, month, day).
+    """
+    # Define a marker file path to verify if a command was executed
+    marker_file = "/tmp/tf_injection_test_marker"
+    
+    # Clean up before test
+    if os.path.exists(marker_file):
+        os.remove(marker_file)
+
+    # Construct a payload that attempts to create the marker file.
+    # This simulates an attacker passing shell metacharacters.
+    # Example: If the internal command is `date <year>`, passing "2023; touch /tmp/..." 
+    # would execute the touch command.
+    injection_payload = f"; touch {marker_file}"
+
+    try:
+        # Attempt to call the API with the injection payload.
+        # Although the API expects integers, we pass a string to test if 
+        # the implementation handles input unsafely (e.g., via str() conversion before shell exec).
+        with tf.compat.forward_compatibility_horizon(injection_payload, 1, 1):
+            pass
+    except TypeError:
+        # If the API strictly enforces integer types, this path is likely not vulnerable.
+        # We catch this to allow the assertion to run (verifying the file wasn't created by other means).
+        pass
+    except Exception as e:
+        # Catch other exceptions to ensure the cleanup/check runs, 
+        # though in a real exploit scenario, the process might crash.
+        print(f"Exception occurred: {e}")
+
+    # Assertion: The marker file should NOT exist.
+    # If it exists, it indicates that the shell command was executed, confirming the vulnerability.
+    assert not os.path.exists(marker_file), \
+        "OS Command Injection vulnerability detected in tf.compat.forward_compatibility_horizon! " \
+        "The payload executed and created the marker file."
+
+    # Clean up after test
+    if os.path.exists(marker_file):
+        os.remove(marker_file)
+
+if __name__ == "__main__":
+    test_forward_compatibility_horizon_command_injection()
+    print("Test passed. No injection detected.")

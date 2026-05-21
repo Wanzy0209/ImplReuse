@@ -1,0 +1,64 @@
+import torch
+import torch.nn as nn
+import torch.nn.utils.prune as prune
+
+class ModelA(nn.Module):
+    def __init__(self):
+        super(ModelA, self).__init__()
+        self.linear = nn.Linear(10, 10)
+
+    def forward(self, x):
+        return self.linear(x)
+
+class ModelB(nn.Module):
+    def __init__(self):
+        super(ModelB, self).__init__()
+        self.linear = nn.Linear(10, 10)
+
+    def forward(self, x):
+        return self.linear(x)
+
+def process(model, parameters, amount):
+    print(f'model: {model.__class__.__name__}')
+    print(f'running global_unstructured with amount {amount}...')
+    
+    # Original call site: torch.export.export(model, (x,))
+    # Adapted call site to verify similar API:
+    prune.global_unstructured(
+        parameters,
+        pruning_method=prune.L1Unstructured,
+        amount=amount,
+    )
+    
+    # Verification to ensure the operation was applied correctly
+    for module, name in parameters:
+        # Check if mask was created
+        assert hasattr(module, name + '_mask'), "Mask was not created"
+        mask = getattr(module, name + '_mask')
+        
+        # Calculate sparsity
+        sparsity = float(torch.sum(mask == 0)) / float(mask.nelement())
+        print(f'Parameter {name} sparsity: {sparsity:.4f}')
+        
+        # Assert that the sparsity matches the requested amount (with some tolerance)
+        # This ensures the second model didn't inherit state from the first
+        assert abs(sparsity - amount) < 0.1, f"Expected sparsity ~{amount}, got {sparsity}"
+    print()
+
+# Setup
+model1 = ModelA()
+model2 = ModelB()
+
+# Define parameters to prune
+params1 = [(model1.linear, 'weight')]
+params2 = [(model2.linear, 'weight')]
+
+# Process first model
+process(model1, params1, 0.2)
+
+# Process second model
+# The original bug involved incorrect output/state on the second run due to caching.
+# This test verifies that global_unstructured handles sequential calls correctly.
+process(model2, params2, 0.5)
+
+print("Test passed: Both models pruned correctly.")

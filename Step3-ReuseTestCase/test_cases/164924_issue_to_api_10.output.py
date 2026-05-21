@@ -1,0 +1,60 @@
+import torch
+import unittest
+import os
+
+# Helper function mimicking the structure of tf.experimental.dtensor.num_clients
+# to determine the execution environment for the test.
+def get_execution_device():
+    """
+    Determines the device to use for testing, mimicking the conditional logic
+    of num_clients() -> is_local_mode() -> jobs().
+    """
+    # Check if we are in a restricted environment (similar to checking is_local_mode)
+    # We use an environment variable check to mirror the os.environ.get in jobs()
+    if os.environ.get("PYTORCH_TEST_CUDA_SKIP") == "1":
+        return "cpu"
+    
+    # If CUDA is available, use it, otherwise CPU
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+class TestIsinScalarCompile(unittest.TestCase):
+    def test_isin_with_scalar_test_elements(self):
+        device = get_execution_device()
+        
+        # Skip if CUDA is required but not available
+        if device == "cuda" and not torch.cuda.is_available():
+            self.skipTest("CUDA not available")
+
+        # Set seed for reproducibility as in the original bug report
+        torch.manual_seed(777)
+
+        class IsinModule(torch.nn.Module):
+            def __init__(self, device):
+                super().__init__()
+                # Reproduce the specific tensor shapes from the bug report
+                # x is 1D, y is scalar (0D)
+                self.x = torch.randint(-50, 50, (1,), dtype=torch.int64, device=device)
+                self.y = torch.randint(-50, 50, (), dtype=torch.int64, device=device)
+
+            def forward(self):
+                # The operation that fails in the bug report
+                return torch.isin(self.x, self.y, assume_unique=False, invert=False)
+
+        model = IsinModule(device)
+        
+        # 1. Run in Eager mode
+        eager_output = model()
+        
+        # 2. Run in Compiled mode (Inductor)
+        # This is where the bug manifests according to the issue
+        compiled_model = torch.compile(model, backend='inductor')
+        compiled_output = compiled_model()
+        
+        # 3. Assert that the outputs match
+        self.assertTrue(torch.equal(eager_output, compiled_output), 
+                        f"Eager and Compiled outputs differ.\nEager: {eager_output}\nCompiled: {compiled_output}")
+
+if __name__ == '__main__':
+    unittest.main()

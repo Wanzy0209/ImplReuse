@@ -1,0 +1,35 @@
+import torch
+import torch.utils._pytree as pytree
+from torch.library import Library
+
+class Foo:
+    pass
+
+class Bar:
+    def __eq__(self, other):
+        return super().__eq__(other)
+
+    def __hash__(self):
+        return 0
+
+pytree.register_constant(Bar)
+
+# Define a custom library and operator to use with impl_abstract
+lib = Library("test_lib", "DEF")
+lib.define("fn(Tensor x, Foo obj) -> Tensor")
+
+# Replace torch.compile with torch.library.impl_abstract
+@torch.library.impl_abstract("test_lib::fn")
+def fn(x, obj):
+    obj.attr = {3: Bar()}
+    return x + 1
+
+# Add a concrete implementation to make the test runnable
+@torch.library.impl("test_lib::fn", "CPU")
+def fn_cpu(x, obj):
+    obj.attr = {3: Bar()}
+    return x + 1
+
+# Adapt the call site to use the custom operator
+result = torch.ops.test_lib.fn(torch.ones(3), Foo())
+assert torch.allclose(result, torch.ones(3) + 1)

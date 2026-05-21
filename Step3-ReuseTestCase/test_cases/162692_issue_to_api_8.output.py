@@ -1,0 +1,67 @@
+import torch
+import torch.distributed as dist
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh
+import os
+
+def test_dtensor_mean_uneven_sharding():
+    """
+    Test case for Issue #162692: Incorrect results of DTensor.mean with uneven sharding.
+    
+    This test verifies that DTensor.mean() correctly computes the global mean
+    when the tensor is sharded unevenly across devices.
+    """
+    # Initialize process group
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 2))
+    
+    # Note: The bug report uses 'nccl', but 'gloo' is used here for broader compatibility
+    # in test environments. The logic for DTensor mean is backend agnostic.
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    device_type = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    if device_type == "cuda":
+        torch.cuda.set_device(rank)
+
+    dist.init_process_group(backend=backend, init_method="tcp://localhost:29500", world_size=world_size, rank=rank)
+
+    try:
+        mesh = init_device_mesh(device_type, (2,))
+
+        # Case 1: 3x4 tensor (Uneven sharding: 2 rows on rank 0, 1 row on rank 1)
+        # Expected Mean: (0+...+11) / 12 = 66 / 12 = 5.5
+        tensor_3x4 = torch.arange(12, dtype=torch.float32).reshape(3, 4).to(device_type)
+        expected_mean_3x4 = tensor_3x4.mean()
+        
+        dt_3x4 = distribute_tensor(tensor_3x4, device_mesh=mesh, placements=[Shard(0)])
+        result_dt_3x4 = dt_3x4.mean()
+        result_3x4 = result_dt_3x4.full_tensor()
+        
+        if rank == 0:
+            print(f"Case 1 (3x4): Expected {expected_mean_3x4.item()}, Got {result_3x4.item()}")
+            assert torch.allclose(result_3x4, expected_mean_3x4), \
+                f"Case 1 Failed: Mean calculation incorrect for uneven sharding. Got {result_3x4}, expected {expected_mean_3x4}"
+
+        # Case 2: 1x4 tensor (Extreme uneven sharding: 1 row on rank 0, 0 rows on rank 1)
+        # Bug report mentioned this results in NaN.
+        # Expected Mean: (0+1+2+3) / 4 = 1.5
+        tensor_1x4 = torch.arange(4, dtype=torch.float32).reshape(1, 4).to(device_type)
+        expected_mean_1x4 = tensor_1x4.mean()
+        
+        dt_1x4 = distribute_tensor(tensor_1x4, device_mesh=mesh, placements=[Shard(0)])
+        result_dt_1x4 = dt_1x4.mean()
+        result_1x4 = result_dt_1x4.full_tensor()
+        
+        if rank == 0:
+            print(f"Case 2 (1x4): Expected {expected_mean_1x4.item()}, Got {result_1x4.item()}")
+            assert not torch.isnan(result_1x4), "Case 2 Failed: Result is NaN for extreme uneven sharding."
+            assert torch.allclose(result_1x4, expected_mean_1x4), \
+                f"Case 2 Failed: Mean calculation incorrect. Got {result_1x4}, expected {expected_mean_1x4}"
+                
+        if rank == 0:
+            print("All tests passed.")
+
+    finally:
+        dist.destroy_process_group()
+
+if __name__ == "__main__":
+    test_dtensor_mean_uneven_sharding()

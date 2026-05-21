@@ -1,0 +1,44 @@
+import torch
+import tensorflow as tf
+import functools
+
+# 1. Define a configuration class (mimicking CustomPolicy from the PyTorch issue)
+class LoopConfig:
+    def __init__(self, increment):
+        self.increment = increment
+
+# 2. Define a function that accepts the config and loop vars
+# (mimicking the usage of create_selective_checkpoint_contexts)
+def loop_body(i, x, config):
+    return i + 1, x + config.increment
+
+# 3. Define the condition function
+def loop_cond(i, x):
+    return i < 5
+
+# 4. Create a partial function binding the config
+# (mimicking context_fn1 = functools.partial(...))
+config = LoopConfig(increment=2.0)
+partial_body = functools.partial(loop_body, config=config)
+
+# 5. Wrap the execution in tf.function
+# (mimicking @torch.compile)
+@tf.function
+def run_while_loop(initial_val):
+    return tf.keras.ops.while_loop(
+        cond=loop_cond,
+        body=partial_body,  # Passing the functools.partial object here
+        loop_vars=(0, initial_val)
+    )
+
+# 6. Execute the test case
+initial_tensor = tf.constant(0.0)
+result_index, result_tensor = run_while_loop(initial_tensor)
+
+# 7. Verify behavior
+# Loop runs for i = 0, 1, 2, 3, 4. Final i is 5.
+# Tensor starts at 0.0, increments by 2.0 five times. Final tensor is 10.0.
+assert result_index == 5, f"Expected index 5, got {result_index}"
+assert result_tensor == 10.0, f"Expected tensor 10.0, got {result_tensor}"
+
+print("Test passed: tf.keras.ops.while_loop handled functools.partial correctly.")

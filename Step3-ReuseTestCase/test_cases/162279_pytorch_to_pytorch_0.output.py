@@ -1,0 +1,65 @@
+import torch
+import torch.nn as nn
+
+class AnyDimsModelEmpty(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        # Reduces over no dimensions, shape should remain the same
+        return torch.ops.aten.any.dims(x, [], False)
+
+class AnyDimsModelNull(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        # Reduces over all dimensions, shape should be scalar
+        return torch.ops.aten.any.dims(x, None, False)
+
+def test_torch_export_sequential_shape_correctness():
+    """
+    Test that torch.export.export correctly infers output shapes
+    when exporting multiple models that use torch.ops.aten.any.dims
+    with different dimension arguments (empty list vs None).
+    
+    This is a regression test for Issue #162279.
+    """
+    x = torch.randn(2, 3)
+
+    # Scenario 1: Export model with empty dims, then model with null dims
+    model_empty = AnyDimsModelEmpty()
+    ep_empty = torch.export.export(model_empty, (x,))
+    out_empty = ep_empty(x)
+    
+    # Expected shape for empty dims is the same as input
+    assert out_empty.shape == (2, 3), \
+        f"Empty Dims Model: Expected shape (2, 3), but got {out_empty.shape}"
+
+    model_null = AnyDimsModelNull()
+    ep_null = torch.export.export(model_null, (x,))
+    out_null = ep_null(x)
+    
+    # Expected shape for None dims is scalar ()
+    # Bug 162279: This might incorrectly be (2, 3) due to caching
+    assert out_null.shape == (), \
+        f"Null Dims Model: Expected shape (), but got {out_null.shape}"
+
+    # Scenario 2: Reverse order to ensure no state pollution in the other direction
+    model_null_2 = AnyDimsModelNull()
+    ep_null_2 = torch.export.export(model_null_2, (x,))
+    out_null_2 = ep_null_2(x)
+    
+    assert out_null_2.shape == (), \
+        f"Null Dims Model (2nd run): Expected shape (), but got {out_null_2.shape}"
+
+    model_empty_2 = AnyDimsModelEmpty()
+    ep_empty_2 = torch.export.export(model_empty_2, (x,))
+    out_empty_2 = ep_empty_2(x)
+    
+    assert out_empty_2.shape == (2, 3), \
+        f"Empty Dims Model (2nd run): Expected shape (2, 3), but got {out_empty_2.shape}"
+
+if __name__ == "__main__":
+    test_torch_export_sequential_shape_correctness()
+    print("Test passed successfully.")

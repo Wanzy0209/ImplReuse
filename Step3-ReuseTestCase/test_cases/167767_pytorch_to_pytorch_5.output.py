@@ -1,0 +1,41 @@
+import torch
+
+# Test case for torch.kron on MPS backend
+# Adapted from the clamp bug report to verify numerical correctness 
+# with specific values (0.0 and 1e-7) on the MPS device.
+
+if torch.backends.mps.is_available():
+    # Test 1: Kronecker product involving zeros and small values
+    # Mirroring the inputs from the original clamp issue
+    a = torch.zeros(1, device='mps')
+    b = torch.tensor([1e-7], device='mps')
+
+    print(f"Input a: {a}")
+    print(f"Input b: {b}")
+
+    c = torch.kron(a, b)
+    print(f"Result of torch.kron(a, b): {c}")
+
+    # Verify against CPU reference
+    a_cpu = a.cpu()
+    b_cpu = b.cpu()
+    c_cpu = torch.kron(a_cpu, b_cpu)
+
+    assert torch.allclose(c, c_cpu), f"MPS result {c} does not match CPU result {c_cpu}"
+
+    # Test 2: Kronecker product with mixed values
+    d = torch.tensor([1.0, 0.0], device='mps')
+    e = torch.tensor([1e-7, 1.0], device='mps')
+
+    print(f"Input d: {d}")
+    print(f"Input e: {e}")
+
+    f = torch.kron(d, e)
+    print(f"Result of torch.kron(d, e): {f}")
+
+    f_cpu = torch.kron(d.cpu(), e.cpu())
+    assert torch.allclose(f, f_cpu), f"MPS result {f} does not match CPU result {f_cpu}"
+
+    print("All tests passed.")
+else:
+    print("MPS backend is not available. Skipping test.")

@@ -1,0 +1,50 @@
+import torch
+import unittest
+
+# Helper function derived from the logic of the similar API (torch._numpy._funcs_impl.size)
+# This logic is reused to validate tensor dimensions in the test case.
+def get_tensor_size(a, axis=None):
+    if axis is None:
+        return a.numel()
+    else:
+        return a.shape[axis]
+
+class TestGridSampler3DNaN(unittest.TestCase):
+    def test_grid_sampler_3d_nan_handling(self):
+        """
+        Test that torch.grid_sampler_3d correctly propagates NaN values in the grid
+        on the MPS backend, matching the CPU behavior.
+        """
+        # Setup input and grid with NaN value (Reproducing the bug)
+        input_tensor = torch.ones(1, 1, 3, 3, 3)
+        grid_nan = torch.tensor([[[[[torch.nan, 1., 1.], [1., 1., 1.]]]]])
+
+        # 1. Run on CPU
+        out_cpu = torch.grid_sampler_3d(input_tensor, grid_nan, 0, 0, True)
+        
+        # 2. Validate CPU output size using the logic from the similar API
+        # The similar API focused on calculating size/numel. We ensure the output 
+        # has the expected number of elements before checking values.
+        expected_numel = get_tensor_size(out_cpu)
+        self.assertEqual(expected_numel, 2, "CPU output should have 2 elements")
+
+        # 3. Run on MPS if available
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS backend is not available")
+
+        input_mps = input_tensor.to("mps")
+        grid_mps = grid_nan.to("mps")
+        out_mps = torch.grid_sampler_3d(input_mps, grid_mps, 0, 0, True)
+
+        # 4. Validate MPS output size
+        mps_numel = get_tensor_size(out_mps)
+        self.assertEqual(mps_numel, expected_numel, "MPS output size mismatch")
+
+        # 5. Compare values
+        # The bug report indicates MPS returns [1., 1.] instead of [nan, 1.].
+        # We assert that MPS matches CPU (which correctly returns NaN).
+        # equal_nan=True ensures that NaN == NaN is considered True.
+        torch.testing.assert_close(out_mps.cpu(), out_cpu, equal_nan=True, rtol=0, atol=0)
+
+if __name__ == '__main__':
+    unittest.main()

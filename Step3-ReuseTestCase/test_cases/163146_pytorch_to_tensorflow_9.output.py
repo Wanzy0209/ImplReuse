@@ -1,0 +1,68 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_reparameterization_type_with_dynamic_slice():
+    """
+    Adapts the PyTorch dynamic slicing export bug (Issue 163146) to TensorFlow.
+    
+    Original Bug Context:
+    - API: torch.export.export
+    - Issue: Data dependent error on slices (item_embedding[:, :max_item_num, :])
+    
+    Target API Context:
+    - API: tf.compat.v1.distributions.ReparameterizationType
+    - Goal: Verify the behavior of the target API when used in a context 
+      involving dynamic slicing (the core logic of the original bug).
+    """
+    
+    # 1. Setup the environment and the specific API object
+    # We use a Normal distribution which is fully reparameterized.
+    dist = tf.compat.v1.distributions.Normal(loc=0.0, scale=1.0)
+    
+    # The API under test: accessing the reparameterization type
+    expected_type = tf.compat.v1.distributions.FULLY_REPARAMETERIZED
+    assert dist.reparameterization_type == expected_type
+
+    # 2. Define the model logic containing the "bug" reproduction logic
+    # In PyTorch, the error occurred during export/tracing of a function with dynamic slicing.
+    # In TensorFlow, we use tf.function to simulate the export/tracing/graph mode.
+    @tf.function
+    def process_data(item_embedding, max_item_num):
+        # Core bug reproduction logic: Dynamic slicing
+        # PyTorch code: selected_item_embedding = item_embedding[:, :max_item_num, :]
+        # TensorFlow equivalent:
+        selected_item_embedding = item_embedding[:, :max_item_num, :]
+        
+        # Interaction with the Similar API:
+        # We verify the reparameterization type within the traced function.
+        # This checks if the API property is accessible and correct in the graph context.
+        reparam_type = dist.reparameterization_type
+        
+        return selected_item_embedding, reparam_type
+
+    # 3. Prepare inputs
+    # Shape: [batch_size=10, sequence_length=20, embedding_dim=64]
+    item_embedding = tf.random.normal([10, 20, 64])
+    # Dynamic scalar value for slicing
+    max_item_num = tf.constant(5, dtype=tf.int32)
+
+    # 4. Execute the "exported" function
+    # Unlike the PyTorch bug which raised an error, we expect TensorFlow to handle this,
+    # potentially via retracing or dynamic shape inference.
+    result_slice, result_type = process_data(item_embedding, max_item_num)
+
+    # 5. Assertions to verify behavior
+    # Verify the slicing logic worked as intended
+    assert result_slice.shape[0] == 10
+    assert result_slice.shape[1] == 5  # Sliced by max_item_num
+    assert result_slice.shape[2] == 64
+    
+    # Verify the Similar API behavior
+    # The type should remain consistent inside the tf.function
+    assert result_type == tf.compat.v1.distributions.FULLY_REPARAMETERIZED
+    
+    print("Test Passed: ReparameterizationType verified successfully within dynamic slicing context.")
+
+if __name__ == "__main__":
+    test_reparameterization_type_with_dynamic_slice()

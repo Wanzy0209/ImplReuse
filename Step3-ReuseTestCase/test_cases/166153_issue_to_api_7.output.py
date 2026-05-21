@@ -1,0 +1,54 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_roll_compiled_context_stability():
+    """
+    Test case for tf.keras.ops.roll inspired by PyTorch Issue #166153.
+    
+    The original issue describes 'flex_attention' hitting a recompile limit 
+    due to input validation checks (specifically dtype and object ID) 
+    within a compiled context (torch.compile).
+    
+    This test verifies that tf.keras.ops.roll behaves correctly and stably 
+    within a TensorFlow compiled context (tf.function) when subjected to 
+    varying input types and properties (dtypes, argument types), ensuring 
+    it handles potential retracing or validation scenarios gracefully.
+    """
+    
+    # Define a compiled function wrapping the API under test
+    @tf.function
+    def compiled_roll(input_tensor, shift, axis):
+        return tf.keras.ops.roll(input_tensor, shift, axis)
+
+    # 1. Standard usage with int32
+    x_int = tf.constant([1, 2, 3, 4, 5], dtype=tf.int32)
+    result_int = compiled_roll(x_int, shift=2, axis=0)
+    expected_int = tf.constant([4, 5, 1, 2, 3], dtype=tf.int32)
+    assert np.array_equal(result_int.numpy(), expected_int.numpy()), "Int32 roll failed"
+
+    # 2. Usage with float32 (Mimicking the dtype checks in the original bug)
+    # The original bug log showed: "query.dtype != key.dtype"
+    # We verify the op handles different dtypes correctly in the compiled context.
+    x_float = tf.constant([1.0, 2.0, 3.0, 4.0, 5.0], dtype=tf.float32)
+    result_float = compiled_roll(x_float, shift=2, axis=0)
+    expected_float = tf.constant([4.0, 5.0, 1.0, 2.0, 3.0], dtype=tf.float32)
+    assert np.array_equal(result_float.numpy(), expected_float.numpy()), "Float32 roll failed"
+
+    # 3. Usage with Tensor arguments for shift/axis
+    # Testing if non-standard argument types cause retracing issues or errors
+    shift_tensor = tf.constant(1, dtype=tf.int32)
+    x_2d = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], dtype=tf.int32)
+    result_tensor_args = compiled_roll(x_2d, shift=shift_tensor, axis=0)
+    expected_tensor_args = tf.constant([[7, 8, 9], [1, 2, 3], [4, 5, 6]], dtype=tf.int32)
+    assert np.array_equal(result_tensor_args.numpy(), expected_tensor_args.numpy()), "Tensor args roll failed"
+
+    # 4. Usage with negative shift
+    result_neg = compiled_roll(x_int, shift=-1, axis=0)
+    expected_neg = tf.constant([2, 3, 4, 5, 1], dtype=tf.int32)
+    assert np.array_equal(result_neg.numpy(), expected_neg.numpy()), "Negative shift roll failed"
+
+    print("All test cases passed for tf.keras.ops.roll in compiled context.")
+
+if __name__ == "__main__":
+    test_roll_compiled_context_stability()

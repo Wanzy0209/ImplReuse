@@ -1,0 +1,63 @@
+import torch
+import os
+import tensorflow as tf
+import sys
+
+def test_create_tpu_mesh_command_injection():
+    """
+    Adapted test case for Issue 167480 (OS Command Injection).
+    
+    Original PyTorch Issue: torch.utils.cpp_extension.load_inline allowed 
+    OS command injection via extra_cflags due to subprocess.check_output(..., shell=True).
+    
+    This test verifies if tf.experimental.dtensor.create_tpu_mesh is vulnerable 
+    to similar injection via string arguments (e.g., mesh_name).
+    """
+    
+    # Setup: Define a unique marker file path to verify command execution
+    marker_file = "/tmp/tf_dtensor_injection_test.txt"
+    
+    # Clean up before test
+    if os.path.exists(marker_file):
+        os.remove(marker_file)
+
+    # Payload: Shell command to create the marker file
+    # We append this to a string argument passed to the API.
+    # In PyTorch, this was done via extra_cflags.
+    # Here, we attempt to inject it via mesh_name.
+    injection_payload = f"; touch {marker_file}; #"
+    
+    # We use a valid base name to ensure the API doesn't reject it immediately 
+    # for being empty or invalid format before reaching the vulnerable code path (if any).
+    malicious_mesh_name = f"test_mesh{injection_payload}"
+
+    try:
+        # Call the target API with the potentially malicious input.
+        # Note: create_tpu_mesh requires a TPU environment to fully succeed.
+        # We wrap it in a try/except to ensure we check for the side effect 
+        # even if the API fails due to hardware unavailability.
+        mesh = tf.experimental.dtensor.create_tpu_mesh(
+            mesh_dim_names=['x', 'y'],
+            mesh_shape=[2, 2],
+            mesh_name=malicious_mesh_name
+        )
+    except Exception as e:
+        # Expected if not running on a TPU or if the API validates inputs strictly.
+        # We print the error for debugging but proceed to check for the injection.
+        print(f"API Exception (expected if no TPU): {e}")
+
+    # Verification: Check if the marker file was created.
+    # If the file exists, the API executed the shell command, indicating a vulnerability.
+    if os.path.exists(marker_file):
+        print("SECURITY ISSUE DETECTED: Marker file created via OS command injection.")
+        # Clean up
+        os.remove(marker_file)
+        return False # Test failed (vulnerable)
+    else:
+        print("No OS command injection detected.")
+        return True # Test passed (safe)
+
+if __name__ == "__main__":
+    # Run the test
+    result = test_create_tpu_mesh_command_injection()
+    sys.exit(0 if result else 1)

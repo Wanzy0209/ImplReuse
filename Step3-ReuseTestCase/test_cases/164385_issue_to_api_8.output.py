@@ -1,0 +1,68 @@
+import tensorflow as tf
+import numpy as np
+
+def test_minimum_with_complex_symbolic_like_expression():
+    """
+    Test tf.keras.layers.Minimum with a complex expression structure similar to the FloorDiv issue.
+    
+    The original issue (164385) involved FloorDiv generating a sympy Rational (Mul) 
+    instead of maintaining the FloorDiv operation when handling complex symbolic expressions.
+    
+    This test adapts that logic to TensorFlow. We construct a complex arithmetic expression
+    mimicking the structure of the original bug report and apply the 'minimum' operation
+    (the similar API) to ensure it handles the inputs correctly without unexpected type 
+    conversions or calculation errors.
+    """
+    
+    # Create tensors corresponding to the symbolic variables s14 and s37
+    # We use specific integer values to simulate the symbolic evaluation
+    # s14 = 4032 (so s14 // 2016 = 2)
+    # s37 = 10
+    s14 = tf.constant(4032, dtype=tf.int32)
+    s37 = tf.constant(10, dtype=tf.int32)
+
+    print("Testing tf.keras.layers.Minimum with complex expression...")
+
+    # Build the numerator expression step by step (mirroring the original logic)
+    # Original: inner_expr = FloorDiv(s14 , 2016)
+    inner_expr = tf.math.floordiv(s14, 2016)
+
+    # Original: middle_expr = (24 * s37 + 672) * inner_expr
+    middle_expr = (24 * s37 + 672) * inner_expr
+
+    # Original: numerator = middle_expr + 21
+    numerator = middle_expr + 21
+
+    denominator = tf.constant(22, dtype=tf.int32)
+
+    print(f"Numerator: {numerator.numpy()}")
+    print(f"Denominator: {denominator.numpy()}")
+
+    # Create the Minimum layer (the similar API)
+    minimum_layer = tf.keras.layers.Minimum()
+
+    # Apply the minimum operation
+    # Note: The layer expects a list of inputs
+    result = minimum_layer([numerator, denominator])
+
+    print(f"Minimum result: {result.numpy()}")
+    print(f"Result type: {type(result)}")
+
+    # Assertions
+    # 1. Check that the result is a Tensor
+    assert isinstance(result, tf.Tensor), "Result should be a Tensor"
+
+    # 2. Check the value
+    # Calculation trace:
+    # inner_expr = 4032 // 2016 = 2
+    # middle_expr = (24*10 + 672) * 2 = (240 + 672) * 2 = 912 * 2 = 1824
+    # numerator = 1824 + 21 = 1845
+    # denominator = 22
+    # minimum(1845, 22) = 22
+    expected_value = 22
+    assert result.numpy() == expected_value, f"Expected {expected_value}, got {result.numpy()}"
+
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_minimum_with_complex_symbolic_like_expression()

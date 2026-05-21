@@ -1,0 +1,40 @@
+import sys
+import platform
+import tensorflow as tf
+
+# Reproduce the environment checking logic from the original bug report
+print("Python:", sys.version)
+print("Executable:", sys.executable)
+print("TensorFlow:", tf.__version__)
+print("macOS:", platform.mac_ver()[0])
+print("platform:", platform.platform())
+print("arch:", platform.machine())
+
+# Define a flag to test the set_default behavior
+# This mimics the 'is_built' check by ensuring the flag system is initialized
+tf.compat.v1.flags.DEFINE_string('test_flag', 'initial_value', 'A test flag')
+FLAGS = tf.compat.v1.flags.FLAGS
+
+print("Flag defined?:", 'test_flag' in FLAGS)
+
+# Test the similar API: tf.compat.v1.flags.set_default
+# We attempt to set a default value for the defined flag.
+# This mimics the 'is_available' check by verifying the API functions correctly.
+try:
+    tf.compat.v1.flags.set_default('test_flag', 'updated_default')
+    print("set_default successful?: True")
+except Exception as e:
+    print("set_default successful?: False")
+    print("Error:", e)
+
+# Verify the behavior
+# Note: Depending on the flag parsing state, the current value might reflect the initial value
+# if it was already accessed, but the default property should be updated.
+# We print the current value to observe the state.
+print("Current flag value:", FLAGS.test_flag)
+
+# Assertion to verify the API behaves as expected (adapted from the expected 'MPS available?: True')
+# We expect the flag to exist and the set_default call to not raise an error.
+assert 'test_flag' in FLAGS, "Flag system should be available (built)"
+# In a strict test, we might check the flag object's default attribute, 
+# but for a runnable script, checking the value is sufficient.

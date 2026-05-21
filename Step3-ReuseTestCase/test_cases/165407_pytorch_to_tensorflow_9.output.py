@@ -1,0 +1,81 @@
+import torch
+import tensorflow as tf
+import gc
+import sys
+
+def get_tensor_count():
+    """
+    Helper function to count the number of live tf.Tensor objects.
+    This mimics the 'Tensors: ...' metric in the original PyTorch bug report.
+    """
+    return sum(1 for obj in gc.get_objects() if isinstance(obj, tf.Tensor))
+
+def test_name_scope_memory_leak():
+    """
+    Adapted test case for tf.name_scope based on PyTorch torch.compile memory leak (Issue 165407).
+    
+    The original bug involved a memory leak where the number of tensors increased every step
+    while allocated memory remained stable (ghost tensors).
+    
+    This test verifies that using tf.name_scope in a repeated execution context
+    does not cause a similar unbounded growth in the number of live tensors.
+    """
+    print("Testing tf.name_scope for memory accumulation behavior...")
+
+    # Initial baseline
+    gc.collect()
+    initial_count = get_tensor_count()
+    print(f"Initial Tensors: {initial_count}")
+
+    # Simulate the training loop steps from the original bug report
+    # Steps: 150, 200, 250, 300
+    # We perform 50 iterations of work between each print statement to match the cadence.
+    for step in range(150, 301, 50):
+        
+        # Perform a batch of work
+        for _ in range(50):
+            # Use the API under test: tf.name_scope
+            # We use a dynamic name to ensure the context manager is actively creating scopes
+            with tf.name_scope(f"memory_leak_test_step_{step}"):
+                # Create tensors to simulate a forward pass (e.g., attention mechanism)
+                # Using random tensors to ensure they are new objects
+                x = tf.random.normal((32, 128))
+                y = tf.random.normal((32, 128))
+                
+                # Perform an operation
+                z = tf.matmul(x, y)
+                loss = tf.reduce_sum(z)
+
+            # Explicitly delete references to allow garbage collection
+            del x, y, z, loss
+
+        # Force garbage collection to check for lingering references
+        gc.collect()
+
+        current_count = get_tensor_count()
+        
+        # Calculate a dummy loss for display consistency with the original log
+        dummy_loss = 2.30 + (step * 0.0001)
+        
+        # Print status in a format similar to the original bug report
+        # Original: Step 150 | Loss: 2.3023 | Alloc: 0.017GB | Res: 0.055GB | Tensors: 2266 ...
+        print(f"Step {step} | Loss: {dummy_loss:.4f} | Tensors: {current_count}")
+
+    final_count = get_tensor_count()
+    print(f"Final Tensors: {final_count}")
+
+    # Assertion logic:
+    # In the original PyTorch bug, tensor count grew significantly (e.g., 2266 -> 3514).
+    # For a healthy API, the tensor count should remain relatively stable or bounded.
+    # We assert that the growth is minimal.
+    growth = final_count - initial_count
+    print(f"Total Tensor Growth: {growth}")
+
+    # Threshold: Allow some overhead, but fail if it grows by > 500 tensors (indicating a leak)
+    assert growth < 500, (
+        f"Potential memory leak detected in tf.name_scope. "
+        f"Tensor count grew by {growth} (Initial: {initial_count}, Final: {final_count})."
+    )
+
+if __name__ == "__main__":
+    test_name_scope_memory_leak()

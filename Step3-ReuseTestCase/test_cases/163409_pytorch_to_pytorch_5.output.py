@@ -1,0 +1,34 @@
+import torch
+
+# Check for CUDA availability as the original bug was specific to CUDA
+if torch.cuda.is_available():
+    # Replicate the input structure from the bug report
+    # input[0]: args for __init__
+    # input[1]: kwargs for __init__
+    # input[2]: args for forward
+    # input[3]: kwargs for forward
+    input_args = [
+        [()], 
+        {}, 
+        [
+            torch.empty((9, 6, 3, 6, 9), dtype=torch.complex128, device='cuda'), 
+            torch.empty((5, 7, 9, 8, 5), dtype=torch.uint32, device='cuda')
+        ], 
+        {}
+    ]
+
+    # Instantiate the similar API (torch.nn.MSELoss)
+    # This corresponds to: r1 = torch.nn.MaxUnpool3d(*input[0],**input[1])
+    r1 = torch.nn.MSELoss(*input_args[0], **input_args[1])
+    
+    # Call the similar API
+    # This corresponds to: r2 = r1(*input[2],**input[3])
+    # Note: MSELoss expects float inputs. Passing complex/uint32 is invalid.
+    # This test checks if the API handles this gracefully (raises error) vs crashing.
+    try:
+        r2 = r1(*input_args[2], **input_args[3])
+        print("Test Result:", r2)
+    except Exception as e:
+        print(f"Exception caught: {type(e).__name__}: {e}")
+else:
+    print("CUDA is not available. Skipping test.")

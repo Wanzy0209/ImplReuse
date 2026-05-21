@@ -1,0 +1,19 @@
+import torch
+import sys, platform, torch
+
+print("Python:", sys.version)
+print("Executable:", sys.executable)
+print("PyTorch:", torch.__version__)
+print("Platform:", platform.platform())
+print("Arch:", platform.machine())
+
+# Adapted test for torch.backends.opt_einsum.get_opt_einsum
+# This API returns the opt_einsum package if available, else None.
+opt_einsum_module = torch.backends.opt_einsum.get_opt_einsum()
+
+print("opt_einsum available?:", opt_einsum_module is not None)
+print("opt_einsum module:", opt_einsum_module)
+
+# Assertion to verify behavior
+assert opt_einsum_module is None or hasattr(opt_einsum_module, '__name__'), \
+    "get_opt_einsum should return None or a valid module"

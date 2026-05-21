@@ -1,0 +1,58 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    """
+    Initialize the distributed environment.
+    """
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    """
+    Destroy the process group.
+    """
+    dist.destroy_process_group()
+
+def run_distributed_test(rank, world_size):
+    """
+    Function to be run on each process.
+    Adapts the original test case loop to use torch.distributed.send_object_list.
+    """
+    setup(rank, world_size)
+
+    # Adapted loop from the original test case
+    for _ in range(10):
+        if rank == 0:
+            # Create tensors similar to the original script
+            # Note: Using CPU tensors here for compatibility with 'gloo' backend 
+            # in a generic runnable example. If CUDA is available and 'nccl' is used,
+            # device='cuda' can be added.
+            x = torch.randn(4096, 4096)
+            y = torch.randn(4096, 4096)
+            
+            object_list = [x, y]
+            
+            # Call the similar API: torch.distributed.send_object_list
+            # This replaces the torch_add / torch_compile_add calls from the original
+            dist.send_object_list(object_list, dst=1)
+        elif rank == 1:
+            # Receiver side to complete the communication
+            object_list = [None, None]
+            dist.recv_object_list(object_list, src=0)
+            
+            # Basic assertion to verify data reception
+            assert object_list[0] is not None
+            assert object_list[1] is not None
+            assert object_list[0].shape == (4096, 4096)
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn 2 processes to simulate the distributed environment
+    mp.spawn(run_distributed_test, args=(world_size,), nprocs=world_size, join=True)

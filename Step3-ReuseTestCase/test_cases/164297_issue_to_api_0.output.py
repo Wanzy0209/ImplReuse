@@ -1,0 +1,76 @@
+import torch
+import tensorflow as tf
+from tensorflow.python.framework import test_util
+from tensorflow.python.platform import test
+
+# The original bug (Issue 164297) involved a segfault when accessing a specific 
+# type (torch.onnx.OperatorExportTypes) during import, specifically related to 
+# type conversion (__int__).
+# The similar API (tf.experimental.unregister_dispatch_for) manages a registry 
+# of dispatch functions for types.
+# This test verifies the robustness of the registry management, ensuring that 
+# unregistering dispatch targets (both valid and invalid) does not cause crashes 
+# or unexpected behavior, mirroring the stability concerns of the original bug.
+
+@test_util.run_all_in_graph_and_eager_modes
+class UnregisterDispatchForTest(test.TestCase):
+
+  def test_unregister_dispatch_for_basic(self):
+    # Test the basic happy path: register and then unregister.
+    # This ensures the API can handle valid operations without crashing.
+    
+    class MyTensor(tf.experimental.ExtensionType):
+      value: tf.Tensor
+
+    @tf.experimental.dispatch_for_api(tf.abs)
+    def my_abs(x: MyTensor):
+      return MyTensor(tf.abs(x.value))
+
+    # Verify registration works
+    t = MyTensor(tf.constant(-5.0))
+    result = tf.abs(t)
+    self.assertIsInstance(result, MyTensor)
+    self.assertAllEqual(result.value, 5.0)
+
+    # Unregister the dispatch
+    tf.experimental.unregister_dispatch_for(my_abs)
+
+    # Verify unregistration worked (should raise ValueError as per docstring)
+    with self.assertRaises(ValueError):
+      tf.abs(t)
+
+  def test_unregister_dispatch_for_robustness(self):
+    # Test robustness against unregistering non-existent or already unregistered 
+    # targets. The original bug was a segfault (crash) on specific type access.
+    # We ensure this API handles edge cases gracefully.
+
+    class DummyType(tf.experimental.ExtensionType):
+      x: int
+
+    def dummy_dispatch(x: DummyType):
+      return DummyType(x.x + 1)
+
+    # Attempting to unregister a function that was never registered
+    # should not crash the interpreter.
+    try:
+      tf.experimental.unregister_dispatch_for(dummy_dispatch)
+    except Exception:
+      # Depending on implementation, it might raise a specific error, 
+      # but it must not segfault.
+      pass
+
+    # Register and then unregister twice
+    @tf.experimental.dispatch_for_api(tf.abs)
+    def temp_dispatch(x: DummyType):
+      return DummyType(abs(x.x))
+
+    tf.experimental.unregister_dispatch_for(temp_dispatch)
+    
+    # Second unregistration should also be handled gracefully
+    try:
+      tf.experimental.unregister_dispatch_for(temp_dispatch)
+    except Exception:
+      pass
+
+if __name__ == "__main__":
+  test.main()

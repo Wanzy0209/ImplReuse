@@ -1,0 +1,47 @@
+import torch
+import pytest
+
+# Reusing the code pattern from the similar API: tf.keras.activations.linear
+# which is a simple pass-through function.
+def linear(x):
+    """Linear activation function (pass-through)."""
+    return x
+
+def test_torch_compile_debug_mode_interaction():
+    """
+    Test that torch.compile raises an error when used inside DebugMode,
+    rather than silently skipping compilation.
+    
+    This test is based on Issue 164143 which reports that DebugMode 
+    silently disables torch.compile. The expected behavior (fix) is to 
+    raise an error indicating that a non-infra dispatch mode is present.
+    """
+    # torch._C._DebugModeGuard is the context manager that enables 
+    # the 'non-infra torch dispatch mode' mentioned in the bug report.
+    with torch._C._DebugModeGuard():
+        # We expect torch.compile to fail with a RuntimeError when 
+        # attempting to compile a function while in DebugMode.
+        with pytest.raises(RuntimeError, match="non-infra torch dispatch mode"):
+            compiled_fn = torch.compile(linear)
+            
+            # Create a dummy input
+            x = torch.randn(2, 2)
+            
+            # Calling the compiled function should trigger the error
+            # (or the compilation step itself, depending on implementation details,
+            # but usually the error is raised when the graph is captured/ran).
+            compiled_fn(x)
+
+if __name__ == "__main__":
+    # Basic execution check if pytest is not available
+    try:
+        test_torch_compile_debug_mode_interaction()
+        print("Test passed: Error raised as expected.")
+    except AssertionError as e:
+        print(f"Test failed: {e}")
+    except RuntimeError as e:
+        # If running without pytest, we catch the expected error to show it works
+        if "non-infra torch dispatch mode" in str(e):
+            print("Test passed: Expected RuntimeError caught.")
+        else:
+            print(f"Test failed with unexpected RuntimeError: {e}")

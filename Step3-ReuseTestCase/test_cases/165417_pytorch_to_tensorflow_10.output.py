@@ -1,0 +1,67 @@
+import torch
+import tensorflow as tf
+import time
+
+class MyModel(tf.Module):
+    def __init__(self):
+        super().__init__()
+        # In the original PyTorch code, self.relu was defined but torch.unique was called.
+        # Here we adapt the logic to use the requested API: tf.keras.activations.relu.
+
+    def __call__(self, x):
+        # Adaptation: Using tf.keras.activations.relu instead of torch.unique.
+        # Note: tf.keras.activations.relu preserves the input shape (static shape),
+        # unlike torch.unique which results in dynamic shapes.
+        _x = tf.keras.activations.relu(x)
+        
+        # Preserving the tuple output structure of the original test case
+        # to ensure the test runner handles the output types correctly.
+        return _x, x
+
+def GetInput():
+    # Matching the original input shape (8,)
+    return tf.random.normal((8,))
+
+def run_once(model, x, label):
+    t0 = time.perf_counter()
+    
+    # Adaptation: Using tf.function to simulate torch.compile(fullgraph=True).
+    # This traces the TensorFlow operations into a static graph.
+    compiled_model = tf.function(model)
+    
+    # Running the model
+    y = compiled_model(x)
+    
+    print(f"[{label}] ok, types={[type(t) for t in (y if isinstance(y, (tuple, list)) else [y])]} "
+          f"time={(time.perf_counter()-t0)*1000:.3f}ms")
+    return y
+
+def main():
+    print("tf.__version__ =", tf.__version__)
+
+    model = MyModel()
+    x = GetInput()
+
+    # 1. Run in Eager mode (equivalent to PyTorch eager)
+    y_eager = run_once(model, x, "Eager")
+
+    # 2. Run in Graph mode (equivalent to torch.compile)
+    # The original bug report indicated a failure in fullgraph mode due to dynamic shapes.
+    # Since tf.keras.activations.relu is a static-shape operator, we expect this to succeed.
+    y_graph = run_once(model, x, "Graph")
+
+    # Assertions to verify correctness and consistency
+    assert isinstance(y_eager, tuple), "Eager output should be a tuple"
+    assert isinstance(y_graph, tuple), "Graph output should be a tuple"
+    assert len(y_eager) == 2, "Eager output tuple length mismatch"
+    assert len(y_graph) == 2, "Graph output tuple length mismatch"
+
+    # Verify that Eager and Graph outputs are identical
+    for eager_tensor, graph_tensor in zip(y_eager, y_graph):
+        # tf.debugging.assert_near checks for element-wise equality
+        tf.debugging.assert_near(eager_tensor, graph_tensor, message="Eager and Graph outputs differ")
+
+    print("Test passed: tf.keras.activations.relu works correctly in both Eager and Graph modes.")
+
+if __name__ == "__main__":
+    main()

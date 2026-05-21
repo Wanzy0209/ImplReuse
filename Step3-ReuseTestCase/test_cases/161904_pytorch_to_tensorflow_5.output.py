@@ -1,0 +1,72 @@
+import torch
+import tensorflow as tf
+import unittest
+
+# The original bug report highlights an incompatibility between pipeline parallel schedules 
+# and torch.compiled models. 
+# 
+# The similar API, tf.compat.v1.train.add_queue_runner, is designed to manage 
+# asynchronous execution flows (QueueRunners) within a TensorFlow Graph. 
+# It is explicitly incompatible with eager execution (TF2 default), similar to how 
+# the original bug describes an incompatibility with the compiled mode.
+#
+# This test case adapts the logic by verifying that add_queue_runner correctly 
+# integrates with the Graph execution context (the TF equivalent of a compiled/static graph).
+
+class TestQueueRunnerCompatibility(unittest.TestCase):
+    
+    def test_add_queue_runner_in_graph_mode(self):
+        """
+        Verifies that tf.compat.v1.train.add_queue_runner works correctly 
+        in a Graph context (analogous to the compiled environment in the original bug).
+        """
+        # Disable eager execution to simulate the "compiled" graph environment
+        # where this API is intended to function.
+        tf.compat.v1.disable_eager_execution()
+        
+        with tf.Graph().as_default():
+            # Define a simple queue (analogous to a pipeline buffer)
+            queue = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.float32], shapes=[])
+            
+            # Define enqueue operations (analogous to pipeline stages processing data)
+            enqueue_op = queue.enqueue([1.0])
+            
+            # Create a QueueRunner (analogous to the pipeline schedule managing the flow)
+            # We create 2 threads to enqueue items, mimicking parallel stages.
+            qr = tf.compat.v1.train.QueueRunner(queue, [enqueue_op] * 2)
+            
+            # Call the API under test: add_queue_runner
+            # This adds the runner to the default collection (GraphKeys.QUEUE_RUNNERS)
+            tf.compat.v1.train.add_queue_runner(qr)
+            
+            # Verify the runner was successfully added to the collection
+            collected_runners = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+            
+            self.assertEqual(len(collected_runners), 1, "QueueRunner should be added to the collection")
+            self.assertIs(collected_runners[0], qr, "The collected runner should be the one we added")
+
+    def test_add_queue_runner_custom_collection(self):
+        """
+        Verifies that add_queue_runner can add to a custom collection,
+        ensuring flexibility in managing different pipeline stages.
+        """
+        tf.compat.v1.disable_eager_execution()
+        
+        with tf.Graph().as_default():
+            queue = tf.compat.v1.FIFOQueue(capacity=5, dtypes=[tf.int32])
+            qr = tf.compat.v1.train.QueueRunner(queue, [queue.enqueue([10])])
+            
+            custom_collection_key = "MY_PIPELINE_STAGES"
+            
+            # Add to a custom collection
+            tf.compat.v1.train.add_queue_runner(qr, collection=custom_collection_key)
+            
+            # Verify it is in the custom collection and NOT in the default one
+            custom_runners = tf.compat.v1.get_collection(custom_collection_key)
+            default_runners = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+            
+            self.assertIn(qr, custom_runners)
+            self.assertNotIn(qr, default_runners)
+
+if __name__ == "__main__":
+    unittest.main()

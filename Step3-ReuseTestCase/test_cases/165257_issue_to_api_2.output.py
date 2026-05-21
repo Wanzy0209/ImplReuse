@@ -1,0 +1,25 @@
+import tensorflow as tf
+
+# Test contexts for executing_eagerly
+# Mirroring the structure of the original test which compared operations across different devices (CPU vs MPS).
+# Here we compare the API behavior across different execution contexts (Eager vs Graph).
+contexts = [
+    ("Default", lambda: tf.compat.v1.executing_eagerly()),
+    ("Inside tf.function", lambda: tf.function(lambda: tf.compat.v1.executing_eagerly())()),
+    ("Inside init_scope", lambda: tf.function(lambda: tf.compat.v1.init_scope(lambda: tf.compat.v1.executing_eagerly())())()),
+]
+
+print(f"{'Context':<25} {'Expected':<12} {'Actual':<12} {'Status'}")
+print("-" * 65)
+
+for name, check_func in contexts:
+    # Expected behavior based on TensorFlow documentation
+    # Default and init_scope should be eager (True), tf.function should be graph (False)
+    expected = True if name in ["Default", "Inside init_scope"] else False
+    
+    # Execute the check
+    actual = check_func()
+    
+    # Determine status based on whether the API correctly identifies the context
+    status = " OK" if actual == expected else " BUG"
+    print(f"{name:<25} {str(expected):<12} {str(actual):<12} {status}")

@@ -1,0 +1,62 @@
+import torch
+import tensorflow as tf
+import numpy as np
+import pytest
+
+def test_dynamic_cache_input_shape():
+    """
+    Adapted from PyTorch Issue 167293.
+    Original Issue: torch.export.export fails with 'Constraints violated (seq)' 
+    when handling dynamic sequence lengths in KV cache tensors.
+    
+    This test verifies that tf.keras.Input correctly defines dynamic sequence
+    dimensions (using None) and that the resulting model can process inputs
+    of varying sequence lengths without raising constraint errors.
+    """
+    # Configuration mimicking the KV cache structure from the bug report
+    batch_size = 1
+    num_heads = 8
+    head_dim = 64
+    
+    # The 'seq' dimension is set to None to indicate it is dynamic.
+    # In the PyTorch bug, this dimension caused a UserError due to constraint violations.
+    # Here we verify that tf.keras.Input allows this definition.
+    key_cache_input = tf.keras.Input(
+        shape=(num_heads, None, head_dim), 
+        batch_size=batch_size, 
+        name="key_cache"
+    )
+    
+    # Simple model to simulate cache processing
+    x = tf.keras.layers.Dense(head_dim)(key_cache_input)
+    model = tf.keras.Model(inputs=key_cache_input, outputs=x)
+    
+    # Test Case 1: Sequence length within typical range (e.g., 10)
+    seq_len_1 = 10
+    input_data_1 = np.random.rand(batch_size, num_heads, seq_len_1, head_dim).astype(np.float32)
+    output_1 = model(input_data_1)
+    
+    # Assert the model handles the dynamic shape correctly
+    assert output_1.shape == (batch_size, num_heads, seq_len_1, head_dim), \
+        f"Failed for seq_len={seq_len_1}: Expected shape {(batch_size, num_heads, seq_len_1, head_dim)}, got {output_1.shape}"
+        
+    # Test Case 2: Sequence length mentioned in PyTorch error (512)
+    # The error mentioned: "Not all values of seq ... in the specified range seq <= 512"
+    seq_len_2 = 512
+    input_data_2 = np.random.rand(batch_size, num_heads, seq_len_2, head_dim).astype(np.float32)
+    output_2 = model(input_data_2)
+    
+    assert output_2.shape == (batch_size, num_heads, seq_len_2, head_dim), \
+        f"Failed for seq_len={seq_len_2}: Expected shape {(batch_size, num_heads, seq_len_2, head_dim)}, got {output_2.shape}"
+        
+    # Test Case 3: Another dynamic sequence length to ensure flexibility
+    seq_len_3 = 128
+    input_data_3 = np.random.rand(batch_size, num_heads, seq_len_3, head_dim).astype(np.float32)
+    output_3 = model(input_data_3)
+    
+    assert output_3.shape == (batch_size, num_heads, seq_len_3, head_dim), \
+        f"Failed for seq_len={seq_len_3}: Expected shape {(batch_size, num_heads, seq_len_3, head_dim)}, got {output_3.shape}"
+
+if __name__ == "__main__":
+    test_dynamic_cache_input_shape()
+    print("Test passed successfully.")

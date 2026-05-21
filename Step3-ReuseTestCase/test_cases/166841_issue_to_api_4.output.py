@@ -1,0 +1,87 @@
+import tensorflow as tf
+import numpy as np
+import sys
+
+def test_keras_ops_add_multi_device_compilation():
+    """
+    Test case adapted from PyTorch Issue 166841.
+    
+    Original Bug: aoti_compile_and_package incorrectly generates CUDA kernel 
+    for CPU scatter_add_ in multi-device models.
+    
+    Adaptation: This test verifies that tf.keras.ops.add (the similar API) 
+    correctly respects device placement (CPU vs GPU) when used within a 
+    compiled graph (tf.function) that involves mixed devices.
+    """
+    
+    # Check for GPU availability to ensure multi-device context
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        print("WARNING: No GPU found. This test requires a GPU to fully reproduce the multi-device context.")
+        # We proceed, but the test might not fully stress the device boundary logic
+        # intended by the original bug report.
+        device_name = '/CPU:0' # Fallback to CPU only
+    else:
+        device_name = '/GPU:0'
+
+    # --- 1. Minimal Model Definition ---
+    class MixedDeviceModel(tf.Module):
+        def __init__(self):
+            super().__init__()
+            # Buffers are on CPU (mimicking the PyTorch model)
+            with tf.device('/CPU:0'):
+                self.cpu_buffer = tf.Variable([1.0, 2.0, 3.0], dtype=tf.float32)
+
+        @tf.function # Tracing/Compilation equivalent to aoti_compile
+        def __call__(self, x):
+            # Inputs are on GPU (or fallback device)
+            
+            # 1. Operation on CPU tensors using the Similar API
+            # Original: z.scatter_add(0, self.index, self.src)
+            # Adapted: tf.keras.ops.add on CPU buffer
+            with tf.device('/CPU:0'):
+                # We perform an addition on the CPU buffer
+                cpu_result = tf.keras.ops.add(self.cpu_buffer, tf.constant(1.0, dtype=tf.float32))
+
+            # 2. Move result to CUDA (GPU) and continue on CUDA
+            # Original: v = vector + scatter_result.to(vector.dtype).to('cuda')
+            # Adapted: Add the CPU result to the GPU input
+            with tf.device(device_name):
+                # Note: TensorFlow handles device placement automatically, but we enforce 
+                # the scope to mimic the explicit .to('cuda') logic.
+                output = tf.keras.ops.add(x, cpu_result)
+                
+            return output
+
+    # --- 2. Setup and Compile ---
+    model = MixedDeviceModel()
+    
+    # Create inputs on the target device
+    with tf.device(device_name):
+        input_tensor = tf.constant([10.0, 20.0, 30.0], dtype=tf.float32)
+
+    print(f"Running model with inputs on {device_name} and buffers on CPU...")
+
+    # --- 3. Run (This is where the PyTorch bug failed) ---
+    try:
+        # The first call triggers tracing (compilation)
+        result = model(input_tensor)
+        
+        # Verify the result
+        # CPU: [1, 2, 3] + 1 = [2, 3, 4]
+        # GPU: [10, 20, 30] + [2, 3, 4] = [12, 23, 34]
+        expected = np.array([12.0, 23.0, 34.0], dtype=np.float32)
+        
+        assert np.allclose(result.numpy(), expected), \
+            f"Expected {expected}, but got {result.numpy()}"
+            
+        print("Test Passed: tf.keras.ops.add correctly handled mixed-device compilation.")
+        
+    except Exception as e:
+        print(f"Test Failed: {e}")
+        # In the PyTorch bug, this failed with:
+        # "CUDAGuardImpl initialized with non-CUDA DeviceType: cpu"
+        raise
+
+if __name__ == "__main__":
+    test_keras_ops_add_multi_device_compilation()

@@ -1,0 +1,48 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    if rank == 0:
+        # Sender process
+        # Create a list of objects to send
+        objects_to_send = [
+            torch.tensor([1, 2, 3], dtype=torch.float32),
+            "hello world",
+            {"key": "value"}
+        ]
+        print(f"Rank {rank} sending objects...")
+        dist.send_object_list(objects_to_send, dst=1)
+    elif rank == 1:
+        # Receiver process
+        # Prepare a list to receive objects (must match the size of the sent list)
+        received_objects = [None] * 3
+        
+        print(f"Rank {rank} receiving objects...")
+        # Call the similar API: torch.distributed.recv_object_list
+        dist.recv_object_list(received_objects, src=0)
+        
+        # Verify the received data
+        assert torch.equal(received_objects[0], torch.tensor([1, 2, 3], dtype=torch.float32))
+        assert received_objects[1] == "hello world"
+        assert received_objects[2] == {"key": "value"}
+        print(f"Rank {rank} successfully received and verified objects.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn 2 processes to simulate the distributed environment
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

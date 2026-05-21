@@ -1,0 +1,40 @@
+import torch
+import pytest
+
+# Similar API: tf.compat.v1.resource_loader.readahead_file_path
+# This API is a stub that silently returns the input path without performing
+# the intended operation (readahead). The bug report indicates that torch.compile
+# behaves similarly (silently skipping compilation) when DebugMode is active.
+# We reuse this pattern to define the expected "bad" behavior (silent skip)
+# which the test asserts against.
+
+def readahead_file_path(path, readahead='128M'):
+    """Mock of tf.compat.v1.resource_loader.readahead_file_path."""
+    # Readahead files not implemented; simply returns given path.
+    return path
+
+def test_torch_compile_debug_mode_raises_error():
+    """
+    Test that torch.compile raises an error when DebugMode is active,
+    rather than silently skipping compilation (which would be similar to
+    the behavior of the stub readahead_file_path).
+    """
+    def simple_model(x):
+        return x + 1
+
+    # Verify the similar API behavior (silent skip/no-op)
+    assert readahead_file_path("dummy_path") == "dummy_path"
+
+    # Enable DebugMode (non-infra torch dispatch mode)
+    original_debug_mode = torch._C._get_debug_mode()
+    try:
+        torch._C._set_debug_mode(True)
+
+        # The bug is that torch.compile would silently skip (like readahead_file_path)
+        # and run the eager model. The fix requires this to raise an error.
+        with pytest.raises(RuntimeError, match="non-infra torch dispatch mode"):
+            compiled_model = torch.compile(simple_model)
+            input_tensor = torch.randn(5)
+            compiled_model(input_tensor)
+    finally:
+        torch._C._set_debug_mode(original_debug_mode)

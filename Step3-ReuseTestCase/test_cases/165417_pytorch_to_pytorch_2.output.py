@@ -1,0 +1,51 @@
+import torch
+import torch.nn as nn
+import time
+
+class MyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        # Replacing torch.unique with torch.numel
+        # torch.numel returns the total number of elements in the input tensor.
+        # Unlike torch.unique, numel depends on the shape, not the data values.
+        count = torch.numel(x)
+        
+        # Return a tuple similar to the original structure
+        return self.relu(x), count
+
+def GetInput():
+    return torch.randn(8)
+
+def run_once(model, x, label):
+    model.eval()
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        y = model(x)
+    print(f"[{label}] ok, types={[type(t) for t in (y if isinstance(y, (tuple, list)) else [y])]} "
+          f"time={(time.perf_counter()-t0)*1000:.3f}ms")
+    return y
+
+def main():
+    print("torch.__version__ =", torch.__version__)
+
+    model = MyModel()
+    x = GetInput()
+
+    # 1. Run in Eager mode
+    run_once(model, x, "Eager")
+
+    # 2. Run in torch.compile with fullgraph=True
+    # The original issue reported a failure here for torch.unique.
+    # We verify if torch.numel triggers the same "Dynamic shape operator" error.
+    try:
+        compiled_model = torch.compile(model, fullgraph=True)
+        run_once(compiled_model, x, "Compiled Fullgraph")
+        print("Test passed: torch.numel is supported in fullgraph mode.")
+    except torch._dynamo.exc.Unsupported as e:
+        print(f"Test failed with error: {e}")
+
+if __name__ == "__main__":
+    main()

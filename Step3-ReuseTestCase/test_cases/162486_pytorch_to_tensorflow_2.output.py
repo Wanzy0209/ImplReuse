@@ -1,0 +1,55 @@
+import torch
+import tensorflow as tf
+from tensorflow.keras.ops import diagonal
+
+def test_diagonal_device(device_name: str = '/GPU:0'):
+    """
+    Adapted test case to verify tf.keras.ops.diagonal behavior 
+    when tensors are placed on a specific device (mimicking set_default_device).
+    """
+    # Check if the requested device exists
+    physical_devices = tf.config.list_physical_devices()
+    is_gpu = 'GPU' in device_name
+    has_gpu = any(d.device_type == 'GPU' for d in physical_devices)
+
+    if is_gpu and not has_gpu:
+        print(f"Skipping {device_name} test: No GPU available.")
+        return
+
+    print(f"Testing on device: {device_name}")
+    
+    try:
+        # In TensorFlow, we use tf.device to control where tensors are created and ops run.
+        # This mimics the behavior of torch.set_default_device.
+        with tf.device(device_name):
+            # Create random data (mimicking torch.randn)
+            # Using a shape similar to the original bug report context
+            x = tf.random.normal((100, 3))
+            
+            # Call the similar API: tf.keras.ops.diagonal
+            # The original API was random_split, which failed on CUDA.
+            # We test if diagonal handles the device context correctly.
+            result = diagonal(x)
+            
+            # Verify the result is as expected
+            # For a (100, 3) tensor, diagonal returns a (3,) tensor
+            assert result.shape == (3,), f"Expected shape (3,), got {result.shape}"
+            
+            # Ensure the result is actually on the correct device
+            # Note: result.device might be a composite string or specific device handle
+            # depending on TF version, but checking execution success is primary here.
+            
+            print(f"Device {device_name} worked.")
+
+    except Exception as e:
+        print(f"Device {device_name} failed with error: {e}")
+        raise
+
+# Run tests
+if __name__ == "__main__":
+    # Test on CPU (should always work)
+    test_diagonal_device(device_name='/CPU:0')
+    
+    # Test on GPU (if available)
+    # This corresponds to the 'cuda' test in the original bug report
+    test_diagonal_device(device_name='/GPU:0')

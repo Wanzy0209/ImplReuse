@@ -1,0 +1,59 @@
+import torch
+import tensorflow as tf
+import time
+
+# Set random seed for reproducibility
+tf.random.set_seed(0)
+
+# Original shapes were pairs for matrix multiplication (A, B).
+# For tf.keras.backend.switch, we need tensors of the same shape.
+# We adapt the test to use the first shape of each pair for the switch operation.
+shape_pairs = [
+     ((1, 12, 10, 64), (1, 12, 64, 10)),
+     ((1, 12, 10, 10), (1, 12, 10, 64)),
+]
+
+def benchmark_switch(shape, dtype=tf.float16, repeat=500):
+    """
+    Benchmarks tf.keras.backend.switch on CPU for a given tensor shape.
+    Preserves the structure of the original torch.matmul benchmark.
+    """
+    # Ensure execution on CPU
+    with tf.device("/CPU:0"):
+        # Create a scalar condition
+        condition = tf.constant(True)
+        
+        # Create tensors for then/else expressions
+        # Mimic the random generation range [-1, 1] from the original code
+        then_tensor = tf.random.uniform(shape, minval=-1, maxval=1, dtype=dtype)
+        else_tensor = tf.random.uniform(shape, minval=-1, maxval=1, dtype=dtype)
+
+        # warm up
+        for _ in range(5000):
+            _ = tf.keras.backend.switch(condition, then_tensor, else_tensor)
+
+        # run
+        times = []
+        for i in range(repeat):
+            start = time.time()
+            result = tf.keras.backend.switch(condition, then_tensor, else_tensor)
+            # Force execution in eager mode to get accurate timing
+            _ = result.numpy()
+            end = time.time()
+            if i > 100:
+                times.append(round((end - start) * 1000 * 1000))
+        
+        times.sort()
+        # print(times) # Optional: print raw times for debugging
+        avg_time_us = sum(times) / len(times)
+        
+        # Assertion to verify the operation ran correctly and shape is preserved
+        assert result.shape == shape
+        
+        return avg_time_us
+
+if __name__ == "__main__":
+    for a_shape, b_shape in shape_pairs:
+        # We benchmark using the first shape of the pair
+        t = benchmark_switch(a_shape)
+        print(f"Switch on shape {a_shape}  ->  {t:.3f} us")

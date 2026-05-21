@@ -1,0 +1,53 @@
+import torch
+import tensorflow as tf
+import os
+import sys
+
+def test_tf_enable_eager_execution_injection():
+    """
+    Adapted test case for OS command injection vulnerability.
+    
+    Original PyTorch Issue: OS command injection via torch.utils.cpp_extension.load_inline
+    due to subprocess.check_output(..., shell=True) with user-supplied extra_cflags.
+    
+    Target API: tf.compat.v1.enable_eager_execution
+    
+    Since tf.compat.v1.enable_eager_execution is a configuration switch and does not 
+    accept compilation flags or arbitrary string arguments for shell execution, 
+    this test verifies that passing malicious strings does not result in command execution
+    (either by rejecting the input or handling it safely).
+    """
+    
+    # Payload intended to create a file if command injection is possible
+    # In the original PyTorch bug, this would be passed to extra_cflags.
+    injection_payload = "; touch /tmp/tf_pwned_test"
+    test_file = "/tmp/tf_pwned_test"
+
+    # Cleanup before test
+    if os.path.exists(test_file):
+        os.remove(test_file)
+
+    try:
+        # Attempt to inject the payload.
+        # enable_eager_execution signature: 
+        # (config=None, device_policy=None, execution_mode=None)
+        # We try to pass the malicious string as the first argument (config).
+        # If the API were vulnerable and accepted raw strings passed to a shell,
+        # the command would execute.
+        tf.compat.v1.enable_eager_execution(injection_payload)
+        
+    except TypeError as e:
+        # Expected behavior: The API rejects the string because 'config' expects 
+        # a ConfigProto object or None, not a raw string.
+        print(f"Caught expected TypeError (API rejected input): {e}")
+    except Exception as e:
+        print(f"Caught unexpected exception: {e}")
+
+    # Verify that the command was NOT executed
+    assert not os.path.exists(test_file), \
+        "Security Alert: OS Command Injection detected! The file was created."
+    
+    print("Test Passed: The API is not vulnerable to this injection vector.")
+
+if __name__ == "__main__":
+    test_tf_enable_eager_execution_injection()

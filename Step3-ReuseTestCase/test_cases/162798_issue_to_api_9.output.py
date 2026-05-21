@@ -1,0 +1,52 @@
+import torch
+import math
+from contextlib import contextmanager
+
+# Reusing the pattern from tf.compat.v1.flags.set_default:
+# A context manager that sets up a specific state (device) and ensures cleanup.
+@contextmanager
+def device_context(tensor, device_name):
+    """
+    Context manager to handle device availability and tensor movement,
+    mirroring the try/finally structure of tf.compat.v1.flags.set_default.
+    """
+    is_available = False
+    if device_name == 'cpu':
+        is_available = True
+    elif device_name == 'cuda' and torch.cuda.is_available():
+        is_available = True
+    elif device_name == 'mps' and torch.backends.mps.is_available():
+        is_available = True
+
+    if not is_available:
+        yield None
+        return
+
+    # Setup (Push)
+    tensor_on_device = tensor.to(device_name)
+    try:
+        yield tensor_on_device
+    finally:
+        # Teardown (Pop) - Structure matches the similar API
+        pass
+
+def test_nanmedian_empty_input():
+    x = torch.empty((0,), dtype=torch.float32)
+    print("Input tensor:", x)
+
+    # Test on CPU, CUDA, and MPS using the context manager pattern
+    for device in ['cpu', 'cuda', 'mps']:
+        with device_context(x, device) as x_dev:
+            if x_dev is None:
+                continue
+
+            result = torch.nanmedian(x_dev)
+            print(f"{device} result: {result}")
+
+            # Bug: MPS returns 0. Expected: NaN (consistent with CPU/CUDA).
+            # We assert that the result is NaN.
+            assert math.isnan(result.item()), \
+                f"Bug detected on {device}: torch.nanmedian returned {result.item()} instead of NaN for empty input."
+
+if __name__ == "__main__":
+    test_nanmedian_empty_input()

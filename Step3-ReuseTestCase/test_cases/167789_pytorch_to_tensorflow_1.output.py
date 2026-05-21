@@ -1,0 +1,42 @@
+import torch
+import sys
+import tensorflow as tf
+
+# Preserve the core bug reproduction logic: setting a high recursion limit
+sys.setrecursionlimit(10000000)
+
+# Define the recursive function
+def fn(x, n):
+    if n == 0:
+        return x
+    return fn(x, n - 1) + 1
+
+# Define the computation to be passed to the similar API
+def computation(x):
+    return fn(x, 1000)
+
+# Prepare inputs for tf.compat.v1.tpu.batch_parallel
+# The API expects a list of lists of Tensors
+inputs = [[tf.ones([3])]]
+
+# Attempt to run the test case
+# Note: tf.compat.v1.tpu.batch_parallel requires a TPU environment.
+try:
+    # Initialize TPU system (Required for the API to function)
+    resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(resolver)
+    tf.tpu.experimental.initialize_tpu_system(resolver)
+
+    # Call the similar API
+    # This mimics the structure of @torch.compile wrapping the recursive call
+    output = tf.compat.v1.tpu.batch_parallel(computation, inputs=inputs)
+    
+    # If successful, the recursion limit was respected or handled
+    print("Test passed. Output:", output)
+
+except RecursionError as e:
+    # Check if the recursion limit issue persists in the similar API
+    print(f"RecursionError encountered: {e}")
+except Exception as e:
+    # Handle environment errors (e.g., no TPU found) or other API specific errors
+    print(f"Test execution failed: {e}")

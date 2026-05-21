@@ -1,0 +1,83 @@
+import tensorflow as tf
+
+# Disable eager execution to use TF 1.x style graph mode, 
+# which is required for string_input_producer
+tf.compat.v1.disable_eager_execution()
+
+def test_duplicate_string_input_producer_logic():
+    """
+    Adapts the PyTorch joint_graph.py merge mistake logic to TensorFlow.
+    
+    Original Bug: joint_custom_pre_pass is executed twice due to a merge error.
+    Adapted Logic: string_input_producer is invoked twice in the graph construction,
+    mimicking the duplicate execution pattern.
+    """
+    
+    # Mock configuration object similar to PyTorch's config
+    class Config:
+        joint_custom_pre_pass = True
+        joint_graph_constant_folding = True
+
+    config = Config()
+    
+    # Input data for the producer
+    string_tensor = ["file1.txt", "file2.txt", "file3.txt"]
+
+    # --- Adapted Code Block Start ---
+
+    # 1. First invocation (The original intended location)
+    if config.joint_custom_pre_pass is not None:
+        # Mimics: GraphTransformObserver(graph, "joint_custom_pre_pass").apply_graph_pass(...)
+        # We use the similar API to add ops to the graph
+        q1 = tf.compat.v1.train.string_input_producer(
+            string_tensor, 
+            name="joint_custom_pre_pass_instance_1",
+            shuffle=False
+        )
+
+    # 2. Intermediate operation (mimicking remove_noop_ops)
+    # In the original code, this sits between the two duplicate blocks.
+    # We represent this with a standard TF operation.
+    with tf.name_scope("remove_noop_ops"):
+        noop_identity = tf.identity(string_tensor[0], name="noop")
+
+    # 3. Conditional operation (mimicking constant_fold_uniform_value)
+    if config.joint_graph_constant_folding:
+        with tf.name_scope("constant_fold_uniform_value"):
+            const_val = tf.constant(42)
+
+    # 4. Second invocation (The Merge Mistake / Bug)
+    # This block should have been removed or moved, but was duplicated.
+    if config.joint_custom_pre_pass is not None:
+        # Mimics the duplicate call to apply_graph_pass
+        q2 = tf.compat.v1.train.string_input_producer(
+            string_tensor, 
+            name="joint_custom_pre_pass_instance_2",
+            shuffle=False
+        )
+
+    # --- Adapted Code Block End ---
+
+    # Verification
+    # We check the graph to see if the "bug" (duplicate queue creation) occurred.
+    graph = tf.compat.v1.get_default_graph()
+    
+    # string_input_producer creates FIFOQueueV2 ops
+    queue_ops = [op for op in graph.get_operations() if op.type == 'FIFOQueueV2']
+    
+    # Because of the duplicated logic, we expect 2 queues instead of 1.
+    # This assertion verifies that the "bug reproduction logic" is present.
+    assert len(queue_ops) == 2, (
+        f"Expected 2 queue operations due to duplicate logic, found {len(queue_ops)}. "
+        "The bug reproduction logic (duplicate invocation) was not successful."
+    )
+    
+    # Verify the names match our duplicate calls to ensure it's the specific API being duplicated
+    queue_names = [op.name for op in queue_ops]
+    assert "joint_custom_pre_pass_instance_1" in queue_names
+    assert "joint_custom_pre_pass_instance_2" in queue_names
+
+    print("Test passed: The duplicate logic pattern was successfully applied to the TensorFlow API.")
+
+if __name__ == "__main__":
+    test_duplicate_string_input_producer_logic()

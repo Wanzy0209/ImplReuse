@@ -1,0 +1,47 @@
+import tensorflow as tf
+import time
+
+# Set seed for reproducibility
+tf.random.set_seed(0)
+
+# Adapted shapes for resize_volumes (requires 5D tensor)
+# Original shapes were 4D: (1, 12, 10, 64) etc.
+# We add a dimension to make it 5D: (Batch, Depth, Height, Width, Channels)
+shapes = [
+    (1, 12, 10, 64, 64),
+    (1, 12, 10, 10, 64),
+]
+
+def benchmark_resize_volumes(x_shape, depth_factor, height_factor, width_factor, dtype=tf.float16, device="/cpu:0", repeat=500):
+    # Create tensor on specified device
+    with tf.device(device):
+        # Mimic the original data generation: uniform distribution between -1 and 1
+        X = tf.random.uniform(x_shape, minval=-1, maxval=1, dtype=dtype)
+
+    # Warm up
+    for _ in range(5000):
+        with tf.device(device):
+            _ = tf.keras.backend.resize_volumes(X, depth_factor, height_factor, width_factor, data_format='channels_last')
+
+    # Run benchmark
+    times = []
+    for i in range(repeat):
+        start = time.time()
+        with tf.device(device):
+            _ = tf.keras.backend.resize_volumes(X, depth_factor, height_factor, width_factor, data_format='channels_last')
+        end = time.time()
+        if i > 100:
+            times.append(round((end - start) * 1000 * 1000))
+    
+    times.sort()
+    print(times)
+    avg_time_us = sum(times) / len(times)
+    return avg_time_us
+
+if __name__ == "__main__":
+    # Factors for resizing (depth, height, width)
+    factors = (2, 2, 2) 
+    
+    for shape in shapes:
+        t = benchmark_resize_volumes(shape, factors[0], factors[1], factors[2])
+        print(f"{shape} -> {t:.3f} us")

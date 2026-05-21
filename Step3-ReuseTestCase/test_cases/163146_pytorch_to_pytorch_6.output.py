@@ -1,0 +1,67 @@
+import torch
+import torch.nn as nn
+from torch.export import export
+
+class PCASlicingModel(nn.Module):
+    """
+    A model that performs PCA and then slices the output components
+    based on a dynamic tensor input.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x, k):
+        # Perform PCA on the input x
+        # x shape: (m, n)
+        U, S, V = torch.pca_lowrank(x, center=True, niter=2)
+        
+        # Attempt to slice the output using a tensor k, similar to the bug report
+        # where item_embedding was sliced by max_item_num (a tensor).
+        # This operation triggers the "Data dependent error" in torch.export
+        # if the slicing logic cannot be resolved statically.
+        
+        # U shape: (m, min(m, n))
+        # k: scalar tensor
+        
+        U_sliced = U[:, :k]
+        S_sliced = S[:k]
+        V_sliced = V[:, :k]
+        
+        return U_sliced, S_sliced, V_sliced
+
+def test_pca_lowrank_export_with_dynamic_slicing():
+    # Setup inputs
+    # m=10 samples, n=5 features
+    x = torch.randn(10, 5)
+    # k is a dynamic tensor input representing the number of components to keep
+    k = torch.tensor(3)
+    
+    model = PCASlicingModel()
+    
+    print("Testing torch.export.export with torch.pca_lowrank and dynamic slicing...")
+    
+    try:
+        # Attempt to export the model
+        # The original bug report showed failures with both strict=False and strict=True
+        # when encountering data-dependent slicing.
+        exported_program = export(model, args=(x, k))
+        
+        print("Export successful.")
+        
+        # Verify the exported program runs
+        res = exported_program.module()(x, k)
+        
+        # Basic assertion to check output shapes match the dynamic input k
+        assert res[0].shape[1] == k.item(), f"Output shape mismatch for U: expected {k.item()}, got {res[0].shape[1]}"
+        assert res[1].shape[0] == k.item(), f"Output shape mismatch for S: expected {k.item()}, got {res[1].shape[0]}"
+        assert res[2].shape[1] == k.item(), f"Output shape mismatch for V: expected {k.item()}, got {res[2].shape[1]}"
+        
+        print("Test passed: Export and execution successful.")
+        
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        # Re-raise to ensure the test runner sees the failure
+        raise
+
+if __name__ == "__main__":
+    test_pca_lowrank_export_with_dynamic_slicing()

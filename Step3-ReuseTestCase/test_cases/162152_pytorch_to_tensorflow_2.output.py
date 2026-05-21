@@ -1,0 +1,59 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_softmax_cross_entropy_with_logits():
+    """
+    Adapted test case for tf.nn.softmax_cross_entropy_with_logits.
+    Preserves the logic of checking device availability, placing tensors on the device,
+    and verifying the execution of the operation.
+    """
+    # Check for GPU availability (mirroring torch.<mybackend>.is_available)
+    gpus = tf.config.list_physical_devices('GPU')
+    
+    if gpus:
+        print(f"Detected {len(gpus)} GPU(s)")
+        
+        # Configure memory growth to avoid allocating all memory at once
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError as e:
+            print(e)
+
+        # Define dimensions matching the PyTorch SimpleModel output
+        batch_size = 20
+        output_size = 5  # Corresponds to the output of the linear layer in SimpleModel
+
+        # Place tensors on the first GPU (mirroring model.<mybackend>())
+        with tf.device('/GPU:0'):
+            # Simulate model output (logits) and input labels
+            # PyTorch input: (20, 10) -> Output: (20, 5)
+            logits = tf.random.normal([batch_size, output_size])
+            
+            # Create random labels and normalize them to be a valid probability distribution
+            labels = tf.random.uniform([batch_size, output_size], minval=0, maxval=1)
+            labels = labels / tf.reduce_sum(labels, axis=1, keepdims=True)
+
+            # Call the target API: tf.nn.softmax_cross_entropy_with_logits
+            # This API expects unscaled logits and performs softmax internally.
+            loss = tf.nn.softmax_cross_entropy_with_logits(labels=labels, logits=logits)
+
+            # Verify the result
+            print("Success")
+            
+            # Assertions to check behavior
+            assert loss.shape == (batch_size,), f"Expected shape ({batch_size},), got {loss.shape}"
+            assert not tf.reduce_any(tf.math.is_nan(loss)), "Loss calculation resulted in NaN"
+            assert not tf.reduce_any(tf.math.is_inf(loss)), "Loss calculation resulted in Inf"
+            
+            print(f"Output shape: {loss.shape}")
+            print(f"Sample loss values: {loss.numpy()[:5]}")
+            
+    else:
+        # Mimic the 'else: raise' block in the original test case
+        print("No GPU detected, raising error.")
+        raise RuntimeError("GPU not available")
+
+if __name__ == "__main__":
+    test_softmax_cross_entropy_with_logits()

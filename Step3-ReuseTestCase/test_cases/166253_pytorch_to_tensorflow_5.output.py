@@ -1,0 +1,35 @@
+import torch
+import tensorflow as tf
+
+# Adapted function using the similar API: tf.keras.ops.convert_to_tensor
+# Note: torch.full creates a tensor of a specific shape filled with a value.
+# tf.keras.ops.convert_to_tensor converts a value to a tensor. 
+# We adapt the test to verify if the value conversion handles dynamic inputs correctly under JIT.
+def func_nojit(x):
+    return tf.keras.ops.convert_to_tensor(x, dtype=tf.float64)
+
+# Apply JIT compilation (TensorFlow equivalent of torch.compile)
+func_jit = tf.function(func_nojit)
+
+# Test inputs
+# PyTorch used torch.tensor(5.0, dtype=torch.float64)
+# We use tf.constant to represent the tensor input
+x1 = tf.constant(5.0, dtype=tf.float64)
+x2 = tf.constant(10.0, dtype=tf.float64)
+
+print("Testing func_nojit:")
+res1 = func_nojit(x1)
+res2 = func_nojit(x2)
+print(res1)
+print(res2)
+
+print("\nTesting func_jit:")
+res3 = func_jit(x1)
+res4 = func_jit(x2)
+print(res3)
+print(res4)
+
+# Assertions to verify the behavior matches expectations (no caching of the first value)
+# The original bug showed the second call returning the first value (5.0 instead of 10.0)
+assert res3.numpy() == 5.0, f"Expected 5.0, got {res3.numpy()}"
+assert res4.numpy() == 10.0, f"Expected 10.0, got {res4.numpy()} (Potential caching bug detected)"

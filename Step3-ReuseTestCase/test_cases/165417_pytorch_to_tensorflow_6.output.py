@@ -1,0 +1,59 @@
+import torch
+import tensorflow as tf
+import time
+import numpy as np
+
+class MyModel(tf.keras.Model):
+    def __init__(self):
+        super().__init__()
+        self.relu = tf.keras.layers.ReLU()
+
+    def call(self, x):
+        # tf.keras.layers.add is a layer that adds a list of inputs.
+        # Unlike torch.unique, this operation does not produce data-dependent output shapes.
+        # We adapt the test to verify that this API works correctly within 
+        # TensorFlow's graph mode (tf.function), which is analogous to torch.compile.
+        
+        # Note: tf.keras.layers.add expects a list of tensors as input.
+        # We add the tensor to itself to mimic a processing step.
+        added = tf.keras.layers.add([x, x])
+        
+        return self.relu(added)
+
+def get_input():
+    # Equivalent to torch.randn(8)
+    return tf.random.normal((8,))
+
+def run_once(model, x, label):
+    t0 = time.perf_counter()
+    y = model(x)
+    elapsed = (time.perf_counter() - t0) * 1000
+    print(f"[{label}] ok, type={type(y)} time={elapsed:.3f}ms")
+    return y
+
+def main():
+    print("tf.__version__ =", tf.__version__)
+
+    model = MyModel()
+    x = get_input()
+
+    # 1. Run in Eager mode
+    y_eager = run_once(model, x, "Eager")
+
+    # 2. Run in Graph mode (tf.function is the TF equivalent of torch.compile)
+    # We wrap the model's call method in tf.function to trigger tracing.
+    compiled_call = tf.function(model.call)
+    y_graph = run_once(compiled_call, x, "Graph (tf.function)")
+
+    # 3. Verification
+    # Ensure that the behavior is consistent between eager and graph execution.
+    # The original PyTorch issue involved a failure to compile due to dynamic shapes.
+    # Here we verify that tf.keras.layers.add compiles and runs successfully.
+    if np.allclose(y_eager.numpy(), y_graph.numpy()):
+        print("Verification passed: Eager and Graph outputs match.")
+    else:
+        print("Verification failed: Outputs differ.")
+        raise AssertionError("Eager and Graph outputs differ")
+
+if __name__ == "__main__":
+    main()

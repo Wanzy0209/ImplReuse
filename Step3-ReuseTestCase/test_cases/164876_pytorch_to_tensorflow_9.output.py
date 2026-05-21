@@ -1,0 +1,83 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_sparse_add_divergence():
+    """
+    Adapted test case for tf.sparse.add based on the PyTorch torch.unique bug.
+    
+    The original bug involves an operation (torch.unique) that produces a tensor 
+    with a size dependent on data (dynamic shape), which is then used in a 
+    matrix multiplication with a static tensor. This causes a divergence between 
+    eager mode (where the size is known) and compiled mode (where the size might 
+    be symbolic or inferred differently).
+    
+    Here, we use tf.sparse.add, which produces a SparseTensor. The number of 
+    non-zero values (the 'values' tensor) has a dynamic shape. We extract these 
+    values and perform a matmul with a static tensor to check for similar 
+    behavior in TensorFlow's eager and graph (XLA) modes.
+    """
+    
+    # Setup inputs to mimic the PyTorch scenario where the result of the operation 
+    # has a specific size (1) in eager mode.
+    # We create two sparse tensors that overlap, so their sum has 1 non-zero element.
+    # sp_a: [0,0] = 1.0
+    # sp_b: [0,0] = 1.0
+    # sum:  [0,0] = 2.0 -> values shape is (1,)
+    
+    indices_a = tf.constant([[0, 0]], dtype=tf.int64)
+    values_a = tf.constant([1.0], dtype=tf.float64)
+    shape_a = tf.constant([1, 1], dtype=tf.int64)
+    sp_a = tf.SparseTensor(indices_a, values_a, shape_a)
+
+    indices_b = tf.constant([[0, 0]], dtype=tf.int64)
+    values_b = tf.constant([1.0], dtype=tf.float64)
+    shape_b = tf.constant([1, 1], dtype=tf.int64)
+    sp_b = tf.SparseTensor(indices_b, values_b, shape_b)
+
+    # Static tensor corresponding to var_node_5 in the original bug report
+    # Shape (1, 18)
+    var_node_5 = tf.fill((1, 18), 0.40330381448978797)
+
+    def fuzzed_program_tf(sp_a, sp_b, static_tensor):
+        # API Under Test: tf.sparse.add
+        # Corresponds to torch.unique in the original report
+        res_sparse = tf.sparse.add(sp_a, sp_b)
+        
+        # Extract the values. The shape of this tensor is (num_non_zeros,).
+        # In eager mode with these inputs, num_non_zeros is 1.
+        # In compiled mode, this might be treated as a dynamic dimension.
+        var_node_1 = res_sparse.values
+        
+        # Cast to float64 to match original logic (though already float64 here)
+        var_node_1 = tf.cast(var_node_1, tf.float64)
+        
+        # Matrix multiplication
+        # var_node_1 is (1,), var_node_5 is (1, 18).
+        # (1,) @ (1, 18) -> (1, 1) @ (1, 18) -> (1, 18) -> (18,)
+        # This corresponds to the failing operation in the original bug.
+        var_node_0 = tf.matmul(var_node_1, static_tensor)
+        
+        return var_node_0
+
+    # 1. Test Eager Mode
+    print("Testing Eager Mode...")
+    try:
+        result_eager = fuzzed_program_tf(sp_a, sp_b, var_node_5)
+        print(f" Eager success. Result shape: {result_eager.shape}, values: {result_eager.numpy()[:5]}...")
+    except Exception as e:
+        print(f" Eager failed: {e}")
+
+    # 2. Test Compiled Mode (tf.function with XLA)
+    # This mimics torch.compile behavior.
+    print("\nTesting Compiled Mode (tf.function with jit_compile=True)...")
+    compiled_program = tf.function(fuzzed_program_tf, jit_compile=True)
+    
+    try:
+        result_compiled = compiled_program(sp_a, sp_b, var_node_5)
+        print(f" Compile success. Result shape: {result_compiled.shape}, values: {result_compiled.numpy()[:5]}...")
+    except Exception as e:
+        print(f" Compile failed: {e}")
+
+if __name__ == "__main__":
+    test_tf_sparse_add_divergence()

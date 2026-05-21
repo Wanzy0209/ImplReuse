@@ -1,0 +1,54 @@
+import torch
+import unittest
+
+# This test case reproduces the segmentation fault in torch.nn.MaxUnpool3d.
+# It leverages the wrapper pattern (try/finally) seen in the similar API
+# (tf.compat.v1.enable_control_flow_v2) to manage the execution context.
+
+def run_with_context_guard(fn):
+    """
+    Mimics the structure of tf.compat.v1.enable_control_flow_v2.
+    It wraps the function execution to ensure cleanup or state restoration.
+    """
+    try:
+        return fn()
+    finally:
+        # In the TF API, this restores control flow flags.
+        # Here, we ensure CUDA cache is cleared or perform cleanup.
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+class TestMaxUnpool3dSegfault(unittest.TestCase):
+    def test_invalid_args_crash(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is not available")
+
+        # Inputs derived from the bug report
+        # input[0] and input[1] are for __init__
+        init_args = ()
+        init_kwargs = {}
+
+        # input[2] and input[3] are for forward
+        # Note: Mismatched shapes and types (complex128, uint32) causing the crash
+        tensor_a = torch.empty((9, 6, 3, 6, 9), dtype=torch.complex128, device='cuda')
+        tensor_b = torch.empty((5, 7, 9, 8, 5), dtype=torch.uint32, device='cuda')
+        forward_args = [tensor_a, tensor_b]
+        forward_kwargs = {}
+
+        def execute_bug():
+            # Reproducing the exact unpacking logic
+            r1 = torch.nn.MaxUnpool3d(*init_args, **init_kwargs)
+            r2 = r1(*forward_args, **forward_kwargs)
+            return r2
+
+        # Execute using the wrapper pattern
+        # Note: This will likely cause a Segmentation Fault (Process crash).
+        # In a robust test suite, this would be run in a subprocess to check return code.
+        try:
+            run_with_context_guard(execute_bug)
+        except RuntimeError as e:
+            # If it raises a standard error instead of segfaulting, we report it.
+            self.fail(f"Expected a crash or specific error, but got: {e}")
+
+if __name__ == '__main__':
+    unittest.main()

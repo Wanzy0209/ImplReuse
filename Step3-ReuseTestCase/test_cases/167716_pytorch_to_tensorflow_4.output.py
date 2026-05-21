@@ -1,0 +1,55 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_swapaxes_behavior():
+    """
+    Adapted test case based on PyTorch issue #167716.
+    Original API: torch.sparse.mm
+    Target API: tf.experimental.numpy.swapaxes
+    
+    The original bug involved a Segmentation fault when converting the result 
+    of a sparse matrix multiplication to a dense tensor. 
+    This test verifies the behavior of the similar TensorFlow API 
+    (swapaxes) with sparse inputs to ensure stability and correctness.
+    """
+    
+    # Setup data similar to the PyTorch bug report
+    # Original: a = torch.tensor([[1., 0, 2], [0, 3, 0]]).to_sparse()
+    # We create a SparseTensor in TensorFlow to mimic the sparse input
+    indices_a = [[0, 0], [0, 2], [1, 1]]
+    values_a = [1.0, 2.0, 3.0]
+    a = tf.SparseTensor(indices=indices_a, values=values_a, dense_shape=(2, 3))
+
+    # Original: b = torch.tensor([[0, 1.], [2, 0], [0, 0]])
+    # Note: swapaxes is a unary operation (or operates on a single array structure),
+    # so 'b' is not used in the operation itself but is kept to match the test setup context.
+    b = tf.constant([[0., 1.], [2., 0.], [0., 0.]])
+
+    # Original: y = torch.sparse.mm(a, b)
+    # Adaptation: Use tf.experimental.numpy.swapaxes on 'a'
+    # We swap axis 0 and 1. 
+    # Note: tf.experimental.numpy.asarray converts SparseTensor to dense, 
+    # so the operation effectively happens on the dense representation.
+    y = tf.experimental.numpy.swapaxes(a, 0, 1)
+
+    # Original: z = y.to_dense()
+    # Adaptation: Verify the result. 
+    # Since swapaxes likely returns a dense tensor (via asarray conversion), 
+    # we check the result directly.
+    if isinstance(y, tf.SparseTensor):
+        z = tf.sparse.to_dense(y)
+    else:
+        z = y
+
+    # Expected result of swapping axes of [[1, 0, 2], [0, 3, 0]] is [[1, 0], [0, 3], [2, 0]]
+    expected = tf.constant([[1., 0.], [0., 3.], [2., 0.]])
+
+    # Verify the result matches expectations
+    # This ensures no corruption or segfault occurs during the operation/conversion
+    assert tf.reduce_all(tf.equal(z, expected)).numpy(), "Test failed: Output does not match expected swapaxes result."
+    
+    print("Test passed: tf.experimental.numpy.swapaxes handled the input correctly without corruption.")
+
+if __name__ == "__main__":
+    test_tf_swapaxes_behavior()

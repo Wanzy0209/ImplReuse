@@ -1,0 +1,14 @@
+import torch
+
+# Adapted test case for torch.zeros_like based on the torch.aminmax issue
+# Original call site: torch.aminmax(torch.tensor([1, -3, 5]))
+# Adapted call site: torch.zeros_like(torch.tensor([1, -3, 5]))
+
+input_tensor = torch.tensor([1, -3, 5])
+result = torch.zeros_like(input_tensor)
+
+# Expected output for zeros_like is a tensor of zeros with the same shape and dtype
+expected_output = torch.tensor([0, 0, 0])
+
+# Assertion to verify the API behavior
+assert torch.equal(result, expected_output), f"Test failed: expected {expected_output}, got {result}"

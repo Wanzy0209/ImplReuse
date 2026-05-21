@@ -1,0 +1,60 @@
+import torch
+from torch import nn
+from torch._dynamo.functional_export import _dynamo_graph_capture_for_export
+from torch._functorch.aot_autograd import aot_export_joint_with_descriptors
+from torch._guards import tracing, TracingContext
+from contextlib import ExitStack
+
+# Define a module that leverages the similar API (torch.special.erfcx)
+# while maintaining the kwargs structure that triggered the original bug.
+class ModuleWithErfcx(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x, scale=1.0):
+        # Use torch.special.erfcx as the operation to test
+        return torch.special.erfcx(x) * scale
+
+def test_aot_export_with_kwargs_and_erfcx():
+    model = ModuleWithErfcx()
+    inputs = (torch.randn(4, 3),)
+    kwargs = {"scale": torch.randn(1)}
+
+    # Helper function mirroring the bug report's logic
+    def graph_capture_and_aot_export_joint_with_descriptors(model, inputs, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
+        with torch._dynamo.config.patch(install_free_tensors=True):
+            gm = _dynamo_graph_capture_for_export(model)(*inputs, **kwargs)
+            fake_mode = gm.meta.get("fake_mode", None)
+
+        with tracing(TracingContext(fake_mode)):
+            return aot_export_joint_with_descriptors_alone(gm, inputs, kwargs=kwargs)
+
+    def aot_export_joint_with_descriptors_alone(model, inputs, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
+        with ExitStack() as stack:
+            joint_with_descriptors = aot_export_joint_with_descriptors(
+                stack,
+                model,
+                inputs,
+                kwargs=kwargs,
+            )
+            return joint_with_descriptors.graph_module
+
+    # Execute the export logic
+    # This verifies that aot_export_joint_with_descriptors works with kwargs
+    # when the model uses torch.special.erfcx
+    gm = graph_capture_and_aot_export_joint_with_descriptors(model, inputs, kwargs=kwargs)
+
+    # Assertions to ensure the test is valid and the export succeeded
+    assert gm is not None, "GraphModule export failed"
+    
+    # Verify the exported graph runs correctly with the provided kwargs
+    result = gm(*inputs, **kwargs)
+    expected_shape = inputs[0].shape
+    assert result.shape == expected_shape, f"Shape mismatch: expected {expected_shape}, got {result.shape}"
+
+if __name__ == "__main__":
+    test_aot_export_with_kwargs_and_erfcx()

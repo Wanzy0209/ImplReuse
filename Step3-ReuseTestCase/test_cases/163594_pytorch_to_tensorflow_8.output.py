@@ -1,0 +1,66 @@
+import torch
+import subprocess
+import sys
+import tempfile
+import os
+
+# Payload script content
+# This mimics the logic of the original test which involved compiling a function
+# (torch.compile) and running it. Here we use tf.function (TF's compilation 
+# decorator) and tf.keras.name_scope to verify behavior in a similar context.
+PAYLOAD = """
+import tensorflow as tf
+
+# Use tf.function to mimic torch.compile behavior
+@tf.function
+def run_in_scope(x):
+    # Use the target API: tf.keras.name_scope
+    # The original bug involved complex graph operations that potentially hung.
+    # We verify that name_scope works correctly within a compiled graph context.
+    with tf.keras.name_scope("test_scope"):
+        y = x * 2
+        z = tf.add(y, 1)
+    return z
+
+# Execute the function
+input_tensor = tf.constant([1.0, 2.0, 3.0])
+output = run_in_scope(input_tensor)
+print("Success:", output.numpy())
+"""
+
+def test_tf_keras_name_scope_compile_like():
+    """
+    Adapts the test_dtensor_compile_redistribute logic to tf.keras.name_scope.
+    
+    The original test failed because a subprocess running a compiled function
+    timed out after 30 seconds. This test runs a similar structure (subprocess
+    executing a compiled function using the target API) to ensure it does not
+    hang or timeout.
+    """
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write(PAYLOAD)
+        temp_file = f.name
+
+    try:
+        # Replicate the subprocess execution with a timeout
+        # The original test failed with subprocess.TimeoutExpired after 30 seconds.
+        res = subprocess.run(
+            [sys.executable, temp_file],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        # Check for the specific failure mode (Timeout)
+        # If we get here, it didn't timeout, so we check for success.
+        assert res.returncode == 0, f"Process failed with stderr: {res.stderr}"
+        assert "Success:" in res.stdout, "Expected output not found in stdout"
+
+    except subprocess.TimeoutExpired:
+        # Reproduce the assertion failure seen in the original bug report
+        raise AssertionError("Subprocess timed out after 30 seconds, similar to the original bug.")
+    finally:
+        os.remove(temp_file)
+
+if __name__ == "__main__":
+    test_tf_keras_name_scope_compile_like()

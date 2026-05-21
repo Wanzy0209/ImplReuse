@@ -1,0 +1,43 @@
+import torch
+import torch.nn.functional as F
+
+# Setup dimensions
+B, H, W, C = 20, 2, 2, 128
+
+# Create input tensor
+x = torch.randn(B, H, W, C, requires_grad=True)
+linear = torch.nn.Linear(C, C, bias=False)
+
+# Generate activations
+values = linear(x)
+# Create a view to potentially trigger stride issues
+values_view = values.view(B, H * W, C)
+values_view.retain_grad()
+
+# Adaptation for torch.nn.functional.conv_transpose1d
+# The original API (einsum) took 'values_view' of shape (B, H*W, C).
+# conv_transpose1d expects input of shape (minibatch, in_channels, L).
+# We map: minibatch=B, in_channels=H*W, L=C.
+in_channels = H * W
+out_channels = H * W
+kernel_size = 1
+
+# Define weights for conv_transpose1d
+# Shape: (in_channels, out_channels, kernel_size)
+weight = torch.randn(in_channels, out_channels, kernel_size)
+
+# Call the similar API
+# result shape will be (B, out_channels, L) -> (B, H*W, C)
+result = F.conv_transpose1d(values_view, weight)
+
+# Backward pass
+result.backward(torch.ones_like(result))
+
+# Verification
+# The bug report indicates that gradients should have the same stride as the input.
+print("Forward stride:", values_view.stride())
+print("Gradient stride:", values_view.grad.stride())
+
+# Assert that strides match to ensure the similar API does not have the bug
+assert values_view.grad.stride() == values_view.stride(), \
+    f"Gradient stride mismatch! Forward: {values_view.stride()}, Grad: {values_view.grad.stride()}"

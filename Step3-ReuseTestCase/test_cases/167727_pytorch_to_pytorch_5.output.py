@@ -1,0 +1,25 @@
+import torch
+
+# Test case for torch.argmin with complex64 on MPS device
+# Based on the original bug report for torch.addmm, checking if similar issues
+# occur with large tensors and complex numbers.
+
+# success (small tensor)
+a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+try:
+    out_mps = torch.argmin(a, dim=1)
+    out_cpu = torch.argmin(a.cpu(), dim=1)
+    torch.testing.assert_close(out_mps.cpu(), out_cpu)
+    print("Small tensor test passed.")
+except Exception as e:
+    print(f"Small tensor test failed: {e}")
+
+# fails (large tensor) - checking for incorrect results or errors
+a = torch.rand((64, 10000), dtype=torch.complex64, device="mps")
+try:
+    out_mps = torch.argmin(a, dim=1)
+    out_cpu = torch.argmin(a.cpu(), dim=1)
+    torch.testing.assert_close(out_mps.cpu(), out_cpu)
+    print("Large tensor test passed.")
+except Exception as e:
+    print(f"Large tensor test failed: {e}")

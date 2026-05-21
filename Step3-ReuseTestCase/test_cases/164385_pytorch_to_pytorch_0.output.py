@@ -1,0 +1,55 @@
+import torch
+
+def test_torch_div_floor_complex_expression():
+    """
+    Test torch.div with rounding_mode='floor' (FloorDiv equivalent)
+    using the specific expression structure that caused issues in the bug report.
+    Expression: FloorDiv((24*s37 + 672)*((s14//2016)) + 21, 22)
+    """
+    # Create integer tensors corresponding to the symbolic variables
+    # s14, s37, s46 are integers
+    s14 = torch.tensor(4032, dtype=torch.int64)
+    s37 = torch.tensor(1, dtype=torch.int64)
+    s46 = torch.tensor(1, dtype=torch.int64)
+
+    print("Testing torch.div with complex symbolic expression...")
+
+    # Build the numerator expression step by step
+    # Original: inner_expr = FloorDiv(s14 , 2016)
+    # PyTorch: torch.div(..., rounding_mode='floor')
+    inner_expr = torch.div(s14, 2016, rounding_mode='floor')
+    
+    # Original: middle_expr = (24 * s37 + 672) * inner_expr
+    middle_expr = (24 * s37 + 672) * inner_expr
+    
+    # Original: numerator = middle_expr + 21
+    numerator = middle_expr + 21
+    
+    denominator = 22
+
+    print(f"Numerator: {numerator}")
+    print(f"Denominator: {denominator}")
+
+    # Create the FloorDiv expression
+    # Original: result = FloorDiv(numerator, denominator)
+    result = torch.div(numerator, denominator, rounding_mode='floor')
+    
+    print(f"torch.div result: {result}")
+    print(f"Result type: {type(result)}")
+    print(f"Result dtype: {result.dtype}")
+
+    # Verify the result is an integer tensor (not float/rational)
+    assert result.dtype == torch.int64, f"Expected int64, got {result.dtype}"
+
+    # Verify the value is correct
+    # Calculate expected value using Python integers
+    expected_inner = s14.item() // 2016
+    expected_middle = (24 * s37.item() + 672) * expected_inner
+    expected_numerator = expected_middle + 21
+    expected_result = expected_numerator // 22
+
+    assert result.item() == expected_result, f"Expected {expected_result}, got {result.item()}"
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_torch_div_floor_complex_expression()

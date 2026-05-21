@@ -1,0 +1,31 @@
+import sys
+import platform
+import tensorflow as tf
+
+print("Python:", sys.version)
+print("Executable:", sys.executable)
+print("TensorFlow:", tf.__version__)
+print("OS:", platform.platform())
+print("Arch:", platform.machine())
+
+# Check if the API exists (analogous to is_built)
+has_get_step = hasattr(tf.summary.experimental, 'get_step')
+print("Has get_step API?:", has_get_step)
+
+if has_get_step:
+    # Check default state (analogous to is_available check)
+    initial_step = tf.summary.experimental.get_step()
+    print("Initial Step:", initial_step)
+    
+    # Verify default behavior
+    assert initial_step is None, f"Expected initial step to be None, got {initial_step}"
+
+    # Verify state change
+    tf.summary.experimental.set_step(10)
+    current_step = tf.summary.experimental.get_step()
+    print("Step after set_step(10):", current_step)
+    
+    # Verify updated behavior
+    assert current_step == 10, f"Expected step to be 10, got {current_step}"
+else:
+    print("tf.summary.experimental.get_step is not available in this version.")

@@ -1,0 +1,69 @@
+import torch
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+def test_relayout_with_dynamic_slice():
+    """
+    Test case adapted from PyTorch Issue #163146.
+    
+    Original Issue: torch.export.export fails with a "Data dependent error" 
+    when encountering a dynamic slice operation (item_embedding[:, :max_item_num, :]).
+    
+    Adaptation: This test verifies if tf.experimental.dtensor.relayout handles
+    tensors that have been dynamically sliced within a tf.function (graph mode),
+    mirroring the export/tracing context of the original bug.
+    """
+    
+    # 1. Setup DTensor Mesh
+    # Using a single CPU device for minimal reproducibility
+    mesh = dtensor.create_mesh([("batch", 1)], devices=["CPU:0"])
+
+    # 2. Define Inputs
+    # Mimicking the PyTorch variables: item_embedding and max_item_num
+    batch_size = 10
+    seq_len = 64
+    dim = 64
+    
+    # Create a DTensor sharded on the batch dimension
+    # Corresponds to PyTorch: Tensor(shape: torch.Size([s10, s64, 64]), ...)
+    layout_sharded = dtensor.Layout([dtensor.Sharding("batch"), dtensor.UNSHARDED, dtensor.UNSHARDED], mesh)
+    item_embedding = dtensor.ones((batch_size, seq_len, dim), layout=layout_sharded, dtype=tf.float32)
+    
+    # Dynamic scalar tensor for slicing
+    # Corresponds to PyTorch: max_item_num: Tensor(shape: torch.Size([]), ...)
+    max_item_num = tf.constant(50, dtype=tf.int32)
+
+    # 3. Define the Graph Function (similar to torch.export)
+    @tf.function
+    def apply_slice_and_relayout(embedding, limit):
+        # The operation that caused the "Data dependent error" in PyTorch
+        # Slicing based on a runtime tensor value
+        selected_item_embedding = embedding[:, :limit, :]
+        
+        # Apply the similar API: tf.experimental.dtensor.relayout
+        # We attempt to change the layout of the dynamically sliced tensor.
+        # Target layout: Fully Replicated
+        layout_replicated = dtensor.Layout.replicated(mesh, rank=3)
+        
+        relayouted_tensor = dtensor.relayout(selected_item_embedding, layout_replicated)
+        return relayouted_tensor
+
+    # 4. Execute and Verify
+    try:
+        result = apply_slice_and_relayout(item_embedding, max_item_num)
+        
+        # Assertions to verify correctness
+        # Check that the slicing happened (dim 1 should be 50)
+        assert result.shape[1] == 50, f"Expected dim 1 to be 50, got {result.shape[1]}"
+        
+        # Check that the layout was successfully changed to replicated
+        assert result.layout.is_fully_replicated(), "Expected layout to be fully replicated"
+        
+        print("Test Passed: relayout handled dynamic slice successfully.")
+        
+    except Exception as e:
+        print(f"Test Failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_relayout_with_dynamic_slice()

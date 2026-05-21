@@ -1,0 +1,57 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_bessel_j0_contiguity():
+    """
+    Adapted test case for tf.math.special.bessel_j0 based on PyTorch issue #162730.
+    Verifies that the API produces consistent results for contiguous and non-contiguous tensors.
+    """
+    # Check for GPU availability to mimic the hardware-specific context of the original bug
+    gpus = tf.config.list_physical_devices('GPU')
+    device = '/GPU:0' if gpus else '/CPU:0'
+    
+    print(f"Running test on device: {device}")
+
+    with tf.device(device):
+        # Create a base tensor with dimensions similar to the PyTorch example
+        # PyTorch: W = torch.randn(12, 64, 768)
+        W = tf.random.normal((12, 64, 768), dtype=tf.float32)
+
+        # Create a non-contiguous tensor.
+        # In PyTorch, einops.rearrange was used. In TensorFlow, transposing is the standard
+        # way to alter memory layout (strides) to create a non-contiguous view.
+        # PyTorch: w_noncontig = einops.rearrange(W, "h d m -> m (h d)")
+        # We mimic the layout change by transposing dimensions.
+        w_noncontig = tf.transpose(W, perm=[2, 0, 1]) # Shape becomes (768, 12, 64)
+
+        # Create a contiguous version by forcing a copy
+        w_contig = tf.identity(w_noncontig)
+
+        # Apply the API under test: tf.math.special.bessel_j0
+        result_noncontig = tf.math.special.bessel_j0(w_noncontig)
+        result_contig = tf.math.special.bessel_j0(w_contig)
+
+        # Verify results
+        # Convert to numpy for numerical comparison
+        res_nc = result_noncontig.numpy()
+        res_c = result_contig.numpy()
+
+        are_close = np.allclose(res_nc, res_c, atol=1e-5)
+        
+        print(f"Non-contiguous shape: {w_noncontig.shape}")
+        print(f"Contiguous shape: {w_contig.shape}")
+        print(f"Results match: {are_close}")
+
+        if not are_close:
+            max_diff = np.max(np.abs(res_nc - res_c))
+            print(f"Max difference: {max_diff}")
+            raise AssertionError(
+                f"tf.math.special.bessel_j0 produced inconsistent results between "
+                f"contiguous and non-contiguous tensors (max diff: {max_diff})"
+            )
+        
+        print("Test passed: Results are consistent.")
+
+if __name__ == "__main__":
+    test_bessel_j0_contiguity()

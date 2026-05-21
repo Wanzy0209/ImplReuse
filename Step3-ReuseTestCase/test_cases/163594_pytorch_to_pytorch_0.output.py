@@ -1,0 +1,66 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed._tensor import DTensor, Shard, Replicate
+
+def test_dtensor_compile_redistribute(rank, world_size):
+    """
+    Test case to verify torch.compile works correctly with DTensor redistribution.
+    This test addresses the flaky timeout issue observed in CI.
+    """
+    # Initialize the distributed environment
+    dist.init_process_group(
+        backend="gloo", # Using gloo for CPU compatibility in this test
+        rank=rank,
+        world_size=world_size
+    )
+
+    # Create a device mesh
+    # Note: In a real scenario with GPUs, this would be "cuda"
+    mesh = init_device_mesh("cpu", (world_size,))
+
+    # Define a function that performs DTensor redistribution
+    # This is the core logic that was causing timeouts in the original bug report.
+    def redistribute_fn(x):
+        # Create a DTensor sharded along dimension 0
+        dt = DTensor.from_local(x, mesh, [Shard(0)])
+        
+        # Redistribute the tensor to be fully replicated
+        # This operation often triggers complex graph compilation in TorchDynamo
+        dt_replicated = dt.redistribute(mesh, [Replicate()])
+        
+        # Convert back to local tensor to return
+        return dt_replicated.to_local()
+
+    # Compile the function using torch.compile
+    # The original bug involved the compilation or execution of this graph hanging.
+    compiled_fn = torch.compile(redistribute_fn, backend="inductor")
+
+    # Create a local tensor input
+    local_tensor = torch.randn(4, 4)
+
+    # Execute the compiled function
+    # We wrap this in a try-except to catch potential hangs or errors, 
+    # though the original issue was a subprocess timeout.
+    try:
+        result = compiled_fn(local_tensor)
+        
+        # Basic verification that the function returned a result
+        assert result is not None
+        assert result.shape == local_tensor.shape
+        
+        if rank == 0:
+            print("Test passed: torch.compile with DTensor redistribute completed successfully.")
+            
+    except Exception as e:
+        print(f"Rank {rank} failed with error: {e}")
+        raise
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Run the test in a multiprocess setting to simulate the distributed environment
+    # required for DTensor operations.
+    world_size = 2
+    mp.spawn(test_dtensor_compile_redistribute, args=(world_size,), nprocs=world_size, join=True)

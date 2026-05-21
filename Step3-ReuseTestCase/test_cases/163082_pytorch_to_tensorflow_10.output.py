@@ -1,0 +1,41 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Set seed for reproducibility
+tf.random.set_seed(1337)
+
+# Define the compiled version using tf.function (analogous to torch.compile)
+@tf.function
+def logaddexp_compile(x1, x2):
+    return tf.experimental.numpy.logaddexp(x1, x2)
+
+# Define the eager version (analogous to vec_norm_without_compile)
+def logaddexp_without_compile(x1, x2):
+    return tf.experimental.numpy.logaddexp(x1, x2)
+
+# Attempt to use GPU if available, similar to the original bug's context
+device = '/gpu:0' if tf.config.list_physical_devices('GPU') else '/cpu:0'
+
+with tf.device(device):
+    # Create inputs similar to the original bug report (float32)
+    # The original bug used a vector [3.799999, 0.0, 0.0].
+    # logaddexp takes two inputs, so we define x1 and x2.
+    x1 = tf.constant([[3.799999, 0.0, 0.0]], dtype=tf.float32)
+    x2 = tf.constant([[0.0, 0.0, 0.0]], dtype=tf.float32)
+
+    print("Input vector x1:", [x.item() for x in x1[0]])
+    print("Input vector x2:", [x.item() for x in x2[0]])
+
+    # Run compiled version
+    res_compiled = logaddexp_compile(x1, x2)
+    print("Result (compile):", [x.item() for x in res_compiled[0]])
+
+    # Run eager version
+    res_eager = logaddexp_without_compile(x1, x2)
+    print("Result (without compile):", [x.item() for x in res_eager[0]])
+
+    # Verify numerical consistency between compiled and eager execution
+    # The original bug was triggered by a discrepancy in precision.
+    assert np.allclose(res_compiled.numpy(), res_eager.numpy()), \
+        "Discrepancy found between compiled and eager execution results"

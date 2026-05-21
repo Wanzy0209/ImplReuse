@@ -1,0 +1,84 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# 1. Use the specific API requested: enable_eager_execution
+# This must be called at the very beginning of the program.
+tf.compat.v1.enable_eager_execution()
+
+def example_function():
+    """
+    Translates the PyTorch logic to TensorFlow.
+    Original PyTorch logic:
+        - Cholesky decomposition
+        - Matrix inversion
+        - Matrix multiplication
+        - Gradient calculation
+        - Vectorized mapping (vmap)
+    """
+
+    def logp(x, matrix):
+        # PyTorch: p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+        # TensorFlow: tf.linalg.cholesky returns the Cholesky decomposition.
+        p_mat_sqrt = tf.linalg.cholesky(matrix)
+
+        # PyTorch: p_mat_sqrt_inv = p_mat_sqrt.inverse()
+        # TensorFlow: tf.linalg.inv computes the inverse.
+        p_mat_sqrt_inv = tf.linalg.inv(p_mat_sqrt)
+
+        # PyTorch: val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+        # x is expected to be (5, 3) inside the mapped function.
+        # x[0] selects the first row (shape (3,)).
+        # p_mat_sqrt_inv is (3, 3).
+        # matmul result is (3,).
+        val = tf.reduce_sum(tf.square(tf.matmul(p_mat_sqrt_inv, x[0])))
+        return -val / 2
+
+    # PyTorch: torch.func.grad(logp, 0)
+    # TensorFlow: Use tf.GradientTape to compute gradients.
+    def grad_logp(x, matrix):
+        with tf.GradientTape() as tape:
+            tape.watch(x)
+            val = logp(x, matrix)
+        return tape.gradient(val, x)
+
+    # PyTorch: torch.vmap(torch.func.grad(logp, 0), (0, None))
+    # TensorFlow: tf.vectorized_map maps the function over the first dimension.
+    def score_func(data, matrix):
+        # We use a lambda to pass the constant 'matrix' argument to the mapped function
+        return tf.vectorized_map(lambda x: grad_logp(x, matrix), data)
+
+    return score_func
+
+if __name__ == "__main__":
+    # Setup data
+    # PyTorch: device = torch.device("mps")
+    # TensorFlow: We use the default device (CPU or GPU if available).
+    # TF does not expose 'mps' explicitly in the same way, usually relying on system acceleration.
+    dtype = tf.float32
+    data = tf.zeros((2, 5, 3), dtype=dtype)
+
+    # PyTorch: compiled_function = torch.compile(example_function())
+    # Since we are testing eager execution (the "fix" for the PyTorch bug),
+    # we do not wrap this in tf.function (which would be the TF equivalent of torch.compile).
+    score_func = example_function()
+
+    # Setup matrix
+    # PyTorch: p = torch.diag(torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)**2)
+    p_diag_vals = tf.constant([20., 0.5, 5.], dtype=dtype) ** 2
+    p = tf.linalg.diag(p_diag_vals)
+
+    # Run the function
+    # In the PyTorch bug report, this crashes in compiled mode but works in eager mode.
+    # Here, we verify it works in eager mode enabled by the API.
+    res = score_func(data, p)
+
+    # Assertions to verify behavior
+    # The result should have the same shape as the input data (2, 5, 3)
+    assert res.shape == (2, 5, 3), f"Expected shape (2, 5, 3), got {res.shape}"
+    
+    # Since input data is zeros, the gradient calculation involving x[0] will result in zeros.
+    # We verify the result is a tensor of zeros.
+    assert np.allclose(res.numpy(), 0.0), "Expected result to be zero for zero input"
+
+    print("Test passed. Result shape:", res.shape)

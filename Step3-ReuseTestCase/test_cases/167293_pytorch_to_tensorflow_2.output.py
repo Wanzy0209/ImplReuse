@@ -1,0 +1,84 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_dynamic_cache_numerics():
+    """
+    Adapted from the PyTorch test case for torch.export.export (Issue 167293).
+    
+    The original bug involves a 'Constraints violated' error during export
+    when handling dynamic sequence lengths in a KV cache.
+    
+    This test adapts that scenario to verify the behavior of the similar
+    TensorFlow API: tf.debugging.enable_check_numerics.
+    
+    It ensures that the numerics checker works correctly when processing
+    dynamic shapes (growing sequence lengths) across multiple runs,
+    mimicking the transformer cache behavior.
+    """
+    
+    # 1. Enable the API under test
+    tf.debugging.enable_check_numerics()
+
+    # 2. Define a model step mimicking the transformer cache logic
+    # We use @tf.function to simulate the graph/export context
+    @tf.function
+    def model_step(input_ids, past_key_values):
+        # Extract key cache
+        key_cache = past_key_values['key_cache']
+        
+        # Perform a computation (simulating attention scores)
+        # This is where NaNs or Infs might occur
+        # We use a safe operation here to test the 'pass' case
+        scores = tf.matmul(input_ids, key_cache, transpose_b=True)
+        
+        # Simulate appending to the cache (Dynamic Shape)
+        # In the original bug, the sequence length 'seq' changes dynamically.
+        # We verify that enable_check_numerics handles this shape change gracefully.
+        new_cache = tf.concat([key_cache, input_ids], axis=1)
+        
+        return {'key_cache': new_cache}
+
+    # 3. Setup initial inputs
+    batch_size = 1
+    initial_seq_len = 10
+    hidden_dim = 4
+    
+    # Initial cache
+    past_kv = {
+        'key_cache': tf.ones((batch_size, initial_seq_len, hidden_dim))
+    }
+
+    # 4. Run 1: Initial sequence
+    input_1 = tf.ones((batch_size, 1, hidden_dim))
+    past_kv = model_step(input_1, past_kv)
+    
+    # 5. Run 2: Sequence grows (Dynamic shape change)
+    # This mimics the "multiple_run" aspect of the original test case
+    input_2 = tf.ones((batch_size, 1, hidden_dim))
+    past_kv = model_step(input_2, past_kv)
+
+    # Assertion: Verify the cache grew as expected (10 + 1 + 1 = 12)
+    assert past_kv['key_cache'].shape[1] == 12, \
+        f"Expected cache length 12, got {past_kv['key_cache'].shape[1]}"
+
+    # 6. Verify the API's behavior: Check for NaNs
+    # The core purpose of enable_check_numerics is to detect invalid numerics.
+    # We inject a NaN to ensure the checker is active and raises the correct error.
+    bad_cache = {
+        'key_cache': tf.constant([[[float('nan')]]])
+    }
+    
+    try:
+        model_step(input_1, bad_cache)
+        # If we reach here, the API failed to detect the NaN
+        raise AssertionError("tf.errors.InvalidArgumentError not raised for NaN input")
+    except tf.errors.InvalidArgumentError as e:
+        # Verify the error message mentions numerics
+        assert "nan" in str(e).lower() or "inf" in str(e).lower(), \
+            f"Error message does not indicate numeric failure: {e}"
+        print("Successfully caught numeric error as expected.")
+
+if __name__ == "__main__":
+    test_dynamic_cache_numerics()
+    print("Test passed successfully.")

@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+
+def test_tf_roll_dynamic_dtypes():
+    """
+    Test case for tf.roll adapted from the PyTorch flex_attention recompilation issue.
+    
+    The original issue (Issue 166153) describes a scenario where flex_attention,
+    when used with torch.compile, hits a recompile limit due to input validation
+    checks (specifically dtype mismatches or object ID checks).
+    
+    This test adapts that logic to tf.roll by wrapping it in a tf.function
+    (TensorFlow's compilation mechanism) and invoking it with inputs of varying
+    dtypes. This verifies that tf.roll handles dynamic type changes gracefully
+    within a compiled context, mirroring the failure condition of the original bug.
+    """
+    
+    # Define the compiled function analogous to torch.compile(flex_attention)
+    @tf.function
+    def compiled_roll(input_tensor, shift, axis):
+        return tf.roll(input_tensor, shift, axis)
+
+    # Simulate the scenario where input properties (dtypes) vary across calls,
+    # which triggered the recompile limit in the PyTorch issue.
+    dtypes_to_test = [tf.float32, tf.float64, tf.int32, tf.int64]
+    base_data = [1, 2, 3, 4, 5]
+
+    for dtype in dtypes_to_test:
+        # Create input with a specific dtype
+        input_tensor = tf.constant(base_data, dtype=dtype)
+        
+        # Call the compiled function. 
+        # In the PyTorch bug, varying dtypes caused excessive recompilation.
+        # Here, we ensure tf.roll functions correctly despite potential retracing.
+        result = compiled_roll(input_tensor, shift=2, axis=0)
+        
+        # Verify correctness against the eager implementation
+        expected = tf.roll(input_tensor, shift=2, axis=0)
+        
+        # Assert that the compiled result matches the expected result
+        assert tf.reduce_all(result == expected).numpy(), \
+            f"tf.roll failed for dtype {dtype} in compiled context"
+
+    print("Test passed: tf.roll handles varying dtypes correctly in compiled context.")
+
+if __name__ == "__main__":
+    test_tf_roll_dynamic_dtypes()

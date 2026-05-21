@@ -1,0 +1,68 @@
+import torch
+import tensorflow as tf
+import time
+
+# Force CPU execution to match the original bug report's environment
+tf.config.set_visible_devices([], 'GPU')
+
+# Set random seed for reproducibility
+tf.random.set_seed(0)
+
+# Define shapes suitable for conv2d_transpose
+# Input format: (Batch, Height, Width, In_Channels)
+# Filter format: (Filter_Height, Filter_Width, Out_Channels, In_Channels)
+# Output format: (Batch, Out_Height, Out_Width, Out_Channels)
+shapes = [
+    {
+        "input_shape": (1, 10, 10, 64),
+        "filter_shape": (3, 3, 64, 64),
+        "output_shape": (1, 12, 12, 64),
+        "strides": [1, 1, 1, 1],
+        "padding": "VALID"
+    },
+    {
+        "input_shape": (1, 12, 10, 64),
+        "filter_shape": (3, 3, 64, 64),
+        "output_shape": (1, 14, 12, 64),
+        "strides": [1, 1, 1, 1],
+        "padding": "VALID"
+    }
+]
+
+def benchmark_conv2d_transpose(params, dtype=tf.float16, repeat=500):
+    input_shape = params["input_shape"]
+    filter_shape = params["filter_shape"]
+    output_shape = params["output_shape"]
+    strides = params["strides"]
+    padding = params["padding"]
+
+    # Initialize tensors with values in range [-1, 1] to match torch.uniform_(0,1) * 2 - 1
+    x = tf.random.uniform(input_shape, minval=-1, maxval=1, dtype=dtype)
+    kernel = tf.random.uniform(filter_shape, minval=-1, maxval=1, dtype=dtype)
+    
+    # Warm up
+    for _ in range(5000):
+        _ = tf.compat.v1.nn.conv2d_transpose(
+            x, kernel, output_shape, strides, padding=padding
+        )
+    
+    # Run benchmark
+    times = []
+    for i in range(repeat):
+        start = time.time()
+        _ = tf.compat.v1.nn.conv2d_transpose(
+            x, kernel, output_shape, strides, padding=padding
+        )
+        end = time.time()
+        if i > 100:
+            times.append(round((end - start) * 1000 * 1000))
+            
+    times.sort()
+    print(times)
+    avg_time_us = sum(times) / len(times)
+    return avg_time_us
+
+if __name__ == "__main__":
+    for params in shapes:
+        t = benchmark_conv2d_transpose(params)
+        print(f"Input: {params['input_shape']}, Filter: {params['filter_shape']} -> {t:.3f} us")

@@ -1,0 +1,61 @@
+import torch
+import tensorflow as tf
+import os
+import tempfile
+import sys
+
+def test_match_filenames_once_command_injection():
+    """
+    Test case adapted from PyTorch Issue 167480 (OS command injection).
+    
+    This test verifies if tf.io.match_filenames_once is vulnerable to OS command 
+    injection via the 'pattern' argument, similar to how torch.utils.cpp_extension.load_inline
+    was vulnerable via 'extra_cflags'.
+    
+    The test attempts to inject a shell command (creating a marker file) within 
+    the pattern argument. If the file is created, the API is vulnerable.
+    """
+    
+    # Create a temporary directory and a specific path for the injection marker
+    with tempfile.TemporaryDirectory() as tmpdir:
+        marker_file = os.path.join(tmpdir, "injection_success.txt")
+        
+        # Construct a malicious payload.
+        # It starts with a valid glob '*' to satisfy basic pattern requirements,
+        # followed by a shell command separator ';' and the command to create a file.
+        # If the underlying implementation passes this to a shell (e.g., via system() or popen()),
+        # the command will execute.
+        malicious_pattern = f"*; touch {marker_file}; #"
+        
+        print(f"Testing tf.io.match_filenames_once with payload: {malicious_pattern}")
+
+        try:
+            # Call the target API
+            # In TensorFlow 2.x, match_filenames_once returns a Variable initialized with the file list.
+            # We need to trigger the evaluation of the op.
+            file_list_var = tf.io.match_filenames_once(malicious_pattern)
+            
+            # Force evaluation/initialization to ensure the underlying op runs
+            # In eager mode, accessing the value triggers the operation.
+            _ = file_list_var.numpy()
+            
+        except Exception as e:
+            # Exceptions might occur if the pattern is invalid or permissions are denied,
+            # but we are primarily interested in the side effect (command execution).
+            print(f"Exception occurred during API call: {e}")
+
+        # Verification: Check if the injected command created the marker file
+        if os.path.exists(marker_file):
+            print("VULNERABILITY DETECTED: The API executed the injected shell command.")
+            # Clean up the marker file
+            os.remove(marker_file)
+            return True
+        else:
+            print("SAFE: The API did not execute the injected shell command.")
+            return False
+
+if __name__ == "__main__":
+    is_vulnerable = test_match_filenames_once_command_injection()
+    
+    # Exit with 1 if vulnerable (to fail CI/CD security checks), 0 if safe
+    sys.exit(1 if is_vulnerable else 0)

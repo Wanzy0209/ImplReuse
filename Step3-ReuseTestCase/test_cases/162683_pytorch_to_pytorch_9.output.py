@@ -1,0 +1,40 @@
+import torch
+import time
+
+torch.manual_seed(0)
+# Adapted shapes for single tensor input (torch.narrow takes one tensor)
+shapes = [
+    (1, 12, 10, 64),
+    (1, 12, 10, 10),
+]
+
+def benchmark_narrow(shape, dtype=torch.float16, device="cpu", repeat=500):
+    A = torch.empty(shape, dtype=dtype, device=device).uniform_(0,1) * 2 - 1
+    
+    # Define narrow parameters: dimension, start index, length
+    dim = 1
+    start = 0
+    length = shape[dim] // 2  # Narrow to half the size of the dimension
+
+    # warm up
+    for _ in range(5000):
+        _ = torch.narrow(A, dim, start, length)
+    
+    # run
+    times = []
+    for i in range(repeat):
+        start_time = time.time()
+        _ = torch.narrow(A, dim, start, length)
+        end_time = time.time()
+        if i > 100:
+            times.append(round((end_time - start_time) * 1000 * 1000))
+    
+    times.sort()
+    print(times)
+    avg_time_us = sum(times) / len(times)
+    return avg_time_us
+
+if __name__ == "__main__":
+    for shape in shapes:
+        t = benchmark_narrow(shape)
+        print(f"narrow on {shape} -> {t:.3f} us")

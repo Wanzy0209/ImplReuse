@@ -1,0 +1,61 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+class TestModel(tf.Module):
+    def __init__(self):
+        super().__init__()
+        # Initialize weights
+        self.w1 = tf.Variable(tf.random.normal((10, 20)), name='w1')
+        self.b1 = tf.Variable(tf.zeros((20,)), name='b1')
+        self.w2 = tf.Variable(tf.random.normal((20, 1)), name='w2')
+        self.b2 = tf.Variable(tf.zeros((1,)), name='b2')
+
+    def __call__(self, x):
+        # Using the similar API: tf.compat.v1.name_scope
+        # This replaces the logic of torch.compile in terms of context usage
+        with tf.compat.v1.name_scope("model_forward"):
+            x = tf.matmul(x, self.w1) + self.b1
+            x = tf.nn.relu(x)
+            x = tf.matmul(x, self.w2) + self.b2
+        return x
+
+def get_default_model():
+    return TestModel()
+
+def get_sample_inputs():
+    return np.random.randn(4, 10).astype(np.float32)
+
+def main():
+    model = get_default_model()
+    inputs = get_sample_inputs()
+
+    # 1. Original Output (Eager execution)
+    # Corresponds to: original_output = model(*inputs)
+    original_output = model(inputs)
+    print('Original model output shape:', original_output.shape)
+
+    # 2. Graph Capture execution
+    # Corresponds to: with torch.cuda.graph(graph): ...
+    # In TensorFlow, tf.function is the mechanism to capture a graph (trace it).
+    
+    # We define the function that uses the similar API inside the capture context
+    @tf.function
+    def run_in_graph(x):
+        # The PyTorch bug occurs because torch.compile (the similar API) is called inside the capture.
+        # Here we use tf.compat.v1.name_scope inside the tf.function (capture).
+        with tf.compat.v1.name_scope("captured_execution"):
+            return model(x)
+
+    # Run the captured graph
+    graph_output = run_in_graph(inputs)
+    print('Captured graph output shape:', graph_output.shape)
+    
+    # Verify consistency
+    # Note: Due to potential numerical differences in graph vs eager (rare for simple ops), 
+    # we use a tolerance.
+    assert tf.reduce_all(tf.abs(original_output - graph_output) < 1e-5), "Output mismatch between original and graph execution"
+    print("Test passed: API behaves correctly inside graph capture context.")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,46 @@
+import tensorflow as tf
+
+def test_ragged_tensor_spec_properties():
+    """
+    Test case adapted from PyTorch issue 163798 logic.
+    
+    Original Issue Context:
+    The issue involves extracting scalar outputs (via tolist() or item()) from a tensor
+    and verifying how the compilation graph handles these extractions.
+    
+    Similar API Context (tf.RaggedTensorSpec):
+    The provided code snippet for tf.RaggedTensorSpec demonstrates accessing properties
+    like 'dtype' and 'shape' from the type specification of a RaggedTensor.
+    
+    Adaptation:
+    This test mirrors the logic of extracting components from a tensor structure.
+    Instead of unpacking values via tolist(), we extract metadata properties (dtype, shape)
+    via the RaggedTensorSpec to verify the API's behavior in reporting tensor characteristics.
+    """
+    
+    # Create a RaggedTensor, analogous to the input tensor in the PyTorch issue
+    rt = tf.ragged.constant([["a"], ["b", "c"]], dtype=tf.string)
+    
+    # Get the Type Spec for the RaggedTensor
+    # This is the "Similar API" being leveraged
+    spec = tf.type_spec_from_value(rt)
+    
+    # Extract properties from the spec
+    # This parallels the 'u0, u1 = a.tolist()' extraction logic in the original issue,
+    # but applied to type metadata rather than tensor values.
+    dtype_val = spec.dtype
+    shape_val = spec.shape
+    
+    # Assertions to verify correct extraction
+    # Verify dtype extraction (analogous to scalar extraction)
+    assert dtype_val == tf.string, f"Expected dtype tf.string, got {dtype_val}"
+    
+    # Verify shape extraction (analogous to structural extraction)
+    # The shape of [["a"], ["b", "c"]] is (2, None) - 2 rows, variable length columns
+    assert shape_val.rank == 2, f"Expected rank 2, got {shape_val.rank}"
+    assert shape_val[1].is_none(), "Expected second dimension to be None (ragged)"
+    
+    print("Test Passed: RaggedTensorSpec properties extracted and validated successfully.")
+
+if __name__ == "__main__":
+    test_ragged_tensor_spec_properties()

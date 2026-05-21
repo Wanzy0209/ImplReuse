@@ -1,0 +1,115 @@
+import torch
+import torch.distributed as dist
+import torch.distributed.checkpoint as dcp
+from torch.distributed.checkpoint.default_planner import DefaultSavePlanner
+from torch.distributed.tensor import distribute_tensor, Shard
+from torch.distributed.device_mesh import init_device_mesh
+import torch.special
+import time
+import os
+import sys
+
+def test_default_save_planner_performance_with_special_ops():
+    """
+    Test case for Issue 163548: DefaultSavePlanner._validate_global_plan 
+    performance regression.
+    
+    This test preserves the original reproduction logic which involves creating 
+    a large number of sharded tensors to trigger the O(n^2) complexity in 
+    create_global_plan. It leverages torch.special.scaled_modified_bessel_k0 
+    to generate the tensor data, satisfying the requirement to reuse the 
+    similar API.
+    """
+    
+    # Check if distributed environment is available
+    if not dist.is_available():
+        print("Skipping test: torch.distributed is not available.")
+        return
+
+    # Initialize process group if not already initialized
+    if not dist.is_initialized():
+        # Check for necessary environment variables for multi-process setup
+        if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
+            print("Skipping test: Distributed environment variables (RANK, WORLD_SIZE) not set.")
+            return
+            
+        try:
+            dist.init_process_group(backend="gloo")
+        except Exception as e:
+            print(f"Skipping test: Failed to initialize process group: {e}")
+            return
+
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    
+    # Setup device mesh
+    try:
+        device_mesh = init_device_mesh("cpu", (world_size,))
+    except Exception as e:
+        print(f"Skipping test: Failed to init device mesh: {e}")
+        dist.destroy_process_group()
+        return
+
+    # --- Leverage Similar API: torch.special.scaled_modified_bessel_k0 ---
+    # We use this API to generate the data for the tensors. 
+    # This replaces the simple torch.ones from the original reproduction 
+    # while maintaining the tensor shapes required to trigger the bug.
+    base_input = torch.ones(1024, 1)
+    # Apply the scaled modified Bessel function of the second kind
+    processed_data = torch.special.scaled_modified_bessel_k0(base_input)
+    
+    # Create a list of tensors (1024 tensors) to simulate the large FSDP state
+    # The bug manifests when the number of items in the state_dict is large.
+    fully_tensor = [processed_data.clone() for _ in range(1024)]
+    
+    # Distribute tensors
+    sharded_tensor = [
+        distribute_tensor(tensor=t, device_mesh=device_mesh, placements=[Shard(0)]) 
+        for t in fully_tensor
+    ]
+    state_dict = {str(key): value for key, value in enumerate(sharded_tensor)}
+
+    # Setup Planner
+    planner = DefaultSavePlanner()
+    planner.set_up_planner(state_dict=state_dict, is_coordinator=rank == 0)
+    local_plan = planner.create_local_plan()
+    
+    gather_objs = [None] * world_size
+    dist.gather_object(
+        obj=local_plan, 
+        object_gather_list=gather_objs if rank == 0 else None, 
+        dst=0, 
+        group=dist.group.WORLD
+    )
+
+    # The bottleneck in the bug report is here on rank 0
+    if rank == 0:
+        start = time.time()
+        try:
+            # This call contains _validate_global_plan which has O(n^2) complexity
+            all_local_plans, global_metadata = planner.create_global_plan(gather_objs)
+            end = time.time()
+            duration = end - start
+            
+            print(f"Create global planner cost {duration:.4f}s")
+            
+            # Basic assertions to ensure the planner completed successfully
+            assert global_metadata is not None, "Global metadata should not be None"
+            assert all_local_plans is not None, "All local plans should not be None"
+            assert len(all_local_plans) == world_size, "Should have one plan per world size"
+            
+            # Note: A strict performance regression test would assert duration < threshold.
+            # However, thresholds vary by hardware. The primary goal here is to 
+            # successfully execute the logic path that was previously too slow.
+            
+        except Exception as e:
+            print(f"Error during create_global_plan: {e}")
+            raise
+
+    dist.barrier()
+    
+    # Cleanup
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    test_default_save_planner_performance_with_special_ops()

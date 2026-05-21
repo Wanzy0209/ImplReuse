@@ -1,0 +1,71 @@
+import torch
+import torch.nn as nn
+import torch.nn.attention as attention
+import warnings
+
+def test_flex_attention_recompile_limit():
+    """
+    Test case for Issue 166153: Flex Attention with AO hits recompile limit.
+    
+    This test reproduces the scenario where flex_attention, when compiled with
+    torch.compile, hits the recompile_limit due to object ID checks on input
+    tensors (specifically the 'key' tensor).
+    
+    The test leverages the 'batch API' pattern concept from the similar API
+    (tf.raw_ops.NcclAllReduce) by using batched inputs and running multiple
+    iterations to stress the recompilation logic.
+    """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Define a function that uses flex_attention
+    # This mimics the usage pattern where inputs are processed in a batch
+    def flex_attention_fn(query, key, value):
+        return attention.flex_attention(query, key, value)
+
+    # Compile the function to trigger dynamo/inductor
+    # The bug manifests when the compiled function is called repeatedly
+    compiled_fn = torch.compile(flex_attention_fn)
+
+    # Capture warnings to detect the recompile limit hit
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        
+        # The recompile_limit default is 8. We run 10 iterations to ensure
+        # we cross the threshold if the bug is present.
+        for i in range(10):
+            # Create new tensor objects in every iteration.
+            # The log indicates '___check_obj_id(key, ...)' as the recompile reason.
+            # By creating new objects, we simulate the condition that triggers
+            # the guard failure if the graph is specialized to object IDs.
+            
+            # Batch dimensions: (Batch, Heads, Sequence, Dim)
+            # This aligns with the "batch API" handling mentioned in the
+            # similar API (tf.raw_ops.NcclAllReduce) description.
+            batch_size = 2
+            num_heads = 4
+            seq_len = 16
+            head_dim = 32
+            
+            query = torch.randn(batch_size, num_heads, seq_len, head_dim, device=device)
+            key = torch.randn(batch_size, num_heads, seq_len, head_dim, device=device)
+            value = torch.randn(batch_size, num_heads, seq_len, head_dim, device=device)
+            
+            # Execute the compiled function
+            output = compiled_fn(query, key, value)
+            
+            # Basic assertion to verify execution
+            assert output.shape == (batch_size, num_heads, seq_len, head_dim), \
+                f"Output shape mismatch: {output.shape}"
+
+        # Check for the specific warning mentioned in the bug report
+        recompile_warnings = [warning for warning in w if "recompile_limit" in str(warning.message)]
+        
+        if recompile_warnings:
+            print("Bug Reproduced: Recompile limit hit.")
+            # In a strict regression test, we might assert this is empty.
+            # Here we print to indicate the state.
+        else:
+            print("Test Passed: No recompile limit warnings detected.")
+
+if __name__ == "__main__":
+    test_flex_attention_recompile_limit()

@@ -1,0 +1,38 @@
+import pytest
+import torch
+from torch.optim import AdamW
+from omegaconf import OmegaConf, ListConfig
+
+
+def test_adamw_betas_type_validation():
+    """
+    Test that AdamW validates the 'betas' parameter type.
+    
+    This test ensures that passing an OmegaConf ListConfig (or other non-tuple/list 
+    sequence-like objects) raises a TypeError, preventing unexpected serialization 
+    behavior where the entire configuration tree might be saved.
+    """
+    # Create a simple model
+    model = torch.nn.Linear(10, 1)
+    
+    # Create an OmegaConf configuration with a nested structure
+    cfg = OmegaConf.create({
+        'model': {'betas': [0.9, 0.999]},
+        'data': {'batch_size': 32}
+    })
+    
+    # Verify that cfg.model.betas is indeed a ListConfig
+    assert isinstance(cfg.model.betas, ListConfig)
+
+    # Expected behavior: Optimizer should raise TypeError for OmegaConf ListConfig
+    with pytest.raises(TypeError):
+        AdamW(model.parameters(), lr=1e-3, betas=cfg.model.betas)
+
+    # Verify that valid types (tuple and list) are still accepted
+    # Valid tuple
+    opt_tuple = AdamW(model.parameters(), lr=1e-3, betas=(0.9, 0.999))
+    assert isinstance(opt_tuple, AdamW)
+    
+    # Valid list
+    opt_list = AdamW(model.parameters(), lr=1e-3, betas=[0.9, 0.999])
+    assert isinstance(opt_list, AdamW)

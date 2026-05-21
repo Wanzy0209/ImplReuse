@@ -1,0 +1,44 @@
+import tensorflow as tf
+
+def test_crossed_column_initialization():
+    """
+    Test case for tf.feature_column.crossed_column inspired by PyTorch issue #164297.
+    
+    The original issue involved a segfault when accessing/converting a C++ bound type
+    (OperatorExportTypes) during import, specifically related to pybind11 object handling.
+    This test verifies that the similar C++ backed API in TensorFlow (crossed_column)
+    handles initialization and argument processing (specifically integer hash_bucket_size)
+    without memory access violations or crashes.
+    """
+    # Setup: Create base categorical columns to serve as keys
+    # This mimics the setup required to instantiate the object that crashed in PyTorch
+    col_a = tf.feature_column.categorical_column_with_identity('feature_a', num_buckets=3)
+    col_b = tf.feature_column.categorical_column_with_identity('feature_b', num_buckets=3)
+
+    # Action: Create the crossed column
+    # This involves passing an integer (hash_bucket_size) to the C++ backend.
+    # The PyTorch bug was triggered by an __int__ call on a C++ object.
+    # We ensure the C++ interaction here is stable.
+    try:
+        crossed_col = tf.feature_column.crossed_column(
+            keys=[col_a, col_b],
+            hash_bucket_size=10
+        )
+    except Exception as e:
+        # If there is a segfault, the process will terminate.
+        # If there is a Python exception, we capture it here.
+        assert False, f"Exception raised during crossed_column creation: {e}"
+
+    # Assertion: Verify the object is valid and accessible
+    # This ensures the underlying C++ object is intact and not corrupted,
+    # similar to checking if OperatorExportTypes was accessible.
+    assert crossed_col is not None, "crossed_column returned None"
+    assert hasattr(crossed_col, 'name'), "crossed_column object missing 'name' attribute"
+    
+    # Accessing internal properties to ensure deep C++ validity
+    # (In PyTorch, accessing the enum value caused the crash)
+    _ = str(crossed_col) 
+
+if __name__ == "__main__":
+    test_crossed_column_initialization()
+    print("Test passed successfully.")

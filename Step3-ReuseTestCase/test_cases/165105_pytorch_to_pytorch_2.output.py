@@ -1,0 +1,53 @@
+import torch
+
+# Reproduce the environment settings from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch.manual_seed(70609)
+
+# Check for CUDA availability as the original bug was device-specific
+if not torch.cuda.is_available():
+    print("Test skipped: CUDA not available.")
+else:
+    # Define the function to test, adapted from the original fuzzed_program logic
+    # Original: var_node_8 = torch.matmul(var_node_9, var_node_10)
+    # Adapted: Using torch.repeat_interleave with tensors of similar shapes/dtypes
+    def test_repeat_interleave(arg_0, arg_1):
+        # var_node_9 equivalent
+        input_tensor = torch.full((6, 13), 1.3154296875, dtype=torch.float16, device='cuda')
+        # var_node_10 equivalent (size 13, 1)
+        repeats_tensor = arg_1 
+        
+        # Adaptation: Replace matmul with repeat_interleave
+        # We repeat along dimension 1 (size 13) using the repeats_tensor (size 13, 1)
+        return torch.repeat_interleave(input_tensor, repeats=repeats_tensor.squeeze(), dim=1)
+
+    # Setup inputs based on the original trace
+    # arg_1 corresponds to var_node_10 with size (13, 1)
+    arg_1 = torch.ones((13, 1), dtype=torch.float16, device='cuda') * 2
+
+    # Run Eager mode
+    try:
+        eager_result = test_repeat_interleave(None, arg_1)
+    except Exception as e:
+        print(f"Eager mode failed: {e}")
+        eager_result = None
+
+    # Run Compiled mode (torch._dynamo / torch.compile)
+    try:
+        compiled_test_repeat_interleave = torch.compile(test_repeat_interleave)
+        compiled_result = compiled_test_repeat_interleave(None, arg_1)
+    except Exception as e:
+        print(f"Compiled mode failed: {e}")
+        compiled_result = None
+
+    # Verify results
+    if eager_result is not None and compiled_result is not None:
+        if torch.allclose(eager_result, compiled_result):
+            print("Test Passed: Eager and Compiled results match.")
+        else:
+            print("Test Failed: Divergence detected between Eager and Compiled modes.")
+            print(f"Eager result shape: {eager_result.shape}")
+            print(f"Compiled result shape: {compiled_result.shape}")
+    elif eager_result is not None or compiled_result is not None:
+        print("Test Failed: One mode failed while the other succeeded.")

@@ -1,0 +1,71 @@
+import torch
+import torch.backends.mha
+import unittest
+
+class TestCompileWithMHABackend(unittest.TestCase):
+    """
+    Test case to verify that torch.compile interacts correctly with 
+    torch.backends.mha.get_fastpath_enabled.
+    
+    This test is derived from Issue #164301 which reports a torch.compile 
+    regression. The similar API (torch.backends.mha.get_fastpath_enabled) 
+    contains logic checking torch.jit.is_scripting(). This test ensures 
+    that torch.compile respects the backend state queried via this API,
+    preserving the expected behavior and codegen patterns.
+    """
+
+    def test_compile_respects_mha_fastpath_state(self):
+        # Save original state to restore later
+        original_fastpath = torch.backends.mha.get_fastpath_enabled()
+
+        try:
+            # Define a workload that uses the similar API
+            # This mimics the pattern where execution depends on backend flags
+            def workload(x):
+                # Reuse the similar API
+                is_fast = torch.backends.mha.get_fastpath_enabled()
+                
+                # Perform a simple operation based on the flag
+                # (In the original bug, this was a complex quantization operation)
+                if is_fast:
+                    return x * 2.0
+                else:
+                    return x / 2.0
+
+            # Apply torch.compile (Original API Under Test)
+            compiled_workload = torch.compile(workload)
+
+            input_tensor = torch.randn(32, 32)
+
+            # Scenario 1: Fastpath enabled
+            torch.backends.mha.set_fastpath_enabled(True)
+            
+            result_eager = workload(input_tensor)
+            result_compiled = compiled_workload(input_tensor)
+            
+            # Assert correctness: compiled should match eager
+            self.assertTrue(torch.allclose(result_compiled, result_eager), 
+                            "Compiled output mismatched eager output with fastpath enabled")
+            # Assert logic: verify the fastpath branch was taken
+            self.assertTrue(torch.allclose(result_compiled, input_tensor * 2.0), 
+                            "Fastpath logic failed in compiled function")
+
+            # Scenario 2: Fastpath disabled
+            torch.backends.mha.set_fastpath_enabled(False)
+            
+            result_eager = workload(input_tensor)
+            result_compiled = compiled_workload(input_tensor)
+            
+            # Assert correctness: compiled should match eager
+            self.assertTrue(torch.allclose(result_compiled, result_eager), 
+                            "Compiled output mismatched eager output with fastpath disabled")
+            # Assert logic: verify the non-fastpath branch was taken
+            self.assertTrue(torch.allclose(result_compiled, input_tensor / 2.0), 
+                            "Non-fastpath logic failed in compiled function")
+
+        finally:
+            # Restore original backend state
+            torch.backends.mha.set_fastpath_enabled(original_fastpath)
+
+if __name__ == "__main__":
+    unittest.main()

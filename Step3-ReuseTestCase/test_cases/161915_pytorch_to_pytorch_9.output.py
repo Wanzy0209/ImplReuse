@@ -1,0 +1,51 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def run(rank, size):
+    """
+    Function to run distributed test case.
+    Adapted from the bug report to test torch.distributed.isend
+    instead of share_memory_().
+    """
+    # Initialize the process group
+    dist.init_process_group(
+        backend='gloo',
+        init_method='tcp://127.0.0.1:29500',
+        rank=rank,
+        world_size=size
+    )
+
+    # Create the NestedTensor as described in the bug report
+    a = torch.randn(3)
+    b = torch.randn(5)
+    nt = torch.nested.nested_tensor([a, b], layout=torch.jagged)
+
+    if rank == 0:
+        # Adaptation: Replace nt.share_memory_() with dist.isend
+        # to verify if the similar API handles NestedTensor correctly.
+        try:
+            work = dist.isend(nt, dst=1)
+            work.wait()
+            print("isend successful")
+        except Exception as e:
+            print(f"isend failed: {e}")
+    elif rank == 1:
+        # Receiver side to complete the operation
+        # Note: Receiving into a NestedTensor is complex, 
+        # so we use a dummy buffer to allow the sender to proceed.
+        try:
+            # Create a buffer large enough to hold the data (3 + 5 = 8)
+            dummy = torch.zeros(8) 
+            req = dist.irecv(dummy, src=0)
+            req.wait()
+        except Exception:
+            pass
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use multiprocessing to spawn two processes for the test
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)

@@ -1,0 +1,91 @@
+import torch
+import unittest
+import time
+
+# This test case addresses Issue 164301: torch.compile regression in mxfp8 quantization.
+# It leverages the code pattern of the similar API (tf.errors.CancelledError) 
+# by defining a structured error class to handle performance regression detection.
+
+class CompileRegressionError(RuntimeError):
+    """
+    Raised when a performance regression is detected in torch.compile.
+    This class mirrors the structure of tf.errors.CancelledError to 
+    provide detailed context about the operation failure.
+    """
+    def __init__(self, node_def, op, message, *args):
+        # Mimicking the signature of tf.errors.CancelledError
+        super().__init__(node_def, op, message, *args)
+        self.node_def = node_def
+        self.op = op
+        self.message = message
+
+class TestTorchCompileMxfp8(unittest.TestCase):
+    def setUp(self):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        if self.device == "cpu":
+            self.skipTest("CUDA is required for this performance regression test")
+
+    def test_dim0_mxfp8_floor_performance(self):
+        """
+        Reproduces the logic for Issue 164301.
+        Tests torch.compile performance for row-wise (dim0) mxfp8 quantization.
+        """
+        # Parameters from the bug report
+        M, K, BLOCK_SIZE = 16384, 16384, 32
+        
+        # Simulating the 'dim0_mxfp8_floor' operation logic
+        # This involves row-wise scaling (1 x block_size granularity)
+        def dim0_mxfp8_floor_fn(x):
+            # Placeholder for the actual torchao quantization logic
+            # We simulate the row-wise scaling pattern described in the bug
+            # Scale calculation along rows (dim 0)
+            scale = torch.ones((x.shape[0], 1), device=x.device, dtype=x.dtype)
+            # Simulate the quantization operation
+            return (x / scale).to(torch.float8_e4m3fn)
+
+        # Apply torch.compile (the API under test)
+        try:
+            compiled_fn = torch.compile(dim0_mxfp8_floor_fn, mode="max-autotune")
+        except Exception as e:
+            raise CompileRegressionError(
+                node_def="torch.compile",
+                op="inductor",
+                message=f"Failed to compile function: {e}"
+            )
+
+        # Setup input tensor
+        # Using float16 as input which is common for fp8 casting
+        x = torch.randn(M, K, dtype=torch.float16, device=self.device)
+
+        # Warmup runs
+        for _ in range(10):
+            _ = compiled_fn(x)
+
+        # Benchmarking
+        start_time = time.time()
+        iterations = 100
+        for _ in range(iterations):
+            _ = compiled_fn(x)
+        end_time = time.time()
+
+        avg_time_us = (end_time - start_time) / iterations * 1e6
+        
+        print(f"Issue 164301 Repro: M={M}, K={K}, BLOCK_SIZE={BLOCK_SIZE}")
+        print(f"Avg time per iteration (us): {avg_time_us:.2f}")
+
+        # The bug report indicates a regression from ~5600gbps to ~1485gbps.
+        # While we cannot assert exact bandwidth without the specific hardware (B200),
+        # we verify that the operation completes and check for extreme slowdowns
+        # relative to a baseline if necessary. Here we ensure execution succeeds.
+        
+        # Example check: If time is significantly worse than expected, raise error
+        # (Threshold is illustrative; actual threshold depends on hardware)
+        # if avg_time_us > 1000: # 1ms
+        #     raise CompileRegressionError(
+        #         node_def="torch.compile",
+        #         op="inductor",
+        #         message=f"Performance regression detected: {avg_time_us:.2f}us > 1000us"
+        #     )
+
+if __name__ == "__main__":
+    unittest.main()

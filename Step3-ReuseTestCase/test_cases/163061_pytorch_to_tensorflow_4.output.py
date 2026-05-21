@@ -1,0 +1,104 @@
+import tensorflow as tf
+import threading
+import time
+
+# Disable eager execution to use TF v1 APIs
+tf.compat.v1.disable_eager_execution()
+
+def check_gil_released(func, name):
+    """
+    Helper to check if the GIL is released during the execution of func.
+    If the GIL is released, a separate Python thread should be able to run
+    and increment a counter.
+    """
+    python_counter = 0
+    stop_flag = False
+
+    def python_worker():
+        nonlocal python_counter
+        while not stop_flag:
+            python_counter += 1
+
+    # Start the Python worker thread
+    worker = threading.Thread(target=python_worker)
+    worker.start()
+
+    # Run the target function
+    start_time = time.time()
+    func()
+    duration = time.time() - start_time
+
+    # Signal the worker to stop and wait for it
+    stop_flag = True
+    worker.join()
+
+    # If the counter is high, it means the worker thread could run concurrently,
+    # implying the GIL was released.
+    # We expect at least some increments if the operation took > 10ms.
+    print(f"[{name}] Duration: {duration:.4f}s, Python increments: {python_counter}")
+    
+    # Assertion: If the operation took a reasonable amount of time, 
+    # we expect the GIL to be released (counter > 0).
+    # Note: This is a heuristic. Very fast operations might not yield the GIL 
+    # even if they are supposed to.
+    if duration > 0.01:
+        assert python_counter > 0, f"GIL appears to be held for {name}"
+
+def tf_standard_add(x, y):
+    """Standard TensorFlow operation."""
+    return tf.add(x, y)
+
+def tf_string_producer_op(string_tensor):
+    """The API under test: string_input_producer."""
+    return tf.compat.v1.train.string_input_producer(
+        string_tensor, num_epochs=1, shuffle=False
+    )
+
+def main():
+    # 1. Setup data for standard op
+    x = tf.random.normal((4096, 4096))
+    y = tf.random.normal((4096, 4096))
+
+    # 2. Setup data for string_input_producer
+    # Creating a list of filenames to simulate an input pipeline
+    filenames = [f"file_{i}.txt" for i in range(100)]
+    string_tensor = tf.convert_to_tensor(filenames, dtype=tf.string)
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables
+        sess.run(tf.compat.v1.global_variables_initializer())
+        sess.run(tf.compat.v1.local_variables_initializer())
+
+        # --- Test Standard TF Op ---
+        print("Testing standard TF operation (tf.add)...")
+        def run_standard():
+            for _ in range(10):
+                sess.run(tf_standard_add(x, y))
+        
+        check_gil_released(run_standard, "Standard TF Add")
+
+        # --- Test string_input_producer ---
+        print("Testing tf.compat.v1.train.string_input_producer...")
+        
+        # Create the queue
+        queue = tf_string_producer_op(string_tensor)
+        
+        # Start queue runners
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+
+        def run_producer():
+            # Dequeue items to trigger the producer logic
+            dequeue_op = queue.dequeue()
+            for _ in range(10):
+                sess.run(dequeue_op)
+
+        try:
+            check_gil_released(run_producer, "String Input Producer")
+        finally:
+            # Stop queue runners
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    main()

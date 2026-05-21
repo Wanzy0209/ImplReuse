@@ -1,0 +1,92 @@
+import torch
+import torch.nn as nn
+from torch.nn import DataParallel
+import unittest.mock as mock
+
+# Reproducing the SimpleModel from the issue
+class SimpleModel(nn.Module):
+    def __init__(self, input_size=10, hidden_size=20, output_size=5):
+        super(SimpleModel, self).__init__()
+        self.linear1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.linear2(x)
+        return x
+
+def test_dataparallel_custom_backend_dispatch():
+    """
+    Test case to verify that torch.nn.DataParallel invokes the necessary 
+    communication primitives (scatter, gather, etc.) which would be provided 
+    by a custom backend.
+    
+    This test leverages the pattern from tf.keras.losses.deserialize (iterating 
+    over a registry of types/functions) to setup mocks for the backend functions.
+    """
+    
+    # List of functions implemented by the user's custom backend
+    # This mirrors the iteration pattern seen in the similar API (tf.keras)
+    backend_primitives = [
+        'broadcast',
+        'scatter', 
+        'gather',
+        'broadcast_coalesced',
+        'scatter_out',
+        'gather_out'
+    ]
+
+    # Setup mocks for the torch.cuda.comm functions (which DataParallel uses)
+    # In a real custom backend scenario, these would be bound to torch._C
+    patches = {}
+    for func_name in backend_primitives:
+        # We patch torch.cuda.comm to intercept calls
+        patches[func_name] = mock.patch(f'torch.cuda.comm.{func_name}', autospec=True)
+
+    # Start all patches
+    active_patches = [p.start() for p in patches.values()]
+    mocks = {name: active_patches[i] for i, name in enumerate(backend_primitives)}
+
+    try:
+        # Mock environment to simulate available GPUs (required for DataParallel)
+        with mock.patch('torch.cuda.device_count', return_value=2):
+            model = SimpleModel()
+            
+            # Mock the .cuda() call to move model to "GPU" without actual hardware
+            with mock.patch.object(model, 'cuda', return_value=model):
+                # Initialize DataParallel
+                # The issue states DataParallel should support custom backends.
+                # We verify it calls the expected primitives.
+                dp_model = DataParallel(model, device_ids=[0, 1])
+
+                # Prepare input data
+                batch_size = 20
+                input_data = torch.randn(batch_size, 10)
+                
+                # Mock input .cuda() call
+                with mock.patch.object(input_data, 'cuda', return_value=input_data):
+                    # Mock the forward pass to avoid actual computation errors
+                    # We just want to check if the communication primitives are called
+                    with mock.patch.object(model, 'forward', return_value=torch.randn(batch_size, 5)):
+                        output = dp_model(input_data)
+
+                    # Assertions
+                    # Verify that DataParallel attempted to use the communication primitives
+                    # provided by the "backend" (mocked here).
+                    # Note: Depending on implementation details, not all might be called in a simple pass,
+                    # but scatter and gather are essential for DataParallel.
+                    
+                    assert mocks['scatter'].called, "DataParallel did not call scatter (custom backend support missing)"
+                    assert mocks['gather'].called, "DataParallel did not call gather (custom backend support missing)"
+                    
+                    print("Test Passed: DataParallel successfully dispatched to custom backend primitives.")
+
+    finally:
+        # Stop all patches
+        for p in active_patches:
+            p.stop()
+
+if __name__ == "__main__":
+    test_dataparallel_custom_backend_dispatch()

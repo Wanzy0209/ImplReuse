@@ -1,0 +1,57 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Replicate the seed and setup from the original bug report
+tf.random.set_seed(1166094474)
+
+def fuzzed_program(arg_2):
+    """
+    Adapted from the original PyTorch fuzzed_program.
+    The original logic involved torch.chunk on a (6, 4) tensor.
+    We adapt this to use tf.split (semantic equivalent of chunk) and 
+    apply the target API tf.experimental.numpy.triu.
+    """
+    # Original: var_node_10 = arg_2 # size=(6, 4), stride=(4, 1), dtype=bool, device=cuda
+    var_node_10 = arg_2
+    
+    # Original: var_node_9 = torch.chunk(var_node_10, 4, dim=1)[0] # size=(6, 1)
+    # TensorFlow equivalent: tf.split
+    chunks = tf.split(var_node_10, num_or_size_splits=4, axis=1)
+    var_node_9 = chunks[0] # Shape (6, 1)
+    
+    # Target API: tf.experimental.numpy.triu
+    # We apply triu to the chunked tensor. 
+    # Note: triu requires rank >= 2, so (6, 1) is valid.
+    return tf.experimental.numpy.triu(var_node_9)
+
+# Input generation
+# Original: arg_2 = torch.as_strided(torch.randint(0, 2, (24,), dtype=torch.int8).bool(), (6, 4), (4, 1))
+# We create a (6, 4) boolean tensor in TensorFlow
+arg_2 = tf.cast(tf.random.uniform((6, 4), minval=0, maxval=2, dtype=tf.int32), tf.bool)
+
+# 1. Eager Execution
+print("Running eager execution...")
+try:
+    result_eager = fuzzed_program(arg_2)
+    print(f" Eager success. Shape: {result_eager.shape}, Dtype: {result_eager.dtype}")
+except Exception as e:
+    print(f" Eager failed: {e}")
+
+# 2. Compiled Execution (tf.function)
+# This mimics torch.compile to check for eager/compile divergence
+print("Running compiled execution...")
+try:
+    compiled_program = tf.function(fuzzed_program, jit_compile=True)
+    result_compiled = compiled_program(arg_2)
+    print(f" Compile success. Shape: {result_compiled.shape}, Dtype: {result_compiled.dtype}")
+except Exception as e:
+    print(f" Compile failed: {e}")
+
+# 3. Verification
+# Check if results match
+if 'result_eager' in locals() and 'result_compiled' in locals():
+    if tf.reduce_all(tf.equal(result_eager, result_compiled)).numpy():
+        print(" Verification passed: Eager and Compiled results match.")
+    else:
+        print(" Verification failed: Divergence detected between Eager and Compiled results.")

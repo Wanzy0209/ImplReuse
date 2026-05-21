@@ -1,0 +1,63 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_svd_with_epsilon():
+    """
+    Adapted test case for tf.keras.ops.svd based on the torch.clamp bug report.
+    
+    Original Bug Logic:
+    - Create a tensor with zeros.
+    - Apply an operation with a small threshold (min=1e-7).
+    - Verify if the operation handles the threshold correctly (PyTorch MPS backend failed to clamp).
+    
+    Adaptation for tf.keras.ops.svd:
+    - Create matrices (zeros and identity).
+    - Apply SVD with epsilon=1e-7 (analogous parameter to the small threshold).
+    - Verify the operation executes and returns valid shapes/types.
+    - Note: In SVD, 'epsilon' is typically a convergence tolerance, not an output clamp.
+    """
+
+    print("--- Test Case 1: Zero Matrix ---")
+    # Analogous to: a = torch.zeros(1, device='mps')
+    a = tf.zeros((2, 2), dtype=tf.float32)
+    print("Input:\n", a)
+
+    # Analogous to: a.clamp(min=1e-7)
+    # Using epsilon=1e-7 as the small parameter. 
+    # max_iter is required by the provided signature.
+    try:
+        s, u, v = tf.keras.ops.svd(a, max_iter=30, epsilon=1e-7)
+        print("Singular Values:\n", s)
+        print("U:\n", u)
+        print("V:\n", v)
+        
+        # Basic sanity check
+        assert s.shape == (2,), "Shape mismatch for singular values"
+        assert u.shape == (2, 2), "Shape mismatch for U"
+        assert v.shape == (2, 2), "Shape mismatch for V"
+        print("Test 1 Passed: Shapes are correct.")
+    except Exception as e:
+        print(f"Test 1 Failed with error: {e}")
+
+    print("\n--- Test Case 2: Identity Matrix ---")
+    # Analogous to: b = torch.zeros(1, device='mps') followed by operations
+    # Using Identity to ensure non-zero singular values
+    b = tf.eye(2, dtype=tf.float32)
+    print("Input:\n", b)
+
+    try:
+        s, u, v = tf.keras.ops.svd(b, max_iter=30, epsilon=1e-7)
+        print("Singular Values:\n", s)
+        print("U:\n", u)
+        print("V:\n", v)
+
+        # Check if singular values are close to 1.0 (expected for Identity)
+        # This verifies the 'epsilon' didn't break the calculation
+        assert np.allclose(s.numpy(), [1.0, 1.0], atol=1e-5), "Singular values for Identity matrix incorrect"
+        print("Test 2 Passed: Values are correct.")
+    except Exception as e:
+        print(f"Test 2 Failed with error: {e}")
+
+if __name__ == "__main__":
+    test_svd_with_epsilon()

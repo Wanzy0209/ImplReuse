@@ -1,0 +1,106 @@
+import torch
+import tensorflow as tf
+import numpy as np
+import sys
+
+def foo(arg0, arg1, arg2, arg3, arg4):
+    # t0 = arg0 # size=(5, 4), dtype=bfloat16
+    # t1 = arg1 # size=(5, 1024), dtype=bfloat16
+    # t2 = arg2 # size=(1024, 4), dtype=bfloat16
+    
+    # Use the bfloat16_scope for the matrix multiplication part
+    # This mimics the context where bfloat16 precision is critical
+    with tf.compat.v1.tpu.bfloat16_scope():
+        # Explicitly cast to bfloat16 to ensure the operation runs in this precision
+        # The scope primarily affects variable creation, but we enforce dtype here for the op
+        t0 = tf.cast(arg0, tf.bfloat16)
+        t1 = tf.cast(arg1, tf.bfloat16)
+        t2 = tf.cast(arg2, tf.bfloat16)
+
+        # torch.addmm(t0, t1, t2) -> t0 + (t1 @ t2)
+        # Matmul: (5, 1024) @ (1024, 4) -> (5, 4)
+        # Add: (5, 4) + (5, 4) -> (5, 4)
+        t3 = tf.matmul(t1, t2) + t0
+        
+        # t4 = t3.norm() -> Frobenius norm by default for matrices
+        t4 = tf.norm(t3)
+
+    # t5 = arg3 # size=(3, 4, 5, 2), dtype=float32
+    t5 = arg3
+    
+    # t6 = t5.var(dim=0) -> Variance over dim 0
+    # Input: (3, 4, 5, 2), Output: (4, 5, 2)
+    t6 = tf.math.reduce_variance(t5, axis=0)
+    
+    # t7 = t6.var() -> Scalar variance
+    t7 = tf.math.reduce_variance(t6)
+    
+    # t8 = arg4 # size=(), dtype=float32
+    t8 = arg4
+    
+    # t9 = torch.nn.functional.relu(t8)
+    t9 = tf.nn.relu(t8)
+    
+    # t10 = t7 + t4 + t9
+    # t4 is bfloat16, t7 and t9 are float32. 
+    # TF will likely promote t4 to float32 for the addition.
+    t10 = t7 + tf.cast(t4, tf.float32) + t9
+    
+    # t11 = torch.pow(torch.pow(t4, t7), t10)
+    # t4 is bfloat16, t7 is float32. 
+    # We cast t4 to float32 for the power operation to match standard mixed precision behavior
+    # and avoid potential underflow/overflow specific to bf16 pow implementation details.
+    t4_f32 = tf.cast(t4, tf.float32)
+    t11 = tf.pow(tf.pow(t4_f32, t7), t10)
+    
+    output = t11
+    return output
+
+# Generate inputs matching the PyTorch test case
+# Using numpy for generation to ensure consistency
+np.random.seed(42)
+
+arg0 = tf.constant(np.random.rand(5, 4), dtype=tf.float32) # Will be cast to bf16 inside
+arg1 = tf.constant(np.random.rand(5, 1024), dtype=tf.float32) # Will be cast to bf16 inside
+arg2 = tf.constant(np.random.rand(1024, 4), dtype=tf.float32) # Will be cast to bf16 inside
+arg3 = tf.constant(np.random.rand(3, 4, 5, 2), dtype=tf.float32)
+arg4 = tf.constant(np.random.rand(1)[0], dtype=tf.float32) # Scalar
+
+if __name__ == '__main__':
+    # 1. Run in Eager mode
+    # Note: In TF2, eager is the default.
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4)
+    print('Eager Success! ')
+
+    # 2. Run in Compiled mode (tf.function)
+    # This mimics torch.compile
+    compiled_foo = tf.function(foo)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4)
+    print('Compile Success! ')
+
+    # 3. Compare outputs
+    # The original bug reported an 8% divergence. We check for significant differences here.
+    
+    # Convert to numpy for calculation
+    val_eager = out_eager.numpy()
+    val_compiled = out_compiled.numpy()
+    
+    diff = np.abs(val_eager - val_compiled)
+    rel_diff = diff / (np.abs(val_eager) + 1e-12) * 100
+    
+    print(f'Relative diff: {rel_diff:.6f}%')
+    print(f'Eager Value: {val_eager}')
+    print(f'Compiled Value: {val_compiled}')
+    
+    # Check for NaNs or Infs which might indicate precision issues
+    if not np.isfinite(val_eager) or not np.isfinite(val_compiled):
+        print(' Output contains NaN or Inf!')
+        sys.exit(1)
+
+    # The original bug threshold was > 5%. We use a similar threshold to detect regressions.
+    if rel_diff > 5.0:
+        print(f' Outputs differ significantly (relative)!')
+        print('Absolute diff:', diff)
+        sys.exit(1)
+        
+    print('Test Passed! ')

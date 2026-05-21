@@ -1,0 +1,58 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision.models import resnet18
+import pytest
+
+def test_torch_compile_resnet_mps_backward():
+    """
+    Test case for Issue 161905: torch.compile ResNet-18 model fails during 
+    loss.backward() on MPS backend, but works on CPU.
+    
+    This test verifies that the backward pass completes successfully when using
+    torch.compile on the MPS device.
+    """
+    # Skip if MPS is not available
+    if not torch.backends.mps.is_available():
+        pytest.skip("MPS backend is not available on this system")
+
+    BATCH_SIZE = 4
+    NUM_CLASSES = 10
+    LEARNING_RATE = 0.01
+    device = 'mps'
+
+    # Initialize model and move to MPS device
+    model = resnet18(num_classes=NUM_CLASSES)
+    model = model.to(device)
+    model.train()
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+
+    # Apply torch.compile as per the bug report
+    @torch.compile
+    def train_step(images, labels):
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        # The bug specifically occurs here during the backward pass
+        loss.backward()
+        optimizer.step()
+        return loss
+
+    # Create dummy data
+    images = torch.randn(BATCH_SIZE, 3, 224, 224, device=device)
+    labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,), device=device)
+
+    # Run the compiled step
+    # We expect this to run without RuntimeError on MPS
+    try:
+        loss = train_step(images, labels)
+        assert loss is not None
+        assert loss.item() >= 0  # CrossEntropyLoss should be non-negative
+    except RuntimeError as e:
+        pytest.fail(f"RuntimeError during backward pass on MPS: {e}")
+
+if __name__ == "__main__":
+    test_torch_compile_resnet_mps_backward()
+    print("Test passed successfully.")

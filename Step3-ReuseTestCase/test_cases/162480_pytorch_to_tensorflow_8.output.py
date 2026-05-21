@@ -1,0 +1,57 @@
+import torch
+import tensorflow as tf
+import traceback
+
+def test_name_scope_float_handling():
+    """
+    Adapted from PyTorch Issue 162480.
+    
+    Original Bug Description:
+    The function rebind_unbacked() in torch.fx.experimental.symbolic_shapes.py 
+    failed to handle float values correctly during AOTInductor compilation.
+    The fix involved checking if the value is a float and discarding/skipping it.
+    
+    Adaptation Logic:
+    This test verifies the behavior of the similar API tf.keras.name_scope 
+    when encountering unexpected float types (e.g., as the name argument).
+    It checks if the API handles the float gracefully (like the PyTorch fix) 
+    or raises an error (the original bug behavior).
+    """
+    
+    print("Testing tf.keras.name_scope with float input...")
+
+    # Test Case: Passing a float as the 'name' argument
+    # This parallels the PyTorch scenario where a float appeared in a variable binding.
+    float_name = 123.456
+    
+    try:
+        # Attempt to create a name scope with a float
+        with tf.keras.name_scope(float_name) as scope:
+            # Create a dummy op to ensure the scope is active
+            v = tf.constant(1.0)
+        
+        # If successful, TensorFlow likely converted the float to a string or handled it.
+        print(f"SUCCESS: Handled float name '{float_name}' gracefully. Scope: {scope}")
+        assert isinstance(scope, str), "Scope should be a string representation"
+        
+    except Exception as e:
+        # If it fails, it mimics the original bug behavior (crash on unexpected type)
+        print(f"FAILURE: Encountered error with float name '{float_name}'.")
+        print(f"Error: {e}")
+        traceback.print_exc()
+        raise
+
+    # Test Case: Passing a float in 'values' (if applicable/supported)
+    # The signature allows 'values', which are tensors. Passing a raw float might be invalid.
+    # This tests robustness against mixed types in arguments.
+    try:
+        with tf.keras.name_scope("test_scope", values=[tf.constant(1.0), 99.9]):
+            pass
+        print("SUCCESS: Handled float in 'values' list gracefully.")
+    except Exception as e:
+        # Depending on TF version, this might be expected to fail or be handled.
+        # We log it as info rather than a failure, as 'values' usually expects Tensors.
+        print(f"INFO: Could not handle float in 'values' (Expected behavior in strict typing). Error: {e}")
+
+if __name__ == "__main__":
+    test_name_scope_float_handling()

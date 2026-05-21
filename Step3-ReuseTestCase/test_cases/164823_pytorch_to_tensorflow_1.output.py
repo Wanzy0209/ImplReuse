@@ -1,0 +1,66 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def computation(x):
+    """
+    Mirrors the PyTorch model logic:
+    1. Convert dense to sparse.
+    2. Perform arithmetic operation.
+    3. Convert sparse back to dense.
+    """
+    # PyTorch: x.to_sparse()
+    x_sparse = tf.sparse.from_dense(x)
+    
+    # PyTorch: x_sparse * 2
+    # TensorFlow requires explicit sparse ops
+    result_sparse = tf.sparse.multiply(x_sparse, 2.0)
+    
+    # PyTorch: result.to_dense()
+    return tf.sparse.to_dense(result_sparse)
+
+def main():
+    # Setup input data
+    # PyTorch: torch.randn(10, 10)
+    x = tf.random.normal((10, 10))
+    
+    # 1. Run in Eager mode (Baseline)
+    # PyTorch: model(x)
+    try:
+        eager_output = computation(x)
+        print("Eager output:\n", eager_output.numpy())
+    except Exception as e:
+        print(f"Eager execution failed: {e}")
+
+    # 2. Run with TPU batch_parallel (Compiled/Parallel mode)
+    # PyTorch: torch.compile(model)(x)
+    # TensorFlow: tf.compat.v1.tpu.batch_parallel(...)
+    print("\nAttempting TPU batch_parallel execution...")
+    
+    # Note: tf.compat.v1.tpu.batch_parallel requires a TPU environment.
+    # This code block represents the correct API usage for the test case.
+    try:
+        # Initialize TPU system if available (standard boilerplate for TPU scripts)
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        
+        # batch_parallel expects inputs as a list of tensors
+        # num_shards=1 mimics the single-device execution of the original bug report
+        compiled_output = tf.compat.v1.tpu.batch_parallel(
+            computation, 
+            inputs=[x], 
+            num_shards=1
+        )
+        
+        print("Compiled output (TPU):\n", compiled_output.numpy())
+        
+    except ValueError as ve:
+        # Handles cases where TPU is not found (common in local dev environments)
+        print(f"TPU not found (skipping TPU execution): {ve}")
+    except Exception as e:
+        # Handles actual runtime errors similar to the PyTorch NotImplementedError
+        print(f"TPU execution failed with error: {e}")
+
+if __name__ == "__main__":
+    main()

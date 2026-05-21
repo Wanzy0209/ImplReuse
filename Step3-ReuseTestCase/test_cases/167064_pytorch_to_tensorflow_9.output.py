@@ -1,0 +1,42 @@
+import torch
+import tensorflow as tf
+import unittest
+
+class TestNameScopeGlobalState(unittest.TestCase):
+    def test_name_scope_state_isolation(self):
+        """
+        Adapted from PyTorch Issue 167064.
+        
+        The original bug report highlights that `torch.compile` triggers a global
+        state change (`torch.distributions.Distribution.set_default_validate_args(False)`)
+        even if the compiled function is not used, affecting other parts of the system.
+        
+        This test verifies that `tf.name_scope` (the similar TensorFlow API) manages
+        its state (the naming scope) correctly and does not leak this state globally
+        after the context is exited.
+        """
+        
+        # 1. Verify initial global state (naming context)
+        # We create a variable outside the scope to check the default naming behavior.
+        var_outside = tf.Variable(1.0, name="var")
+        # The name should not contain any specific scope prefix (or just the default).
+        self.assertNotIn("test_scope", var_outside.name)
+        
+        # 2. Enter the context (similar to calling torch.compile)
+        # In the PyTorch bug, the call itself triggers the global change.
+        # Here, entering the scope triggers the context change.
+        with tf.name_scope("test_scope"):
+            # 3. Verify state change inside the context
+            # Operations inside should be affected by the scope (the "side effect").
+            var_inside = tf.Variable(1.0, name="var")
+            self.assertIn("test_scope", var_inside.name)
+            
+        # 4. Verify global state after exiting the context
+        # The PyTorch bug implies the state change persists or is unwanted.
+        # For tf.name_scope, we verify that the state change is REVERTED,
+        # ensuring no "redundant global code" effect leaks out.
+        var_after = tf.Variable(1.0, name="var")
+        self.assertNotIn("test_scope", var_after.name)
+
+if __name__ == "__main__":
+    unittest.main()

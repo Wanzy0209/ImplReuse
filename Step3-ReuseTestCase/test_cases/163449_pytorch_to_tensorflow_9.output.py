@@ -1,0 +1,79 @@
+import torch
+import tensorflow as tf
+import numpy as np
+import sys
+
+# Ensure reproducibility
+np.random.seed(42)
+tf.random.set_seed(42)
+
+def foo(arg0, arg1, arg2, arg3, arg4):
+    # Use tf.convert_to_tensor to handle type conversion, matching the API under test.
+    # The original bug involves bfloat16 precision, so we convert the first three args to bfloat16.
+    t0 = tf.convert_to_tensor(arg0, dtype=tf.bfloat16)
+    t1 = tf.convert_to_tensor(arg1, dtype=tf.bfloat16)
+    t2 = tf.convert_to_tensor(arg2, dtype=tf.bfloat16)
+
+    # torch.addmm(t0, t1, t2) -> t0 + matmul(t1, t2)
+    t3 = tf.add(t0, tf.matmul(t1, t2))
+
+    # t3.norm() -> Frobenius norm
+    # PyTorch trace indicates t4 remains bfloat16. 
+    # tf.norm usually promotes to float32, so we cast back to match the trace semantics.
+    t4 = tf.cast(tf.norm(t3), tf.bfloat16)
+
+    t5 = tf.convert_to_tensor(arg3, dtype=tf.float32)
+    # t5.var(dim=0)
+    t6 = tf.math.reduce_variance(t5, axis=0)
+    # t6.var()
+    t7 = tf.math.reduce_variance(t6)
+
+    t8 = tf.convert_to_tensor(arg4, dtype=tf.float32)
+    t9 = tf.nn.relu(t8)
+
+    # t7 + t4 + t9
+    # t4 is bfloat16, t7/t9 are float32. Result is float32.
+    t10 = t7 + tf.cast(t4, tf.float32) + t9
+
+    # torch.pow(torch.pow(t4, t7), t10)
+    # t4 is bfloat16, t7 is float32. pow promotes to float32.
+    t11 = tf.math.pow(tf.math.pow(tf.cast(t4, tf.float32), t7), t10)
+    return t11
+
+# Generate raw data (numpy arrays) to be converted by the API
+arg0 = np.random.rand(5, 4).astype(np.float32)
+arg1 = np.random.rand(5, 1024).astype(np.float32)
+arg2 = np.random.rand(1024, 4).astype(np.float32)
+arg3 = np.random.rand(3, 4, 5, 2).astype(np.float32)
+arg4 = np.random.rand(1).astype(np.float32)[0] # Scalar
+
+if __name__ == '__main__':
+    # 1. Eager Execution
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4)
+    print('Eager Success! ')
+
+    # 2. Compiled Execution (XLA)
+    # Using tf.function with jit_compile=True to mimic torch.compile
+    compiled_foo = tf.function(foo, jit_compile=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4)
+    print('Compile Success! ')
+
+    # Compare outputs (forward)
+    # The original test compares the sum of the output
+    out_eager_sum = tf.reduce_sum(out_eager).numpy()
+    out_compiled_sum = tf.reduce_sum(out_compiled).numpy()
+
+    diff = abs(out_eager_sum - out_compiled_sum)
+    rel_diff = diff / (abs(out_eager_sum) + 1e-12) * 100
+
+    print(f'Relative diff (sum): {rel_diff:.6f}%')
+
+    if rel_diff > 5:
+        print(f' Forward output sums differ significantly (relative)!')
+        print('out_eager_sum:', out_eager_sum)
+        print('out_compiled_sum:', out_compiled_sum)
+        print('Absolute diff:', diff)
+        print('Relative diff (%):', rel_diff)
+        sys.exit(1)
+    else:
+        print("Test Passed.")

@@ -1,0 +1,45 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def foo(x):
+    # PyTorch: x.tan_()
+    # TensorFlow: tf.tan (out-of-place, but semantically the operation)
+    x = tf.tan(x)
+
+    # PyTorch: x = x.t()
+    # TensorFlow: tf.transpose
+    x = tf.transpose(x)
+
+    # Target API: tf.compat.v1.assert_negative
+    return tf.compat.v1.assert_negative(x)
+
+# Setup data
+# To ensure the assertion passes (verifying correct behavior on transformed data),
+# we generate negative inputs. tan(x) is negative for x in (-pi/2, 0).
+np.random.seed(0)
+x_data = -np.abs(np.random.randn(4, 6)).astype(np.float32)
+
+# 1. Eager execution
+# In TensorFlow 2.x, eager execution is enabled by default.
+try:
+    # Execute the function. If assertion fails, it raises an error.
+    foo(tf.constant(x_data))
+    eager_result = "Passed"
+except tf.errors.InvalidArgumentError:
+    eager_result = "Failed"
+
+# 2. Compiled execution
+# tf.function is the TensorFlow equivalent to torch.compile for optimization/graph tracing.
+compiled_foo = tf.function(foo)
+try:
+    compiled_foo(tf.constant(x_data))
+    compiled_result = "Passed"
+except tf.errors.InvalidArgumentError:
+    compiled_result = "Failed"
+
+# Verify consistency
+# The original bug was a mismatch between eager and compiled outputs.
+# Here we check if the assertion result is consistent between modes.
+assert eager_result == compiled_result, f"Mismatch: Eager={eager_result}, Compiled={compiled_result}"
+print("Test passed. Behavior is consistent between eager and compiled modes.")

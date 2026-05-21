@@ -1,0 +1,49 @@
+import warnings
+import sys
+
+def test_tf_iterator_futurewarning():
+    """
+    Test case to reproduce FutureWarnings related to functools.partial 
+    when importing/defining tf.data.Iterator, similar to the PyTorch issue.
+    
+    The original bug report shows that importing a module with specific 
+    functools.partial usage triggers FutureWarnings in Python 3.13+.
+    This test checks if the similar API (tf.data.Iterator) exhibits the same behavior.
+    """
+    
+    # Capture warnings
+    with warnings.catch_warnings(record=True) as w:
+        # Ensure all warnings are always triggered
+        warnings.simplefilter("always")
+        
+        # Import the module containing the similar API.
+        # Based on the provided snippet, the class is in tensorflow.python.data.ops.iterator_ops
+        try:
+            from tensorflow.python.data.ops.iterator_ops import Iterator
+        except ImportError:
+            # Fallback to public API if internal structure differs
+            from tensorflow.data import Iterator
+
+        # Filter for FutureWarnings
+        future_warnings = [warning for warning in w if issubclass(warning.category, FutureWarning)]
+        
+        # Filter for warnings specifically mentioning functools.partial
+        partial_warnings = [
+            warning for warning in future_warnings 
+            if "functools.partial" in str(warning.message)
+        ]
+
+        # Reproduction logic: The original issue confirmed these warnings exist.
+        # We assert they exist here to validate the similarity/bug presence.
+        assert len(partial_warnings) > 0, (
+            f"Expected FutureWarnings regarding functools.partial, but found none. "
+            f"Total warnings captured: {len(w)}"
+        )
+        
+        # Print details for verification
+        for warning in partial_warnings:
+            print(f"FutureWarning caught: {warning.message}")
+            print(f"Location: {warning.filename}:{warning.lineno}")
+
+if __name__ == "__main__":
+    test_tf_iterator_futurewarning()

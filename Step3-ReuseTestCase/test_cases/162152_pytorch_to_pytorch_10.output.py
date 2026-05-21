@@ -1,0 +1,57 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_gather_object(rank, world_size):
+    """
+    Test function for torch.distributed.gather_object.
+    This function initializes the process group, creates an object specific to the rank,
+    gathers it on rank 0, and verifies the results.
+    """
+    # Setup environment for multiprocessing
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Create a picklable object to gather.
+    # In the context of the original bug, this represents data or state 
+    # that might be scattered/gathered across devices.
+    obj = {
+        "rank": rank,
+        "tensor": torch.randn(2, 2),
+        "message": f"Hello from rank {rank}"
+    }
+
+    # Prepare the list to gather into (only required on the destination rank)
+    if rank == 0:
+        gather_list = [None for _ in range(world_size)]
+    else:
+        gather_list = None
+
+    # Call the similar API: torch.distributed.gather_object
+    # This replaces the DataParallel forward pass in the original test case logic
+    dist.gather_object(obj, gather_list, dst=0)
+
+    # Assertions to verify correctness
+    if rank == 0:
+        assert len(gather_list) == world_size, "Gathered list length does not match world size"
+        for i in range(world_size):
+            assert gather_list[i]["rank"] == i, f"Rank mismatch at index {i}"
+            assert isinstance(gather_list[i]["tensor"], torch.Tensor), f"Tensor type mismatch at index {i}"
+            assert gather_list[i]["message"] == f"Hello from rank {i}", f"Message mismatch at index {i}"
+        print("Test Passed: gather_object successfully gathered objects from all ranks.")
+    else:
+        # Non-root ranks just participate
+        pass
+
+    # Cleanup
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Set the number of processes (simulating multiple devices/ranks)
+    world_size = 2
+    # Start multiprocessing
+    mp.spawn(test_gather_object, args=(world_size,), nprocs=world_size, join=True)

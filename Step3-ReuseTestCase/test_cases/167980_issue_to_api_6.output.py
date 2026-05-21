@@ -1,0 +1,76 @@
+import os
+import tensorflow as tf
+import numpy as np
+
+# Reproduce environment setup from the bug report (CPU focus)
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+def test_tf_pad_train_eval_stability():
+    """
+    Test case for tf.compat.v1.pad inspired by PyTorch Issue 167980.
+    
+    The original bug involves a crash during evaluation after a training epoch
+    when processing MNIST-like data. This test verifies that tf.compat.v1.pad
+    (the similar API) handles the tensor manipulations correctly within a
+    Train -> Eval workflow without crashing or producing NaNs.
+    """
+    # Simulate MNIST data batch (Batch, Channels, Height, Width)
+    batch_size = 80
+    # Shape: [80, 1, 28, 28]
+    X = np.random.rand(batch_size, 1, 28, 28).astype(np.float32)
+    y = np.random.randint(0, 10, size=(batch_size,))
+
+    # Define paddings for the similar API (tf.compat.v1.pad)
+    # paddings shape is [n, 2] where n is rank of tensor (4 here).
+    # We pad the Height (dim 2) and Width (dim 3) by 1 pixel on each side.
+    # New shape will be [80, 1, 30, 30].
+    paddings = tf.constant([[0, 0], [0, 0], [1, 1], [1, 1]])
+
+    # Define a simple linear layer variable to simulate the "Net" logic
+    # After padding: 28+2 = 30. Flattened size = 1 * 30 * 30 = 900.
+    flattened_dim = 1 * 30 * 30
+    output_dim = 10
+    W = tf.Variable(tf.random.normal([flattened_dim, output_dim]))
+    b = tf.Variable(tf.zeros([output_dim]))
+
+    # Define the forward pass using the similar API
+    def forward(x):
+        # Apply padding (Leveraging tf.compat.v1.pad)
+        x_padded = tf.compat.v1.pad(x, paddings, mode="CONSTANT")
+        
+        # Flatten (Simulating nn.Flatten)
+        x_flat = tf.reshape(x_padded, [batch_size, -1])
+        
+        # Linear transformation (Simulating nn.Linear)
+        return tf.matmul(x_flat, W) + b
+
+    # === TRAIN ===
+    optimizer = tf.optimizers.SGD(learning_rate=0.01)
+    
+    with tf.GradientTape() as tape:
+        logits = forward(X)
+        loss = tf.reduce_mean(
+            tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=logits)
+        )
+
+    grads = tape.gradient(loss, [W, b])
+    optimizer.apply_gradients(zip(grads, [W, b]))
+
+    # === EVAL ===
+    # The original bug report indicates a crash happens here in PyTorch.
+    # We verify that the operation completes successfully in TensorFlow.
+    # Note: We disable gradient tracking to strictly mimic the 'eval' mode.
+    logits_eval = forward(X)
+
+    # Assertions to ensure correctness and successful execution
+    # Check shape
+    assert logits_eval.shape == (batch_size, output_dim), \
+        f"Expected shape {(batch_size, output_dim)}, got {logits_eval.shape}"
+    
+    # Check for NaNs (common sign of native backend failures)
+    assert not tf.reduce_any(tf.math.is_nan(logits_eval)), "Output contains NaNs"
+    
+    print("Test passed: Train and Eval cycles completed without crash.")
+
+if __name__ == "__main__":
+    test_tf_pad_train_eval_stability()

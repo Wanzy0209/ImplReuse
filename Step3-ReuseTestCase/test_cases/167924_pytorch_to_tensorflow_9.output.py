@@ -1,0 +1,54 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_numpy_outer_with_sliced_tensor():
+    """
+    Adapted test case for Issue 167924.
+    Original Bug: Crash on MPS when using repeat_interleave with a sliced tensor.
+    Target API: tf.experimental.numpy.outer.
+    
+    This test verifies if tf.experimental.numpy.outer handles sliced tensors
+    correctly without crashing, preserving the slicing logic from the original bug.
+    """
+    
+    # Attempt to use GPU if available to mimic the hardware-specific nature of the original bug
+    gpus = tf.config.list_physical_devices('GPU')
+    device_name = '/GPU:0' if gpus else '/CPU:0'
+    
+    print(f"Running test on device: {device_name}")
+
+    with tf.device(device_name):
+        # Replicate tensor creation from the original bug report
+        # Original: data = torch.arange(2, device="mps")
+        # We use tf.range as the direct equivalent to torch.arange
+        a = tf.range(2, dtype=tf.int32)
+
+        # Original: counts = torch.tensor([0, 1, 0], device="mps")
+        b = tf.constant([0, 1, 0], dtype=tf.int32)
+
+        # Original: counts[1:3] (The slicing operation that triggered the segfault)
+        b_sliced = b[1:3]
+
+        # Call the similar API: tf.experimental.numpy.outer
+        # We pass the sliced tensor to verify the API's robustness
+        try:
+            result = tf.experimental.numpy.outer(a, b_sliced)
+            
+            # Verify correctness against standard NumPy behavior
+            # a = [0, 1], b_sliced = [1, 0]
+            # outer product should be [[0, 0], [1, 0]]
+            expected = np.outer(a.numpy(), b_sliced.numpy())
+            
+            assert np.array_equal(result.numpy(), expected), \
+                f"Output mismatch. Expected {expected}, got {result.numpy()}"
+            
+            print("Test Passed: tf.experimental.numpy.outer handled sliced tensor correctly.")
+            print(f"Result: {result.numpy()}")
+            
+        except Exception as e:
+            print(f"Test Failed with exception: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_tf_numpy_outer_with_sliced_tensor()

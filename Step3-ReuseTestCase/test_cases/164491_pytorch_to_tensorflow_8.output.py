@@ -1,0 +1,96 @@
+import tensorflow as tf
+import numpy as np
+import sys
+
+def test_conv2d_transpose_layout_handling():
+    """
+    Test case adapted from PyTorch Issue #164491.
+    
+    Original Issue: _scaled_mm and _int_mm are slow or raise errors with row-major RHS matrices.
+    The issue highlights that APIs should handle different memory layouts (row-major vs column-major)
+    for the weight/kernel matrix without crashing or significant performance penalties.
+    
+    Adaptation: 
+    In TensorFlow/Keras, the equivalent of memory layout handling is the 'data_format' argument
+    ('channels_last' vs 'channels_first'). This test verifies that tf.keras.backend.conv2d_transpose
+    handles both layouts correctly without raising errors, specifically checking the 'channels_first'
+    case which is analogous to the non-standard row-major layout in the PyTorch bug.
+    """
+    
+    print("Testing tf.keras.backend.conv2d_transpose with different data formats...")
+    
+    # Parameters
+    batch_size = 4
+    height = 16
+    width = 16
+    in_channels = 32
+    out_channels = 64
+    kernel_h = 3
+    kernel_w = 3
+    
+    # Define output shapes required by conv2d_transpose
+    # For 'same' padding, output spatial dims match input spatial dims
+    output_shape_channels_last = (batch_size, height, width, out_channels)
+    output_shape_channels_first = (batch_size, out_channels, height, width)
+
+    # --- Test Case 1: channels_last (Standard/Row-Major for spatial) ---
+    print("\n1. Testing with data_format='channels_last'...")
+    try:
+        # Input: (Batch, Height, Width, In_Channels)
+        x_last = tf.random.normal((batch_size, height, width, in_channels))
+        
+        # Kernel: (Height, Width, Output_Channels, Input_Channels)
+        # Note: In Keras backend, kernel layout depends on data_format
+        kernel_last = tf.random.normal((kernel_h, kernel_w, out_channels, in_channels))
+        
+        out_last = tf.keras.backend.conv2d_transpose(
+            x_last,
+            kernel_last,
+            output_shape=output_shape_channels_last,
+            padding='same',
+            data_format='channels_last'
+        )
+        
+        assert out_last.shape == output_shape_channels_last, \
+            f"Shape mismatch for channels_last. Expected {output_shape_channels_last}, got {out_last.shape}"
+        print("   PASSED: channels_last executed successfully.")
+        
+    except Exception as e:
+        print(f"   FAILED: channels_last raised an error: {e}")
+        return False
+
+    # --- Test Case 2: channels_first (Non-Standard/Column-Major for spatial) ---
+    # This corresponds to the "row-major rhs" scenario in the PyTorch bug where 
+    # the API must handle a layout different from the default.
+    print("\n2. Testing with data_format='channels_first' (Non-standard layout)...")
+    try:
+        # Input: (Batch, In_Channels, Height, Width)
+        x_first = tf.random.normal((batch_size, in_channels, height, width))
+        
+        # Kernel: (Input_Channels, Output_Channels, Height, Width)
+        # This layout is different from channels_last, testing the API's ability to swap dimensions.
+        kernel_first = tf.random.normal((in_channels, out_channels, kernel_h, kernel_w))
+        
+        out_first = tf.keras.backend.conv2d_transpose(
+            x_first,
+            kernel_first,
+            output_shape=output_shape_channels_first,
+            padding='same',
+            data_format='channels_first'
+        )
+        
+        assert out_first.shape == output_shape_channels_first, \
+            f"Shape mismatch for channels_first. Expected {output_shape_channels_first}, got {out_first.shape}"
+        print("   PASSED: channels_first executed successfully.")
+        
+    except Exception as e:
+        print(f"   FAILED: channels_first raised an error: {e}")
+        return False
+
+    print("\nAll tests passed. The API handles different data formats correctly.")
+    return True
+
+if __name__ == "__main__":
+    # Run the test
+    success = test_conv2d_transpose_layout_handling()
+    sys.exit(0 if success else 1)

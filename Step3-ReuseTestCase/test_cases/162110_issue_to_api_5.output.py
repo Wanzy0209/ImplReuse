@@ -1,0 +1,69 @@
+import torch
+from torch.export import Dim
+from typing import List
+
+# Reproduce the decomposition logic from the issue
+def view_decomposition(x: torch.Tensor, size: List[torch.SymInt]) -> torch.Tensor:
+    return torch.ops.aten._reshape_copy.default(x, size)
+
+# Minimal model to trigger the view operation without heavy dependencies
+class SimpleModel(torch.nn.Module):
+    def forward(self, x):
+        # Using view with -1 triggers dynamic size calculation which may lead to unbacked symbols
+        return x.view(x.size(0), -1)
+
+def test_reshape_copy_modes():
+    """
+    Test case for Issue 162110: unbacked semantics for _reshape_copy not defined.
+    
+    This test leverages the pattern from tf.executing_eagerly to verify behavior
+    in both Eager and Export (Graph) modes.
+    """
+    # Setup dynamic shapes
+    seq_len = Dim("seq_len", min=1, max=128)
+    
+    model = SimpleModel()
+    inputs = torch.randn(1, 12)
+    
+    # --- Eager Execution (Analogous to tf.executing_eagerly() == True) ---
+    print("Running in Eager mode...")
+    try:
+        with torch.no_grad():
+            out_eager = model(inputs)
+        print(f"Eager output shape: {out_eager.shape}")
+        assert out_eager.shape == (1, 12)
+    except Exception as e:
+        print(f"Eager mode failed: {e}")
+        raise
+
+    # --- Export/Graph Execution (Analogous to tf.executing_eagerly() == False) ---
+    print("\nRunning in Export mode...")
+    try:
+        dynamic_shapes = ({0: seq_len},)
+        
+        # Export the model (similar to tracing in tf.function)
+        ep = torch.export.export(
+            model,
+            args=(inputs,),
+            dynamic_shapes=dynamic_shapes,
+            strict=False,
+        )
+        
+        # Apply the decomposition that triggers the bug
+        decomp_table = torch.export.default_decompositions()
+        decomp_table[torch.ops.aten.view.default] = view_decomposition
+        
+        after_decomp = ep.run_decompositions(decomp_table=decomp_table)
+        
+        # Verify execution
+        res = after_decomp(inputs)
+        print(f"Export output shape: {res.shape}")
+        assert res.shape == (1, 12)
+        print("Success: Operation handled correctly in both modes.")
+        
+    except Exception as e:
+        print(f"Export mode failed (Bug reproduced): {e}")
+        raise
+
+if __name__ == "__main__":
+    test_reshape_copy_modes()

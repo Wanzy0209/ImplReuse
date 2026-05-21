@@ -1,0 +1,98 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Set seeds for reproducibility
+tf.random.set_seed(9)
+np.random.seed(9)
+
+# Sentinel variable to simulate gradient tracking context
+sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+def fuzzed_program(arg_0):
+    # var_node_1 = arg_0 # size=(1, 2), stride=(2, 1), dtype=int64
+    var_node_1 = arg_0
+
+    # var_node_5 = torch.full((1, 2), -66, dtype=torch.int32)
+    var_node_5 = tf.fill([1, 2], -66)
+    var_node_5 = tf.cast(var_node_5, dtype=tf.int32)
+
+    # var_node_6 = torch.full((1, 2), 77, dtype=torch.int64)
+    var_node_6 = tf.fill([1, 2], 77)
+    var_node_6 = tf.cast(var_node_6, dtype=tf.int64)
+
+    # var_node_4 = torch.ops.aten.add(var_node_5, var_node_6)
+    # PyTorch add(int32, int64) -> int32 (in this specific fuzzer trace context, usually promotes to larger)
+    # TF add(int32, int64) -> int64
+    var_node_4 = tf.add(var_node_5, var_node_6)
+
+    # var_node_7 = torch.full((1, 2), -64, dtype=torch.int32)
+    var_node_7 = tf.fill([1, 2], -64)
+    var_node_7 = tf.cast(var_node_7, dtype=tf.int32)
+
+    # var_node_3 = torch.ops.aten.mul(var_node_4, var_node_7)
+    var_node_3 = tf.multiply(var_node_4, var_node_7)
+
+    # var_node_9 = torch.full((3, 4), False, dtype=torch.bool)
+    var_node_9 = tf.fill([3, 4], False)
+
+    # --- API SUBSTITUTION ---
+    # Original: var_node_8 = torch.nonzero(var_node_9)
+    # Similar API: tf.keras.backend.random_uniform
+    # We adapt the call to match the expected output shape (1, 2) and dtype (int64) 
+    # required by the subsequent operations in the fuzzed program.
+    var_node_8 = tf.keras.backend.random_uniform(
+        shape=(1, 2), 
+        minval=0, 
+        maxval=10, 
+        dtype='int64'
+    )
+
+    # var_node_2 = torch.ops.aten.add(var_node_3, var_node_8)
+    var_node_2 = tf.add(var_node_3, var_node_8)
+
+    # var_node_0 = torch.ops.aten.div(var_node_1, var_node_2)
+    # Original trace indicates dtype=int64, implying floor division or integer division.
+    var_node_0 = tf.math.floordiv(var_node_1, var_node_2)
+
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+
+    # if result.is_complex(): result = result.real
+    if tf.dtypes.is_complex(result):
+        result = tf.math.real(result)
+
+    return result
+
+# Input argument
+arg_0 = tf.constant(np.random.randint(0, 3, (1, 2)), dtype=tf.int64)
+
+# 1. Eager Execution
+print("Running Eager Execution...")
+try:
+    result_eager = fuzzed_program(arg_0)
+    print(f' Eager success')
+    print(f'Eager result: {result_eager.numpy()}')
+    print(f'Eager shape: {result_eager.shape}')
+except Exception as e:
+    print(f" Eager failed: {e}")
+
+# 2. Compiled Execution (tf.function)
+print("\nRunning Compiled Execution (tf.function)...")
+try:
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(arg_0)
+    print(f' Compile success')
+    print(f'Compiled result: {result_compiled.numpy()}')
+    print(f'Compiled shape: {result_compiled.shape}')
+except Exception as e:
+    print(f" Compile failed: {e}")
+
+# 3. Comparison
+# Note: Since random_uniform is stochastic, values may differ, but shapes and dtypes should match.
+if 'result_eager' in locals() and 'result_compiled' in locals():
+    assert result_eager.shape == result_compiled.shape, \
+        f"Shape divergence: Eager {result_eager.shape} vs Compiled {result_compiled.shape}"
+    assert result_eager.dtype == result_compiled.dtype, \
+        f"Dtype divergence: Eager {result_eager.dtype} vs Compiled {result_compiled.dtype}"
+    print(" Shape and Dtype consistency verified between Eager and Compiled modes.")

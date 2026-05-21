@@ -1,0 +1,104 @@
+import os
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+# Based on the similar API tf.math.log1p, we leverage torch.log1p 
+# to test the functional operation inside torch.cond.
+# The similarity lies in the functional nature and context handling 
+# (getting default context/device) which is relevant to the dynamo/capture issue.
+
+def setup_process(rank, world_size):
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
+    
+    # initialize the process group
+    dist.init_process_group(
+        backend='nccl', # or 'gloo' if running on CPU/without GPU
+        init_method=f'tcp://127.0.0.1:29500',
+        rank=rank,
+        world_size=world_size
+    )
+    if torch.cuda.is_available():
+        torch.cuda.set_device(rank)
+
+def cleanup():
+    dist.destroy_process_group()
+
+@torch.compile(dynamic=True)
+def test_cond_with_log1p(rank_tensor):
+    """
+    Test torch.cond with a functional math operation (log1p) inside.
+    This mimics the pattern of tf.math.log1p which relies on context.
+    """
+    # torch.cond requires a tensor predicate
+    rank = rank_tensor.item()
+    pred = torch.tensor(rank == 0, device=rank_tensor.device)
+    
+    # Define a tensor to operate on
+    base_tensor = torch.tensor([1.0, 2.0, 3.0], device=rank_tensor.device)
+
+    # Using torch.cond to branch execution
+    # Branch 1: Apply log1p (similar to tf.math.log1p)
+    # Branch 2: Apply a different math op or identity
+    result = torch.cond(
+        pred,
+        lambda: torch.log1p(base_tensor), # Reusing logic from similar API
+        lambda: base_tensor + 1.0
+    )
+    
+    return result
+
+def run_test(rank, world_size):
+    print(f"Running test on rank {rank}")
+    setup_process(rank, world_size)
+    
+    # Configuration from the original bug report
+    torch._dynamo.config.capture_scalar_outputs = True
+    
+    device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
+    rank_tensor = torch.tensor([rank], device=device)
+    
+    try:
+        # Execute the compiled function with torch.cond
+        output = test_cond_with_log1p(rank_tensor)
+        
+        # Assertions to verify correctness and catch segfaults implicitly
+        if rank == 0:
+            expected = torch.log1p(torch.tensor([1.0, 2.0, 3.0], device=device))
+            assert torch.allclose(output, expected), f"Rank {rank} output mismatch"
+        else:
+            expected = torch.tensor([1.0, 2.0, 3.0], device=device) + 1.0
+            assert torch.allclose(output, expected), f"Rank {rank} output mismatch"
+            
+        print(f"Test passed on rank {rank}")
+        
+    except Exception as e:
+        print(f"Test failed on rank {rank}: {e}")
+        raise
+    finally:
+        cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use spawn to launch processes for a minimal runnable distributed test
+    if torch.cuda.is_available():
+        mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+    else:
+        # Fallback for CPU-only environments (requires gloo backend)
+        print("CUDA not available, running on CPU with gloo backend.")
+        # Note: To run this on CPU, you might need to install torch with gloo support
+        # and potentially adjust the init_process_group backend above.
+        # For simplicity in this snippet, we assume a standard setup.
+        try:
+            mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+        except Exception as e:
+            print(f"Skipping distributed test on CPU due to: {e}")
+            print("Running single process sanity check...")
+            # Minimal single process check if distributed fails
+            rank_tensor = torch.tensor([0])
+            torch._dynamo.config.capture_scalar_outputs = True
+            output = test_cond_with_log1p(rank_tensor)
+            expected = torch.log1p(torch.tensor([1.0, 2.0, 3.0]))
+            assert torch.allclose(output, expected)
+            print("Single process sanity check passed.")

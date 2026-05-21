@@ -1,0 +1,72 @@
+import torch
+import torch.nn as nn
+from torch.nn import DataParallel
+
+class SimpleModel(nn.Module):
+    def __init__(self, input_size=10, hidden_size=20, output_size=5):
+        super(SimpleModel, self).__init__()
+        self.linear1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.linear2(x)
+        return x
+
+def test_dataparallel_backend_support():
+    """
+    Test case for torch.nn.DataParallel support for custom backends.
+    This test adapts the registry/iteration pattern found in 
+    tf.keras.constraints.deserialize to handle multiple potential backends.
+    """
+    
+    # Define a registry of backends to test, similar to PROTO_CLASS_TO_PY_CLASS
+    # In a real custom backend scenario, the user's backend module would be added here.
+    backend_registry = [torch.cuda]
+
+    model_executed = False
+
+    for backend in backend_registry:
+        # Check if the backend is available, similar to checking proto representation
+        # in tf.keras.constraints.deserialize: if proto.representation.Is(proto_class.DESCRIPTOR):
+        if hasattr(backend, 'is_available') and backend.is_available():
+            if backend.device_count() > 1:
+                print(f"Testing backend: {backend.__name__} with {backend.device_count()} devices")
+                
+                # Initialize model
+                model = SimpleModel()
+                # Move model to the primary device of the backend
+                model = model.to(backend.current_device())
+                
+                # Apply DataParallel
+                # This verifies that DataParallel can handle the backend's device IDs
+                model = DataParallel(model, device_ids=list(range(backend.device_count())))
+                
+                # Prepare input data
+                batch_size = 20
+                input_data = torch.randn(batch_size, 10).to(backend.current_device())
+                
+                # Forward pass
+                output = model(input_data)
+                
+                # Assertions to verify correctness
+                assert output is not None, "Output should not be None"
+                assert output.shape[0] == batch_size, f"Batch size mismatch: expected {batch_size}, got {output.shape[0]}"
+                assert output.shape[1] == 5, f"Output size mismatch: expected 5, got {output.shape[1]}"
+                
+                model_executed = True
+                print("Test passed successfully.")
+                break # Exit after first successful backend execution
+
+    # Mimic the error raising in tf.keras.constraints.deserialize if no match is found
+    # raise ValueError("Can not deserialize proto...")
+    if not model_executed:
+        raise ValueError(
+            "Cannot run DataParallel test: No suitable backend found. "
+            "Ensure at least one backend (e.g., CUDA) is available with > 1 device."
+        )
+
+if __name__ == "__main__":
+    test_dataparallel_backend_support()

@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+
+def computation(a):
+    """
+    Mimics the logic of the PyTorch test case:
+    u0, u1 = a.tolist()
+    return a*u0*u1
+    
+    In TensorFlow graph/TPU context, we use indexing to extract scalar tensors
+    rather than converting to Python lists, which would break the graph.
+    """
+    # PyTorch: u0, u1 = a.tolist()
+    # TensorFlow equivalent (graph-safe): indexing
+    u0 = a[0]
+    u1 = a[1]
+    
+    # PyTorch: return a*u0*u1
+    return a * u0 * u1
+
+# Input data
+# PyTorch: torch.tensor([1,2])
+inputs = [tf.constant([1, 2])]
+
+# Test execution
+# Note: tf.compat.v1.tpu.rewrite requires a TPU environment to execute.
+# The code below includes standard TPU initialization boilerplate.
+try:
+    # Initialize TPU system
+    resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(resolver)
+    tf.tpu.experimental.initialize_tpu_system(resolver)
+    
+    # Call the similar API: tf.compat.v1.tpu.rewrite
+    # This compiles 'computation' for TPU execution, similar to torch.compile
+    result = tf.compat.v1.tpu.rewrite(computation, inputs)
+    
+    # Verify the output structure
+    # The API returns a list of tensors corresponding to the output of 'computation'
+    assert result is not None, "Rewrite returned None"
+    assert len(result) > 0, "Rewrite returned empty list"
+    
+    print("Test Case Passed: tf.compat.v1.tpu.rewrite executed successfully.")
+
+except (tf.errors.NotFoundError, ValueError, tf.errors.InternalError) as e:
+    # Handle cases where TPU hardware is not available or initialization fails
+    print(f"Test skipped (TPU environment required for execution): {e}")

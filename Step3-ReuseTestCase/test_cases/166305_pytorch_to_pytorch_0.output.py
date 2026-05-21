@@ -1,0 +1,87 @@
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch._dynamo as dynamo
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+# Necessary configuration to trigger the bug
+dynamo.config.optimize_ddp = True
+
+def setup():
+    """Initialize distributed process group."""
+    # Use 'gloo' for CPU or single GPU testing, 'nccl' for multi-GPU
+    backend = 'nccl' if torch.cuda.is_available() and dist.is_nccl_available() else 'gloo'
+    dist.init_process_group(backend=backend)
+
+def cleanup():
+    """Destroy distributed process group."""
+    dist.destroy_process_group()
+
+class SimplestDoubleFn(torch.autograd.Function):
+    """Minimal custom autograd function."""
+    @staticmethod
+    def forward(ctx, x):
+        return x * 2
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        return grad_out * 2
+
+class DoubleLayer(nn.Module):
+    """Module wrapping the custom autograd function."""
+    def forward(self, x):
+        return SimplestDoubleFn.apply(x)
+
+def main():
+    setup()
+
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    
+    # Device setup
+    if torch.cuda.is_available():
+        device = torch.device(f"cuda:{local_rank}")
+        torch.cuda.set_device(device)
+    else:
+        device = torch.device("cpu")
+
+    # Define model
+    model = nn.Sequential(
+        nn.Conv2d(3, 3, 3, padding=1),
+        DoubleLayer()
+    ).to(device)
+
+    # API Under Test: torch.compile
+    # This call is expected to fail or cause issues in the backward pass
+    # when combined with DDP and optimize_ddp=True in the buggy version.
+    model = torch.compile(model)
+
+    # Wrap with DDP
+    model = DDP(model, device_ids=[local_rank] if torch.cuda.is_available() else None,
+                output_device=local_rank if torch.cuda.is_available() else None,
+                find_unused_parameters=True)
+
+    opt = torch.optim.SGD(model.parameters(), lr=1e-4)
+
+    # Training loop
+    for it in range(3):
+        x = torch.rand(2, 3, 256, 256, device=device)
+        out = model(x)
+        loss = F.mse_loss(out, x)
+
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        opt.step()
+
+        if local_rank == 0:
+            print(f"Iteration {it+1}, Loss: {loss.item():.6f}")
+            # Basic assertion to ensure the process didn't hang or produce NaNs
+            assert torch.isfinite(loss), "Loss is not finite"
+
+    cleanup()
+
+if __name__ == "__main__":
+    # Note: This script must be launched using torchrun or similar distributed launcher.
+    # Example: torchrun --nproc_per_node=2 test_ddp_compile.py
+    main()

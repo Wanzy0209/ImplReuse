@@ -1,0 +1,47 @@
+import tensorflow as tf
+import numpy as np
+
+def test_name_scope_with_sparse_ops():
+    """
+    Adapts the PyTorch sparse/dense conversion test to TensorFlow's 
+    tf.keras.backend.name_scope.
+    
+    Original Logic:
+    1. Create dense tensor.
+    2. Convert to sparse.
+    3. Perform arithmetic operation.
+    4. Convert back to dense.
+    
+    This test verifies that these operations execute successfully within 
+    the context of the target API.
+    """
+    # Create a random dense tensor
+    x = tf.random.normal((10, 10))
+    
+    # Expected result (eager execution without sparse conversion)
+    expected_output = x * 2.0
+
+    # Use the target API: tf.keras.backend.name_scope
+    # We wrap the sparse operations inside this scope to verify behavior.
+    with tf.keras.backend.name_scope("sparse_conversion_test"):
+        # PyTorch: x.to_sparse()
+        # TensorFlow: tf.sparse.from_dense
+        x_sparse = tf.sparse.from_dense(x)
+        
+        # PyTorch: x_sparse * 2
+        # TensorFlow: tf.sparse.multiply
+        result_sparse = tf.sparse.multiply(x_sparse, 2.0)
+        
+        # PyTorch: result.to_dense()
+        # TensorFlow: tf.sparse.to_dense
+        result_dense = tf.sparse.to_dense(result_sparse)
+
+    # Verify the output matches the expected calculation
+    # We use np.allclose for floating point comparison
+    assert np.allclose(result_dense.numpy(), expected_output.numpy()), \
+        "Output mismatch after sparse/dense conversion inside name_scope"
+
+    print("Test passed: Sparse operations inside tf.keras.backend.name_scope succeeded.")
+
+if __name__ == "__main__":
+    test_name_scope_with_sparse_ops()

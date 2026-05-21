@@ -1,0 +1,35 @@
+import torch
+import torch.nn as nn
+
+# Test case adapted from Issue 168071 for torch.nn.MaxUnpool2d
+# Original issue: torch.nn.functional.pad crashes when padding a 0-shape dimension with (0, 0)
+# This test checks if MaxUnpool2d handles 0-shape dimensions correctly during unpooling operations.
+
+def test_maxunpool2d_zero_shape():
+    # Create a tensor with a 0 dimension (Batch, Channel, Height, Width)
+    # Analogous to the (6, 0) shape in the original bug report
+    x = torch.zeros((1, 1, 6, 0))
+    
+    # Indices must match the input shape
+    indices = torch.zeros((1, 1, 6, 0), dtype=torch.long)
+
+    # Initialize MaxUnpool2d
+    # Using kernel_size=2, stride=2
+    unpool = nn.MaxUnpool2d(kernel_size=2, stride=2)
+
+    # Expected output shape calculation:
+    # Height: (6 - 1) * 2 + 2 = 12
+    # Width: (0 - 1) * 2 + 2 = 0
+    # Expected shape: (1, 1, 12, 0)
+    
+    try:
+        output = unpool(x, indices)
+        print(f"Test passed. Output shape: {output.shape}")
+        assert output.shape == torch.Size([1, 1, 12, 0]), f"Expected shape (1, 1, 12, 0), got {output.shape}"
+    except RuntimeError as e:
+        print(f"RuntimeError caught: {e}")
+        # This would indicate a similar bug to Issue 168071 where 0-shape handling fails
+        raise
+
+if __name__ == "__main__":
+    test_maxunpool2d_zero_shape()

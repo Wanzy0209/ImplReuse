@@ -1,0 +1,61 @@
+import torch
+import torch.library
+import unittest
+import triton
+import triton.language as tl
+
+# Define the Triton kernel (same as the bug report)
+@triton.jit
+def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+# Define a custom library to wrap the Triton kernel
+lib = torch.library.Library("test_triton_lib", "DEF")
+lib.define("add(Tensor x, Tensor y) -> Tensor")
+
+# Register the abstract implementation (fake impl) using torch.library.impl_abstract
+# This is required for torch.compile to understand the operator without running it
+@torch.library.impl_abstract("test_triton_lib::add")
+def add_abstract(x, y):
+    # The output shape is the same as the inputs
+    return x
+
+# Register the concrete implementation for CUDA
+@torch.library.impl("test_triton_lib::add", "CUDA")
+def add_cuda(x, y):
+    output = torch.empty_like(x)
+    grid = lambda meta: (triton.cdiv(output.numel(), meta['BLOCK_SIZE']), )
+    add_kernel[grid](x, y, output, output.numel(), BLOCK_SIZE=1024)
+    return output
+
+class TestTritonLibraryAbstract(unittest.TestCase):
+    def test_custom_op_to_cpu(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available")
+
+        # Function using the custom op defined via torch.library
+        def f(x, y):
+            # Call the custom op which wraps the Triton kernel
+            out = torch.ops.test_triton_lib.add(x, y)
+            # Move to CPU and modify (the operation that triggered the bug)
+            out_cpu = out.cpu() + 1
+            return out_cpu
+
+        x = torch.randn(4, 4, device="cuda")
+        y = torch.randn(4, 4, device="cuda")
+
+        eager_out = f(x, y)
+        # Compile the function. This relies on the impl_abstract registered above.
+        compiled_out = torch.compile(f)(x, y)
+        
+        self.assertEqual(eager_out, compiled_out)
+
+if __name__ == "__main__":
+    unittest.main()

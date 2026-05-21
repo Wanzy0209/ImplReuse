@@ -1,0 +1,52 @@
+import torch
+import torch.testing
+
+def test_torch_compile_solve_large_matrix():
+    """
+    Test case for torch.compile regression related to torch.solve (torch.linalg.solve).
+    
+    This test is derived from Issue 164301, which highlights a performance regression
+    in torch.compile for specific tensor operations (mxfp8 quantization) on large matrices.
+    Given the high code similarity with torch.solve, this test verifies that torch.compile
+    handles torch.linalg.solve correctly and efficiently on similarly sized large matrices.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # Dimensions matching the scale of the bug report (M=16384, K=16384)
+    M = 16384
+    N = 16384
+
+    # Initialize inputs on CUDA
+    # Create a diagonally dominant matrix A to ensure invertibility for solve
+    A = torch.randn(M, N, device='cuda', dtype=torch.float32)
+    A = A + torch.eye(M, device='cuda') * 10.0
+    
+    B = torch.randn(M, N, device='cuda', dtype=torch.float32)
+
+    # The similar API is torch.solve, which is deprecated in favor of torch.linalg.solve.
+    # We use torch.linalg.solve here as the active implementation.
+    def solve_func(A, B):
+        return torch.linalg.solve(A, B)
+
+    # Compile the function using an aggressive mode to stress the inductor codegen,
+    # similar to the benchmark conditions in the bug report.
+    compiled_solve = torch.compile(solve_func, mode='max-autotune')
+
+    # 1. Run eager mode to get baseline
+    result_eager = solve_func(A, B)
+
+    # 2. Run compiled mode (warmup)
+    compiled_solve(A, B)
+    
+    # 3. Run compiled mode for measurement/verification
+    result_compiled = compiled_solve(A, B)
+
+    # Verify correctness to ensure the compiler didn't break the logic
+    torch.testing.assert_close(result_compiled, result_eager, rtol=1e-2, atol=1e-2)
+    
+    print("Test passed: torch.compile on torch.linalg.solve maintains correctness for large matrices.")
+
+if __name__ == "__main__":
+    test_torch_compile_solve_large_matrix()

@@ -1,0 +1,62 @@
+import torch
+import tensorflow as tf
+import unittest
+
+class TestPartitionerDim0Regression(tf.test.TestCase):
+    """
+    Test case derived from Issue 164301: torch.compile regression for mxfp8 quantization along rows.
+    
+    The original issue involves a performance regression when processing tensors of shape [16384, 16384]
+    along dimension 0 (rows) with a specific block size. This test verifies the behavior of the
+    tf.distribute.experimental.partitioners.Partitioner API under similar conditions (partitioning
+    along axis 0 for large tensors) to ensure correct handling of the dimensionality logic.
+    """
+
+    def test_partitioner_dim0_large_shape(self):
+        # Dimensions from the original bug report (M=16384, K=16384)
+        M, K = 16384, 16384
+        shape = tf.TensorShape([M, K])
+        dtype = tf.float32
+        
+        # The bug specifically involves operations along "dim0" (rows)
+        axis = 0
+
+        # Use a concrete partitioner implementation to test the base API behavior
+        # FixedShardsPartitioner splits the tensor into a fixed number of shards along the axis
+        partitioner = tf.distribute.experimental.partitioners.FixedShardsPartitioner(num_shards=2)
+
+        # Call the partitioner as defined in the API signature
+        # def __call__(self, shape, dtype, axis=0)
+        partitions = partitioner(shape, dtype, axis=axis)
+
+        # Assertions to verify correct partitioning logic
+        # The result should be a list of partition counts for each dimension.
+        # For a 2D tensor split into 2 shards along axis 0, we expect [2, 1].
+        self.assertIsNotNone(partitions)
+        self.assertEqual(len(partitions), 2, "Partition list length should match tensor rank")
+        
+        # Verify that axis 0 is partitioned
+        self.assertEqual(partitions[0], 2, "Axis 0 should be partitioned into 2 shards")
+        
+        # Verify that axis 1 is not partitioned (remains 1 shard)
+        self.assertEqual(partitions[1], 1, "Axis 1 should remain unpartitioned")
+
+    def test_partitioner_axis_1_differentiation(self):
+        """
+        Additional test to ensure the partitioner correctly differentiates between axes,
+        mirroring the specific 'dim0' focus of the original bug.
+        """
+        shape = tf.TensorShape([1024, 1024])
+        dtype = tf.float32
+        
+        # Test partitioning along axis 1 (columns) to contrast with the bug's axis 0
+        axis = 1
+        partitioner = tf.distribute.experimental.partitioners.FixedShardsPartitioner(num_shards=4)
+        
+        partitions = partitioner(shape, dtype, axis=axis)
+        
+        self.assertEqual(partitions[0], 1, "Axis 0 should remain unpartitioned")
+        self.assertEqual(partitions[1], 4, "Axis 1 should be partitioned into 4 shards")
+
+if __name__ == '__main__':
+    tf.test.main()

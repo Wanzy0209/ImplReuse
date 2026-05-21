@@ -1,0 +1,63 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+class M(tf.Module):
+    def __init__(self, rate=0.5, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.rate = rate
+        self.n_fft = n_fft
+        self.hop = hop
+        self.win = win
+        
+        # Register window as a variable so it moves with the module
+        self.window = tf.Variable(tf.signal.hann_window(win), trainable=False)
+        
+        # Introduce parameter for broadcasting / stride ops
+        self.p = tf.Variable(2.0, dtype=tf.float32)
+
+    def forward(self, x: tf.Tensor) -> tf.Tensor:
+        # Perform STFT
+        # Note: tf.signal.stft uses frame_length (win) and fft_length (n_fft)
+        S = tf.signal.stft(
+            x, 
+            frame_length=self.win, 
+            frame_step=self.hop, 
+            fft_length=self.n_fft, 
+            window_fn=lambda _: self.window, 
+            pad_end=True
+        )
+        
+        R = tf.abs(tf.math.real(S))   # unary op on real
+        I = tf.math.imag(S) / self.p  # scalar divide with Variable (broadcast)
+        
+        # Target API: tf.keras.backend.dropout
+        # Applying dropout to the processed real part 'R' to mimic the recombination step
+        Z = tf.keras.backend.dropout(R, rate=self.rate, seed=0)
+        return Z
+
+def main():
+    # Setup device (TensorFlow handles GPU/CPU automatically)
+    tf.random.set_seed(0)
+
+    x = tf.random.normal((1, 16000)) # Batch size 1, 16000 samples
+    m = M()
+
+    # Eager execution
+    z_eager = m.forward(x)
+    print("Eager mode OK:", z_eager.shape, z_eager.dtype)
+
+    # Compiled execution (tf.function)
+    # This is equivalent to torch.compile in PyTorch
+    m_compiled = tf.function(m.forward)
+    z_compiled = m_compiled(x)
+    print("Compiled mode OK:", z_compiled.shape, z_compiled.dtype)
+
+    # Assertions
+    assert z_eager.shape == z_compiled.shape
+    assert z_eager.dtype == z_compiled.dtype
+    # Verify deterministic execution with seed
+    assert tf.reduce_all(tf.equal(z_eager, z_compiled)).numpy()
+
+if __name__ == "__main__":
+    main()

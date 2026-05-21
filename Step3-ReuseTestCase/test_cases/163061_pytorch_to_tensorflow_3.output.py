@@ -1,0 +1,73 @@
+import tensorflow as tf
+import threading
+import time
+import sys
+
+# Ensure eager execution is enabled as per the similar API requirement
+# This corresponds to the execution mode context of the issue.
+tf.compat.v1.enable_eager_execution()
+
+# Helper to check if GIL is released during execution.
+# This mimics the user's observation of GIL behavior in the bug report.
+gil_counter = [0]
+stop_flag = [False]
+
+def gil_monitor():
+    """
+    This thread tries to acquire the GIL periodically.
+    If the main thread releases the GIL during kernel execution,
+    this counter will increment significantly.
+    """
+    while not stop_flag[0]:
+        gil_counter[0] += 1
+        # Sleep briefly to yield, but short enough to detect GIL contention
+        time.sleep(0.0001)
+
+monitor_thread = threading.Thread(target=gil_monitor)
+monitor_thread.daemon = True
+monitor_thread.start()
+
+def tf_add(x: tf.Tensor, y: tf.Tensor):
+    """Standard TensorFlow addition in eager mode."""
+    return x + y
+
+def main():
+    # Check for GPU availability to match the original CUDA context
+    gpus = tf.config.list_physical_devices('GPU')
+    device_name = '/GPU:0' if gpus else '/CPU:0'
+    
+    print(f"Running test on {device_name}")
+    
+    with tf.device(device_name):
+        # Create large tensors similar to the original reproduction script
+        x = tf.random.normal((4096, 4096))
+        y = tf.random.normal((4096, 4096))
+        
+        # Run operations in a loop
+        for _ in range(10):
+            # Execute the operation
+            res = tf_add(x, y)
+            
+            # .numpy() forces synchronization and execution of the underlying kernel
+            _ = res.numpy()
+
+if __name__ == "__main__":
+    try:
+        main()
+    finally:
+        # Signal the monitor thread to stop
+        stop_flag[0] = True
+        monitor_thread.join(timeout=1.0)
+
+    print(f"GIL Monitor iterations during execution: {gil_counter[0]}")
+    
+    # Verification logic:
+    # If the GIL is held (the bug), the monitor thread will be blocked,
+    # resulting in a low counter.
+    # If the GIL is released (expected behavior), the counter will be high.
+    if gil_counter[0] < 50:
+        print("FAIL: GIL appears to be held during execution (Bug reproduced).")
+        sys.exit(1)
+    else:
+        print("PASS: GIL appears to be released during execution.")
+        sys.exit(0)

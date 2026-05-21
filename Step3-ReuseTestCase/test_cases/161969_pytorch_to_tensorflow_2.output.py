@@ -1,0 +1,80 @@
+import torch
+import tensorflow as tf
+import tensorflow.experimental.dtensor as dtensor
+import numpy as np
+
+def test_dtensor_copy_to_mesh_linear_algebra():
+    """
+    Adapted test case for tf.experimental.dtensor.copy_to_mesh based on 
+    PyTorch issue #161969 (torch.compile contiguity on MPS).
+    
+    This test verifies that tensors moved to a DTensor mesh via copy_to_mesh
+    maintain correct layout/contiguity semantics when used within a compiled
+    function (tf.function) performing linear algebra operations.
+    """
+    
+    # 1. Setup Mesh (Simulating the device constraint)
+    # Using CPU to ensure the test runs in most environments, 
+    # analogous to torch.device("mps") in the original bug.
+    devices = tf.config.list_physical_devices('CPU')
+    if not devices:
+        print("No CPU devices found, skipping test.")
+        return
+
+    mesh = dtensor.create_mesh([("batch", 1)], devices=devices)
+
+    # 2. Define the function logic (adapted from PyTorch logp)
+    # @tf.function is the TensorFlow equivalent of torch.compile
+    @tf.function
+    def compute_logp(x, matrix):
+        # PyTorch: p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+        # TensorFlow: tf.linalg.cholesky
+        p_mat_sqrt = tf.linalg.cholesky(matrix)
+        
+        # PyTorch: p_mat_sqrt_inv = p_mat_sqrt.inverse()
+        # TensorFlow: tf.linalg.inv
+        p_mat_sqrt_inv = tf.linalg.inv(p_mat_sqrt)
+        
+        # PyTorch: val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+        # x shape is (2, 5, 3), x[0, :] is (3,)
+        # p_mat_sqrt_inv is (3, 3)
+        # We perform the matrix-vector multiplication
+        vec = x[0, :]
+        res = tf.tensordot(p_mat_sqrt_inv, vec, axes=1)
+        val = tf.reduce_sum(res ** 2)
+        
+        return -val / 2.0
+
+    # 3. Prepare Data
+    dtype = tf.float32
+    # PyTorch: data = torch.zeros((2, 5, 3), device=device, dtype=dtype)
+    data_host = tf.zeros((2, 5, 3), dtype=dtype)
+    
+    # PyTorch: p = torch.diag(torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)**2)
+    p_vals = np.array([20., 0.5, 5.], dtype=np.float32)**2
+    p_host = tf.linalg.diag(tf.convert_to_tensor(p_vals, dtype=dtype))
+
+    # 4. Use the API: copy_to_mesh
+    # This moves the tensors to the DTensor mesh, analogous to ensuring data 
+    # is on the correct device for the original bug.
+    layout_data = dtensor.Layout.replicated(mesh, rank=3)
+    layout_p = dtensor.Layout.replicated(mesh, rank=2)
+
+    data_dt = dtensor.copy_to_mesh(data_host, layout=layout_data)
+    p_dt = dtensor.copy_to_mesh(p_host, layout=layout_p)
+
+    # 5. Execute
+    # The original bug failed here with a contiguity assertion inside the compiled function.
+    # We verify that copy_to_mesh allows the compiled function to run without errors.
+    try:
+        result = compute_logp(data_dt, p_dt)
+        print(f"Test Passed. Result: {result}")
+        # Basic assertion to ensure computation happened
+        assert result.shape == ()
+        assert result.dtype == tf.float32
+    except Exception as e:
+        print(f"Test Failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_dtensor_copy_to_mesh_linear_algebra()

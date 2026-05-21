@@ -1,0 +1,51 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_full_like_with_repeat_slice():
+    """
+    Adapts the PyTorch MPS crash reproduction case to TensorFlow.
+    Original issue: Crash on MPS when using repeat_interleave with sliced tensor.
+    Original API: torch.arange
+    Similar API: tf.keras.ops.full_like
+    """
+    
+    # 1. Setup inputs
+    # Original: counts = torch.tensor([0, 1, 0], device="mps")
+    counts = tf.constant([0, 1, 0], dtype=tf.int32)
+    
+    # Original: data = torch.arange(2, device="mps")
+    # Adaptation: Use tf.keras.ops.full_like to create a tensor of shape (2,)
+    # We create a prototype tensor to define the shape for full_like
+    prototype = tf.zeros(2, dtype=tf.int32)
+    data = tf.keras.ops.full_like(prototype, fill_value=1)
+    
+    # 2. Perform the slice operation (non-prefix slice)
+    # Original: counts[1:3]
+    sliced_counts = counts[1:3]
+    
+    # 3. Perform the repeat operation
+    # Original: data.repeat_interleave(counts[1:3], dim=0)
+    # TensorFlow equivalent: tf.repeat
+    # Logic: data=[1, 1], counts=[1, 0] -> Result should be [1]
+    try:
+        result = tf.repeat(data, sliced_counts, axis=0)
+        
+        # 4. Verification
+        # The first element (1) repeats 1 time, the second element (1) repeats 0 times.
+        expected = tf.constant([1], dtype=tf.int32)
+        
+        assert tf.reduce_all(tf.equal(result, expected)).numpy(), \
+            f"Expected {expected.numpy()}, but got {result.numpy()}"
+            
+        print("Test passed successfully.")
+        print(f"Input data: {data.numpy()}")
+        print(f"Sliced counts: {sliced_counts.numpy()}")
+        print(f"Result: {result.numpy()}")
+        
+    except Exception as e:
+        print(f"Test failed with exception: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_full_like_with_repeat_slice()

@@ -1,0 +1,31 @@
+import torch
+import tensorflow as tf
+
+# Setup: Set a specific step value to act as the ground truth
+expected_step = 42
+tf.summary.experimental.set_step(expected_step)
+
+# 1. Eager execution (analogous to out1 in the original PyTorch test)
+out_eager = tf.summary.experimental.get_step()
+
+# 2. Compiled execution (analogous to torch.compile -> out2)
+# In TensorFlow, tf.function is the equivalent of torch.compile for graph optimization
+@tf.function
+def get_step_compiled():
+    return tf.summary.experimental.get_step()
+
+out_compiled = get_step_compiled()
+
+# 3. Reference check (analogous to out3_high in the original PyTorch test)
+# For a state getter, the reference is the value we explicitly set.
+reference = expected_step
+
+# Verification
+# The original bug checked for numerical differences (max abs diff).
+# Here we check for exact equality since get_step returns an integer/None.
+print(f"Eager result: {out_eager}")
+print(f"Compiled result: {out_compiled}")
+print(f"Reference: {reference}")
+
+assert out_eager == reference, f"Eager execution returned {out_eager}, expected {reference}"
+assert out_compiled == reference, f"Compiled execution returned {out_compiled}, expected {reference}"

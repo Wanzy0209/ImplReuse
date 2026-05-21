@@ -1,0 +1,113 @@
+import torch
+import tensorflow as tf
+import sys
+
+def test_unsorted_segment_sqrt_n_nan():
+    """
+    Adapted test case for tf.math.unsorted_segment_sqrt_n based on the 
+    torch.nn.MaxPool2d bug report (Issue 165297).
+    
+    The original bug involved large tensors, bfloat16 dtype, and specific 
+    memory layouts causing NaNs or illegal memory access. This test verifies
+    the robustness of the TensorFlow equivalent reduction operation under 
+    similar conditions (large tensor size, bfloat16).
+    """
+    
+    # Check for GPU availability to match the original bug context (CUDA)
+    gpus = tf.config.list_physical_devices('GPU')
+    device = '/GPU:0' if gpus else '/CPU:0'
+    print(f"Running on device: {device}")
+
+    # Large input tensor dimensions from the original bug report
+    # Total elements: 84 * 64 * 512 * 960 = 2,642,411,520
+    N, C, H, W = 84, 64, 512, 960
+    
+    with tf.device(device):
+        # Case 1: bfloat16
+        # The original bug specifically highlighted bfloat16 causing NaNs with channels_last
+        print("\n--- Case 1: bfloat16 ---")
+        try:
+            # Create a large tensor. We flatten it to use with segment operations.
+            # tf.random.normal is equivalent to torch.randn
+            x = tf.random.normal([N * C * H * W], dtype=tf.bfloat16)
+            
+            # Create segment IDs to simulate a reduction over the large tensor.
+            # We map the large input to a smaller number of segments.
+            num_segments = 1000
+            segment_ids = tf.random.uniform(
+                shape=[tf.shape(x)[0]], 
+                minval=0, 
+                maxval=num_segments, 
+                dtype=tf.int32
+            )
+
+            print(f"Input tensor shape: {x.shape}, dtype: {x.dtype}")
+
+            # Execute the operation
+            # unsorted_segment_sqrt_n computes sum / sqrt(N) for each segment
+            y = tf.math.unsorted_segment_sqrt_n(x, segment_ids, num_segments)
+
+            # Check for NaNs and Infs
+            has_nan = tf.reduce_any(tf.math.is_nan(y))
+            has_inf = tf.reduce_any(tf.math.is_inf(y))
+
+            print(f"Output contains NaN? {has_nan.numpy()}")
+            print(f"Output contains Inf? {has_inf.numpy()}")
+
+            # Check stats (casting to float32 for safe min/max calculation)
+            y_float = tf.cast(y, tf.float32)
+            print(f"Stats: min={tf.reduce_min(y_float).numpy()}, max={tf.reduce_max(y_float).numpy()}")
+
+            if has_nan:
+                print("Detected NaNs in unsorted_segment_sqrt_n output!")
+                return False
+
+        except tf.errors.ResourceExhaustedError:
+            print("OOM Error: Tensor size too large for available memory.")
+            return False
+        except Exception as e:
+            print(f"Unexpected Error: {e}")
+            return False
+
+        # Case 2: float32
+        # The original bug mentioned float32 causing illegal memory access
+        print("\n--- Case 2: float32 ---")
+        try:
+            x_fp32 = tf.random.normal([N * C * H * W], dtype=tf.float32)
+            
+            segment_ids_fp32 = tf.random.uniform(
+                shape=[tf.shape(x_fp32)[0]], 
+                minval=0, 
+                maxval=num_segments, 
+                dtype=tf.int32
+            )
+
+            y_fp32 = tf.math.unsorted_segment_sqrt_n(x_fp32, segment_ids_fp32, num_segments)
+
+            has_nan_fp32 = tf.reduce_any(tf.math.is_nan(y_fp32))
+            has_inf_fp32 = tf.reduce_any(tf.math.is_inf(y_fp32))
+
+            print(f"Output contains NaN? {has_nan_fp32.numpy()}")
+            print(f"Output contains Inf? {has_inf_fp32.numpy()}")
+            print(f"Stats: min={tf.reduce_min(y_fp32).numpy()}, max={tf.reduce_max(y_fp32).numpy()}")
+
+            if has_nan_fp32:
+                print("Detected NaNs in unsorted_segment_sqrt_n output (float32)!")
+                return False
+
+        except tf.errors.ResourceExhaustedError:
+            print("OOM Error: Tensor size too large for available memory.")
+            return False
+        except Exception as e:
+            print(f"Unexpected Error: {e}")
+            return False
+
+    return True
+
+if __name__ == "__main__":
+    success = test_unsorted_segment_sqrt_n_nan()
+    if success:
+        print("\nTest completed successfully without detecting NaNs.")
+    else:
+        print("\nTest failed or skipped.")
+        sys.exit(1)

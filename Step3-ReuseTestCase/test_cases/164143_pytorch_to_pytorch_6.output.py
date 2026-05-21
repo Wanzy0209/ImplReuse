@@ -1,0 +1,57 @@
+import torch
+from torch._dynamo.testing import DebugMode
+
+def test_lobpcg_with_debug_mode():
+    """
+    Test case to verify the behavior of torch.lobpcg when compiled 
+    with torch.compile while DebugMode is active.
+    
+    Based on Issue 164143: DebugMode silently disables torch.compile.
+    The bug report indicates that torch.compile skips compilation when 
+    a non-infra torch dispatch mode (like DebugMode) is present.
+    """
+    
+    # Setup inputs for torch.lobpcg
+    # A must be a symmetric positive definite matrix
+    A = torch.randn(10, 10, dtype=torch.float64)
+    A = A @ A.T + torch.eye(10, dtype=torch.float64)
+    
+    # X is the initial approximation for the eigenvectors
+    X = torch.randn(10, 2, dtype=torch.float64)
+
+    # Define the function using the similar API (torch.lobpcg)
+    def lobpcg_function(A, X):
+        # lobpcg returns a tuple of (eigenvalues, eigenvectors)
+        return torch.lobpcg(A, k=2, X=X)
+
+    # Get expected results in eager mode
+    expected_eigenvalues, expected_eigenvectors = lobpcg_function(A, X)
+
+    # The bug context: Running torch.compile inside DebugMode
+    with DebugMode():
+        # Attempt to compile the function
+        compiled_fn = torch.compile(lobpcg_function)
+        
+        try:
+            # Run the compiled function
+            actual_eigenvalues, actual_eigenvectors = compiled_fn(A, X)
+            
+            # Verify correctness. 
+            # Note: If the bug is present (silent skip), this runs in eager mode.
+            # If the fix "error on skip" is applied, this might raise an error.
+            # If the fix "support DebugMode" is applied, this runs in compiled mode.
+            assert torch.allclose(actual_eigenvalues, expected_eigenvalues, atol=1e-5), \
+                "Eigenvalues do not match"
+            assert torch.allclose(actual_eigenvectors, expected_eigenvectors, atol=1e-5), \
+                "Eigenvectors do not match"
+                
+            print("Test passed: torch.lobpcg executed correctly with torch.compile and DebugMode.")
+            
+        except Exception as e:
+            # Depending on the fix status, an error might be the expected behavior
+            # (e.g., "non-infra torch dispatch mode present" error).
+            print(f"Exception raised during execution: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_lobpcg_with_debug_mode()

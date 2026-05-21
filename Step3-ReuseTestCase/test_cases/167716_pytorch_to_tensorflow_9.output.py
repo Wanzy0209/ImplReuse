@@ -1,0 +1,81 @@
+import torch
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+
+def test_tf_experimental_numpy_diff_with_sparse_data():
+    """
+    Adapted from PyTorch Issue 167716 (torch.sparse.mm segfault).
+    
+    The original bug involved sparse matrix multiplication (mm) causing a 
+    segmentation fault when converting the result to dense.
+    
+    This test adapts the data setup (sparse tensors A and B) to the 
+    TensorFlow API 'tf.experimental.numpy.diff' to verify its behavior 
+    with similar sparse data structures, although the semantic operation 
+    (difference vs multiplication) is different.
+    """
+    
+    # Setup data from the original PyTorch bug report
+    # PyTorch indices are (2, N), TensorFlow SparseTensor indices are (N, 2)
+    indices_A_pt = [[0, 1, 2], [0, 2, 3]]
+    values_A = [1.0, 2.0, 3.0]
+    
+    indices_B_pt = [[0, 1, 2, 3], [0, 1, 1, 2]]
+    values_B = [4.0, 5.0, 6.0, 7.0]
+    
+    # Create SparseTensors in TensorFlow
+    # Transpose indices to match TensorFlow's (N, 2) format
+    indices_A_tf = tf.transpose(indices_A_pt)
+    sp_A = tf.sparse.SparseTensor(indices=indices_A_tf, values=values_A, dense_shape=(3, 4))
+    
+    indices_B_tf = tf.transpose(indices_B_pt)
+    sp_B = tf.sparse.SparseTensor(indices=indices_B_tf, values=values_B, dense_shape=(4, 2))
+    
+    print("Testing tf.experimental.numpy.diff with sparse inputs...")
+
+    # Test on Tensor A
+    # Note: tf.experimental.numpy.diff might not support SparseTensors directly 
+    # depending on the implementation details (it usually expects dense arrays).
+    # We attempt the call to check for robustness/crashes similar to the original bug.
+    try:
+        # Attempting to run diff on the sparse tensor directly
+        result_A = tnp.diff(sp_A)
+        print(f"Result A (Sparse Input): {result_A}")
+    except (AttributeError, TypeError) as e:
+        # If sparse is not supported, we densify to ensure the test case is runnable 
+        # and demonstrates the API's logic on the data.
+        print(f"Direct sparse input not supported for diff (expected): {e}")
+        print("Densifying input A for tf.experimental.numpy.diff...")
+        dense_A = tf.sparse.to_dense(sp_A)
+        result_A = tnp.diff(dense_A)
+        print(f"Result A (Dense Input): {result_A}")
+
+    # Test on Tensor B
+    try:
+        result_B = tnp.diff(sp_B)
+        print(f"Result B (Sparse Input): {result_B}")
+    except (AttributeError, TypeError) as e:
+        print(f"Direct sparse input not supported for diff (expected): {e}")
+        print("Densifying input B for tf.experimental.numpy.diff...")
+        dense_B = tf.sparse.to_dense(sp_B)
+        result_B = tnp.diff(dense_B)
+        print(f"Result B (Dense Input): {result_B}")
+
+    # Assertions to verify the operation completed without segmentation fault
+    # and produced results of the expected shape.
+    # diff reduces the size of the specified axis by 1.
+    # A is (3, 4) -> diff default axis=-1 -> (3, 3)
+    # B is (4, 2) -> diff default axis=-1 -> (4, 1)
+    
+    # If we fell back to dense, check those shapes
+    if 'dense_A' in locals():
+        assert result_A.shape == (3, 3), f"Expected shape (3, 3), got {result_A.shape}"
+        assert result_B.shape == (4, 1), f"Expected shape (4, 1), got {result_B.shape}"
+    else:
+        # If sparse worked, check shapes (unlikely for diff)
+        pass
+
+    print("Test completed successfully.")
+
+if __name__ == "__main__":
+    test_tf_experimental_numpy_diff_with_sparse_data()

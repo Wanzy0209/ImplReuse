@@ -1,0 +1,50 @@
+import torch
+import tensorflow as tf
+
+def test_name_scope_in_tf_function():
+    """
+    Test case adapted from PyTorch issue #167927.
+    
+    Original PyTorch Issue:
+    torch.compile(fullgraph=True) raises an error when encountering 
+    torch.compiler.disable, treating it as an unsupported graph break.
+    
+    TensorFlow Adaptation:
+    Verify that tf.compat.v1.name_scope (the similar context manager API)
+    works correctly inside tf.function (the compilation API), 
+    ensuring the context manager is respected without causing errors.
+    """
+    
+    # Define a function using the similar API (tf.compat.v1.name_scope)
+    # inside a compiled context (tf.function).
+    @tf.function
+    def func(x):
+        # In PyTorch, torch.compiler.disable is used here to exclude code.
+        # In TensorFlow, tf.compat.v1.name_scope is used to namespace operations.
+        # We verify that this context manager does not break the compilation.
+        with tf.compat.v1.name_scope("custom_scope"):
+            return x + 1
+
+    # Execute the compiled function
+    input_tensor = tf.constant(1.0)
+    result = func(input_tensor)
+
+    # Assert the result is correct
+    # In the PyTorch bug, this raises torch._dynamo.exc.Unsupported.
+    # Here, we expect it to succeed.
+    assert result.numpy() == 2.0
+    
+    # Additionally, verify that the scope was applied correctly to the graph
+    concrete_func = func.get_concrete_function(input_tensor)
+    graph = concrete_func.graph
+    ops = [op.name for op in graph.get_operations()]
+    
+    # Check if any operation in the graph contains the scope name
+    # This confirms the context manager was active during compilation
+    has_custom_scope = any("custom_scope" in op_name for op_name in ops)
+    assert has_custom_scope, "Expected to find 'custom_scope' in graph operations"
+
+    print("Test passed: tf.compat.v1.name_scope works correctly inside tf.function.")
+
+if __name__ == "__main__":
+    test_name_scope_in_tf_function()

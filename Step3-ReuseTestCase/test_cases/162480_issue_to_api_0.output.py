@@ -1,0 +1,56 @@
+import tensorflow as tf
+import numpy as np
+
+def test_float_handling_in_hash_table():
+    """
+    Test case to verify float handling in tf.raw_ops.HashTable.
+    
+    This test is derived from the PyTorch issue #162480, where the function 
+    `rebind_unbacked()` was missing handling for float types, leading to a crash.
+    The fix involved adding a check to discard floats gracefully.
+    
+    Here, we adapt this logic to the similar API `tf.raw_ops.HashTable`. 
+    We verify that the API correctly handles float dtypes (keys and values) 
+    during initialization and lookup, ensuring robustness against type-related 
+    issues similar to the original bug.
+    """
+    # Define float keys and values
+    # In the original bug, a float value 'u1' caused an issue.
+    # Here we explicitly use floats to test handling.
+    keys = tf.constant([1.5, 2.5, 3.5], dtype=tf.float32)
+    values = tf.constant([10.0, 20.0, 30.0], dtype=tf.float32)
+    
+    # Create a HashTable with float dtypes
+    # This tests the API's ability to accept float types where applicable.
+    table_handle = tf.raw_ops.HashTable(
+        key_dtype=tf.float32,
+        value_dtype=tf.float32
+    )
+    
+    # Initialize the table
+    # This step corresponds to the 'binding' phase in the PyTorch bug.
+    # We ensure that processing float inputs does not raise an error.
+    tf.raw_ops.InitializeTable(
+        table_handle=table_handle,
+        keys=keys,
+        values=values
+    )
+    
+    # Perform a lookup to verify the float data was handled correctly
+    lookup_keys = tf.constant([1.5, 3.5], dtype=tf.float32)
+    result = tf.raw_ops.LookupTableFind(
+        table_handle=table_handle,
+        keys=lookup_keys,
+        default_value=tf.constant(-1.0, dtype=tf.float32)
+    )
+    
+    # Assertions to verify correct behavior
+    # The PyTorch fix 'discarded' the float. Here we expect the float to be 
+    # successfully stored and retrieved, demonstrating correct type handling.
+    assert np.isclose(result[0].numpy(), 10.0), "Lookup for key 1.5 failed"
+    assert np.isclose(result[1].numpy(), 30.0), "Lookup for key 3.5 failed"
+    
+    print("Test passed: tf.raw_ops.HashTable correctly handles float types.")
+
+if __name__ == "__main__":
+    test_float_handling_in_hash_table()

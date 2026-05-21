@@ -1,0 +1,78 @@
+import torch
+import torch._dynamo
+
+# Configuration from the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch.manual_seed(751735337)
+
+def test_round_dynamo_divergence():
+    # Check for CUDA availability as the original bug was on device=cuda
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    device = "cuda"
+
+    # Setup inputs matching the fuzzer's shapes and dtypes
+    # arg_0: size=(15, 108, 4), stride=(432, 1, 4), dtype=int16
+    # We construct a tensor with the specific non-contiguous stride mentioned in the bug report
+    base_buffer = torch.randn(15 * 108 * 4, dtype=torch.int16, device=device)
+    arg_0 = base_buffer.as_strided((15, 108, 4), (432, 1, 4))
+    
+    arg_1 = torch.randint(0, 10, (11,), dtype=torch.int64, device=device)
+    arg_2 = torch.randn(3, 27, dtype=torch.int16, device=device)
+    arg_3 = torch.randn(1, 27, dtype=torch.int16, device=device)
+    arg_4 = torch.randn(1, 27, dtype=torch.int16, device=device)
+    arg_5 = torch.randn(1, 27, dtype=torch.int16, device=device)
+    arg_6 = torch.randint(0, 10, (1,), dtype=torch.int64, device=device)
+    sentinel = None
+
+    def fuzzed_program(arg_0, arg_1, arg_2, arg_3, arg_4, arg_5, arg_6, sentinel):
+        var_node_4 = arg_0
+        var_node_3 = torch.chunk(var_node_4, 4, dim=1)[0]
+        var_node_2 = torch.chunk(var_node_3, 4, dim=2)[0]
+        var_node_1 = torch.squeeze(var_node_2)
+        var_node_8 = torch.full((13, 27), 3, dtype=torch.int16, device=var_node_4.device)
+        var_node_9 = arg_1
+        _input_size_var_node_7 = var_node_8.size(0)
+        _index_var_node_7 = torch.randint(0, _input_size_var_node_7, (11,), device=var_node_8.device)
+        var_node_7 = torch.index_select(var_node_8, 0, _index_var_node_7)
+        var_node_6 = torch.clamp(var_node_7, min=-1.0, max=1.0)
+        var_node_12 = arg_2
+        var_node_11 = torch.clamp(var_node_12, min=-1.0, max=1.0)
+        var_node_13 = torch.full((1,), 3, dtype=torch.int64, device=var_node_4.device)
+        _input_size_var_node_10 = var_node_11.size(0)
+        _index_var_node_10 = torch.randint(0, _input_size_var_node_10, (1,), device=var_node_11.device)
+        var_node_10 = torch.index_select(var_node_11, 0, _index_var_node_10)
+        var_node_16 = arg_3
+        var_node_17 = arg_4
+        var_node_18 = arg_5
+        var_node_15 = torch.cat([var_node_16, var_node_17, var_node_18], dim=0)
+        var_node_20 = arg_6
+        var_node_19 = torch.clamp(var_node_20, min=None, max=1.0)
+        _input_size_var_node_14 = var_node_15.size(0)
+        _index_var_node_14 = torch.randint(0, _input_size_var_node_14, (1,), device=var_node_15.device)
+        var_node_14 = torch.index_select(var_node_15, 0, _index_var_node_14)
+        var_node_22 = torch.full((4, 27), 3, dtype=torch.int16, device=var_node_4.device)
+        var_node_24 = torch.full((4,), 3, dtype=torch.int64, device=var_node_4.device)
+        var_node_25 = torch.full((2,), 3, dtype=torch.int64, device=var_node_4.device)
+        _input_size_var_node_23 = var_node_24.size(0)
+        
+        # Adaptation: Replace the original call site (which was cut off) with torch.round
+        # We apply it to var_node_6 which is int16 and has complex strides from index_select
+        return torch.round(var_node_6)
+
+    # Compile the function with torch._dynamo to trigger the potential divergence
+    try:
+        compiled_fn = torch._dynamo.optimize("eager")(fuzzed_program)
+        result = compiled_fn(arg_0, arg_1, arg_2, arg_3, arg_4, arg_5, arg_6, sentinel)
+        print("Test Passed. Result shape:", result.shape)
+    except AssertionError as e:
+        print(f"Test Failed with AssertionError: {e}")
+        raise
+    except Exception as e:
+        print(f"Test Failed with Exception: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_round_dynamo_divergence()

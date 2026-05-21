@@ -1,0 +1,35 @@
+import torch
+import unittest
+
+class TestRandAPI(unittest.TestCase):
+    def test_rand_scalar_operations(self):
+        """
+        Test case for torch.rand adapted from the context of test_scalar_multiply.
+        Verifies that torch.rand works correctly with scalar multiplication and addition,
+        similar to the patterns found in the codebase.
+        """
+        # Define a shape
+        shape = (10, 10)
+        
+        # Test 1: Basic torch.rand generation
+        t = torch.rand(*shape)
+        self.assertEqual(t.shape, shape)
+        self.assertEqual(t.dtype, torch.float32)
+        
+        # Test 2: Scalar multiplication (link to original test_scalar_multiply)
+        scalar = 5.0
+        t_mul = t * scalar
+        self.assertTrue(torch.all(t_mul >= 0))
+        self.assertTrue(torch.all(t_mul < scalar))
+        
+        # Test 3: Pattern from Similar API information: torch.rand(*shape).mul(16).add(1)
+        # This pattern was identified as similar to the failing test context.
+        t_complex = torch.rand(*shape).mul(16).add(1)
+        
+        # Verify range: rand is [0,1) -> mul 16 is [0,16) -> add 1 is [1,17)
+        self.assertTrue(torch.all(t_complex >= 1))
+        self.assertTrue(torch.all(t_complex < 17))
+        self.assertEqual(t_complex.shape, shape)
+
+if __name__ == '__main__':
+    unittest.main()

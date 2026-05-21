@@ -1,0 +1,34 @@
+import torch
+import tensorflow as tf
+
+print(tf.__version__, flush=True)
+
+# Adapted inputs based on the PyTorch bug report for torch.nn.functional.max_unpool1d
+# Original PyTorch inputs:
+# 1. input: torch.empty((5, 7, 4, 3, 7, 6), dtype=torch.int8)
+# 2. indices: torch.empty((4, 9, 2), dtype=torch.int32)
+# 3. output_size: ()
+# 4. stride: False
+
+# Mapping to tf.keras.random.dropout(x, rate, noise_shape, seed):
+# 1. x -> input (6D int8 tensor)
+x = tf.empty((5, 7, 4, 3, 7, 6), dtype=tf.int8)
+
+# 2. rate -> indices (3D int32 tensor)
+# Note: 'rate' expects a float scalar. Passing a tensor to test robustness against type mismatch.
+rate = tf.empty((4, 9, 2), dtype=tf.int32)
+
+# 3. noise_shape -> output_size (Empty tuple)
+noise_shape = ()
+
+# 4. seed -> stride (Boolean)
+# Note: 'seed' expects an integer. Passing a boolean to test robustness.
+seed = False
+
+try:
+    # Attempt to call the API with the adapted, potentially invalid arguments
+    result = tf.keras.random.dropout(x, rate, noise_shape=noise_shape, seed=seed)
+    print("Call succeeded. Result:", result)
+except Exception as e:
+    # Catching exceptions to verify if the API handles the invalid inputs gracefully or crashes
+    print(f"Caught exception: {type(e).__name__}: {e}")

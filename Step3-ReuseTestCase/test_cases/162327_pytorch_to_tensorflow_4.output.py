@@ -1,0 +1,23 @@
+import torch
+import tensorflow as tf
+
+print("TensorFlow Version:", tf.__version__, flush=True)
+
+# Adapted inputs from the PyTorch bug report
+# PyTorch: torch.empty((5, 7, 4, 3, 7, 6), dtype=torch.int8)
+# TF equivalent: creating a tensor with the same shape and dtype
+input_a = tf.zeros((5, 7, 4, 3, 7, 6), dtype=tf.int8)
+
+# PyTorch: torch.empty((4, 9, 2), dtype=torch.int32)
+input_b = tf.zeros((4, 9, 2), dtype=tf.int32)
+
+# Original PyTorch call: torch.nn.functional.max_unpool1d(input, indices, (), False)
+# Target API call: tf.keras.ops.outer(a, b)
+# Note: tf.keras.ops.outer does not take output_size or a boolean flag.
+# We pass the two tensors to check for similar instability/crashes.
+
+try:
+    result = tf.keras.ops.outer(input_a, input_b)
+    print("Test executed successfully. Result shape:", result.shape)
+except Exception as e:
+    print(f"Exception occurred: {e}")

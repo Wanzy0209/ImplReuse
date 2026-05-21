@@ -1,0 +1,39 @@
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+def test_call_with_layout_preservation():
+    """
+    Adapted from PyTorch issue #163483.
+    Verifies that tf.experimental.dtensor.call_with_layout preserves
+    the requested layout (sharding strategy) on the output tensor,
+    similar to how memory_format (channels_last) is expected to be preserved
+    in PyTorch all_gather.
+    """
+    
+    # Setup a mesh to simulate the distributed environment
+    # Using 2 CPU devices to match the 'world_size=2' in the PyTorch example
+    mesh = dtensor.create_mesh([("x", 2)], devices=["CPU:0", "CPU:1"])
+
+    # Define a specific layout (sharding on the first dimension)
+    # This is analogous to the 'channels_last' memory format in the sense that
+    # it defines a specific data arrangement/ordering.
+    layout = dtensor.Layout([dtensor.SHARDED("x"), dtensor.UNSHARDED], mesh)
+
+    # Define a function that creates a tensor
+    def create_tensor():
+        return tf.reshape(tf.range(16, dtype=tf.float32), (2, 8))
+
+    # Call the function with the specified layout
+    # This is the operation being tested for layout preservation
+    result = dtensor.call_with_layout(create_tensor, layout)
+
+    # Verify that the output tensor has the expected layout
+    # This mirrors the PyTorch check where the user expected the memory format
+    # to be preserved after the operation.
+    assert result.layout == layout, \
+        f"Layout mismatch detected. Expected {layout}, but got {result.layout}."
+
+    print("Test passed: Layout preserved correctly.")
+
+if __name__ == "__main__":
+    test_call_with_layout_preservation()

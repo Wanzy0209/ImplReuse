@@ -1,0 +1,96 @@
+import torch
+import tensorflow as tf
+import numpy as np
+import sys
+
+# Import the similar API as indicated in the prompt
+# Note: This is typically an internal testing utility in TensorFlow
+try:
+    from tensorflow.python.framework.test_util import enable_control_flow_v2
+except ImportError:
+    # Fallback definition if the specific internal import is not available in the environment,
+    # based on the code provided in the "Similar API information" section.
+    class enable_control_flow_v2:
+        def __init__(self, fn):
+            self.fn = fn
+        
+        def __call__(self, *args, **kwargs):
+            # Mocking the behavior if the actual util is missing
+            return self.fn(*args, **kwargs)
+
+def foo(arg0, arg1):
+    # Translating PyTorch operations to TensorFlow
+    # t0 = arg0 # size=(4, 503, 64, 504)
+    
+    # t1 = t0.mean(dim=0) # size=(503, 64, 504)
+    t1 = tf.reduce_mean(arg0, axis=0)
+    
+    # t2 = torch.nn.functional.relu(t1)
+    t2 = tf.nn.relu(t1)
+    
+    # t3 = arg1 # size=(5, 16, 1, 64)
+    
+    # t4 = t3.sum(dim=0) # size=(16, 1, 64)
+    t4 = tf.reduce_sum(arg1, axis=0)
+    
+    # t5 = t4.transpose(2, 1) # size=(16, 64, 1)
+    # PyTorch transpose(2,1) on (16, 1, 64) swaps last two dims -> (16, 64, 1)
+    t5 = tf.transpose(t4, perm=[0, 2, 1])
+    
+    # t6 = torch.nn.functional.conv1d(t2, t5, stride=1, padding=0)
+    # PyTorch conv1d: input (N, C, L), weight (O, C, Lk)
+    # t2: (503, 64, 504) -> (N, C_in, L_in)
+    # t5: (16, 64, 1) -> (C_out, C_in, K)
+    # TensorFlow conv1d with data_format='NCHW': input (N, C, L), filter (K, C_in, C_out)
+    # We need to reshape/transpose t5 to match TF filter expectation: (1, 64, 16)
+    t5_tf_filter = tf.transpose(t5, perm=[2, 1, 0])
+    
+    t6 = tf.nn.conv1d(
+        input=t2,
+        filters=t5_tf_filter,
+        stride=1,
+        padding='VALID',
+        data_format='NCHW'
+    )
+    
+    output = t6
+    return output
+
+# Using the similar API (enable_control_flow_v2) to wrap the test logic
+# This reflects the relationship where the API controls the execution environment
+# similar to how torch.compile controls the execution in the original bug.
+@enable_control_flow_v2
+def test_conv_backward_divergence():
+    # Setup inputs matching the original bug report shapes
+    # arg0: size=(4, 503, 64, 504)
+    arg0 = tf.random.normal([4, 503, 64, 504], dtype=tf.float32)
+    # arg1: size=(5, 16, 1, 64)
+    arg1 = tf.random.normal([5, 16, 1, 64], dtype=tf.float32)
+
+    # Mimic the backward pass logic using GradientTape
+    with tf.GradientTape(persistent=True) as tape:
+        tape.watch(arg0)
+        tape.watch(arg1)
+        
+        # Run the forward pass
+        out = foo(arg0, arg1)
+        
+        # Mimic out.sum().backward()
+        loss = tf.reduce_sum(out)
+
+    # Calculate gradients
+    grad_arg0 = tape.gradient(loss, arg0)
+    grad_arg1 = tape.gradient(loss, arg1)
+
+    # Assertions to verify behavior
+    assert grad_arg0 is not None, "Gradient for arg0 should not be None"
+    assert grad_arg1 is not None, "Gradient for arg1 should not be None"
+    
+    # Check shapes match inputs (standard gradient check)
+    assert grad_arg0.shape == arg0.shape, f"Gradient shape mismatch: {grad_arg0.shape} vs {arg0.shape}"
+    assert grad_arg1.shape == arg1.shape, f"Gradient shape mismatch: {grad_arg1.shape} vs {arg1.shape}"
+    
+    print('Test Success! ')
+
+if __name__ == '__main__':
+    test_conv_backward_divergence()

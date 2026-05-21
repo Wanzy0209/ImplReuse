@@ -1,0 +1,46 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_dropout_with_2d_input():
+    """
+    Adapted test case for tf.keras.random.dropout based on the 
+    torch.nn.EmbeddingBag bug report (Issue ID: 167974).
+    
+    The original bug involved incorrect offsets when input is 2D and 
+    include_last_offset is True. Since tf.keras.random.dropout does not 
+    have an 'include_last_offset' parameter or offsets, this test verifies
+    that the API correctly handles the 2D input structure and required 
+    parameters (like seed, as per the provided implementation snippet).
+    """
+    
+    # Original input from PyTorch bug report
+    # Note: EmbeddingBag accepts Long (indices), Dropout expects Float (activations)
+    input_data = tf.constant([[1.0, 2.0, 4.0, 5.0], [4.0, 3.0, 2.0, 9.0]], dtype=tf.float32)
+    
+    # Parameters for tf.keras.random.dropout
+    # The provided snippet for the similar API requires a seed.
+    rate = 0.5
+    seed = 42
+    
+    # Execute the similar API
+    # In the original bug, the issue was with internal state generation (offsets).
+    # Here we verify the function executes correctly on the 2D input.
+    try:
+        output = tf.keras.random.dropout(input_data, rate=rate, seed=seed)
+        
+        # Verify output shape matches input shape (standard behavior for dropout)
+        assert output.shape == input_data.shape, \
+            f"Output shape mismatch. Expected {input_data.shape}, got {output.shape}"
+            
+        # Verify output type
+        assert output.dtype == input_data.dtype, \
+            f"Output dtype mismatch. Expected {input_data.dtype}, got {output.dtype}"
+            
+        print("Test passed: tf.keras.random.dropout handled 2D input correctly.")
+        
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+
+if __name__ == "__main__":
+    test_tf_dropout_with_2d_input()

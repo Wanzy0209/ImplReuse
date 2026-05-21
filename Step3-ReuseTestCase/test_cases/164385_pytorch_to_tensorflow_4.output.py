@@ -1,0 +1,52 @@
+import tensorflow as tf
+import numpy as np
+
+"""
+Test LecunNormal with specific shapes that trigger internal division logic.
+Adapted from the FloorDiv bug report: The original issue involved FloorDiv 
+incorrectly simplifying to a Rational (float) type. 
+
+LecunNormal involves an internal division calculation: stddev = sqrt(scale / fan_in).
+This test verifies that the division logic within the LecunNormal initializer
+is handled correctly (producing float values) and does not incorrectly apply
+floor division or type coercion that would result in invalid initialization.
+"""
+
+# Define dimensions (analogous to symbolic variables in the original bug)
+# Using the values from the original bug report: s14, s37, s46
+s14 = 14
+s37 = 37
+s46 = 46
+
+print("Testing LecunNormal with specific shape...")
+
+# Create the initializer
+# LecunNormal uses scale=1.0, mode='fan_in', distribution='truncated_normal'
+initializer = tf.keras.initializers.LecunNormal(seed=42)
+
+# Define a shape using the variables from the bug report
+# This mimics the "complex expression" setup by using specific integers
+shape = (s14, s37, s46)
+
+print(f"Input Shape: {shape}")
+
+# Call the initializer
+# This triggers the internal calculation: stddev = sqrt(1.0 / fan_in)
+result = initializer(shape=shape)
+
+print(f"Result shape: {result.shape}")
+print(f"Result dtype: {result.dtype}")
+print(f"Result sample: {result.numpy().flatten()[:5]}")
+
+# Assertions
+# 1. Check shape
+assert result.shape == shape, f"Shape mismatch: expected {shape}, got {result.shape}"
+
+# 2. Check dtype (must be float to support the division result)
+assert result.dtype == tf.float32, f"Dtype mismatch: expected float32, got {result.dtype}"
+
+# 3. Check that values are non-zero (verifying float division occurred, not floor division)
+# If floor division was used (1 // fan_in), stddev would be 0, resulting in all zeros.
+assert not np.allclose(result.numpy(), 0.0), "Result is all zeros, suggesting incorrect floor division logic."
+
+print("Test passed: LecunNormal correctly handles division logic.")

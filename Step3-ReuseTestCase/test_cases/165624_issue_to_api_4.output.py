@@ -1,0 +1,61 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_duplicate_relu_execution_pattern():
+    """
+    Test case adapted from Issue 165624 (PyTorch).
+    
+    The original issue describes a merge mistake where a graph transformation pass
+    (joint_custom_pre_pass) was executed twice due to duplicate code blocks
+    (lines 581-600 in torch/_inductor/fx_passes/joint_graph.py).
+    
+    This test verifies that tf.keras.backend.relu (the similar API) behaves
+    correctly (is idempotent) if it were subjected to the same duplicate
+    execution pattern found in the bug report.
+    """
+    
+    # Setup: Simulating the configuration object from the bug report
+    class Config:
+        joint_custom_pre_pass = True
+        joint_graph_constant_folding = False
+
+    config = Config()
+    
+    # Input data: Mixed positive and negative values
+    input_tensor = tf.constant([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=tf.float32)
+    
+    # --- Reproducing the Buggy Control Flow Pattern ---
+    
+    # Block 1: Original execution
+    if config.joint_custom_pre_pass:
+        # In the bug: GraphTransformObserver(...).apply_graph_pass(...)
+        # Here: Apply tf.keras.backend.relu
+        current_tensor = tf.keras.backend.relu(input_tensor)
+
+    # Intermediate step (simulating remove_noop_ops from the bug)
+    # We assume a pass-through for this test to isolate the duplicate pass behavior
+    # current_tensor = current_tensor 
+
+    # Block 2: The duplicate execution (The Merge Mistake)
+    if config.joint_custom_pre_pass:
+        # In the bug: GraphTransformObserver(...).apply_graph_pass(...) (Duplicate)
+        # Here: Apply tf.keras.backend.relu again
+        current_tensor = tf.keras.backend.relu(current_tensor)
+
+    # --- Assertions ---
+    
+    # Expected result of ReLU([-2, -1, 0, 1, 2]) is [0, 0, 0, 1, 2]
+    # Since ReLU is idempotent (ReLU(ReLU(x)) == ReLU(x)), applying it twice 
+    # should yield the same result as applying it once.
+    expected_output = tf.constant([0.0, 0.0, 0.0, 1.0, 2.0], dtype=tf.float32)
+    
+    # Verify that the final tensor matches the expected output
+    # This ensures that even with the duplicate execution (the bug pattern),
+    # the API produces the correct mathematical result.
+    assert tf.reduce_all(tf.equal(current_tensor, expected_output)).numpy(), \
+        "Duplicate execution of tf.keras.backend.relu did not produce idempotent results."
+
+if __name__ == "__main__":
+    test_duplicate_relu_execution_pattern()
+    print("Test passed: tf.keras.backend.relu is idempotent under duplicate execution pattern.")

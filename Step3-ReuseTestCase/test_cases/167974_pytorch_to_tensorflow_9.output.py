@@ -1,0 +1,34 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Adapted test case for tf.keras.losses.binary_crossentropy
+# Original Bug: torch.nn.EmbeddingBag with include_last_offset=True generates incorrect 
+# offsets when input is 2D.
+# Adaptation: We test the TensorFlow API with a 2D input and its primary boolean flag 
+# (from_logits) to verify it handles the input structure correctly, analogous to the 
+# failure condition in PyTorch.
+
+def test_binary_crossentropy_2d_input():
+    # Setup 2D inputs (mimicking the shape of the original PyTorch input)
+    # PyTorch input: torch.tensor([[1, 2, 4, 5], [4, 3, 2, 9]])
+    target = tf.constant([[0.0, 1.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]], dtype=tf.float32)
+    output = tf.constant([[0.1, 0.9, 0.2, 0.8], [0.8, 0.1, 0.1, 0.9]], dtype=tf.float32)
+
+    # Execute with the boolean flag enabled (analogous to include_last_offset=True)
+    # In binary_crossentropy, 'from_logits' changes the internal calculation logic.
+    result = tf.keras.losses.binary_crossentropy(target, output, from_logits=True)
+
+    # Verify behavior
+    # The original bug resulted in incorrect internal state (offsets).
+    # Here we verify the output is computed correctly for the 2D input and flag.
+    assert result.shape == (2,), f"Expected shape (2,), got {result.shape}"
+    
+    # Ensure no NaNs or Infs (sanity check for numerical stability with the flag)
+    assert not tf.reduce_any(tf.math.is_nan(result)), "Result contains NaN values"
+    assert not tf.reduce_any(tf.math.is_inf(result)), "Result contains Inf values"
+
+    print("Test passed: binary_crossentropy handles 2D inputs with flags correctly.")
+
+if __name__ == "__main__":
+    test_binary_crossentropy_2d_input()

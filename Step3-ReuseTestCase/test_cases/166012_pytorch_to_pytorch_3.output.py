@@ -1,0 +1,62 @@
+import torch
+import torch.library
+
+def test_torch_library_impl_abstract_consistency():
+    """
+    Test case for torch.library.impl_abstract (register_fake).
+    
+    This test verifies that a custom operator with a registered abstract 
+    implementation behaves consistently when run through torch.compile,
+    addressing the context of cache hit/miss consistency mentioned in the bug report.
+    """
+    
+    # 1. Define a custom library and operator
+    lib = torch.library.Library("test_cache_lib", "DEF")
+    lib.define("custom_scale(Tensor x, float factor) -> Tensor")
+
+    # 2. Register the abstract implementation (The API under test)
+    # This is required for torch.compile to trace the operator (FakeTensor mode)
+    # without executing on real data.
+    @torch.library.impl_abstract("test_cache_lib::custom_scale")
+    def custom_scale_abstract(x, factor):
+        # Infer output properties: shape remains the same
+        return x
+
+    # 3. Register the concrete implementation for CPU
+    @torch.library.impl("test_cache_lib::custom_scale", "CPU")
+    def custom_scale_impl(x, factor):
+        return x * factor
+
+    # 4. Define a function to be compiled
+    def model(x):
+        return torch.ops.test_cache_lib.custom_scale(x, 2.0)
+
+    # 5. Compile the function
+    # This triggers the "Cache Miss" path and generates the internal logs 
+    # (e.g., aotautograd_cache_miss, fx_graph_cache_miss) mentioned in the bug.
+    compiled_model = torch.compile(model)
+
+    # 6. Prepare input
+    input_tensor = torch.randn(2, 2)
+
+    # Run 1: Cache Miss
+    # The first run goes through the full compilation stack.
+    out_miss = compiled_model(input_tensor)
+
+    # Run 2: Cache Hit
+    # The second run should reuse the compiled graph.
+    out_hit = compiled_model(input_tensor)
+
+    # 7. Assertions
+    # Verify that the abstract implementation allowed correct tracing
+    # and that the results are consistent between cache miss and hit.
+    expected = input_tensor * 2.0
+    
+    assert torch.allclose(out_miss, expected), "Output mismatch on cache miss"
+    assert torch.allclose(out_hit, expected), "Output mismatch on cache hit"
+    assert torch.allclose(out_miss, out_hit), "Inconsistency between cache miss and hit results"
+
+    print("Test passed: torch.library.impl_abstract works correctly with torch.compile.")
+
+if __name__ == "__main__":
+    test_torch_library_impl_abstract_consistency()

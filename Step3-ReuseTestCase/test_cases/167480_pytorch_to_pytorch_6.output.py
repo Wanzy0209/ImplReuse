@@ -1,0 +1,54 @@
+import torch
+import os
+from torch.cuda.amp import custom_bwd, custom_fwd
+
+def test_custom_bwd_os_command_injection():
+    """
+    Test case to verify that torch.cuda.amp.custom_bwd is not vulnerable
+    to OS command injection via its arguments, similar to the vulnerability
+    found in torch.utils.cpp_extension.load_inline (GHSA-gfrj-f355-6v3r).
+    """
+    
+    # Define a malicious payload attempting to inject a shell command.
+    # In the original bug, passing a string like this to extra_cflags 
+    # resulted in execution because of shell=True in subprocess.
+    # Here we attempt to inject it into the device_type argument.
+    malicious_device_type = "cpu; touch /tmp/custom_bwd_injection_test"
+
+    class DummyAutogradFunction(torch.autograd.Function):
+        @staticmethod
+        @custom_fwd
+        def forward(ctx, x):
+            return x
+
+        @staticmethod
+        @custom_bwd(device_type=malicious_device_type)
+        def backward(ctx, grad_output):
+            return grad_output
+
+    # Ensure the test file does not exist before running
+    injection_file = "/tmp/custom_bwd_injection_test"
+    if os.path.exists(injection_file):
+        os.remove(injection_file)
+
+    # Attempt to run the function with the malicious argument
+    x = torch.randn(1, requires_grad=True)
+    
+    try:
+        y = DummyAutogradFunction.apply(x)
+        y.sum().backward()
+    except ValueError as e:
+        # We expect a ValueError because "cpu; touch ..." is not a valid device type.
+        # This indicates the input is being validated rather than executed.
+        print(f"Caught expected validation error: {e}")
+    except Exception as e:
+        print(f"Unexpected exception: {e}")
+
+    # Verify that the injection did NOT occur (file was not created)
+    assert not os.path.exists(injection_file), \
+        "Security Alert: OS command injection possible in torch.cuda.amp.custom_bwd!"
+
+    print("Test passed: No OS command injection detected.")
+
+if __name__ == "__main__":
+    test_custom_bwd_os_command_injection()

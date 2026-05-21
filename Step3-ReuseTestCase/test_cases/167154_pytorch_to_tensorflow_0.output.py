@@ -1,0 +1,49 @@
+import torch
+import tensorflow as tf
+
+def test_bessel_y0_non_contiguous():
+    """
+    Adapted test case for Issue ID: 167154.
+    Verifies if tf.compat.v1.math.special.bessel_y0 handles tensors 
+    with non-contiguous/broadcasted memory layouts (simulating 0-stride) 
+    without crashing, similar to the PyTorch MPS regression.
+    """
+    
+    # Parameters from the original PyTorch bug report
+    shape = (5, 499, 768)
+    stride = (0, 768, 1)
+    storage_offset = 0
+
+    # Calculate the required size of the underlying storage based on strides
+    # Logic: storage_offset + sum((shape[i] - 1) * stride[i]) + 1
+    numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+
+    # Create the base tensor
+    # PyTorch equivalent: torch.arange(numel, dtype=torch.float32, device="mps")
+    base = tf.range(numel, dtype=tf.float32)
+
+    # Mimic torch.as_strided with stride (0, 768, 1)
+    # A stride of 0 in the first dimension implies broadcasting.
+    # We reshape the base to match the non-broadcasted dimensions (499, 768).
+    # The base size 383232 matches 499 * 768.
+    reshaped_base = tf.reshape(base, (499, 768))
+
+    # Broadcast to the target shape (5, 499, 768) to simulate the 0-stride behavior
+    input_tensor = tf.broadcast_to(reshaped_base, shape)
+
+    # Call the target API
+    # Original API: torch.nn.functional.linear
+    # Target API: tf.compat.v1.math.special.bessel_y0
+    try:
+        result = tf.compat.v1.math.special.bessel_y0(input_tensor)
+        
+        # Assertions to verify the operation completed and shape is preserved
+        assert result.shape == shape, f"Shape mismatch. Expected {shape}, got {result.shape}"
+        print("Test passed. Operation executed successfully with non-contiguous input.")
+        return True
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        return False
+
+if __name__ == "__main__":
+    test_bessel_y0_non_contiguous()

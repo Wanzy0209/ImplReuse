@@ -1,0 +1,87 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Ensure TF v1 compatibility mode is active for the API under test
+tf.compat.v1.disable_v2_behavior()
+
+def test_string_input_producer_pipeline():
+    """
+    Adapted test case for tf.compat.v1.train.string_input_producer.
+    
+    Original Context: PyTorch pipeline parallelism setup with torch.compile.
+    Adapted Context: TensorFlow v1 input pipeline setup using string_input_producer.
+    
+    This test verifies that the input producer correctly feeds data into a 
+    processing pipeline, mirroring the intent of the original test to set up 
+    and validate a training data flow.
+    """
+    # Define input data (analogous to input_ids in the original PyTorch code)
+    filenames = ["data_batch_1", "data_batch_2", "data_batch_3", "data_batch_4"]
+    num_epochs = 2
+    batch_size = 2
+
+    # Create the string input producer (The API under test)
+    # This acts as the entry point to the data pipeline, similar to how 
+    # input_ids are prepared for the pipeline schedule in the original bug report.
+    input_queue = tf.compat.v1.train.string_input_producer(
+        string_tensor=filenames,
+        num_epochs=num_epochs,
+        shuffle=True,
+        seed=42,
+        capacity=32
+    )
+
+    # Create a batch queue to consume the input (analogous to the pipeline schedule step)
+    # This simulates the processing stage of the pipeline.
+    batch_queue = tf.compat.v1.train.batch(
+        [input_queue],
+        batch_size=batch_size,
+        capacity=10,
+        enqueue_many=False
+    )
+
+    # Initialize graph variables
+    init_local = tf.compat.v1.local_variables_initializer()
+    init_global = tf.compat.v1.global_variables_initializer()
+
+    with tf.compat.v1.Session() as sess:
+        sess.run([init_global, init_local])
+        
+        # Start queue runners (analogous to starting the distributed pipeline processes)
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord)
+
+        collected_data = []
+        try:
+            # Run the pipeline
+            # Expected steps: (num_files * num_epochs) / batch_size
+            total_items = len(filenames) * num_epochs
+            steps = total_items // batch_size
+            
+            for _ in range(steps):
+                batch_data = sess.run(batch_queue)
+                collected_data.extend(batch_data)
+
+        except tf.errors.OutOfRangeError:
+            # Expected when epochs are done
+            pass
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+    # Assertions to verify behavior
+    # 1. Check total count of items produced
+    assert len(collected_data) == total_items, \
+        f"Expected {total_items} items, but got {len(collected_data)}"
+
+    # 2. Check content integrity (all files present correct number of times)
+    for f in filenames:
+        count = collected_data.count(f)
+        assert count == num_epochs, \
+            f"File {f} expected {num_epochs} times, found {count}"
+
+    print("Test passed: string_input_producer successfully fed the pipeline.")
+
+if __name__ == "__main__":
+    test_string_input_producer_pipeline()

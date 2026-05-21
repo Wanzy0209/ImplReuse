@@ -1,0 +1,31 @@
+import torch
+import torch.nn.functional as F
+
+# Check for CUDA availability to match the original bug's context
+if torch.cuda.is_available():
+    device = "cuda"
+else:
+    device = "cpu"
+    print("Warning: CUDA not available, falling back to CPU. Original bug was on CUDA.")
+
+# Setup inputs
+# Using random inputs similar to the original bug report
+x = torch.rand(2, 3, device=device)
+y = torch.rand(2, 3, device=device)
+
+# Define function: logaddexp + pointwise op (relu)
+# The original bug was triggered by a pointwise user (relu) following the op.
+# We apply the same pattern here to test if the compiler handles logaddexp correctly.
+f = lambda x, y: F.relu(torch.logaddexp(x, y))
+
+# Compile
+fc = torch.compile(f)
+
+# Execute
+res_eager = f(x, y)
+res_compiled = fc(x, y)
+
+# Verify
+# The original bug showed a mismatch due to ignored parameters.
+# We assert that eager and compiled results match for the similar API.
+assert torch.allclose(res_eager, res_compiled), "Mismatch between eager and compiled results for logaddexp"

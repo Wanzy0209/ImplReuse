@@ -1,0 +1,43 @@
+import torch
+import unittest
+import os
+
+class TestMaxUnpool3dSegfault(unittest.TestCase):
+    def test_invalid_dtypes_segfault(self):
+        """
+        Test case for Issue 163409: Segmentation fault in torch.nn.MaxUnpool3d.
+        
+        This test reproduces the logic of the original bug report where passing
+        complex128 and uint32 tensors to MaxUnpool3d causes a crash.
+        
+        The test leverages the pattern from the similar API 
+        'torch.distributed.is_torchelastic_launched', which checks an 
+        environment condition (os.getenv) to determine execution flow. 
+        Here, we adapt this pattern to check for CUDA availability, which is 
+        the required environment state for this specific bug to manifest.
+        """
+        
+        # Leveraging the environment check pattern from the similar API
+        # to ensure the test only runs in the correct context (CUDA).
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available, skipping test")
+
+        # Reproduce the original bug logic
+        # input[0] = (), input[1] = {} -> torch.nn.MaxUnpool3d()
+        layer = torch.nn.MaxUnpool3d()
+
+        # input[2] = [tensor1, tensor2], input[3] = {}
+        # Creating tensors with dtypes that trigger the segfault in the buggy version
+        # Tensor 1: complex128 (Invalid for MaxUnpool input)
+        # Tensor 2: uint32 (Invalid for MaxUnpool indices, expects long)
+        t1 = torch.empty((9, 6, 3, 6, 9), dtype=torch.complex128, device='cuda')
+        t2 = torch.empty((5, 7, 9, 8, 5), dtype=torch.uint32, device='cuda')
+
+        # The original code unpacks these: r1(*input[2], **input[3])
+        # We expect this to raise an error (RuntimeError or TypeError) in a fixed version.
+        # In the buggy version, this causes a Segmentation Fault.
+        with self.assertRaises((RuntimeError, TypeError)):
+            layer(t1, t2)
+
+if __name__ == '__main__':
+    unittest.main()

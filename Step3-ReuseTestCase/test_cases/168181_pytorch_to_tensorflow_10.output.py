@@ -1,0 +1,91 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_range_input_producer_compilation_correctness():
+    """
+    Adapts the PyTorch test case for torch.compile + .cpu() correctness 
+    to TensorFlow's tf.compat.v1.train.range_input_producer.
+    
+    Original Logic:
+    1. Define a function using a custom kernel (Triton).
+    2. Move output to CPU and modify.
+    3. Compare Eager execution vs Compiled execution (torch.compile).
+    
+    Adapted Logic:
+    1. Define a function using range_input_producer (the "kernel"/data source).
+    2. Dequeue data and perform an operation (mimicking CPU transfer/modification).
+    3. Compare Eager execution vs Compiled execution (tf.function).
+    """
+    
+    limit = 10
+    num_epochs = 1
+    batch_size = 5
+
+    # Define the function to be tested
+    # This mimics the 'f(x, y)' function in the PyTorch test
+    def data_producer_fn():
+        # Use the specific API requested: tf.compat.v1.train.range_input_producer
+        producer = tf.compat.v1.train.range_input_producer(
+            limit, 
+            num_epochs=num_epochs, 
+            shuffle=False,
+            seed=42
+        )
+        
+        # Dequeue a batch to simulate the kernel output
+        # In the original test, 'out' is the kernel output.
+        # Here, we dequeue elements as the output.
+        batch = producer.dequeue_many(batch_size)
+        
+        # Mimic the .cpu() + 1 logic.
+        # In TensorFlow, explicit .cpu() is rarely needed as tensors are abstract,
+        # but we perform a computation to verify data integrity.
+        out_cpu = batch + 1
+        
+        return out_cpu
+
+    # Initialize local variables (required for range_input_producer)
+    init_op = tf.compat.v1.local_variables_initializer()
+
+    # 1. Eager Execution
+    # We use a Session to simulate the eager baseline for v1 APIs
+    with tf.compat.v1.Session() as sess:
+        sess.run(init_op)
+        # Run the function logic
+        eager_out = sess.run(data_producer_fn())
+
+    # Reset the graph to ensure a clean state for the compiled run
+    tf.compat.v1.reset_default_graph()
+
+    # Re-initialize variables for the new graph context
+    # Note: We must re-define the function logic because the graph was reset
+    def data_producer_fn_compiled():
+        producer = tf.compat.v1.train.range_input_producer(
+            limit, 
+            num_epochs=num_epochs, 
+            shuffle=False,
+            seed=42
+        )
+        batch = producer.dequeue_many(batch_size)
+        out_cpu = batch + 1
+        return out_cpu
+
+    init_op = tf.compat.v1.local_variables_initializer()
+
+    # 2. Compiled Execution
+    # tf.function is the TensorFlow equivalent of torch.compile
+    compiled_fn = tf.function(data_producer_fn_compiled)
+
+    with tf.compat.v1.Session() as sess:
+        sess.run(init_op)
+        # Run the compiled function
+        compiled_out = sess.run(compiled_fn())
+
+    # 3. Assertion
+    # Verify that the compiled version produces the same result as the eager version
+    np.testing.assert_array_equal(eager_out, compiled_out)
+    print("Test passed: Eager and Compiled outputs match.")
+
+if __name__ == "__main__":
+    test_range_input_producer_compilation_correctness()

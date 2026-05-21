@@ -1,0 +1,31 @@
+import torch
+import unittest
+
+class TestSigmoid(unittest.TestCase):
+    def test_sigmoid(self):
+        """
+        Test case adapted from the failing test_scalar_multiply.
+        Replaces the scalar multiplication logic with torch.sigmoid logic
+        extracted from the similar API information.
+        """
+        # Adapted function based on the similar API info:
+        # def sigmoid(a): return (3 * a).sigmoid()
+        def sigmoid_fn(a):
+            return (3 * a).sigmoid()
+
+        # Setup input
+        a = torch.randn(10, 10)
+
+        # Eager execution
+        expected = sigmoid_fn(a)
+
+        # Compiled execution (simulating the FxGraphRunnableTest context)
+        # This ensures the FX graph can be generated and run for this API.
+        compiled_fn = torch.compile(sigmoid_fn)
+        actual = compiled_fn(a)
+
+        # Verify results match
+        self.assertTrue(torch.allclose(expected, actual))
+
+if __name__ == '__main__':
+    unittest.main()

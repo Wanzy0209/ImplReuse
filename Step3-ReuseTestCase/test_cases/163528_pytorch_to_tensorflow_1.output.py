@@ -1,0 +1,62 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+class ErfModule(tf.Module):
+    """
+    TensorFlow module wrapping tf.keras.ops.erf to mimic the structure 
+    of the original PyTorch nn.Module.
+    """
+    def __call__(self, x: tf.Tensor) -> tf.Tensor:
+        return tf.keras.ops.erf(x)
+
+def test_device(device_name, x_np):
+    # Convert numpy array to tensor on the specific device
+    with tf.device(device_name):
+        x = tf.convert_to_tensor(x_np, dtype=tf.float32)
+        
+        # Instantiate standard and compiled models
+        # tf.function with jit_compile=True mimics torch.compile(fullgraph=True)
+        foo = ErfModule()
+        foo_compiled = tf.function(foo, jit_compile=True)
+
+        # warm up
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+        # proper inference
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+        # Calculate difference
+        diff = tf.reduce_max(tf.abs(y_original - y_compiled)).numpy()
+        
+        print(f'device: {device_name}, diff: {diff}')
+        print('original', y_original[:5, :5].numpy())
+        print('compiled', y_compiled[:5, :5].numpy())
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    
+    # Set seed for reproducibility
+    np.random.seed(42)
+    tf.random.set_seed(42)
+    
+    # Generate input data
+    x = np.random.randn(batch_size, feature_dim).astype(np.float32)
+
+    # Test on CPU
+    print("--- Testing CPU ---")
+    test_device('/CPU:0', x)
+
+    # Test on GPU if available
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        print("\n--- Testing GPU ---")
+        test_device('/GPU:0', x)
+    else:
+        print("\nGPU not available, skipping GPU test.")
+
+if __name__ == '__main__':
+    main()

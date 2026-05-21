@@ -1,0 +1,42 @@
+import tensorflow as tf
+
+def test_large_tensor_lu_matrix_inverse():
+    """
+    Test case adapted from PyTorch Issue 164048.
+    
+    Original Bug: Indexing a large tensor on CUDA causes an "invalid configuration argument".
+    Similar API: tf.linalg.lu_matrix_inverse.
+    
+    This test translates the logic of operating on large tensors on a GPU to the 
+    similar TensorFlow API to check for robustness against resource/configuration errors.
+    """
+    # Check for GPU availability to match the original bug's context
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        print("Test skipped: No GPU available.")
+        return
+
+    # Original tensor dimensions: (4, 87, 1056, 736) -> ~270 million elements.
+    # We approximate this scale with a batch of large square matrices.
+    # 4 * 8192 * 8192 ~= 268 million elements.
+    batch_size = 4
+    dim = 8192
+
+    with tf.device('/GPU:0'):
+        # Create a large tensor on the GPU
+        # Using random values to ensure the matrix is likely invertible
+        matrix = tf.random.uniform((batch_size, dim, dim), minval=1.0, maxval=2.0)
+
+        # Perform LU decomposition
+        lu, p = tf.linalg.lu(matrix)
+
+        # Call the similar API: lu_matrix_inverse
+        # This tests if the API handles large tensors on GPU without
+        # crashing or raising "invalid configuration argument" errors.
+        inv_matrix = tf.linalg.lu_matrix_inverse(lu, p)
+
+        # Verify the output is valid (finite values)
+        assert tf.reduce_all(tf.math.is_finite(inv_matrix)), "Result contains NaN or Inf"
+
+if __name__ == "__main__":
+    test_large_tensor_lu_matrix_inverse()

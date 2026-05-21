@@ -1,0 +1,78 @@
+import torch
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+def test_copy_to_mesh_fuzzer_shapes():
+    """
+    Adapted test case for tf.experimental.dtensor.copy_to_mesh based on 
+    PyTorch Issue #163687. The original issue involved flex_attention 
+    OOMing during torch.compile with specific tensor shapes.
+    
+    This test verifies that copy_to_mesh can handle the tensor shapes 
+    identified in the fuzzer report without crashing (e.g., OOM).
+    """
+    
+    # Setup a basic mesh for the test. 
+    # Using a single device mesh to ensure the test runs locally.
+    mesh = dtensor.create_mesh([("x", 1), ("y", 1)], devices=["CPU:0"])
+    
+    # Define a replicated layout for the tensors
+    layout = dtensor.Layout(
+        [dtensor.UNSHARDED, dtensor.UNSHARDED, dtensor.UNSHARDED, dtensor.UNSHARDED], 
+        mesh
+    )
+
+    # Initialize tensors with shapes from the original PyTorch fuzzer report
+    # arg0: size=(27, 26, 62, 122)
+    arg0 = tf.random.normal([27, 26, 62, 122], dtype=tf.float32)
+    # arg1: size=(27, 26, 124, 122)
+    arg1 = tf.random.normal([27, 26, 124, 122], dtype=tf.float32)
+    # arg2: size=(27, 26, 124, 122)
+    arg2 = tf.random.normal([27, 26, 124, 122], dtype=tf.float32)
+    # arg3: size=(27, 26, 124, 122)
+    arg3 = tf.random.normal([27, 26, 124, 122], dtype=tf.float32)
+    # arg4: size=(27, 26, 248, 122)
+    arg4 = tf.random.normal([27, 26, 248, 122], dtype=tf.float32)
+    # arg5: size=(27, 26, 248, 122)
+    arg5 = tf.random.normal([27, 26, 248, 122], dtype=tf.float32)
+    # arg6: size=(27, 26, 31, 122)
+    arg6 = tf.random.normal([27, 26, 31, 122], dtype=tf.float32)
+    # arg7: size=(27, 26, 124, 122)
+    arg7 = tf.random.normal([27, 26, 124, 122], dtype=tf.float32)
+    # arg8: size=(27, 26, 31, 122)
+    arg8 = tf.random.normal([27, 26, 31, 122], dtype=tf.float32)
+    # arg9: size=(27, 26, 124, 122)
+    arg9 = tf.random.normal([27, 26, 124, 122], dtype=tf.float32)
+    # arg10: size=(27, 26, 124, 122)
+    arg10 = tf.random.normal([27, 26, 124, 122], dtype=tf.float32)
+
+    # Perform copy_to_mesh operations
+    # In the original bug, flex_attention was called multiple times. 
+    # Here we verify the data movement API handles these specific tensor configurations.
+    try:
+        t0 = dtensor.copy_to_mesh(arg0, layout)
+        t1 = dtensor.copy_to_mesh(arg1, layout)
+        t2 = dtensor.copy_to_mesh(arg2, layout)
+        t3 = dtensor.copy_to_mesh(arg3, layout)
+        t4 = dtensor.copy_to_mesh(arg4, layout)
+        t5 = dtensor.copy_to_mesh(arg5, layout)
+        t6 = dtensor.copy_to_mesh(arg6, layout)
+        t7 = dtensor.copy_to_mesh(arg7, layout)
+        t8 = dtensor.copy_to_mesh(arg8, layout)
+        t9 = dtensor.copy_to_mesh(arg9, layout)
+        t10 = dtensor.copy_to_mesh(arg10, layout)
+
+        # Assertions to verify behavior
+        assert isinstance(t0, dtensor.DTensor), "Result should be a DTensor"
+        assert t0.shape.as_list() == [27, 26, 62, 122], "Shape mismatch for t0"
+        assert t4.shape.as_list() == [27, 26, 248, 122], "Shape mismatch for t4"
+        assert t10.shape.as_list() == [27, 26, 124, 122], "Shape mismatch for t10"
+        
+        print("Test passed: copy_to_mesh handled fuzzer shapes successfully.")
+
+    except tf.errors.ResourceExhaustedError as e:
+        print(f"Test failed with OOM (ResourceExhaustedError): {e}")
+        raise
+
+if __name__ == "__main__":
+    test_copy_to_mesh_fuzzer_shapes()

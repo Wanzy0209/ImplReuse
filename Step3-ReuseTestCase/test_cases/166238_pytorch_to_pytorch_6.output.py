@@ -1,0 +1,45 @@
+import torch
+import collections
+from torch.testing import assert_close
+
+def test_lobpcg_with_defaultdict():
+    """
+    Test that torch.lobpcg works correctly when called within a torch.compile
+    context that involves creating a collections.defaultdict.
+    This addresses the regression where Dynamo failed to trace defaultdict creation.
+    """
+    # Create a symmetric positive definite matrix
+    torch.manual_seed(42)
+    A = torch.randn(10, 10, dtype=torch.float64)
+    A = A @ A.T + torch.eye(10, dtype=torch.float64)
+
+    def func(A):
+        # The regression trigger: creating a defaultdict inside a compiled function
+        params = collections.defaultdict(int)
+        params['maxiter'] = 20
+        
+        # Call the similar API: torch.lobpcg
+        # We pass the defaultdict to verify it handles the object correctly
+        # alongside the compilation issue.
+        eigenvalues, eigenvectors = torch.lobpcg(
+            A, 
+            k=2, 
+            ortho_iparams=params
+        )
+        return eigenvalues, eigenvectors
+
+    # Compile the function
+    compiled_func = torch.compile(func)
+
+    # Run compiled version
+    compiled_eigvals, compiled_eigvecs = compiled_func(A)
+
+    # Run eager version for comparison
+    eager_eigvals, eager_eigvecs = func(A)
+
+    # Assert results are close
+    assert_close(compiled_eigvals, eager_eigvals, rtol=1e-4, atol=1e-4)
+    assert_close(compiled_eigvecs, eager_eigvecs, rtol=1e-4, atol=1e-4)
+
+if __name__ == "__main__":
+    test_lobpcg_with_defaultdict()

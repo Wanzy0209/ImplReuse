@@ -1,0 +1,50 @@
+import torch
+import unittest
+
+class TestRebindUnbackedFloatHandling(unittest.TestCase):
+    def test_compile_log_with_float_shape_dependency(self):
+        """
+        Test case for Issue #162480.
+        
+        This test verifies that torch.compile (specifically the AOTInductor path)
+        correctly handles float values encountered during the rebind_unbacked
+        process. The bug was triggered when a float value (resulting from 
+        operations like torch.log) was used in a context requiring symbolic 
+        shape rebinding.
+        
+        The test leverages the similar API pattern (torch.log) to create a 
+        data-dependent shape scenario.
+        """
+        
+        # Define a function using the similar API pattern: (3 * a).log()
+        # We extend it slightly to use the result in a shape-determining context
+        # (torch.arange), which forces the symbolic shape engine to process the value.
+        def fn(a):
+            # Similar API pattern
+            val = (3 * a).log()
+            # Use the float result to determine the size of a new tensor.
+            # This creates a data-dependent shape, triggering the symbolic shape logic.
+            return torch.arange(val)
+
+        # Compile the function. The bug is specific to AOTInductor/compile paths.
+        # We use a standard mode that exercises the symbolic shape machinery.
+        compiled_fn = torch.compile(fn, mode="reduce-overhead")
+
+        # Input: a float tensor
+        input_tensor = torch.tensor(5.0)
+
+        # Execute the compiled function.
+        # Before the fix, this could crash in rebind_unbacked if it attempted
+        # to replace a symbolic variable with the float 'val' without proper handling.
+        result = compiled_fn(input_tensor)
+
+        # Assertions to verify correctness
+        self.assertIsNotNone(result)
+        # log(3 * 5.0) = log(15.0) ~= 2.708
+        # torch.arange(2.708) produces [0.0, 1.0, 2.0]
+        expected_length = 3
+        self.assertEqual(len(result), expected_length)
+        self.assertTrue(torch.allclose(result, torch.tensor([0.0, 1.0, 2.0])))
+
+if __name__ == "__main__":
+    unittest.main()

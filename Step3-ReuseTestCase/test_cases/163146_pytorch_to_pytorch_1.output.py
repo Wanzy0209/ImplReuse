@@ -1,0 +1,73 @@
+import torch
+import torch.nn as nn
+import torch.nn.utils.prune as prune
+from torch.export import export
+
+class Mlp(nn.Module):
+    """
+    Simple MLP model that includes the dynamic slicing logic 
+    mentioned in the bug report.
+    """
+    def __init__(self):
+        super().__init__()
+        self.fc = nn.Linear(64, 10)
+
+    def forward(self, item_embedding, max_item_num):
+        # Reproduce the data dependent slicing from the bug report
+        # selected_item_embedding = item_embedding[:, :max_item_num, :]
+        selected_item_embedding = item_embedding[:, :max_item_num, :]
+        return self.fc(selected_item_embedding)
+
+def test_export_pruned_model_with_dynamic_slice():
+    """
+    Test case to verify the interaction between torch.nn.utils.prune.global_unstructured
+    and torch.export.export when the model contains data-dependent slicing.
+    
+    Based on Issue ID: 163146
+    """
+    model = Mlp()
+    
+    # 1. Apply the Similar API: torch.nn.utils.prune.global_unstructured
+    # We prune the weights of the linear layer to introduce the state associated with pruning.
+    parameters_to_prune = [(model.fc, 'weight')]
+    prune.global_unstructured(
+        parameters_to_prune,
+        pruning_method=prune.L1Unstructured,
+        amount=0.2
+    )
+    
+    # Verify that pruning was applied successfully
+    assert hasattr(model.fc, 'weight_mask'), "Pruning mask 'weight_mask' not found on fc layer."
+    assert model.fc.weight_mask is not None, "Pruning mask 'weight_mask' is None."
+
+    # 2. Setup inputs based on the bug report logs
+    # Locals from bug report:
+    # item_embedding: Tensor(shape: torch.Size([s10, s64, 64])...)
+    # max_item_num: Tensor(shape: torch.Size([])...)
+    # We use concrete values for s10=10, s64=64
+    item_embedding = torch.randn(10, 64, 64)
+    max_item_num = torch.tensor(50)
+
+    # 3. Attempt the Original API: torch.export.export
+    # The bug report indicates a "Data dependent error" occurs here because 
+    # max_item_num is a tensor, making the slice data-dependent.
+    # We expect this to raise an error based on the bug description.
+    
+    try:
+        ep = export(model, args=(item_embedding, max_item_num), strict=False)
+        # If export succeeds, the bug might be fixed or not triggered in this specific context.
+        print("Export succeeded. The bug might be fixed.")
+        assert False, "Expected 'Data dependent error' but export succeeded."
+        
+    except Exception as e:
+        error_message = str(e)
+        # Check for the specific error mentioned in the bug report
+        if "Data dependent error" in error_message or "unable to evaluate the value" in error_message:
+            print(f"Successfully reproduced the bug: {error_message}")
+        else:
+            # If a different error occurs, re-raise it as it might be a new issue
+            print(f"An unexpected error occurred: {error_message}")
+            raise
+
+if __name__ == "__main__":
+    test_export_pruned_model_with_dynamic_slice()

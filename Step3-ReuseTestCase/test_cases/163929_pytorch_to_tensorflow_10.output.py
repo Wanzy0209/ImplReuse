@@ -1,0 +1,53 @@
+import torch
+import tensorflow as tf
+import tempfile
+import os
+
+def foo(patterns):
+    # Adaptation logic:
+    # The original PyTorch code performed in-place mutation (tan_), transposition (t()), and reduction (argmin).
+    # Since tf.raw_ops.MatchingFilesDataset operates on file paths (strings) rather than numeric tensors,
+    # we adapt the logic to:
+    # 1. Create the dataset (Input)
+    # 2. Apply a transformation (Mutation equivalent)
+    # 3. Apply a view/reshape (Transpose equivalent)
+    # 4. Return the result
+    
+    # Create the dataset
+    ds = tf.raw_ops.MatchingFilesDataset(patterns=patterns)
+    
+    # Simulate mutation/transformation (e.g., mapping over the filenames)
+    ds = ds.map(lambda x: x)
+    
+    # Simulate transposition/view (e.g., batching)
+    ds = ds.batch(10)
+    
+    return ds
+
+# Setup: Create a temporary directory with files to match
+with tempfile.TemporaryDirectory() as tmpdir:
+    # Create dummy files
+    filenames = [f"file_{i}.txt" for i in range(4)]
+    for fname in filenames:
+        with open(os.path.join(tmpdir, fname), 'w') as f:
+            f.write("test content")
+
+    patterns = [os.path.join(tmpdir, "*.txt")]
+
+    # 1. Eager Execution
+    # Note: as_numpy_iterator() is used to extract values from the Dataset
+    out1 = list(foo(patterns).as_numpy_iterator())
+
+    # 2. Compiled Execution (mimicking torch.compile)
+    # tf.function traces the logic, similar to compilation
+    cf = tf.function(foo)
+    out2 = list(cf(patterns).as_numpy_iterator())
+
+    # 3. Assertion
+    # Decode bytes to strings for comparison
+    out1_decoded = sorted([item.decode() if isinstance(item, bytes) else item for sublist in out1 for item in sublist])
+    out2_decoded = sorted([item.decode() if isinstance(item, bytes) else item for sublist in out2 for item in sublist])
+
+    # Verify that the behavior is consistent between eager and compiled modes
+    assert out1_decoded == out2_decoded, f"Outputs do not match!\nExpected: {out1_decoded}\nGot: {out2_decoded}"
+    assert len(out1_decoded) == 4, f"Expected 4 files, but found {len(out1_decoded)}"

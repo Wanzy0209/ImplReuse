@@ -1,0 +1,46 @@
+import torch
+import torch.distributed as dist
+from torch.testing._internal.distributed import MultiProcessTestCase
+from torch.testing._internal.common_utils import TestCase, run_tests, requires_gpu
+
+# Assuming the test class inherits from MultiProcessTestCase to support distributed testing
+class TestDistributedTritonKernels(MultiProcessTestCase):
+    
+    @property
+    def world_size(self):
+        return 2
+
+    @requires_gpu
+    def test_broadcast_object_list_to_cpu(self):
+        """
+        Adapted from test_triton_kernel_to_cpu.
+        Verifies correctness of torch.distributed.broadcast_object_list followed by .cpu()
+        inside a torch.compile context.
+        """
+        def f(obj_list):
+            # Replace Triton kernel with the similar API: broadcast_object_list
+            dist.broadcast_object_list(obj_list, src=0)
+            # The operation that triggered the correctness issue in the original bug
+            return obj_list[0].cpu() + 1
+
+        # Setup inputs: Rank 0 initializes data, Rank 1 provides placeholder
+        if self.rank == 0:
+            x = torch.randn(4, 4, device="cuda")
+            data = [x]
+        else:
+            data = [torch.zeros(4, 4, device="cuda")]
+
+        # Eager execution
+        eager_data = [t.clone() if torch.is_tensor(t) else t for t in data]
+        eager_out = f(eager_data)
+
+        # Compiled execution
+        compiled_f = torch.compile(f)
+        compiled_data = [t.clone() if torch.is_tensor(t) else t for t in data]
+        compiled_out = compiled_f(compiled_data)
+
+        # Verify results match between eager and compiled modes
+        self.assertEqual(compiled_out, eager_out)
+
+if __name__ == "__main__":
+    run_tests()

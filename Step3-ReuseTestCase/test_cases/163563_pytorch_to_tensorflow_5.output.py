@@ -1,0 +1,104 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# The original bug involves an OOM in PyTorch's compiled (graph) mode 
+# that does not occur in eager mode. 
+# We adapt this to TensorFlow by testing the heavy operations in 
+# tf.compat.v1 Graph Mode (analogous to torch.compile) using 
+# tf.compat.v1.train.add_queue_runner to manage the graph execution flow.
+
+# Note: This test requires significant GPU memory due to the large tensor sizes 
+# (batch_size > 5M) from the original bug report.
+
+def test_tf_queue_runner_oom():
+    # We must use Graph Mode for tf.compat.v1.train.add_queue_runner
+    tf.compat.v1.disable_eager_execution()
+
+    # Define shapes from the original bug report
+    batch_size = 5699097
+    
+    # Define placeholders for inputs
+    # Using float32 for broader compatibility, though original used bfloat16
+    p0 = tf.compat.v1.placeholder(tf.float32, shape=[batch_size, 6, 1], name='arg0')
+    p1 = tf.compat.v1.placeholder(tf.float32, shape=[batch_size, 6, 256], name='arg1')
+    p2 = tf.compat.v1.placeholder(tf.float32, shape=[batch_size, 256, 1], name='arg2')
+
+    # Define the computation logic (Sigmoid, Exp, BatchMatMul, Reshape)
+    # t1 = sigmoid(arg0)
+    t1 = tf.sigmoid(p0)
+    # t3 = sigmoid(arg1)
+    t3 = tf.sigmoid(p1)
+    # t5 = exp(arg2)
+    t5 = tf.exp(p2)
+    
+    # baddbmm equivalent: t1 + batch_matmul(t3, t5)
+    # t3: (B, 6, 256), t5: (B, 256, 1) -> result (B, 6, 1)
+    matmul_res = tf.matmul(t3, t5)
+    t6 = t1 + matmul_res
+    
+    # Reshape
+    t7 = tf.reshape(t6, (193, 386, 459))
+
+    # Setup Queue and QueueRunner to utilize the target API
+    # We create a queue to feed the placeholders, simulating a data pipeline
+    # which is the standard use case for add_queue_runner
+    q = tf.compat.v1.FIFOQueue(
+        capacity=1, 
+        dtypes=[tf.float32, tf.float32, tf.float32], 
+        shapes=[[batch_size, 6, 1], [batch_size, 6, 256], [batch_size, 256, 1]]
+    )
+    
+    enqueue_op = q.enqueue([p0, p1, p2])
+    
+    # Create the QueueRunner
+    qr = tf.compat.v1.train.QueueRunner(q, [enqueue_op])
+    
+    # --- TARGET API CALL ---
+    # Adds the QueueRunner to the graph collection
+    tf.compat.v1.train.add_queue_runner(qr)
+    # -----------------------
+
+    # Dequeue tensors to run the graph
+    d0, d1, d2 = q.dequeue_many(1)
+    
+    # Re-apply ops on dequeued data to link the computation to the queue
+    output_from_queue = tf.reshape(
+        tf.sigmoid(d0) + tf.matmul(tf.sigmoid(d1), tf.exp(d2)), 
+        (193, 386, 459)
+    )
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize
+        sess.run(tf.compat.v1.global_variables_initializer())
+        
+        # Start Queue Runners
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord, sess=sess)
+        
+        try:
+            # Generate data
+            # Using float32 to ensure it runs on standard TF builds
+            data0 = np.random.rand(batch_size, 6, 1).astype(np.float32)
+            data1 = np.random.rand(batch_size, 6, 256).astype(np.float32)
+            data2 = np.random.rand(batch_size, 256, 1).astype(np.float32)
+            
+            # Feed the queue
+            # We run the enqueue op directly to populate the queue initially
+            sess.run(enqueue_op, feed_dict={p0: data0, p1: data1, p2: data2})
+            
+            # Run the computation (consumes from queue)
+            # This mimics the "Compiled" execution path in PyTorch
+            result = sess.run(output_from_queue)
+            
+            print("Graph Execution with QueueRunner Success! ")
+            print(f"Output shape: {result.shape}")
+            
+        except tf.errors.ResourceExhaustedError as e:
+            print(f"OOM Detected (Reproducing Bug Behavior): {e}")
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == '__main__':
+    test_tf_queue_runner_oom()

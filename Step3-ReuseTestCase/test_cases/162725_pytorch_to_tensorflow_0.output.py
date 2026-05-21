@@ -1,0 +1,45 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def fn(x, y):
+    return tf.compat.v1.math.multiply_no_nan(x, y)
+
+# Use jit_compile=True to mimic the aggressive compilation behavior of torch.compile('inductor')
+compiled = tf.function(fn, jit_compile=True)
+
+# Generate sample inputs to test the API behavior
+# We include standard random inputs and specific edge cases for multiply_no_nan (NaN handling)
+inputs = [
+    # Case 1: Standard random float inputs
+    (tf.random.uniform((4, 4), minval=-1.0, maxval=1.0), tf.random.uniform((4, 4), minval=-1.0, maxval=1.0)),
+    
+    # Case 2: x is NaN, y is 0 -> Expected result is 0
+    (tf.constant([float('nan'), 1.0, 2.0]), tf.constant([0.0, 0.0, 3.0])),
+    
+    # Case 3: x is 0, y is NaN -> Expected result is NaN
+    (tf.constant([0.0, 1.0]), tf.constant([float('nan'), 2.0])),
+    
+    # Case 4: Broadcasting
+    (tf.random.uniform((2, 3, 4)), tf.constant([0.0, 1.0, 0.0, 1.0]))
+]
+
+print("Testing tf.compat.v1.math.multiply_no_nan for consistency between eager and compiled modes...")
+
+for x, y in inputs:
+    # Eager execution
+    res1 = fn(x, y)
+    
+    # Compiled execution
+    res2 = compiled(x, y)
+    
+    # Verify consistency
+    # tf.debugging.assert_equal checks exact equality, including NaN positions
+    try:
+        tf.debugging.assert_equal(res1, res2)
+        print(f"Test passed for input shape {x.shape} and {y.shape}")
+    except tf.errors.InvalidArgumentError as e:
+        print(f"\nMismatch detected for input shape {x.shape} and {y.shape}")
+        print(f"Eager result:    {res1.numpy()}")
+        print(f"Compiled result: {res2.numpy()}")
+        raise e

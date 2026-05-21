@@ -1,0 +1,68 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_name_scope_behavior():
+    """
+    Adapts the PyTorch torch.compile bug reproduction logic to TensorFlow.
+    
+    The original bug involved in-place operations (sin_) and index assignments
+    causing incorrect double-application of sin under torch.compile.
+    
+    Here we verify the behavior using tf.keras.name_scope. Since TensorFlow
+    tensors are immutable, we use tf.Variable to mimic the in-place mutations
+    present in the original PyTorch code.
+    """
+    
+    # Setup input data
+    # PyTorch: x = torch.tensor([[1,2,3]...], dtype=torch.float32)
+    # TF: We use a Variable to allow in-place updates (assign)
+    x_data = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]], dtype=np.float32)
+    x = tf.Variable(x_data)
+
+    # Wrap the logic in the requested API: tf.keras.name_scope
+    with tf.keras.name_scope("sin_and_index_put"):
+        # PyTorch: x[0].sin_()
+        # TF: Update row 0 with the sine of row 0
+        x[0].assign(tf.sin(x[0]))
+        
+        # PyTorch: x[1].sin_()
+        # TF: Update row 1 with the sine of row 1
+        x[1].assign(tf.sin(x[1]))
+
+        # PyTorch: y = torch.zeros_like(x)
+        y = tf.Variable(tf.zeros_like(x))
+
+        # PyTorch: y[2] = x[0]
+        # TF: Assign the value of x[0] to y[2]
+        y[2].assign(x[0])
+        
+        # PyTorch: y[3] = x[1]
+        # TF: Assign the value of x[1] to y[3]
+        y[3].assign(x[1])
+
+    # Verification
+    # In the PyTorch bug, cres[2] was incorrectly sin(sin(x[0])).
+    # We verify that TensorFlow produces the correct result: sin(x[0]).
+    
+    # Original values for calculation reference
+    original_x0 = tf.constant([1., 2., 3.])
+    original_x1 = tf.constant([4., 5., 6.])
+    
+    # Expected results: Single application of sin
+    expected_y_2 = tf.sin(original_x0)
+    expected_y_3 = tf.sin(original_x1)
+
+    # Assert y[2] matches sin(original_x0)
+    # We use np.allclose for float comparison
+    assert np.allclose(y[2].numpy(), expected_y_2.numpy()), \
+        f"Test Failed: y[2] mismatch. Expected {expected_y_2.numpy()}, got {y[2].numpy()}"
+        
+    # Assert y[3] matches sin(original_x1)
+    assert np.allclose(y[3].numpy(), expected_y_3.numpy()), \
+        f"Test Failed: y[3] mismatch. Expected {expected_y_3.numpy()}, got {y[3].numpy()}"
+
+    print("Test passed: tf.keras.name_scope context handled operations correctly without the double-sin bug.")
+
+if __name__ == "__main__":
+    test_tf_name_scope_behavior()

@@ -1,0 +1,47 @@
+import tensorflow as tf
+import numpy as np
+import math
+
+"""
+Test LecunUniform initialization logic adapted from FloorDiv issue.
+The original issue verified that FloorDiv did not incorrectly simplify to Rational division.
+Here, we verify that LecunUniform uses float division (not floor division) when calculating
+the limit, as using floor division would result in a limit of 0 for large fan_in values.
+"""
+
+# Using constants from the original bug report
+# s14*s46 // 2016 -> 2016 is a key number
+# Denominator 22
+fan_in_val = 2016
+fan_out_val = 22
+
+print(f"Testing LecunUniform with fan_in={fan_in_val}, fan_out={fan_out_val}...")
+
+# Initialize the initializer
+initializer = tf.keras.initializers.LecunUniform(seed=42)
+
+# Create a shape that results in the specific fan_in
+# For a Dense layer weight matrix of shape (fan_in, fan_out), fan_in is fan_in_val
+shape = (fan_in_val, fan_out_val)
+
+# Generate values
+weights = initializer(shape=shape)
+weights_np = weights.numpy()
+
+# Calculate the expected limit using float division
+# Formula: limit = sqrt(3 / fan_in)
+# If floor division (//) was used instead of float division (/), limit would be sqrt(0) = 0
+expected_limit = math.sqrt(3.0 / fan_in_val)
+
+print(f"Expected limit (float div): {expected_limit}")
+print(f"Expected limit (floor div): {math.sqrt(3 // fan_in_val)}")
+
+# Assertion 1: Values should not be all zero (which would happen with floor division)
+assert not np.allclose(weights_np, 0.0), \
+    "Bug: Weights are zero. This implies floor division was used in limit calculation."
+
+# Assertion 2: Values should be within the expected range [-limit, limit]
+assert np.all(weights_np >= -expected_limit) and np.all(weights_np <= expected_limit), \
+    f"Bug: Weights are out of bounds for LecunUniform. Expected range [-{expected_limit}, {expected_limit}]"
+
+print("LecunUniform test passed: Correctly uses float division for limit calculation.")

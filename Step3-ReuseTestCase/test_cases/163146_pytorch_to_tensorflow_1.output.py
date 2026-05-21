@@ -1,0 +1,58 @@
+import torch
+import tensorflow as tf
+
+def test_xla_dynamic_slice():
+    """
+    Adapted test case from PyTorch Issue #163146.
+    
+    Original Issue: torch.export.export fails with a "Data dependent error" 
+    when encountering a slice operation where the slice length is determined 
+    by a dynamic tensor value (item_embedding[:, :max_item_num, :]).
+    
+    This test verifies the behavior of the similar TensorFlow API 
+    (tf.xla.experimental.compile) when faced with the same data-dependent 
+    slicing logic.
+    """
+    
+    # Define the computation function
+    # Corresponds to the PyTorch model logic causing the error
+    def computation(item_embedding, max_item_num):
+        # The operation causing the "Data dependent error" in PyTorch:
+        # Slicing a tensor [:, :max_item_num, :] where max_item_num is a Tensor.
+        return item_embedding[:, :max_item_num, :]
+
+    # Prepare inputs
+    # Mimicking the PyTorch context:
+    # item_embedding: Tensor(shape: torch.Size([s10, s64, 64]))
+    item_embedding = tf.random.normal((10, 64, 64))
+    
+    # max_item_num: Tensor(shape: torch.Size([]))
+    # Using a Tensor (scalar) to simulate the data-dependent slice limit
+    max_item_num = tf.constant(5, dtype=tf.int32)
+
+    # Attempt to compile with XLA
+    # Corresponds to torch.export.export in the original issue
+    try:
+        # tf.xla.experimental.compile attempts to JIT compile the function
+        # Note: XLA compilation generally requires static shapes, so passing
+        # a tensor for the slice index is the critical test condition.
+        compiled_result = tf.xla.experimental.compile(
+            computation, 
+            inputs=[item_embedding, max_item_num]
+        )
+        
+        # If compilation succeeds, verify the output shape
+        # Expected shape: [10, 5, 64]
+        result = compiled_result[0] 
+        assert result.shape == (10, 5, 64), f"Expected shape (10, 5, 64), got {result.shape}"
+        print("Test Passed: XLA compilation handled dynamic slice successfully.")
+        
+    except Exception as e:
+        # If compilation fails, it mirrors the PyTorch behavior where export failed
+        # due to data-dependent operations.
+        print(f"Test Failed/Error encountered: {e}")
+        # Re-raise to ensure the test signals failure if the API cannot handle it
+        raise
+
+if __name__ == "__main__":
+    test_xla_dynamic_slice()

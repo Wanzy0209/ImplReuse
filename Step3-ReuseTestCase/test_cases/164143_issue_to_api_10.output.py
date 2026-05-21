@@ -1,0 +1,33 @@
+import torch
+import pytest
+
+# DebugMode is an internal testing utility in PyTorch that sets a dispatch mode.
+# The bug report indicates that torch.compile silently skips compilation when
+# this mode is active, and the desired behavior is to raise an error.
+try:
+    from torch.testing._internal.debug_mode import DebugMode
+except ImportError:
+    pytest.skip("torch.testing._internal.debug_mode not available", allow_module_level=True)
+
+def test_torch_compile_debugmode_error():
+    """
+    Test that torch.compile raises an error when used inside DebugMode,
+    instead of silently skipping compilation.
+    
+    This addresses the issue where DebugMode silently disables torch.compile.
+    The expected behavior (based on the issue description "At minimum we should error")
+    is to raise a RuntimeError when a non-infra torch dispatch mode is present.
+    """
+    def simple_fn(x):
+        return x + 1
+
+    # We expect a RuntimeError because torch.compile does not support
+    # non-infra torch dispatch modes like DebugMode.
+    with pytest.raises(RuntimeError, match="non-infra torch dispatch mode"):
+        with DebugMode():
+            compiled_fn = torch.compile(simple_fn)
+            # The error should be raised either during compilation or the first call
+            compiled_fn(torch.randn(5))
+
+if __name__ == "__main__":
+    test_torch_compile_debugmode_error()

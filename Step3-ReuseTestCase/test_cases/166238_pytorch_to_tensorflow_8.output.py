@@ -1,0 +1,42 @@
+import torch
+import tensorflow as tf
+from collections import defaultdict
+
+def test_name_scope_with_defaultdict():
+    """
+    Adapted from PyTorch Dynamo bug report (Issue 166238).
+    Original issue: torch.compile failed to trace collections.defaultdict creation.
+    This test verifies that tf.keras.name_scope (the similar API) handles
+    defaultdict creation correctly, particularly in graph mode (tf.function).
+    """
+    
+    # Test 1: Basic usage inside name_scope (Eager mode)
+    with tf.keras.name_scope("eager_test"):
+        # This operation caused a graph break in PyTorch Dynamo
+        dd = defaultdict(list)
+        dd["key1"].append(1)
+    
+    assert dd["key1"] == [1]
+    assert dd["non_existent"] == []
+
+    # Test 2: Usage inside name_scope within tf.function (Graph mode)
+    # tf.function is the TensorFlow equivalent to torch.compile for tracing.
+    @tf.function
+    def graph_func():
+        with tf.keras.name_scope("graph_test"):
+            # Reproducing the core logic: creating a defaultdict
+            # inside a scope that is being traced/compiled.
+            d = defaultdict(int)
+            d["a"] = 10
+            return d
+
+    result = graph_func()
+    
+    # Verify the defaultdict works as expected after tracing
+    assert isinstance(result, defaultdict)
+    assert result["a"] == 10
+    assert result["b"] == 0  # Verify default factory works
+
+if __name__ == "__main__":
+    test_name_scope_with_defaultdict()
+    print("Test passed.")

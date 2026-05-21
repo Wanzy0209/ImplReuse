@@ -1,0 +1,51 @@
+import torch
+import tensorflow as tf
+from tensorflow.keras.optimizers.schedules import serialize, LearningRateSchedule
+
+
+class CustomSchedule(LearningRateSchedule):
+    """
+    A custom user-defined learning rate schedule, analogous to the Config class
+    in the original bug report.
+    """
+    def __init__(self, initial_learning_rate=0.01):
+        super().__init__()
+        self.initial_learning_rate = initial_learning_rate
+
+    def __call__(self, step):
+        return self.initial_learning_rate
+
+    def get_config(self):
+        return {"initial_learning_rate": self.initial_learning_rate}
+
+
+def forward(x, schedule):
+    """
+    Forward function that calls the similar API (serialize) on a user object
+    within a computation graph, analogous to calling repr() in the bug report.
+    """
+    # Calling serialize() on non-constant user object
+    # We use the length of the serialized config in the calculation
+    # to ensure the operation interacts with the graph tracing.
+    return x * tf.cast(len(serialize(schedule)), tf.float32)
+
+
+# Instantiate the custom object and input tensor
+schedule = CustomSchedule()
+x = tf.ones((2, 2))
+
+# tf.function is the TensorFlow equivalent of torch.compile
+# It traces the Python function to create a graph.
+compiled_forward = tf.function(forward)
+
+# Execute the compiled function
+# This tests if the tracer can handle the serialize() call on the custom object
+result = compiled_forward(x, schedule)
+
+# Verify the result
+# serialize(schedule) returns a dict (e.g., {'class_name': ..., 'config': ...}), length is usually 2.
+# x is ones, so result should be 2 * ones.
+expected_result = 2.0
+assert tf.reduce_all(result == expected_result).numpy(), f"Expected {expected_result}, got {result}"
+
+print("Test passed: tf.function successfully traced the serialize call.")

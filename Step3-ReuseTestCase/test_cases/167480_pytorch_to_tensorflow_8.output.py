@@ -1,0 +1,69 @@
+import torch
+import os
+import tensorflow as tf
+import tempfile
+
+def test_os_command_injection_embedding_column():
+    """
+    Adapted test case for Issue 167480 (OS command injection).
+    
+    Original PyTorch Issue: torch.utils.cpp_extension.load_inline allowed OS command injection 
+    via extra_cflags when using shell=True in subprocess.
+    
+    This test attempts to reproduce the same logic on the similar TensorFlow API:
+    tf.compat.v1.tpu.experimental.embedding_column.
+    
+    We inject shell metacharacters into string arguments (like tensor_name_in_ckpt) 
+    to see if they are executed via a shell.
+    """
+    
+    # Setup: Define a unique marker file to verify command execution
+    marker_file = "/tmp/tf_pwned_167480"
+    
+    # Clean up before test
+    if os.path.exists(marker_file):
+        os.remove(marker_file)
+
+    # Malicious payload: attempts to create a file using shell command substitution
+    # In the PyTorch bug, passing "; touch /tmp/pwn" in extra_cflags worked.
+    # Here we try passing it in tensor_name_in_ckpt.
+    malicious_payload = f"; touch {marker_file}"
+
+    # Create a dummy categorical column required for the API
+    categorical_column = tf.feature_column.categorical_column_with_identity(
+        'test_category', num_buckets=10
+    )
+
+    try:
+        # Attempt to inject the payload
+        # The PyTorch vulnerability was triggered during the function call (compilation).
+        # We call the TF API similarly.
+        col = tf.compat.v1.tpu.experimental.embedding_column(
+            categorical_column=categorical_column,
+            dimension=64,
+            tensor_name_in_ckpt=malicious_payload
+        )
+        
+        # Note: In PyTorch, the command execution happened synchronously inside the call.
+        # We check immediately after the call.
+        
+    except Exception as e:
+        # TensorFlow might raise a ValueError for invalid tensor names or other exceptions.
+        # This is expected behavior for a secure API (sanitization/validation).
+        # We catch it to ensure we check the file system regardless of the exception.
+        pass
+
+    # Verification: Check if the marker file was created
+    # If the file exists, the OS command injection was successful (Vulnerable).
+    # If not, the API handled the input safely (Not Vulnerable).
+    if os.path.exists(marker_file):
+        print("SECURITY ISSUE DETECTED: OS command injection succeeded!")
+        # Clean up
+        os.remove(marker_file)
+        assert False, "API is vulnerable to OS command injection."
+    else:
+        print("API appears safe: No OS command injection detected.")
+        assert True, "API is safe."
+
+if __name__ == "__main__":
+    test_os_command_injection_embedding_column()

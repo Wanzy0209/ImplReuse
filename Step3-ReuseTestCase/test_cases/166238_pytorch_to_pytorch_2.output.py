@@ -1,0 +1,57 @@
+import torch
+import unittest
+
+class TestTorchProdDynamo(unittest.TestCase):
+    """
+    Test case to verify torch.prod works correctly with torch.compile.
+    Adapted from the context of Issue 166238 regarding Dynamo regressions,
+    replacing the problematic collections.defaultdict call with torch.prod.
+    """
+
+    def test_torch_prod_compile_basic(self):
+        """
+        Verifies that torch.prod can be traced and executed by torch.compile.
+        """
+        def fn(x):
+            return torch.prod(x)
+
+        compiled_fn = torch.compile(fn)
+        
+        input_tensor = torch.randn(3, 4)
+        expected = fn(input_tensor)
+        result = compiled_fn(input_tensor)
+
+        self.assertTrue(torch.allclose(result, expected))
+
+    def test_torch_prod_compile_with_dim(self):
+        """
+        Verifies torch.prod with dimension argument works under torch.compile.
+        """
+        def fn(x):
+            return torch.prod(x, dim=1)
+
+        compiled_fn = torch.compile(fn)
+        
+        input_tensor = torch.randn(2, 5)
+        expected = fn(input_tensor)
+        result = compiled_fn(input_tensor)
+
+        self.assertTrue(torch.allclose(result, expected))
+
+    def test_torch_prod_compile_dtype(self):
+        """
+        Verifies torch.prod with specific dtype works under torch.compile.
+        """
+        def fn(x):
+            return torch.prod(x, dtype=torch.float32)
+
+        compiled_fn = torch.compile(fn)
+        
+        input_tensor = torch.tensor([1, 2, 3, 4], dtype=torch.int64)
+        expected = fn(input_tensor)
+        result = compiled_fn(input_tensor)
+
+        self.assertTrue(torch.allclose(result, expected))
+
+if __name__ == '__main__':
+    unittest.main()

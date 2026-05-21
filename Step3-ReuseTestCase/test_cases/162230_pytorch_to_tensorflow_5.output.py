@@ -1,0 +1,50 @@
+import torch
+import unittest
+import tensorflow as tf
+import numpy as np
+
+class TestHeUniformSimilarity(unittest.TestCase):
+    def test_he_uniform_scalar_and_tensor_initialization(self):
+        """
+        Adapted from PyTorch test_scalar_multiply (Issue 162230).
+        
+        The original test failed due to a timeout (subprocess.TimeoutExpired) 
+        when executing torch.mul operations. This test verifies that the 
+        similar API, tf.keras.initializers.HeUniform, handles scalar and 
+        tensor shapes efficiently without hanging or timing out.
+        """
+        # Initialize the HeUniform initializer
+        # Corresponds to the 'scalar' aspect of the original test context
+        initializer = tf.keras.initializers.HeUniform(seed=42)
+
+        # 1. Scalar initialization (Shape [])
+        # This mimics the scalar multiplication context from the original bug
+        try:
+            scalar_val = initializer(shape=[])
+            self.assertEqual(scalar_val.shape, ())
+            self.assertIsInstance(scalar_val, tf.Tensor)
+            # Ensure the value is a float (HeUniform produces floats)
+            self.assertEqual(scalar_val.dtype, tf.float32)
+        except Exception as e:
+            self.fail(f"Scalar initialization failed with exception: {e}")
+
+        # 2. 1-D Tensor initialization
+        try:
+            tensor_1d = initializer(shape=(10,))
+            self.assertEqual(tensor_1d.shape, (10,))
+            # Verify values are finite (sanity check for numerical stability)
+            self.assertTrue(np.all(np.isfinite(tensor_1d.numpy())))
+        except Exception as e:
+            self.fail(f"1D tensor initialization failed with exception: {e}")
+
+        # 3. Larger Tensor initialization
+        # Acts as a stress test to ensure no timeout occurs on larger data
+        try:
+            tensor_large = initializer(shape=(1000, 1000))
+            self.assertEqual(tensor_large.shape, (1000, 1000))
+            self.assertTrue(np.all(np.isfinite(tensor_large.numpy())))
+        except Exception as e:
+            self.fail(f"Large tensor initialization failed with exception: {e}")
+
+if __name__ == '__main__':
+    unittest.main()

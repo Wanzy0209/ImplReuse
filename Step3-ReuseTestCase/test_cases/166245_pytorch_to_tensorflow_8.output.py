@@ -1,0 +1,75 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_categorical_accuracy_fuzzed():
+    """
+    Adapted test case for tf.keras.metrics.categorical_accuracy based on 
+    PyTorch fuzzer logic (Issue 166245).
+    
+    The original PyTorch test involved complex tensor manipulations (chunk, squeeze, 
+    index_select, clamp) with specific dtypes (int16) and shapes, leading to a 
+    compiler assertion. This test mimics those tensor generation steps to verify 
+    the robustness of the TensorFlow equivalent API.
+    """
+    
+    # Set seed to match the original fuzzer context
+    tf.random.set_seed(751735337)
+
+    # --- Mimic PyTorch logic for y_pred generation ---
+    # Original: var_node_8 = torch.full((13, 27), 3, dtype=torch.int16)
+    var_node_8 = tf.fill((13, 27), tf.cast(3, tf.int16))
+    
+    # Original: _index_var_node_7 = torch.randint(0, _input_size_var_node_7, (11,), ...)
+    # var_node_8.size(0) is 13
+    _index_var_node_7 = tf.random.uniform((11,), minval=0, maxval=13, dtype=tf.int32)
+    
+    # Original: var_node_7 = torch.index_select(var_node_8, 0, _index_var_node_7)
+    var_node_7 = tf.gather(var_node_8, _index_var_node_7, axis=0) # Shape: (11, 27)
+    
+    # Original: var_node_6 = torch.clamp(var_node_7, min=-1.0, max=1.0)
+    y_pred = tf.clip_by_value(var_node_7, clip_value_min=-1.0, clip_value_max=1.0)
+
+    # --- Mimic PyTorch logic for y_true generation ---
+    # Original: var_node_4 = arg_0 # size=(15, 108, 4), dtype=int16
+    # We simulate the input arg_0
+    var_node_4 = tf.random.uniform((15, 108, 4), minval=-10, maxval=10, dtype=tf.int16)
+    
+    # Original: var_node_3 = torch.chunk(var_node_4, 4, dim=1)[0] # size=(15, 27, 4)
+    # Slicing the first chunk of dimension 1 (108 / 4 = 27)
+    var_node_3 = var_node_4[:, :27, :]
+    
+    # Original: var_node_2 = torch.chunk(var_node_3, 4, dim=2)[0] # size=(15, 27, 1)
+    # Slicing the first chunk of dimension 2 (4 / 4 = 1)
+    var_node_2 = var_node_3[:, :, :1]
+    
+    # Original: var_node_1 = torch.squeeze(var_node_2) # size=(15, 27)
+    var_node_1 = tf.squeeze(var_node_2, axis=-1)
+    
+    # To match y_pred shape (11, 27) for the metric calculation, we index select from var_node_1
+    # Original logic used random indices, we do the same here.
+    _index_true = tf.random.uniform((11,), minval=0, maxval=15, dtype=tf.int32)
+    y_true = tf.gather(var_node_1, _index_true, axis=0) # Shape: (11, 27)
+
+    # --- Execute Target API ---
+    # tf.keras.metrics.categorical_accuracy(y_true, y_pred)
+    # Note: The API expects one-hot for y_true usually, but argmax works on any tensor.
+    # The fuzzer generates int16 values clamped to [-1, 1], which is a valid stress test.
+    accuracy = tf.keras.metrics.categorical_accuracy(y_true, y_pred)
+
+    # --- Assertions ---
+    # Verify output shape matches the batch size (11)
+    assert accuracy.shape == (11,), f"Expected shape (11,), got {accuracy.shape}"
+    
+    # Verify output type is float (standard for metrics)
+    assert accuracy.dtype == tf.float32, f"Expected dtype float32, got {accuracy.dtype}"
+    
+    # Verify values are binary (0.0 or 1.0) as expected for accuracy
+    # We cast to int to check 0 or 1 easily
+    unique_vals = np.unique(accuracy.numpy())
+    assert np.all(np.isin(unique_vals, [0.0, 1.0])), f"Accuracy values should be 0.0 or 1.0, got {unique_vals}"
+
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_categorical_accuracy_fuzzed()

@@ -1,0 +1,71 @@
+import torch
+import torch.distributed as dist
+import torch.distributed._functional_collectives as dist_fc
+import torch.multiprocessing as mp
+import os
+
+def test_all_to_all_single_layout(rank, world_size):
+    """
+    Test case for torch.distributed.all_to_all_single with non-contiguous (row-major/strided) tensors.
+    Adapted from Issue #164491 regarding _scaled_mm and _int_mm performance/errors with row-major matrices.
+    """
+    # Initialize distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Use 'gloo' backend for CPU compatibility in this test
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Create a base tensor
+    # Shape (4, 4), contiguous by default
+    base_tensor = torch.arange(16, dtype=torch.float32).view(4, 4)
+    
+    # Create a non-contiguous tensor to simulate the "row-major" or strided access issue
+    # Transposing a matrix makes it non-contiguous in memory (strided access)
+    input_tensor = base_tensor.t()
+    
+    # Verify the tensor is non-contiguous
+    assert not input_tensor.is_contiguous(), "Input tensor should be non-contiguous for this test"
+
+    # Define split sizes
+    # We split the input tensor along dimension 0.
+    # Rank 0 sends first 2 rows to Rank 0 and last 2 rows to Rank 1.
+    # Rank 1 sends first 2 rows to Rank 0 and last 2 rows to Rank 1.
+    input_split_sizes = [2, 2]
+    output_split_sizes = [2, 2]
+
+    try:
+        # Call the similar API: torch.distributed.all_to_all_single
+        # Using the functional collective API as indicated in the extracted call chain
+        output_tensor = dist_fc.all_to_all_single(
+            input_tensor,
+            output_split_sizes=output_split_sizes,
+            input_split_sizes=input_split_sizes,
+            group=dist.group.WORLD
+        )
+
+        # Verify correctness
+        # Rank 0 expects: [Rank0_input[:2], Rank1_input[:2]]
+        # Rank 1 expects: [Rank0_input[2:], Rank1_input[2:]]
+        
+        # Since inputs are identical on both ranks for this test:
+        part1 = input_tensor[:2]
+        part2 = input_tensor[2:]
+        
+        if rank == 0:
+            expected = torch.cat([part1, part1], dim=0)
+        else:
+            expected = torch.cat([part2, part2], dim=0)
+            
+        assert torch.equal(output_tensor, expected), f"Rank {rank} output mismatch"
+        print(f"Rank {rank}: Test passed. Non-contiguous tensor handled correctly.")
+
+    except Exception as e:
+        print(f"Rank {rank}: Test FAILED with error: {e}")
+        raise
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_all_to_all_single_layout, args=(world_size,), nprocs=world_size, join=True)

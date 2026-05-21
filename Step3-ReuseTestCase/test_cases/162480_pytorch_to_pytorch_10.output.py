@@ -1,0 +1,59 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_gather_float_compiled(rank, world_size):
+    """
+    Test case for torch.distributed.gather_object handling float objects
+    within a torch.compile context.
+    
+    This test is derived from a bug report regarding missing float handling
+    in torch.fx.experimental.symbolic_shapes.rebind_unbacked(). 
+    By compiling a function that uses gather_object with a float, we verify
+    that the interaction between the distributed API and the compiler's
+    symbolic shape handling works correctly.
+    """
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Define a function that uses gather_object and wrap it with torch.compile.
+    # This ensures the symbolic shape engine (where the bug occurred) is active.
+    @torch.compile
+    def compiled_gather_fn(x):
+        # We use a float object here, which relates to the 'float handling' aspect of the bug.
+        float_obj = 3.14159
+        
+        # Prepare the gather list
+        if rank == 0:
+            gather_list = [None] * world_size
+        else:
+            gather_list = None
+            
+        # Call the similar API: torch.distributed.gather_object
+        dist.gather_object(float_obj, gather_list, dst=0)
+        
+        # Assertions on the destination rank
+        if rank == 0:
+            # Verify that all gathered objects are floats and match the input
+            assert all(isinstance(item, float) for item in gather_list), \
+                f"Expected all items to be float, got {gather_list}"
+            assert all(item == 3.14159 for item in gather_list), \
+                f"Expected all items to be 3.14159, got {gather_list}"
+        
+        return x + 1
+
+    # Execute the compiled function with a tensor to trigger tracing
+    input_tensor = torch.randn(2, 2)
+    compiled_gather_fn(input_tensor)
+
+    # Cleanup
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn processes to run the distributed test
+    mp.spawn(test_gather_float_compiled, args=(world_size,), nprocs=world_size, join=True)

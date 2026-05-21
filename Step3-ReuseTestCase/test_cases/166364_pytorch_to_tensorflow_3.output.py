@@ -1,0 +1,55 @@
+import torch
+import tensorflow as tf
+
+# Enable eager execution as requested by the similar API context
+tf.compat.v1.enable_eager_execution()
+
+def test_learnable_scalar_in_score_mod():
+    """
+    Test function to verify score_mod works with learnable scalars in TensorFlow eager mode.
+    This adapts the PyTorch flex_attention bug scenario where a learnable scalar
+    caused issues in backward/compiled passes.
+    """
+    # 1. Define learnable scalar (equivalent to nn.Parameter(torch.tensor(0.0)))
+    temp = tf.Variable(0.0, dtype=tf.float32, name='learnable_scalar')
+
+    # 2. Define score_mod function
+    def score_mod(score, b, h, q, kv):
+        # The core logic from the bug report: adding a scalar parameter
+        # In PyTorch, this caused a vmap error in backward pass.
+        return score + temp
+
+    # 3. Setup dummy inputs (mimicking attention inputs)
+    B, H, S, D = 2, 4, 10, 16
+    query = tf.random.normal((B, H, S, D))
+    key = tf.random.normal((B, H, S, D))
+    value = tf.random.normal((B, H, S, D))
+
+    # 4. Simulate a simplified attention mechanism using score_mod
+    with tf.GradientTape() as tape:
+        # Calculate raw scores
+        scores = tf.matmul(query, key, transpose_b=True)
+        
+        # Apply score_mod
+        # Note: PyTorch's flex_attention handles batching/vmap internally.
+        # Here we apply the logic directly to the tensor.
+        modified_scores = score_mod(scores, 0, 0, query, key)
+        
+        # Softmax and output
+        attn_weights = tf.nn.softmax(modified_scores, axis=-1)
+        output = tf.matmul(attn_weights, value)
+        loss = tf.reduce_sum(output)
+
+    # 5. Check Backward (Gradients)
+    # The PyTorch bug failed in backward: "vmap... can not return a BatchedTensor"
+    # We verify that TensorFlow eager execution handles this correctly.
+    grads = tape.gradient(loss, temp)
+    
+    # Assertions
+    assert grads is not None, "Gradient for learnable scalar should not be None"
+    assert not tf.math.is_nan(grads), "Gradient should not be NaN"
+    
+    print("Test passed: Learnable scalar works in forward and backward passes.")
+
+if __name__ == "__main__":
+    test_learnable_scalar_in_score_mod()

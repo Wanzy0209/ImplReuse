@@ -1,0 +1,52 @@
+import torch
+import os
+import glob
+
+# Clean up any existing trace files from previous runs to ensure a clean test
+worker_name = "batchnorm_trace"
+for f in glob.glob(f"{worker_name}.*.json.gz"):
+    os.remove(f)
+
+# Setup the profiler exactly as in the bug report
+profile = torch.profiler.profile(
+    activities=[
+        torch.profiler.ProfilerActivity.CPU,
+        torch.profiler.ProfilerActivity.CUDA,
+    ],
+    on_trace_ready=torch.profiler.tensorboard_trace_handler(
+        ".", worker_name=worker_name, use_gzip=True
+    ),
+)
+
+profile.start()
+
+# --- Adapted Call Site ---
+# Replacing the original arithmetic operations with torch.nn.BatchNorm2d
+# to verify the profiler handles this specific API correctly.
+
+# Initialize BatchNorm2d layer with 3 features (channels) and move to CUDA
+bn = torch.nn.BatchNorm2d(3).cuda()
+
+# Create a random input tensor on CUDA (BatchSize=1, Channels=3, Height=10, Width=10)
+input_tensor = torch.randn(1, 3, 10, 10, device="cuda")
+
+# Perform the forward pass
+output = bn(input_tensor)
+
+# Ensure CUDA operations are completed before stopping the profiler
+torch.cuda.synchronize()
+# -------------------------
+
+profile.stop()
+
+# Verification: Check if the trace file was created and is not empty
+# The tensorboard_trace_handler creates files named {worker_name}.{timestamp}.json.gz
+trace_files = glob.glob(f"{worker_name}.*.json.gz")
+
+assert len(trace_files) > 0, "Trace file was not created by tensorboard_trace_handler"
+
+file_path = trace_files[0]
+file_size = os.path.getsize(file_path)
+assert file_size > 0, f"Trace file is empty: {file_path}"
+
+print(f"Test passed. Trace file created: {file_path} (Size: {file_size} bytes)")

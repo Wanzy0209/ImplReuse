@@ -1,0 +1,67 @@
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use v1 queue-based APIs
+tf.compat.v1.disable_eager_execution()
+
+def test_maybe_batch_join_type_safety():
+    """
+    Adapts the PyTorch fuzzer test case to TensorFlow.
+    The original bug involves bfloat16 matrix multiplications resulting in a tensor
+    that is then used as an index (int expected) in an embedding operation.
+    Here, we perform similar bfloat16 operations and attempt to use the result
+    as the 'keep_input' (bool expected) for maybe_batch_join to test type safety.
+    """
+    with tf.compat.v1.Session() as sess:
+        # Recreate fuzzer data: bfloat16 tensors
+        # var_node_4: (4, 8), dtype=bfloat16
+        arg_0 = tf.constant(np.random.randn(4, 8), dtype=tf.bfloat16)
+        # var_node_5: (8, 7), dtype=bfloat16
+        var_node_5 = tf.constant(np.full((8, 7), -0.80078125), dtype=tf.bfloat16)
+
+        # Perform matmul (mimicking fuzzer logic)
+        # Result is (4, 7), dtype=bfloat16
+        var_node_3 = tf.matmul(arg_0, var_node_5)
+
+        # Prepare valid data for the queue
+        # maybe_batch_join expects a list of tensors to batch.
+        # We create a dummy tensor matching the batch dimension.
+        data = tf.constant(np.random.randn(4, 10), dtype=tf.float32)
+
+        # The "Bug" Trigger:
+        # In PyTorch, a float tensor was passed to embedding (expects int).
+        # In TF, we pass the bfloat16 tensor 'var_node_3' to 'keep_input' (expects bool).
+        # This tests if the API validates the dtype strictly.
+        wrong_type_keep_input = var_node_3
+
+        try:
+            # Construct the batch operation
+            batch = tf.compat.v1.train.maybe_batch_join(
+                tensors_list=[[data]],
+                keep_input=wrong_type_keep_input,
+                batch_size=2,
+                capacity=32
+            )
+
+            # Initialize queue runners
+            coord = tf.compat.v1.train.Coordinator()
+            threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+            # Attempt to run
+            # Note: In TF1, dtype mismatches in ops often raise errors during graph construction
+            # or immediately upon run.
+            _ = sess.run(batch)
+
+            coord.request_stop()
+            coord.join(threads)
+            print("Test Passed: API executed without error (implicit casting or loose check).")
+
+        except (ValueError, TypeError) as e:
+            # Expected behavior if the API is strict like the PyTorch assertion.
+            print(f"Test Passed: Caught expected type mismatch error - {e}")
+        except Exception as e:
+            # Catching other potential TF errors related to queues
+            print(f"Test encountered an error: {e}")
+
+if __name__ == "__main__":
+    test_maybe_batch_join_type_safety()

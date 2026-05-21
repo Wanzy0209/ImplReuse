@@ -1,0 +1,27 @@
+import torch
+import torch.nn.functional as F
+
+# Ensure CUDA is available as the original bug was specific to CUDA/Inductor
+assert torch.cuda.is_available(), "CUDA is required for this test"
+
+# Create a random tensor on CUDA
+x = torch.rand(4, 5, device="cuda")
+
+# Define a function using torch.argmin with specific parameters (dim, keepdim).
+# This mirrors the original bug where specific parameters (alpha, beta) were ignored.
+def f(x):
+    return torch.argmin(x, dim=1, keepdim=True)
+
+# Compile the function
+fc = torch.compile(f)
+
+# Run eager and compiled versions
+res_eager = f(x)
+res_compiled = fc(x)
+
+# Assert that the results are identical.
+# If the compiler ignored 'dim' or 'keepdim' (similar to how it ignored alpha/beta in addmm),
+# this assertion would fail.
+assert torch.equal(res_eager, res_compiled), f"Mismatch found:\nEager:\n{res_eager}\nCompiled:\n{res_compiled}"
+
+print("Test passed: torch.argmin parameters respected in torch.compile")

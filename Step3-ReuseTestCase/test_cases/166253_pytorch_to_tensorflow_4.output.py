@@ -1,0 +1,32 @@
+import torch
+import tensorflow as tf
+
+def func_nojit(x):
+    # Adapted to use tf.convert_to_tensor with the specific dtype
+    return tf.convert_to_tensor(x, dtype=tf.float64)
+
+# tf.function is the TensorFlow equivalent to torch.compile
+func_jit = tf.function(func_nojit)
+
+# Test inputs
+x1 = tf.constant(5.0, dtype=tf.float64)
+x2 = tf.constant(10.0, dtype=tf.float64)
+
+print("Testing func_nojit:")
+res1 = func_nojit(x1)
+res2 = func_nojit(x2)
+print(res1)
+print(res2)
+# Assertions to verify correct behavior
+assert res1.numpy() == 5.0, "func_nojit failed for x1"
+assert res2.numpy() == 10.0, "func_nojit failed for x2"
+
+print("\nTesting func_jit (tf.function):")
+res1_jit = func_jit(x1)
+res2_jit = func_jit(x2)
+print(res1_jit)
+print(res2_jit)
+# Assertions to verify correct behavior under JIT compilation
+# This checks if the value is fixed (bug) or updates correctly
+assert res1_jit.numpy() == 5.0, "func_jit failed for x1 (expected 5.0)"
+assert res2_jit.numpy() == 10.0, "func_jit failed for x2 (expected 10.0, bug might be present if 5.0)"

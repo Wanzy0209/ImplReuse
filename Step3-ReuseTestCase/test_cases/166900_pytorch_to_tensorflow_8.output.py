@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+
+# Define the custom classes from the original bug report
+class Foo:
+    pass
+
+class Bar:
+    def __eq__(self, other):
+        return super().__eq__(other)
+
+    def __hash__(self):
+        return 0
+
+# Note: PyTorch's pytree.register_constant(Bar) does not have a direct equivalent 
+# in TensorFlow's public API for graph construction, so we proceed with the object usage.
+
+# We use tf.function to simulate the compilation/tracing environment similar to torch.compile,
+# and apply the target API tf.keras.name_scope inside.
+@tf.function
+def fn(x, obj):
+    # Using the similar API: tf.keras.name_scope
+    with tf.keras.name_scope("test_scope"):
+        # Core logic from the bug report: modifying object attribute with a custom object
+        obj.attr = {3: Bar()}
+        return x + 1
+
+# Test execution
+if __name__ == "__main__":
+    try:
+        input_tensor = tf.ones(3)
+        foo_obj = Foo()
+        
+        # Execute the function
+        result = fn(input_tensor, foo_obj)
+
+        # Verify behavior
+        assert result.shape == (3,), "Output shape mismatch"
+        assert hasattr(foo_obj, 'attr'), "Attribute 'attr' not set on object"
+        assert 3 in foo_obj.attr, "Key 3 not found in attribute dictionary"
+        assert isinstance(foo_obj.attr[3], Bar), "Value in dictionary is not instance of Bar"
+        
+        print("Test passed successfully.")
+
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        raise

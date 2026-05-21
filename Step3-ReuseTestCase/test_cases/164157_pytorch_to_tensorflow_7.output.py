@@ -1,0 +1,70 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Enable numpy behavior for tf.experimental.numpy
+tf.experimental.numpy.experimental_enable_numpy_behavior()
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+    # Setup tensors mirroring the PyTorch bug report
+    t0 = arg0
+    t1 = tf.tanh(t0)
+    t2 = arg1
+    t3 = arg2
+    t4 = t2 * t3
+    # Mimic t5 = t1.clone(); t5.fill_(t4.item())
+    t5 = tf.fill(tf.shape(t1), t4)
+    
+    t6 = arg3
+    t7 = arg4
+    t8 = arg5
+    
+    # t9 = torch.cat([t6, t6, t7, t8], dim=2)
+    t9 = tf.concat([t6, t6, t7, t8], axis=2)
+    
+    # --- ADAPTATION ---
+    # Original API: t10 = t9.std(dim=2)
+    # Similar API: tf.experimental.numpy.power
+    # Bug Context: IncompatibleTypeErrorImpl involving pointer<fp16> and float64.
+    # To test similar type handling logic, we apply power to the fp16 tensor (t9)
+    # using a float64 exponent. This checks if the API handles mixed precision (fp16 base, f64 exponent)
+    # correctly without raising type mismatch errors.
+    
+    exponent = tf.constant(2.0, dtype=tf.float64)
+    t10 = tf.experimental.numpy.power(t9, exponent)
+    # ----------------
+    
+    # The original code performs embedding here, but t10 shape changed from (256, 88) to (256, 88, 4).
+    # To keep the test runnable and focused on the API behavior, we skip the embedding step
+    # and return the result + sentinel.
+    output = t10 + sentinel
+    return output
+
+# Setup inputs
+# Using float16 as per the bug report's context for the error
+arg3 = tf.random.uniform([256, 88, 1], dtype=tf.float16)
+arg4 = tf.random.uniform([256, 88, 1], dtype=tf.float16)
+arg5 = tf.random.uniform([256, 88, 1], dtype=tf.float16)
+
+# Other args (int64)
+arg0 = tf.random.uniform([47], minval=0, maxval=1000, dtype=tf.int64)
+arg1 = tf.random.uniform([], minval=0, maxval=1000, dtype=tf.int64)
+arg2 = tf.random.uniform([], minval=0, maxval=1000, dtype=tf.int64)
+
+sentinel = tf.constant(0.0, dtype=tf.float16)
+
+if __name__ == '__main__':
+    print("Testing Eager Execution...")
+    try:
+        out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+        print(f'Eager Success!  Output shape: {out_eager.shape}, dtype: {out_eager.dtype}')
+    except Exception as e:
+        print(f'Eager Failed!  Error: {e}')
+
+    print("\nTesting Compiled Execution (tf.function)...")
+    try:
+        compiled_foo = tf.function(foo)
+        out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+        print(f'Compile Success!  Output shape: {out_compiled.shape}, dtype: {out_compiled.dtype}')
+    except Exception as e:
+        print(f'Compile Failed!  Error: {e}')

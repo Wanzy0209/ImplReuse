@@ -1,0 +1,134 @@
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use tf.compat.v1 graph mode features
+# This is necessary because tf.compat.v1.train.add_queue_runner is designed for graph execution.
+tf.compat.v1.disable_eager_execution()
+
+# Constants matching the original PyTorch test case
+BATCH_SIZE = 4
+NUM_CLASSES = 10
+LEARNING_RATE = 0.01
+IMAGE_SIZE = 224
+
+def test_tf_queue_runner_training():
+    """
+    Adapts the PyTorch ResNet-18 training loop to TensorFlow 1.x graph mode.
+    It uses tf.compat.v1.train.add_queue_runner to handle data input,
+    mimicking the data loading aspect of the original bug report.
+    """
+    
+    # 1. Setup Data Pipeline using Queue and QueueRunner
+    # Create a queue to hold batches of images and labels
+    q = tf.compat.v1.RandomShuffleQueue(
+        capacity=32, 
+        min_after_dequeue=1,
+        dtypes=[tf.float32, tf.int32],
+        shapes=[(3, IMAGE_SIZE, IMAGE_SIZE), ()]
+    )
+
+    # Placeholders to feed data into the queue
+    images_ph = tf.compat.v1.placeholder(tf.float32, shape=(None, 3, IMAGE_SIZE, IMAGE_SIZE))
+    labels_ph = tf.compat.v1.placeholder(tf.int32, shape=(None,))
+    
+    # Enqueue operation
+    enqueue_op = q.enqueue_many([images_ph, labels_ph])
+
+    # Create a QueueRunner to manage the enqueue threads
+    qr = tf.compat.v1.train.QueueRunner(q, [enqueue_op] * 2)
+
+    # --- API UNDER TEST ---
+    # Adds the QueueRunner to the graph collection
+    tf.compat.v1.train.add_queue_runner(qr)
+    # ---------------------
+
+    # 2. Dequeue data for the training step
+    batch_images, batch_labels = q.dequeue_many(BATCH_SIZE)
+
+    # 3. Define Model (Simplified CNN structure to represent ResNet-18 logic)
+    # Transpose from NCHW (PyTorch default) to NHWC (TensorFlow default)
+    x = tf.transpose(batch_images, [0, 2, 3, 1])
+    
+    with tf.compat.v1.variable_scope("model"):
+        # Conv Layer 1
+        conv1 = tf.compat.v1.layers.conv2d(
+            inputs=x, 
+            filters=64, 
+            kernel_size=7, 
+            strides=2, 
+            padding='same',
+            activation=tf.nn.relu,
+            name='conv1'
+        )
+        # Pooling Layer
+        pool1 = tf.compat.v1.layers.max_pooling2d(
+            inputs=conv1, 
+            pool_size=3, 
+            strides=2, 
+            padding='same',
+            name='pool1'
+        )
+        # Flatten
+        flat = tf.compat.v1.layers.flatten(pool1)
+        # Output Layer (Logits)
+        logits = tf.compat.v1.layers.dense(
+            inputs=flat, 
+            units=NUM_CLASSES,
+            name='logits'
+        )
+
+    # 4. Define Loss and Optimizer
+    loss = tf.compat.v1.losses.sparse_softmax_cross_entropy(
+        labels=batch_labels, 
+        logits=logits
+    )
+    
+    optimizer = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=LEARNING_RATE)
+    
+    # Global step to track training
+    global_step = tf.compat.v1.train.get_or_create_global_step()
+    
+    # Train operation (Forward pass + Backward pass/Gradient computation)
+    train_op = optimizer.minimize(loss, global_step=global_step)
+
+    # 5. Execution
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        # Coordinator for managing queue threads
+        coord = tf.compat.v1.train.Coordinator()
+
+        # Start all queue runners collected in the graph
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord)
+
+        try:
+            # Generate dummy data to feed into the queue
+            # Mimicking the random data generation in the original PyTorch script
+            dummy_images = np.random.randn(32, 3, IMAGE_SIZE, IMAGE_SIZE).astype(np.float32)
+            dummy_labels = np.random.randint(0, NUM_CLASSES, size=(32,)).astype(np.int32)
+
+            # Initial enqueue to populate the queue
+            sess.run(enqueue_op, feed_dict={images_ph: dummy_images, labels_ph: dummy_labels})
+
+            # Run training step
+            # This corresponds to the train(images, labels) call in the original script
+            _, loss_val, step = sess.run([train_op, loss, global_step])
+
+            print(f"Step: {step}, Loss: {loss_val}")
+
+            # Assertions to verify behavior
+            assert loss_val is not None, "Loss computation failed"
+            assert step > 0, "Global step did not increment"
+            print("Test passed: Queue runner and training step executed successfully.")
+
+        except Exception as e:
+            print(f"Test failed with error: {e}")
+            raise e
+        finally:
+            # Stop threads
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_tf_queue_runner_training()

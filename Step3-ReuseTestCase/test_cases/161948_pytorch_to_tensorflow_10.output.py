@@ -1,0 +1,47 @@
+import torch
+import os
+import time
+import tensorflow as tf
+
+# List of threads to test
+threads_list = [1, 2, 4, 8, 16]
+
+# Size of the large tensors
+# Reduced slightly from 10000 to 5000 to ensure reasonable runtime in test environments,
+# but large enough to observe threading behavior.
+tensor_size = (5000, 5000)
+
+# Store results
+times = []
+
+# Benchmark for each thread count
+for threads in threads_list:
+    # Set TensorFlow threading configuration (equivalent to torch.set_num_threads)
+    # Note: In TensorFlow, thread configuration often applies to the runtime context.
+    tf.config.threading.set_intra_op_parallelism_threads(threads)
+    tf.config.threading.set_inter_op_parallelism_threads(threads)
+    
+    # Set environment variables for underlying libraries (MKL/OMP)
+    os.environ['OMP_NUM_THREADS'] = str(threads)
+    os.environ['MKL_NUM_THREADS'] = str(threads)
+
+    # Create random tensors as Variables to compute gradients with respect to them
+    a = tf.Variable(tf.random.normal(tensor_size))
+    b = tf.Variable(tf.random.normal(tensor_size))
+
+    # Define a computationally intensive operation (Matrix Multiplication)
+    # and a loss to calculate gradients for.
+    # This mirrors the torch.matmul(a, b) in the original test.
+    c = tf.matmul(a, b)
+    loss = tf.reduce_sum(c)
+
+    # Warm up
+    _ = tf.gradients(loss, [a, b])
+
+    # Time the gradient calculation
+    start_time = time.time()
+    grads = tf.gradients(loss, [a, b])
+    elapsed_time = time.time() - start_time
+
+    print(f"Threads: {threads}, Time: {elapsed_time:.4f} s")
+    times.append(elapsed_time)

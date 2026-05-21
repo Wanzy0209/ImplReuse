@@ -1,0 +1,19 @@
+import torch
+
+def test_mps_is_built():
+    """
+    Test that torch.backends.mps.is_built returns a valid boolean.
+    This mirrors the logic of checking backend properties (like torch.version.hip)
+    to ensure they are accessible and valid, adapted for the boolean return type
+    of is_built().
+    """
+    # Check if MPS is built
+    is_built = torch.backends.mps.is_built()
+    
+    # Assert that the result is a boolean
+    assert isinstance(is_built, bool), f"Expected bool, got {type(is_built)}"
+    
+    print(f"torch.backends.mps.is_built() returned: {is_built}")
+
+if __name__ == "__main__":
+    test_mps_is_built()

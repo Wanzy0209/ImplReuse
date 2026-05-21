@@ -1,0 +1,61 @@
+import tensorflow as tf
+
+def test_dynamic_ragged_shape_introspection():
+    """
+    Test case adapted from PyTorch Issue 162860.
+    
+    The original issue requested more debug information (type, realized value)
+    for LazyVariableTracker logs. This test verifies that tf.experimental.DynamicRaggedShape
+    provides sufficient introspection capabilities (access to inner_shape and row_partitions)
+    to avoid being opaque, mirroring the desired behavior in the PyTorch issue.
+    """
+
+    # Helper function analogous to 'inner(x)' in the original bug report.
+    # Instead of 'x + 1', we access the 'realized' inner shape of the object.
+    def get_realized_shape(shape):
+        # Accessing the 'realized' variable (inner_shape) and type info
+        return {
+            "type": type(shape).__name__,
+            "value": shape.inner_shape,
+            "partitions": shape.row_partitions
+        }
+
+    # Helper function analogous to 'fn(x)' in the original bug report.
+    # It calls the inner helper twice to simulate the trace flow.
+    def analyze_shape(shape):
+        # First call
+        info_1 = get_realized_shape(shape)
+        # Second call
+        info_2 = get_realized_shape(shape)
+        return info_1, info_2
+
+    # Setup: Create a DynamicRaggedShape
+    # Example: RaggedTensor [[1, 2], [], [3, 4, 5]]
+    # Inner shape (flat_values): [5]
+    # Row partitions: 1 partition with lengths [2, 0, 3]
+    rt = tf.ragged.constant([[1, 2], [], [3, 4, 5]])
+    shape = tf.experimental.DynamicRaggedShape.from_tensor(rt)
+
+    # Execute the logic
+    result_1, result_2 = analyze_shape(shape)
+
+    # Assertions to verify the "debug information" is available and not opaque.
+    # This addresses the bug report's request for "type of the example value" 
+    # and "realized variable".
+    
+    # Check Type
+    assert result_1["type"] == "DynamicRaggedShape"
+    
+    # Check Realized Value (Inner Shape)
+    # The flat values of [[1, 2], [], [3, 4, 5]] have shape [5]
+    assert result_1["value"].as_list() == [5]
+    
+    # Check Partitions (Context)
+    assert len(result_1["partitions"]) == 1
+    
+    # Verify consistency across calls (similar to tracing the same variable)
+    assert result_1 == result_2
+
+if __name__ == "__main__":
+    test_dynamic_ragged_shape_introspection()
+    print("Test passed.")

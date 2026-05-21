@@ -1,0 +1,55 @@
+import torch
+import tensorflow as tf
+import time
+
+# Set seed for reproducibility
+tf.random.set_seed(0)
+
+# Define shapes for the signal tensor.
+# The original test used pairs of shapes for matmul inputs (A, B).
+# overlap_and_add takes one signal tensor. We adapt the shapes to fit the API.
+# Shape format: [..., frames, frame_length]
+shapes = [
+    (1, 12, 10, 64),
+    (1, 12, 10, 10),
+]
+
+def benchmark_overlap_and_add(signal_shape, frame_step, dtype=tf.float16, repeat=500):
+    # Create tensor with values in range [-1, 1] to match torch.uniform_(0,1) * 2 - 1
+    signal = tf.random.uniform(signal_shape, minval=-1.0, maxval=1.0, dtype=dtype)
+    
+    # Warm up
+    for _ in range(5000):
+        _ = tf.signal.overlap_and_add(signal, frame_step)
+    
+    # Run benchmark
+    times = []
+    for i in range(repeat):
+        start = time.time()
+        _ = tf.signal.overlap_and_add(signal, frame_step)
+        end = time.time()
+        if i > 100:
+            times.append(round((end - start) * 1000 * 1000))
+    
+    times.sort()
+    avg_time_us = sum(times) / len(times)
+    
+    # Verify output shape logic
+    # output_size = (frames - 1) * frame_step + frame_length
+    expected_len = (signal_shape[-2] - 1) * frame_step + signal_shape[-1]
+    output_shape = tf.signal.overlap_and_add(signal, frame_step).shape
+    assert output_shape[-1] == expected_len, \
+        f"Shape mismatch: expected last dim {expected_len}, got {output_shape[-1]}"
+        
+    return avg_time_us
+
+if __name__ == "__main__":
+    # frame_step must be <= frame_length (last dimension).
+    # For shape (..., 10, 64), max step is 64.
+    # For shape (..., 10, 10), max step is 10.
+    # We choose 4 to be valid for both shapes.
+    step = 4
+    
+    for shape in shapes:
+        t = benchmark_overlap_and_add(shape, step)
+        print(f"{shape} (step={step}) -> {t:.3f} us")

@@ -1,0 +1,70 @@
+import subprocess
+import sys
+import tempfile
+import os
+
+def test_lecun_normal_subprocess_timeout():
+    """
+    Adapted test case based on Issue 162230 (test_scalar_multiply).
+    
+    The original test failed due to a subprocess timeout (TimeoutExpired) 
+    when running a generated script. This test adapts that logic to 
+    tf.keras.initializers.LecunNormal to verify if the similar API 
+    exhibits similar hanging or timeout behavior under a subprocess execution.
+    """
+    
+    # The payload script to be executed in a separate process.
+    # This mimics the _exec_and_verify_payload logic from the original test.
+    payload_script = """
+import tensorflow as tf
+import numpy as np
+
+# Initialize the similar API: tf.keras.initializers.LecunNormal
+# This initializer draws samples from a truncated normal distribution centered on 0
+# with stddev = sqrt(1 / fan_in).
+initializer = tf.keras.initializers.LecunNormal(seed=42)
+
+# Create a tensor using the initializer
+shape = (100, 100)
+values = initializer(shape=shape)
+
+# Perform a scalar multiplication to link back to the original test context
+# (test_scalar_multiply) and ensure the tensor operations complete.
+result = values * 2.0
+
+# Verify output to ensure execution flow reached the end
+print("Execution completed successfully.")
+"""
+
+    # Create a temporary file for the script
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write(payload_script)
+        script_path = f.name
+
+    try:
+        # Run the script in a subprocess with a timeout.
+        # The original bug report indicated a timeout after 30 seconds.
+        res = subprocess.run(
+            [sys.executable, script_path],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        # Check if the process completed successfully
+        assert res.returncode == 0, f"Script failed with return code {res.returncode}\nStderr: {res.stderr}"
+        assert "Execution completed successfully" in res.stdout, "Script did not produce expected output."
+        
+    except subprocess.TimeoutExpired as e:
+        # This reproduces the specific error condition from the bug report:
+        # subprocess.TimeoutExpired: Command '...' timed out after 30 seconds
+        print(f"Test timed out after {e.timeout} seconds.")
+        print(f"Command: {e.cmd}")
+        raise  # Re-raise to signal the test failure
+    finally:
+        # Clean up the temporary file
+        if os.path.exists(script_path):
+            os.unlink(script_path)
+
+if __name__ == "__main__":
+    test_lecun_normal_subprocess_timeout()

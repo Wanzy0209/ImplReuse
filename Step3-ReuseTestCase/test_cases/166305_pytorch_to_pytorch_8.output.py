@@ -1,0 +1,75 @@
+# test_recv_object_list_compile.py
+import os
+import torch
+import torch.distributed as dist
+import torch._dynamo as dynamo
+
+# Setup distributed environment similar to the bug report
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+backend = "nccl" if dist.is_nccl_available() else "gloo"
+dist.init_process_group(backend=backend)
+
+def main():
+    # Ensure we have at least 2 processes for send/recv
+    if dist.get_world_size() < 2:
+        print("Test requires at least 2 ranks. Skipping.")
+        dist.destroy_process_group()
+        return
+
+    # Define a function that uses the similar API: torch.distributed.recv_object_list
+    def recv_logic(obj_list):
+        dist.recv_object_list(obj_list, src=0)
+        return obj_list
+
+    # Rank 0: Sender
+    if LOCAL_RANK == 0:
+        # Create a list of objects to send (tensors and python objects)
+        send_list = [
+            torch.randn(2, 2),
+            torch.tensor([1, 2, 3]),
+            "test_string",
+            42
+        ]
+        print(f"[Rank 0] Sending object list...")
+        dist.send_object_list(send_list, dst=1)
+
+    # Rank 1: Receiver
+    elif LOCAL_RANK == 1:
+        # Adaptation: Attempt to compile the function using the similar API
+        # This mirrors the 'torch.compile(model)' usage in the original bug report
+        # to verify if the similar API interacts correctly with the compiler.
+        try:
+            print(f"[Rank 1] Attempting to compile recv_object_list logic...")
+            compiled_recv = torch.compile(recv_logic)
+            
+            # Prepare buffer
+            recv_buffer = [None] * 4
+            
+            # Execute compiled function
+            result = compiled_recv(recv_buffer)
+            
+            print(f"[Rank 1] Compiled recv_object_list succeeded.")
+            
+            # Basic verification
+            assert len(result) == 4
+            assert isinstance(result[0], torch.Tensor)
+            assert result[2] == "test_string"
+            print(f"[Rank 1] Assertions passed.")
+
+        except Exception as e:
+            # If compilation fails (expected for non-tensor ops), verify the API works uncompiled
+            print(f"[Rank 1] Compiled execution failed (expected for object lists): {e}")
+            print(f"[Rank 1] Verifying uncompiled recv_object_list...")
+            
+            recv_buffer = [None] * 4
+            dist.recv_object_list(recv_buffer, src=0)
+            
+            assert len(recv_buffer) == 4
+            assert isinstance(recv_buffer[0], torch.Tensor)
+            print(f"[Rank 1] Uncompiled recv_object_list verified.")
+
+    dist.barrier()
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

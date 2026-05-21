@@ -1,0 +1,15 @@
+import torch
+
+# Adapted test case for torch.det based on the torch.ones OOM issue.
+# We create a minimal square matrix on CUDA and compute its determinant.
+# This verifies if torch.det handles CUDA operations correctly on the affected hardware.
+
+# Create a 1x1 identity matrix on CUDA (valid input for determinant)
+input_tensor = torch.eye(1, device="cuda")
+
+# Call the similar API
+result = torch.det(input_tensor)
+
+# Verify the result (determinant of 1x1 identity is 1.0)
+print(result.item())
+assert result.item() == 1.0

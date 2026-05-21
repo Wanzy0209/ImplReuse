@@ -1,0 +1,102 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Enable numpy behavior for TensorFlow to mimic the environment of tf.experimental.numpy
+tf.experimental.numpy.enable_numpy_behavior()
+
+# Set seed for reproducibility, mirroring the original test case
+tf.random.set_seed(9)
+
+def fuzzed_program(arg_0, sentinel):
+    # Replicate the tensor creation and operations using TensorFlow/NumPy APIs
+    # Note: We adjust shapes where necessary to ensure the operations are valid 
+    # given the semantic differences (e.g., cbrt preserves shape, nonzero does not).
+    
+    var_node_1 = arg_0 # size=(1, 2), dtype=float (adjusted for division)
+    
+    # var_node_5: torch.full((1, 2), -66, dtype=torch.int32)
+    var_node_5 = tf.experimental.numpy.full((1, 2), -66, dtype=np.int32)
+    
+    # var_node_6: torch.full((1, 2), 77, dtype=torch.int64)
+    var_node_6 = tf.experimental.numpy.full((1, 2), 77, dtype=np.int64)
+    
+    # var_node_4: add(var_node_5, var_node_6)
+    var_node_4 = tf.experimental.numpy.add(var_node_5, var_node_6)
+    
+    # var_node_7: torch.full((1, 2), -64, dtype=torch.int32)
+    var_node_7 = tf.experimental.numpy.full((1, 2), -64, dtype=np.int32)
+    
+    # var_node_3: mul(var_node_4, var_node_7)
+    var_node_3 = tf.experimental.numpy.multiply(var_node_4, var_node_7)
+    
+    # var_node_9: torch.full((3, 4), False, dtype=torch.bool)
+    # Adaptation: Changed shape to (1, 2) to match var_node_3 for the subsequent add operation.
+    # The original test relied on nonzero changing the shape, but cbrt preserves it.
+    var_node_9 = tf.experimental.numpy.full((1, 2), False, dtype=np.bool)
+    
+    # var_node_8: torch.nonzero(var_node_9) -> API UNDER TEST: tf.experimental.numpy.cbrt
+    var_node_8 = tf.experimental.numpy.cbrt(var_node_9)
+    
+    # var_node_2: add(var_node_3, var_node_8)
+    var_node_2 = tf.experimental.numpy.add(var_node_3, var_node_8)
+    
+    # var_node_0: div(var_node_1, var_node_2)
+    # Cast to float to ensure standard division behavior similar to the original context
+    var_node_0 = tf.experimental.numpy.divide(tf.cast(var_node_1, tf.float64), tf.cast(var_node_2, tf.float64))
+    
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+    
+    # Handle complex numbers if any (though unlikely with this specific setup)
+    if tf.dtypes.complex(result.dtype):
+        result = tf.math.real(result)
+        
+    return result
+
+# Sentinel tensor to ensure gradient computation context
+sentinel = tf.Variable(1.0, dtype=tf.float64)
+
+# Input argument
+# Original: torch.randint(0, 3, (1, 2), dtype=torch.int64)
+arg_0 = tf.random.uniform((1, 2), minval=0, maxval=3, dtype=tf.int64)
+
+args = (arg_0, sentinel)
+
+# 1. Test Eager Execution
+print("Testing Eager Execution...")
+try:
+    result_eager = fuzzed_program(*args)
+    print(' eager success')
+    print(f'Eager result: {result_eager}')
+    print(f'Eager shape: {result_eager.shape}')
+except Exception as e:
+    print(f" eager failed: {e}")
+
+# 2. Test Compiled Execution (tf.function)
+print("\nTesting Compiled Execution...")
+try:
+    # tf.function is the TensorFlow equivalent of torch.compile
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(*args)
+    print(' compile success')
+    print(f'Compiled result: {result_compiled}')
+    print(f'Compiled shape: {result_compiled.shape}')
+except Exception as e:
+    print(f" compile failed: {e}")
+
+# 3. Compare Results
+print("\nComparing Results...")
+try:
+    # Check if shapes match
+    if result_eager.shape != result_compiled.shape:
+        print(f" Shape Divergence: Eager {result_eager.shape} vs Compiled {result_compiled.shape}")
+    else:
+        # Check if values match (allowing for floating point tolerance)
+        if np.allclose(result_eager.numpy(), result_compiled.numpy()):
+            print(' No divergence detected between eager and compiled modes.')
+        else:
+            print(' Value Divergence detected!')
+            print(f"Difference: {result_eager.numpy() - result_compiled.numpy()}")
+except NameError:
+    print("Skipping comparison due to previous errors.")

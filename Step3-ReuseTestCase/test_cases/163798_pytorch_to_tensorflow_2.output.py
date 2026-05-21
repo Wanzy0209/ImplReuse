@@ -1,0 +1,37 @@
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+# Setup necessary mesh for copy_to_mesh
+# We use the CPU device to ensure the test runs in most environments
+devices = tf.config.list_physical_devices('CPU')
+if not devices:
+    # Fallback if no CPU devices are listed (rare, but possible in some restricted envs)
+    # We assume a default CPU context exists
+    devices = [tf.DeviceSpec(device_type="CPU")]
+
+# Create a mesh with a single device for the test
+mesh = dtensor.create_mesh([("batch", 1)], devices=devices)
+layout = dtensor.Layout([dtensor.UNSHARDED], mesh)
+
+@tf.function
+def func(a):
+    # Adaptation of: u0, u1 = a.tolist()
+    # In TensorFlow, a.tolist() returns a Python list and breaks the graph.
+    # To preserve the graph execution (similar to the PyTorch bug scenario where tolist() 
+    # was graphed) and allow subsequent tensor operations, we use tf.unstack.
+    u0, u1 = tf.unstack(a)
+    
+    # Adaptation of: return a*u0*u1
+    # We apply the similar API (copy_to_mesh) to the result of the arithmetic operation.
+    # This verifies if copy_to_mesh handles the tensor resulting from scalar unpacking correctly.
+    result = a * u0 * u1
+    return dtensor.copy_to_mesh(result, layout)
+
+# Test execution
+input_tensor = tf.constant([1, 2])
+output = func(input_tensor)
+
+# Verification
+# copy_to_mesh returns a DTensor. We verify the values match the expected arithmetic result.
+# Expected: [1, 2] * 1 * 2 = [1, 4]
+assert tf.reduce_all(output == tf.constant([1, 4])).numpy()

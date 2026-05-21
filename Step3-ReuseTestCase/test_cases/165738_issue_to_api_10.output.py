@@ -1,0 +1,69 @@
+import unittest
+import time
+import numpy as np
+import tensorflow as tf
+
+# Concrete implementation of the abstract class from the Similar API
+class TestSessionCreator(tf.compat.v1.train.SessionCreator):
+    """
+    A concrete implementation of tf.compat.v1.train.SessionCreator
+    to be used in the test case, mirroring the usage pattern required.
+    """
+    def __init__(self, target='', config=None):
+        self._target = target
+        self._config = config
+
+    def create_session(self):
+        return tf.compat.v1.Session(target=self._target, config=self._config)
+
+class TestSqrtPerformance(unittest.TestCase):
+    def test_sqrt_performance_large_tensor(self):
+        """
+        Test case adapted from Issue 165738.
+        Original issue: tl.sqrt_rn is very slow on Intel XPU.
+        Adaptation: Use tf.compat.v1.train.SessionCreator to create a session
+        and run tf.sqrt on a large tensor to check for performance/correctness.
+        """
+        # Configuration mimicking the device setup hints from the issue
+        # (Attempting to use GPU if available)
+        config = tf.compat.v1.ConfigProto(
+            allow_soft_placement=True,
+            log_device_placement=False
+        )
+        
+        # Use the Similar API to create the session
+        session_creator = TestSessionCreator(config=config)
+        
+        with session_creator.create_session() as sess:
+            # Issue uses fp16
+            dtype = np.float16
+            # Issue uses large size (1073741824), reduced here for test stability
+            # but kept large enough to be relevant.
+            size = 1024 * 1024 * 32 
+            
+            # Create the operation analogous to tl.sqrt_rn
+            # In TensorFlow, this is tf.sqrt
+            input_placeholder = tf.compat.v1.placeholder(dtype, shape=[size])
+            output_op = tf.sqrt(input_placeholder)
+            
+            # Initialize
+            sess.run(tf.compat.v1.global_variables_initializer())
+            
+            # Generate data
+            data = np.random.rand(size).astype(dtype)
+            
+            # Run and measure time (reflecting the performance bug report)
+            start_time = time.time()
+            result = sess.run(output_op, feed_dict={input_placeholder: data})
+            elapsed_time = time.time() - start_time
+            
+            # Assertions
+            self.assertEqual(result.shape, (size,))
+            # Verify correctness against numpy
+            np.testing.assert_array_almost_equal(result, np.sqrt(data), decimal=3)
+            
+            # Print timing to reflect the "performance" nature of the original issue
+            print(f"tf.sqrt execution time for {size} elements: {elapsed_time:.4f}s")
+
+if __name__ == '__main__':
+    unittest.main()

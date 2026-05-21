@@ -1,0 +1,92 @@
+import torch
+import unittest
+import tempfile
+import os
+
+class TestVarBfloat16CompileDivergence(unittest.TestCase):
+    """
+    Test case for Issue 164063: TypeError('unexpected type fp32')
+    Reproduces the eager/compile divergence with torch.var on bfloat16 tensors.
+    """
+
+    def setUp(self):
+        # Configuration from the bug report
+        torch._dynamo.config.capture_scalar_outputs = True
+        torch._dynamo.config.capture_dynamic_output_shape_ops = True
+        torch._inductor.config.emulate_precision_casts = True
+        
+        # Ensure CUDA is available for the test
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if self.device.type == 'cpu':
+            self.skipTest("CUDA is required for this test")
+
+    def test_var_bfloat16_compile(self):
+        """
+        Tests the specific logic flow that caused the TypeError.
+        Wraps the logic in a nn.Module to align with the structural pattern
+        of the similar API (tf.Module).
+        """
+        
+        class VarModel(torch.nn.Module):
+            def forward(self, arg0, arg1, arg2, arg3, arg4, sentinel):
+                t0 = arg0
+                t1 = t0.reshape((28, 24, 3, 127))
+                # The problematic operation
+                t2 = t1.var(dim=2) 
+                
+                t3 = arg1
+                t4 = arg2
+                t5 = torch.nn.functional.embedding(torch.clamp(t3, 0, t4.size(0) - 1).to(torch.long), t4)
+                
+                t6 = arg3
+                t7 = torch.nn.functional.pad(t6, [0, 1], mode='constant', value=0.0)
+                
+                t8 = arg4
+                t9 = t8.sum(dim=1)
+                
+                t10 = torch.baddbmm(t5, t7, t9)
+                t11 = torch.cat([t2, t10], dim=0)
+                
+                output = t11 + sentinel
+                return output
+
+        # Initialize inputs matching the bug report
+        arg0 = torch.rand([36, 7112, 1, 1], dtype=torch.bfloat16, device=self.device, requires_grad=True)
+        arg1 = torch.randint(0, 512, [30, 24], dtype=torch.int64, device=self.device)
+        arg2 = torch.rand([512, 127], dtype=torch.bfloat16, device=self.device, requires_grad=True)
+        arg3 = torch.rand([30, 24, 15], dtype=torch.bfloat16, device=self.device, requires_grad=True)
+        arg4 = torch.rand([30, 4, 16, 127], dtype=torch.bfloat16, device=self.device, requires_grad=True)
+        sentinel = torch.tensor(0.0, dtype=torch.bfloat16, device=self.device, requires_grad=True)
+
+        model = VarModel().to(self.device)
+
+        # 1. Run Eager Mode
+        out_eager = model(arg0, arg1, arg2, arg3, arg4, sentinel)
+        loss_eager = out_eager.sum()
+        loss_eager.backward()
+        
+        # 2. Run Compiled Mode
+        # Using fullgraph=True and dynamic=True as per the bug report context
+        compiled_model = torch.compile(model, fullgraph=True, dynamic=True)
+        
+        try:
+            out_compiled = compiled_model(arg0, arg1, arg2, arg3, arg4, sentinel)
+            loss_compiled = out_compiled.sum()
+            loss_compiled.backward()
+            
+            # 3. Verify Results
+            # Check if outputs are close (allowing for some numerical divergence in bfloat16)
+            self.assertTrue(torch.allclose(out_eager, out_compiled, rtol=1e-2, atol=1e-2))
+            
+            # 4. Leverage "Save" pattern (similar to tf.data.experimental.save)
+            # Save the model state to ensure serialization works with the compiled graph context
+            with tempfile.TemporaryDirectory() as tmpdir:
+                path = os.path.join(tmpdir, "model.pt")
+                torch.save(model.state_dict(), path)
+                self.assertTrue(os.path.exists(path))
+                
+        except Exception as e:
+            self.fail(f"Compiled mode failed with error: {e}")
+
+if __name__ == '__main__':
+    unittest.main()

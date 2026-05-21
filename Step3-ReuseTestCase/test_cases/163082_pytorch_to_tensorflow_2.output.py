@@ -1,0 +1,49 @@
+import torch
+import tensorflow as tf
+
+def test_tf_math_real():
+    """
+    Adapted test case for tf.compat.v1.math.real based on the PyTorch 
+    torch.nn.functional.normalize bug report.
+    
+    The original bug involved precision errors (norm > 1) when normalizing 
+    vectors on CUDA with torch.compile. 
+    
+    Here we test the similar API tf.compat.v1.math.real using the same 
+    input data to verify its behavior. Note that tf.math.real extracts the 
+    real part of a complex number, whereas the original API normalized vectors.
+    """
+    
+    # Recreate the input from the original PyTorch bug report
+    # Original: c=torch.tensor([[3.799999 ,0.0, 0.0]], device='cuda', dtype=torch.float32)
+    input_tensor = tf.constant([[3.799999, 0.0, 0.0]], dtype=tf.float32)
+
+    print("Input vector:", [x for x in input_tensor.numpy()[0]])
+
+    # Apply the similar API: tf.compat.v1.math.real
+    # This operation returns the real part of a complex (or real) tensor.
+    # Since the input is real, it is expected to return the input unchanged.
+    output_tensor = tf.compat.v1.math.real(input_tensor)
+
+    print("Output vector (real part):", [x for x in output_tensor.numpy()[0]])
+
+    # Verification
+    # The original bug checked if the norm was > 1.
+    # For tf.math.real, we verify that the real part is extracted correctly.
+    # For real inputs, output should equal input.
+    assert tf.reduce_all(tf.equal(input_tensor, output_tensor)).numpy(), \
+        "tf.compat.v1.math.real should return the input unchanged for real tensors"
+
+    # Additional verification with a complex input to ensure API functionality
+    # (Though the original bug used real inputs, this confirms the API's specific purpose)
+    complex_input = tf.constant([[3.799999 + 4.0j, 0.0 + 1.0j, 0.0]], dtype=tf.complex64)
+    complex_output = tf.compat.v1.math.real(complex_input)
+    expected_complex_output = tf.constant([[3.799999, 0.0, 0.0]], dtype=tf.float32)
+    
+    assert tf.reduce_all(tf.equal(complex_output, expected_complex_output)).numpy(), \
+        "tf.compat.v1.math.real failed to extract real parts correctly from complex tensor"
+
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_tf_math_real()

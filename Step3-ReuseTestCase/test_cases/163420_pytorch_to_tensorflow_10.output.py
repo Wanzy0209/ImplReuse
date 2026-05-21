@@ -1,0 +1,50 @@
+import torch
+import tensorflow as tf
+
+# Adaptation logic:
+# The original PyTorch bug involves `torch.compile` failing on an operation 
+# (`fill_diagonal_`) driven by a scalar input (`t1.item()`).
+# 
+# The TensorFlow API `tf.compat.v1.train.range_input_producer` is a data pipeline 
+# operation that takes a scalar tensor (`limit`) to generate a queue.
+# 
+# This test case adapts the "Eager vs Compiled" pattern to verify if 
+# `range_input_producer` handles scalar inputs correctly when traced by `tf.function`
+# (the TensorFlow equivalent of `torch.compile`).
+
+def foo(limit_scalar):
+    # limit_scalar mimics the scalar input (t1.item()) from the PyTorch repro.
+    # range_input_producer expects an int32 scalar tensor.
+    queue = tf.compat.v1.train.range_input_producer(
+        limit_scalar, 
+        num_epochs=1, 
+        shuffle=False
+    )
+    return queue
+
+# Setup arguments
+# PyTorch: arg1 = torch.empty([], dtype=torch.float32, device='cuda', requires_grad=True)
+# TensorFlow: limit = tf.constant(10, dtype=tf.int32) (Scalar 0-d tensor)
+limit = tf.constant(10, dtype=tf.int32)
+
+if __name__ == '__main__':
+    # 1. Eager execution (Graph construction)
+    # In TF 2.x, calling the function directly executes ops or constructs the graph.
+    try:
+        out_eager = foo(limit)
+        # Verify the output is a Queue as expected
+        assert isinstance(out_eager, tf.queue.QueueBase)
+        print('Eager Success! ')
+    except Exception as e:
+        print(f'Eager Failed: {e}')
+
+    # 2. Compiled execution (tf.function)
+    # This mimics torch.compile. We trace the function to ensure it handles 
+    # the scalar input correctly in graph mode.
+    try:
+        compiled_foo = tf.function(foo)
+        out_compiled = compiled_foo(limit)
+        assert isinstance(out_compiled, tf.queue.QueueBase)
+        print('Compile Success! ')
+    except Exception as e:
+        print(f'Compile Failed: {e}')

@@ -1,0 +1,67 @@
+import torch
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+import time
+
+class MyModel(tf.Module):
+    """
+    A minimal model adapted from the PyTorch reproduction.
+    Replaces torch.unique with tf.experimental.numpy.add.
+    """
+    def __init__(self):
+        super().__init__()
+        # Using tf.nn.relu to match the structure of the original PyTorch model
+        self.relu = tf.nn.relu
+
+    def __call__(self, a, b):
+        # Original API: torch.unique (dynamic shape operator)
+        # Similar API: tf.experimental.numpy.add (static shape operator)
+        # This operation performs element-wise addition.
+        _x = tnp.add(a, b)
+        
+        # Return the result passed through ReLU
+        return self.relu(_x)
+
+def get_input():
+    # Generate random inputs matching the dimensionality of the original repro (8,)
+    return tf.random.normal((8,)), tf.random.normal((8,))
+
+def run_once(model, inputs, label):
+    t0 = time.perf_counter()
+    # Execute the model
+    y = model(*inputs)
+    elapsed = (time.perf_counter() - t0) * 1000
+    print(f"[{label}] ok, type={type(y)} time={elapsed:.3f}ms")
+    return y
+
+def main():
+    print("tf.__version__ =", tf.__version__)
+    
+    # Enable numpy behavior for tf.experimental.numpy
+    tnp.enable_numpy_behavior()
+
+    model = MyModel()
+    a, b = get_input()
+
+    # 1. Eager Execution
+    # Corresponds to the original "eager" run which passed.
+    print("--- Eager Mode ---")
+    y_eager = run_once(model, (a, b), "eager")
+
+    # 2. Graph/Compiled Execution
+    # Corresponds to torch.compile(fullgraph=True).
+    # tf.function traces the TensorFlow code to generate a graph.
+    # Unlike torch.unique, tf.add is a static shape operation, so this 
+    # is expected to succeed without dynamic shape errors.
+    print("--- Graph Mode (tf.function) ---")
+    compiled_model = tf.function(model)
+    y_graph = run_once(compiled_model, (a, b), "graph")
+
+    # Verification
+    # Ensure that the behavior is consistent between eager and graph modes.
+    # The original bug was a crash; here we verify successful execution and correctness.
+    assert tf.reduce_all(tf.equal(y_eager, y_graph)).numpy(), "Eager and Graph outputs differ"
+    print("Test Passed: tf.experimental.numpy.add works correctly in graph mode.")
+
+if __name__ == "__main__":
+    main()

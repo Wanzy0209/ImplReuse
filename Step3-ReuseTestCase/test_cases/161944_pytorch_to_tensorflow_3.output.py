@@ -1,0 +1,41 @@
+import torch
+import tensorflow as tf
+
+# Mimic the input setup from the original PyTorch test case.
+# Original: inp = torch.randn(8192)
+# Adapted: A dummy file path string as input for the resource loader.
+inp = "/var/tmp/data_resource.bin"
+
+# The function under test
+# Original: func = torch.exp
+# Adapted: tf.compat.v1.resource_loader.readahead_file_path
+func = tf.compat.v1.resource_loader.readahead_file_path
+
+# 1. Eager execution
+# Original: out1 = func(inp)
+out1 = func(inp)
+
+# 2. Compiled execution
+# Original: out2 = torch.compile(func)(inp)
+# Adapted: Use tf.function to simulate compilation/graph mode in TensorFlow
+@tf.function
+def compiled_func(path):
+    return func(path)
+
+out2 = compiled_func(inp)
+
+# 3. Reference / High Precision execution
+# Original: out3_high = func(inp.to(torch.float64))
+# Adapted: Since this is a string identity function, the input itself serves as the 
+# perfect ground truth/reference.
+out3_ref = inp
+
+# Verification
+# Original: print((out3_high - out1).abs().max())
+# Adapted: Check for equality since we are dealing with strings/paths
+print(f"Reference vs Eager Match: {out3_ref == out1}")
+print(f"Reference vs Compiled Match: {out3_ref == out2}")
+
+# Assertions to ensure behavior consistency
+assert out1 == out3_ref, "Eager execution output does not match reference"
+assert out2 == out3_ref, "Compiled execution output does not match reference"

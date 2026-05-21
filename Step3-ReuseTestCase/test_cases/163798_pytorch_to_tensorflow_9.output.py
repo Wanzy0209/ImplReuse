@@ -1,0 +1,53 @@
+import torch
+import tensorflow as tf
+
+def test_name_scope_graph_behavior():
+    """
+    Adapted test case for tf.name_scope based on PyTorch issue 163798.
+    
+    The original issue highlights a discrepancy in graphing behavior between 
+    tolist() and item() under torch.compile. 
+    This test verifies that tf.name_scope correctly handles operations 
+    (specifically scalar extraction via indexing) within a graph context (tf.function),
+    ensuring the scope is applied and the graph is constructed as expected.
+    """
+    
+    # Define the function using tf.function to simulate the compilation context
+    @tf.function
+    def func(a):
+        # Use tf.name_scope as the primary API under test
+        # 'values=[a]' helps determine the context (graph vs eager) internally
+        with tf.name_scope("scalar_extraction", values=[a]):
+            # Mimic the unpacking logic: u0, u1 = a.tolist()
+            # In TensorFlow, we use indexing to extract elements.
+            # Note: a.tolist() in PyTorch returns Python scalars, while a[0] in TF 
+            # returns a 0-d tensor. We stick to graph-compatible ops here.
+            u0 = a[0]
+            u1 = a[1]
+            
+            # Perform the multiplication logic from the original bug
+            return a * u0 * u1
+
+    # Input tensor
+    input_tensor = tf.constant([1, 2])
+
+    # Execute the function
+    result = func(input_tensor)
+
+    # Assertion 1: Verify the numerical result is correct
+    expected = tf.constant([1, 4])
+    assert tf.reduce_all(result == expected).numpy(), "Numerical result mismatch"
+
+    # Assertion 2: Verify graphing behavior
+    # Check if the operations were actually captured within the specified name_scope
+    concrete_func = func.get_concrete_function(input_tensor)
+    graph_def = concrete_func.graph.as_graph_def()
+    
+    # Look for the scope name in the graph node names
+    has_scope = any("scalar_extraction" in node.name for node in graph_def.node)
+    assert has_scope, "tf.name_scope was not applied to the graph operations"
+
+    print("Test passed: tf.name_scope correctly graphed the operations.")
+
+if __name__ == "__main__":
+    test_name_scope_graph_behavior()

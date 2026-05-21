@@ -1,0 +1,21 @@
+import torch
+import tensorflow as tf
+
+# Adapted test case for tf.experimental.numpy.kron based on PyTorch issue 162327
+# Original bug: heap-buffer-overflow in torch.nn.functional.max_unpool1d
+# This test verifies the behavior of the similar TensorFlow API with the same input characteristics.
+
+# Input 1: Corresponds to torch.empty((5, 7, 4, 3, 7, 6), dtype=torch.int8)
+input_a = tf.empty((5, 7, 4, 3, 7, 6), dtype=tf.int8)
+
+# Input 2: Corresponds to torch.empty((4, 9, 2), dtype=torch.int32)
+input_b = tf.empty((4, 9, 2), dtype=tf.int32)
+
+# Call the target API: tf.experimental.numpy.kron
+# Note: The original API took 4 arguments (input, indices, output_size, stride).
+# The similar API takes 2 arguments (a, b). We map the two primary tensors to these arguments.
+try:
+    result = tf.experimental.numpy.kron(input_a, input_b)
+    print("Test passed. Output shape:", result.shape)
+except Exception as e:
+    print(f"Test failed with exception: {e}")

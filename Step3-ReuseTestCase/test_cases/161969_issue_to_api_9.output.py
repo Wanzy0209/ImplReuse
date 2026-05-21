@@ -1,0 +1,54 @@
+import torch
+
+def test_mps_erfinv_compile_contiguity():
+    """
+    Test case adapted from Issue 161969.
+    Replaces torch.linalg.cholesky with torch.special.erfinv to check for
+    similar MPS compilation contiguity assertion failures.
+    """
+    # Check for MPS availability
+    if not torch.backends.mps.is_available():
+        print("MPS is not available. Skipping test.")
+        return
+
+    device = torch.device("mps")
+    dtype = torch.float32
+
+    def func(x, matrix):
+        # Using torch.special.erfinv (Similar API) instead of torch.linalg.cholesky
+        # Retaining .contiguous() as it was central to the original bug report
+        transformed = torch.special.erfinv(matrix).contiguous()
+        
+        # Mimicking the calculation structure to ensure gradients flow
+        # Original: val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+        # Adapted: Element-wise multiplication since erfinv is element-wise
+        val = torch.sum((transformed * x[0, :]) ** 2)
+        return -val / 2
+
+    # Replicating the vmap/grad structure from the original bug
+    score_func = torch.vmap(torch.func.grad(func, 0), (0, None))
+    
+    # Compile the function
+    compiled_function = torch.compile(score_func)
+
+    # Setup data
+    # erfinv requires inputs in (-1, 1)
+    data = torch.zeros((2, 5, 3), device=device, dtype=dtype)
+    p = torch.diag(torch.tensor((0.5, 0.1, 0.2,), device=device, dtype=dtype))
+
+    # Run the test
+    # If the bug exists, this will raise:
+    # RuntimeError: A_t.is_contiguous() INTERNAL ASSERT FAILED
+    try:
+        res = compiled_function(data, p)
+        # Basic assertion to ensure computation happened and is valid
+        assert torch.isfinite(res).all(), "Result contains NaN or Inf"
+        print("Test passed successfully.")
+    except RuntimeError as e:
+        if "is_contiguous() INTERNAL ASSERT FAILED" in str(e):
+            print(f"Bug reproduced with torch.special.erfinv: {e}")
+        else:
+            raise
+
+if __name__ == "__main__":
+    test_mps_erfinv_compile_contiguity()

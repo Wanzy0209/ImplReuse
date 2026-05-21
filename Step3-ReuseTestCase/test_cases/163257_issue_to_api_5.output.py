@@ -1,0 +1,70 @@
+import torch
+import unittest
+import sys
+
+# Attempt to import RMM (Rapids Memory Manager) as it is central to the bug report.
+# If not available, we skip the test as the bug is specific to pluggable allocators like RMM.
+try:
+    import rmm
+    from rmm.allocators.torch import rmm_torch_allocator
+    HAS_RMM = True
+except ImportError:
+    HAS_RMM = False
+    print("Skipping test: RMM library is not installed.")
+
+
+@unittest.skipIf(not HAS_RMM, "RMM library is not installed")
+class TestPluggableAllocatorWithCompile(unittest.TestCase):
+    def setUp(self):
+        # Ensure CUDA is available
+        self.assertTrue(torch.cuda.is_available(), "CUDA is not available")
+
+    def test_compile_with_rmm_allocator_repeat_interleave(self):
+        """
+        Test that torch.compile works with a pluggable allocator (RMM)
+        when using operations like torch.repeat_interleave.
+        
+        This test reproduces the logic from Issue #163257 where changing the 
+        memory allocator breaks torch.compile due to missing 
+        checkPoolLiveAllocations support. It leverages torch.repeat_interleave
+        as the target operation to verify the fix.
+        """
+        # 1. Setup the pluggable allocator (Original Bug Logic)
+        rmm.reinitialize(pool_allocator=True)
+        torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+
+        try:
+            # 2. Define a function using the similar API (torch.repeat_interleave)
+            # We test both with a specific dimension and without (None), 
+            # mirroring the logic in torch.onnx.symbolic_opset13.repeat_interleave
+            def func_with_dim(x):
+                return torch.repeat_interleave(x, repeats=2, dim=0)
+
+            def func_no_dim(x):
+                # The ONNX symbolic implementation handles dim=None by flattening input
+                return torch.repeat_interleave(x, repeats=2)
+
+            # 3. Compile the functions
+            # Bug: RuntimeError: pluggable does not yet support checkPoolLiveAllocations
+            compiled_func_dim = torch.compile(func_with_dim)
+            compiled_func_no_dim = torch.compile(func_no_dim)
+
+            # 4. Execute and verify
+            input_tensor = torch.randn(4, 4).cuda()
+            
+            # Test with dim
+            output_dim = compiled_func_dim(input_tensor)
+            self.assertEqual(output_dim.shape, (8, 4))
+            
+            # Test with dim=None (flattened behavior)
+            output_no_dim = compiled_func_no_dim(input_tensor)
+            # repeat_interleave on flattened (4*4=16) tensor with repeats=2 -> 32
+            self.assertEqual(output_no_dim.shape, (32,))
+
+        finally:
+            # Cleanup: Reset allocator to default to avoid side effects
+            torch.cuda.memory.change_current_allocator(torch.cuda.memory._get_default_allocator())
+
+
+if __name__ == "__main__":
+    unittest.main()

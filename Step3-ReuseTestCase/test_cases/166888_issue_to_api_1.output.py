@@ -1,0 +1,43 @@
+import torch
+from torch.distributions.constraints import greater_than_eq
+
+def test_inductor_constraint_with_item():
+    """
+    Test case for Issue 166888 adapted for torch.distributions.constraints.greater_than_eq.
+    
+    The original issue involved a NameError when using .item() on a float tensor argument
+    inside a torch.compile'd function (specifically with torch.clamp). This test case
+    preserves that logic (extracting a scalar from a tensor arg inside a compiled function)
+    but applies it to the similar API 'greater_than_eq' to check for similar compilation
+    behaviors or regressions.
+    """
+    
+    # Define a function that uses .item() on a tensor argument to configure the constraint
+    def f(x, bound_tensor):
+        # Mimic the original bug's pattern: calling .item() on a float tensor arg
+        # Reuse the similar API: greater_than_eq
+        constraint = greater_than_eq(bound_tensor.item())
+        
+        # Apply the constraint check, which involves a comparison operation
+        # similar to the logic inside clamp.
+        return constraint.check(x)
+
+    # Compile with the specific backend and settings that triggered the original bug
+    compiled_func = torch.compile(f, backend='inductor', fullgraph=True)
+    
+    # Setup inputs
+    x = torch.randn(10, 20, 30, device='cuda')
+    # The bound is a float tensor on cuda, matching the 'max_val' in the original issue
+    bound = torch.tensor(0.0, device='cuda')
+    
+    # Execute the compiled function
+    # This should trigger the triton kernel generation.
+    # If the bug exists, it might fail with a NameError in the generated code.
+    result = compiled_func(x, bound)
+    
+    # Verify the result is correct
+    expected = (x >= 0.0)
+    assert torch.equal(result, expected), "The constraint check did not produce the expected result."
+
+if __name__ == "__main__":
+    test_inductor_constraint_with_item()

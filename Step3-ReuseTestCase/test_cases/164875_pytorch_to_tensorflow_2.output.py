@@ -1,0 +1,39 @@
+import torch
+import tensorflow as tf
+
+# Note: The original bug report involves tensor shape mismatches in PyTorch's torch.add.
+# The target API, tf.compat.v1.resource_loader.readahead_file_path, is a file path utility
+# that returns the input path string. It does not perform tensor operations or handle shapes.
+# Therefore, the test case is adapted to verify the basic functionality and eager/compiled
+# consistency of the target API, preserving the structure of the original test.
+
+def fuzzed_program(path, sentinel):
+    # The target API simply returns the path. 
+    # We ignore the sentinel as it is not applicable to this API.
+    return tf.compat.v1.resource_loader.readahead_file_path(path)
+
+# Setup inputs
+# Original arg_0 was a tensor, here we use a string path as required by the API.
+path = "/var/data/fake_model_checkpoint"
+sentinel = tf.constant(1.0) # Kept for signature consistency, though unused
+
+# Eager execution
+try:
+    result_original = fuzzed_program(path, sentinel)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# Compiled execution (tf.function is the TensorFlow equivalent of torch.compile)
+try:
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(path, sentinel)
+    print(' compile success')
+except Exception as e:
+    print(f' compile failed: {e}')
+
+# Verification
+# The API is expected to return the path unchanged.
+assert result_original == path, f"Eager result mismatch: {result_original} != {path}"
+assert result_compiled == path, f"Compiled result mismatch: {result_compiled} != {path}"
+print(' verification success')

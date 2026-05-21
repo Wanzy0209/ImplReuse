@@ -1,0 +1,85 @@
+import torch
+import triton
+import triton.language as tl
+
+# Attempt to import the specific module mentioned in the issue.
+# Note: This module is part of PyTorch's experimental symmetric memory features.
+try:
+    import torch.symm_mem._nvshmem_triton as nvshmem
+except ImportError:
+    print("Warning: torch.symm_mem._nvshmem_triton not found. Skipping test.")
+    nvshmem = None
+
+if nvshmem:
+    @triton.jit
+    def foo_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        """
+        This kernel name does NOT contain 'nvshmem'.
+        According to Issue 163915, this will cause a silent CUDA IMA 
+        because enable_triton() silently skips initialization for kernels 
+        that don't match the naming convention.
+        """
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        tl.store(output_ptr + offsets, x, mask=mask)
+
+    @triton.jit
+    def nvshmem_bar_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        """
+        This kernel name DOES contain 'nvshmem'.
+        This should work correctly as it meets the naming requirement.
+        """
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        tl.store(output_ptr + offsets, x, mask=mask)
+
+    def test_nvshmem_triton_kernel_naming_convention():
+        """
+        Test case to reproduce Issue 163915.
+        
+        The bug occurs when:
+        1. nvshmem.enable_triton() is called.
+        2. A Triton kernel is launched that does not have "nvshmem" in its name.
+        
+        Expected behavior (Buggy): Silent CUDA Invalid Memory Access (IMA).
+        Expected behavior (Fixed): Clear error message or graceful handling.
+        """
+        # Enable Triton support for NVSHMEM
+        nvshmem.enable_triton()
+
+        # Setup data
+        size = 1024
+        x = torch.randn(size, device='cuda')
+        y = torch.empty_like(x)
+        BLOCK_SIZE = 256
+
+        # --- Case 1: Kernel without 'nvshmem' in name (Reproduces the bug) ---
+        print("Testing kernel without 'nvshmem' in name (Bug Reproduction)...")
+        try:
+            # In the buggy version, this call triggers a silent IMA.
+            # We wrap it in a try/except block in case the fix converts the IMA 
+            # into a raised Python exception.
+            foo_kernel[(1,)](x, y, size, BLOCK_SIZE=BLOCK_SIZE)
+            print("Kernel executed. If no IMA occurred, the bug may be fixed.")
+        except RuntimeError as e:
+            # A proper fix would likely raise a descriptive error here.
+            print(f"Caught RuntimeError (expected if fixed): {e}")
+        except Exception as e:
+            print(f"Caught unexpected exception: {e}")
+
+        # --- Case 2: Kernel with 'nvshmem' in name (Correct usage) ---
+        print("\nTesting kernel with 'nvshmem' in name (Control Case)...")
+        try:
+            nvshmem_bar_kernel[(1,)](x, y, size, BLOCK_SIZE=BLOCK_SIZE)
+            print("Kernel executed successfully.")
+        except Exception as e:
+            print(f"Kernel failed: {e}")
+
+    if __name__ == "__main__":
+        test_nvshmem_triton_kernel_naming_convention()

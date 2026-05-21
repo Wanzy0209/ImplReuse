@@ -1,0 +1,46 @@
+import warnings
+import sys
+
+def test_torch_backends_nnpack_future_warnings():
+    """
+    Test case to check if importing torch.backends.nnpack triggers 
+    FutureWarnings related to functools.partial in Enums, similar to 
+    the issue reported in torch.distributed.algorithms.ddp_comm_hooks.
+    """
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        # Ensure all warnings are captured
+        warnings.simplefilter("always")
+
+        # Reproduce the import logic for the similar API
+        import torch.backends.nnpack
+        
+        # Access the specific component mentioned in the similar API info
+        # to ensure it is loaded/initialized if lazy loading is used
+        from torch.backends import nnpack
+        _ = nnpack.flags
+
+        # Filter for the specific FutureWarning mentioned in the bug report
+        # "functools.partial will be a method descriptor in future Python versions..."
+        partial_warnings = [
+            w for w in caught_warnings
+            if issubclass(w.category, FutureWarning) and
+            "functools.partial" in str(w.message) and
+            "method descriptor" in str(w.message)
+        ]
+
+        # Output results
+        if partial_warnings:
+            print("Detected FutureWarnings regarding functools.partial:")
+            for w in partial_warnings:
+                print(f"  File: {w.filename}, Line: {w.lineno}")
+                print(f"  Message: {w.message}")
+        else:
+            print("No FutureWarnings related to functools.partial detected.")
+
+        # Assertion to verify the bug is not present in the similar API
+        # (If the bug exists, this assertion will fail)
+        assert len(partial_warnings) == 0, \
+            f"Found {len(partial_warnings)} FutureWarnings related to functools.partial in torch.backends.nnpack"
+
+if __name__ == "__main__":
+    test_torch_backends_nnpack_future_warnings()

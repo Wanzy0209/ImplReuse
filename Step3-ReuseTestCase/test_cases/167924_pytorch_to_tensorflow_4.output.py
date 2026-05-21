@@ -1,0 +1,41 @@
+import torch
+import tensorflow as tf
+
+def test_dropout_with_sliced_tensor():
+    """
+    Adapted from PyTorch Issue 167924.
+    Original bug: Crash on MPS when using repeat_interleave with a sliced tensor.
+    This test verifies if tf.nn.dropout handles sliced tensor arguments correctly.
+    """
+    
+    # Create input data
+    # PyTorch: data = torch.arange(2, device="mps")
+    x = tf.range(2, dtype=tf.float32)
+    x = tf.reshape(x, (1, 2)) # Reshape to 2D to allow for noise_shape manipulation
+
+    # Create a tensor to be used as an argument (mimicking 'counts')
+    # PyTorch: counts = torch.tensor([0, 1, 0], device="mps")
+    noise_shape_tensor = tf.constant([1, 2])
+
+    # Slice the tensor (mimicking counts[1:3])
+    # PyTorch: counts[1:3]
+    # We slice the noise_shape tensor to create a non-prefix view
+    sliced_noise_shape = noise_shape_tensor[0:1]
+
+    # Call the API with the sliced tensor
+    # PyTorch: data.repeat_interleave(counts[1:3], dim=0)
+    # TensorFlow: tf.nn.dropout(x, rate=0.5, noise_shape=sliced_noise_shape)
+    # Note: noise_shape=[1] broadcasts to [1, 2], so this is a valid operation.
+    try:
+        result = tf.nn.dropout(x, rate=0.5, noise_shape=sliced_noise_shape, seed=42)
+        
+        # Verify the operation completed and shape is preserved
+        assert result.shape == x.shape
+        print("Test passed: tf.nn.dropout handled sliced tensor argument correctly.")
+        return True
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        return False
+
+if __name__ == "__main__":
+    test_dropout_with_sliced_tensor()

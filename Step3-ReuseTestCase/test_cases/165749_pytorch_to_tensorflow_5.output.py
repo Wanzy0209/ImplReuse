@@ -1,0 +1,80 @@
+import tensorflow as tf
+import numpy as np
+
+# The API tf.compat.v1.train.add_queue_runner requires TF1 graph mode
+tf.compat.v1.disable_eager_execution()
+
+def test_queue_runner_with_conv2d():
+    """
+    Adapts the PyTorch Conv2d + training loop logic to TensorFlow 
+    using tf.compat.v1.train.add_queue_runner for input management.
+    """
+    # Parameters from the original bug report
+    d = 65
+    batch_size = 1
+    steps = 10
+
+    # 1. Setup Input Pipeline using the Target API
+    # We use a random tensor as the source to avoid manual feeding complexity
+    random_data = tf.random.normal((batch_size, 2, 32, 32))
+    
+    # Create a FIFO queue
+    queue = tf.compat.v1.FIFOQueue(capacity=10, dtypes=[tf.float32], shapes=[(batch_size, 2, 32, 32)])
+    
+    # Enqueue operation
+    enqueue_op = queue.enqueue(random_data)
+    
+    # Create QueueRunner
+    qr = tf.compat.v1.train.QueueRunner(queue, [enqueue_op] * 2)
+    
+    # Add to graph collection using the specific API
+    tf.compat.v1.train.add_queue_runner(qr)
+    
+    # Dequeue data for the model
+    x = queue.dequeue()
+
+    # 2. Define Model (Conv2d)
+    # Note: While the original bug involves weight_norm, this test focuses on 
+    # the stability of the training loop using the target API (add_queue_runner).
+    with tf.compat.v1.variable_scope("conv_model"):
+        # Conv2D layer
+        conv = tf.compat.v1.layers.conv2d(
+            inputs=x,
+            filters=d,
+            kernel_size=2,
+            kernel_initializer=tf.compat.v1.random_normal_initializer()
+        )
+        
+        # Loss function (mean of output)
+        loss = tf.reduce_mean(conv)
+        
+        # Optimizer
+        optimizer = tf.compat.v1.train.GradientDescentOptimizer(0.01)
+        train_op = optimizer.minimize(loss)
+
+    # 3. Execution
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
+        
+        # Coordinator for managing queue threads
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+        
+        try:
+            # Run training loop
+            for _ in range(steps):
+                _, loss_val = sess.run([train_op, loss])
+                # Assert loss is finite to catch NaN/Inf failures similar to the original crash
+                assert np.isfinite(loss_val), f"Loss became NaN or Inf: {loss_val}"
+                
+            print("Test passed: Training loop with queue runner completed successfully.")
+            
+        except Exception as e:
+            print(f"Test failed: {e}")
+            raise
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_queue_runner_with_conv2d()

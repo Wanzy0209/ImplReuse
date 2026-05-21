@@ -1,0 +1,22 @@
+import torch
+import tensorflow as tf
+
+# Define a distribution strategy to establish a context
+# This is analogous to the environment setup in the PyTorch issue
+strategy = tf.distribute.MirroredStrategy()
+
+# Define a function decorated with tf.function
+# This is analogous to @torch.compile(fullgraph=True) in the original bug report
+@tf.function
+def f():
+    # Use the similar API (tf.distribute.in_cross_replica_context) to check the execution context.
+    # This mirrors the logic of torch._check inside a compiled graph.
+    # While torch._check failed due to a lambda argument causing a graph break,
+    # here we test if the context check itself integrates correctly with the TF graph compilation.
+    assert tf.distribute.in_cross_replica_context(), "Expected to be in cross-replica context"
+    return "Success"
+
+# Run the test inside the strategy scope
+with strategy.scope():
+    result = f()
+    print(result)

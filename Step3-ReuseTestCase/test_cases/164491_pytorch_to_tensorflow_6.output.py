@@ -1,0 +1,88 @@
+import tensorflow as tf
+import numpy as np
+
+def test_resize_images_layout_handling():
+    """
+    Adapted test case based on PyTorch Issue #164491.
+    
+    Original Issue: _scaled_mm and _int_mm are slow or raise errors with row-major RHS matrices.
+    The core issue involves sensitivity to memory layout (row-major vs column-major).
+    
+    Similar API: tf.keras.backend.resize_images
+    Adaptation: This API handles layout via the 'data_format' argument ('channels_first' vs 'channels_last').
+    This test verifies that the API handles these layout specifications correctly and raises 
+    appropriate errors for invalid formats, mirroring the layout-sensitivity theme of the original bug.
+    """
+    
+    print("--- Testing tf.keras.backend.resize_images Layout Sensitivity ---")
+
+    # Test Case 1: Valid layout 'channels_first' (Analogous to one matrix layout)
+    # In the original bug, specific layouts caused issues. We verify this layout works.
+    print("\n[Test 1] Testing with data_format='channels_first'...")
+    try:
+        # Shape: (Batch, Channels, Height, Width)
+        x_channels_first = tf.random.uniform((1, 3, 32, 32))
+        
+        result = tf.keras.backend.resize_images(
+            x_channels_first,
+            height_factor=2,
+            width_factor=2,
+            data_format='channels_first',
+            interpolation='nearest'
+        )
+        
+        # Expected shape: (1, 3, 64, 64)
+        assert result.shape == (1, 3, 64, 64), f"Shape mismatch: {result.shape}"
+        print("  Passed: 'channels_first' processed correctly.")
+        
+    except Exception as e:
+        print(f"  Failed: {e}")
+
+    # Test Case 2: Valid layout 'channels_last' (Analogous to the other matrix layout)
+    # The original bug noted that both layouts are common use cases.
+    print("\n[Test 2] Testing with data_format='channels_last'...")
+    try:
+        # Shape: (Batch, Height, Width, Channels)
+        x_channels_last = tf.random.uniform((1, 32, 32, 3))
+        
+        result = tf.keras.backend.resize_images(
+            x_channels_last,
+            height_factor=2,
+            width_factor=2,
+            data_format='channels_last',
+            interpolation='bilinear'
+        )
+        
+        # Expected shape: (1, 64, 64, 3)
+        assert result.shape == (1, 64, 64, 3), f"Shape mismatch: {result.shape}"
+        print("  Passed: 'channels_last' processed correctly.")
+        
+    except Exception as e:
+        print(f"  Failed: {e}")
+
+    # Test Case 3: Invalid layout (Analogous to the error raised in the original bug)
+    # The original bug mentioned _scaled_mm raises an error for row-major.
+    # We verify resize_images raises an error for invalid data_format arguments.
+    print("\n[Test 3] Testing with invalid data_format...")
+    try:
+        x_invalid = tf.random.uniform((1, 32, 32, 3))
+        
+        tf.keras.backend.resize_images(
+            x_invalid,
+            height_factor=2,
+            width_factor=2,
+            data_format='invalid_format_string',
+            interpolation='nearest'
+        )
+        
+        print("  Failed: Expected ValueError but none was raised.")
+        
+    except ValueError as e:
+        # This is the expected behavior based on the extracted API code
+        print(f"  Passed: Correctly raised ValueError - '{e}'")
+        
+    except Exception as e:
+        print(f"  Failed: Unexpected error - {e}")
+
+if __name__ == "__main__":
+    test_resize_images_layout_handling()

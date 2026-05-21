@@ -1,0 +1,40 @@
+import os
+import torch
+import torch.distributed as dist
+
+def test_init_process_group_api():
+    """
+    Test case for torch.distributed.init_process_group (aliased as dist.init_process_group).
+    Adapted from the FSDP2 example context to verify process group initialization.
+    """
+    # Setup environment variables for a minimal single-process test
+    # In a real distributed scenario, these would be set by the launcher (e.g., torchrun)
+    os.environ.setdefault("MASTER_ADDR", "localhost")
+    os.environ.setdefault("MASTER_PORT", "29500")
+    os.environ.setdefault("RANK", "0")
+    os.environ.setdefault("WORLD_SIZE", "1")
+
+    rank = int(os.environ["RANK"])
+    
+    # Use CPU for minimal reproducibility, similar to the fallback in the bug report
+    device = torch.device("cpu") 
+    
+    # Determine the backend based on the device, as done in the original example
+    backend = dist.get_default_backend_for_device(device)
+
+    # Verify the API call using the similar API 'dist.init_process_group'
+    if not dist.is_initialized():
+        dist.init_process_group(backend=backend, device_id=device)
+
+    # Assertions to verify correct behavior
+    assert dist.is_initialized(), "Process group failed to initialize."
+    assert dist.get_rank() == rank, f"Rank mismatch: expected {rank}, got {dist.get_rank()}"
+    assert dist.get_backend() == backend, f"Backend mismatch: expected {backend}, got {dist.get_backend()}"
+
+    print(f"Test passed: Process group initialized successfully with backend '{backend}' on rank {rank}.")
+
+    # Clean up
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    test_init_process_group_api()

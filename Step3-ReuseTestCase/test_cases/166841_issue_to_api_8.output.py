@@ -1,0 +1,107 @@
+import torch
+import torch._inductor
+import torch.export
+import tempfile
+import shutil
+import unittest
+import sys
+
+class TestAOTIMultiDeviceScatter(unittest.TestCase):
+    """
+    Test case for Issue 166841:
+    Verifies that aoti_compile_and_package correctly handles CPU scatter_add_
+    operations in models that also contain CUDA operations.
+    
+    The bug manifests when the compiler generates a CUDA kernel for a CPU operation,
+    leading to a CUDAGuardImpl error.
+    """
+    
+    def test_mixed_device_scatter_add(self):
+        # Skip if CUDA is not available
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available, skipping multi-device test")
+
+        # --- 1. Model Definition ---
+        class MixedDeviceModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                # Buffers are explicitly on CPU
+                self.register_buffer(
+                    "index",
+                    torch.tensor([1, 4, 1, 7], device='cpu', dtype=torch.int64)
+                )
+                self.register_buffer(
+                    "src",
+                    torch.ones(4, device='cpu', dtype=torch.int64)
+                )
+
+            def forward(self, matrix, vector):
+                # Inputs are on CUDA
+                
+                # 1. Operation on CPU tensors (The bug trigger)
+                # We create a new tensor z on CPU and perform scatter_add
+                z = torch.zeros((vector.shape[0],), device='cpu', dtype=torch.int64)
+                scatter_result = z.scatter_add(0, self.index, self.src)
+
+                # 2. Move result to CUDA
+                # We cast to match vector dtype (float) and move to device
+                v = vector + scatter_result.to(vector.dtype).to('cuda')
+                
+                # 3. Apply an activation (similar to tf.keras.backend.relu pattern)
+                # to ensure the graph has mixed complexity
+                v = torch.nn.functional.relu(v)
+                
+                return torch.matmul(matrix, v)
+
+        # --- 2. Setup Inputs ---
+        model = MixedDeviceModel().eval()
+        matrix = torch.randn(10, 10, device='cuda')
+        vector = torch.randn(10, device='cuda')
+        example_args = (matrix, vector)
+
+        # --- 3. Export ---
+        print("Exporting model...")
+        try:
+            ep = torch.export.export(model, example_args)
+        except Exception as e:
+            self.fail(f"Export failed: {e}")
+
+        # --- 4. Compile and Package ---
+        output_dir = tempfile.mkdtemp()
+        package_path = f"{output_dir}/model_package.pt2"
+
+        try:
+            print("Starting AOTInductor compilation...")
+            # This is the API under test
+            torch._inductor.aoti_compile_and_package(
+                ep,
+                package_path=package_path,
+            )
+            print(f"Compiled package at: {package_path}")
+
+            # --- 5. Load and Run ---
+            print("\nAttempting to load and run compiled model...")
+            loaded = torch._inductor.aoti_load_package(package_path)
+            print("Model package loaded successfully.")
+
+            # Run the loaded model
+            result = loaded(*example_args)
+            
+            # Verify output shape and device
+            self.assertEqual(result.shape, (10, 10))
+            self.assertEqual(result.device.type, 'cuda')
+            print("Model ran successfully with the loaded package.")
+
+        except Exception as e:
+            # Catch the specific error mentioned in the bug report
+            if "CUDAGuardImpl initialized with non-CUDA DeviceType: cpu" in str(e):
+                self.fail(f"Issue 166841 reproduced: {e}")
+            else:
+                self.fail(f"Unexpected runtime error: {e}")
+        finally:
+            # Cleanup
+            if output_dir:
+                shutil.rmtree(output_dir)
+
+if __name__ == '__main__':
+    unittest.main()

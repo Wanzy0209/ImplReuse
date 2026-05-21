@@ -1,0 +1,69 @@
+import torch
+import torch.nn as nn
+
+# Configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch.manual_seed(1166094474)
+
+# Define a module using torch.nn.ModuleDict
+# Adapted from the Similar API information provided
+class ModuleDictModel(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.layers = torch.nn.ModuleDict(
+            {
+                "0": torch.nn.Linear(12, 12),
+                "1": torch.nn.Linear(12, 12),
+            }
+        )
+
+    def forward(self, x):
+        # Accessing the ModuleDict to select a layer
+        # This replaces the tensor manipulation logic of torch.chunk
+        # with module selection logic.
+        x = self.layers["0"](x)
+        return x
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+# Input tensor adapted for the Linear layer (Batch=1, Features=12)
+# Original arg_0 was size (12,), we adapt to (1, 12) for Linear layer compatibility
+arg_0 = torch.randn(1, 12)
+
+# The function to be tested
+def fuzzed_program(arg_0, sentinel):
+    # Instantiate the model containing the ModuleDict
+    model = ModuleDictModel()
+    
+    # Run the forward pass
+    output = model(arg_0)
+    
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = output * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+args = (arg_0, sentinel)
+
+# Run Eager
+try:
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+    raise
+
+# Run Compiled with fullgraph and dynamic flags
+try:
+    compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+    result_compiled = compiled_program(*args)
+    print(' compile success')
+except Exception as e:
+    print(f' compile failed: {e}')
+    raise
+
+# Verify consistency
+assert torch.allclose(result_original, result_compiled), "Divergence between eager and compiled results"
+print(' results match')

@@ -1,0 +1,29 @@
+import torch
+import tensorflow as tf
+
+def inner(x):
+    return x + 1
+
+def fn(x):
+    # Use tf.name_scope to wrap the execution context, similar to how torch.compile wraps the function.
+    # This provides the naming context (debug information) for the operations inside.
+    with tf.name_scope("compiled_scope"):
+        x = inner(x)
+        return inner(x)
+
+# Use tf.function to trace the execution, analogous to the compilation process in PyTorch.
+@tf.function
+def run_fn(x):
+    return fn(x)
+
+# Execute the function
+result = run_fn(tf.ones(3))
+
+# Verification: Ensure the scope context was captured in the graph.
+# This corresponds to the "debug information" requested in the bug report (seeing the context/structure).
+concrete_fn = run_fn.get_concrete_function(tf.TensorSpec(shape=(3,), dtype=tf.float32))
+graph = concrete_fn.graph
+ops_names = [op.name for op in graph.get_operations()]
+
+# Assert that the scope name appears in the operation names, verifying the context was applied.
+assert any("compiled_scope" in name for name in ops_names), "Scope name not found in graph operations"

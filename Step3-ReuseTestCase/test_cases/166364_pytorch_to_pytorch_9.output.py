@@ -1,0 +1,54 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import torch.nn as nn
+import os
+
+def setup(rank, world_size):
+    """Initialize the distributed environment."""
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    """Destroy the distributed environment."""
+    dist.destroy_process_group()
+
+def test_broadcast_object_list_with_learnable_scalar(rank, world_size):
+    """
+    Test that torch.distributed.broadcast_object_list can handle 
+    learnable scalar parameters (nn.Parameter), similar to the object 
+    causing issues in the original Flex Attention bug report.
+    """
+    setup(rank, world_size)
+
+    # Create the learnable scalar parameter from the bug report
+    if rank == 0:
+        temp = nn.Parameter(torch.tensor(0.0))
+        object_list = [temp]
+    else:
+        object_list = [None]
+
+    # Call the similar API: torch.distributed.broadcast_object_list
+    # This replaces the original flex_attention/compile call site
+    dist.broadcast_object_list(object_list, src=0)
+
+    # Verify the broadcast
+    received_param = object_list[0]
+    
+    # Assertions to ensure the parameter was broadcast correctly
+    assert isinstance(received_param, nn.Parameter), \
+        f"Rank {rank} failed to receive nn.Parameter, got {type(received_param)}"
+    
+    assert torch.allclose(received_param, torch.tensor(0.0)), \
+        f"Rank {rank} received incorrect value: {received_param.item()}"
+
+    print(f"Rank {rank} successfully received parameter: {received_param.item()}")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn processes to simulate distributed environment
+    mp.spawn(test_broadcast_object_list_with_learnable_scalar, args=(world_size,), nprocs=world_size, join=True)

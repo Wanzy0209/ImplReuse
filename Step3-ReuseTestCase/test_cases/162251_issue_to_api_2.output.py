@@ -1,0 +1,33 @@
+import torch
+import unittest
+
+class TestPixelShuffleFPE(unittest.TestCase):
+    """
+    Test case for Issue 162251: Floating point exception in torch.nn.PixelShuffle.
+    
+    This test reproduces the crash logic by passing a very large upscale factor
+    and a complex32 tensor to the PixelShuffle layer.
+    """
+
+    def test_pixel_shuffle_large_upscale_factor_complex32(self):
+        # Reproduce the specific inputs from the bug report
+        # Input tensor with dtype complex32
+        t = torch.zeros((5, 5, 9, 3), dtype=torch.complex32)
+        
+        # Large upscale factor that triggers the FPE in shape checking
+        upscale_factor = 545460846592
+
+        # Initialize the PixelShuffle layer
+        # Note: The original bug report unpacked arguments from a list structure,
+        # but the core logic is simply passing the large integer to the constructor.
+        layer = torch.nn.PixelShuffle(upscale_factor)
+
+        # The bug manifests during the forward pass (or shape checking within it).
+        # We expect this to raise a specific error if the bug is fixed (e.g., ValueError),
+        # or crash with an FPE if the bug is present.
+        # Using assertRaises to handle the expected error state post-fix.
+        with self.assertRaises((RuntimeError, ValueError)):
+            output = layer(t)
+
+if __name__ == '__main__':
+    unittest.main()

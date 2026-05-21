@@ -1,0 +1,64 @@
+import torch
+import tensorflow as tf
+
+# Check for GPU availability (analogous to torch.backends.mps.is_available())
+# Note: This checks for standard GPU availability, which is the TensorFlow equivalent 
+# context for hardware-accelerated operations like the original MPS context.
+gpus = tf.config.list_physical_devices('GPU')
+assert len(gpus) > 0, "GPU device not available"
+
+# Wrapper over the TensorFlow resize_nearest_neighbor operation.
+# Analogous to MPSSoftshrink in the original bug report.
+class TFResizeNearestNeighbor(tf.keras.layers.Layer):
+    def __init__(self, size=(2, 2), **kwargs):
+        super().__init__(**kwargs)
+        self.size = size
+
+    def call(self, inputs):
+        return tf.compat.v1.image.resize_nearest_neighbor(
+            images=inputs,
+            size=self.size,
+            align_corners=False,
+            half_pixel_centers=False
+        )
+
+# Wrapper over the Sequential layer, using the custom resize implementation.
+# Analogous to CustomMPSSoftshrinkModel.
+class CustomResizeModel(tf.keras.Model):
+    def __init__(
+        self,
+        input_channels: int = 1,
+        conv1_size: int = 32,
+        conv2_size: int = 64,
+        output_size: int = 10,
+    ):
+        super().__init__()
+
+        # Using Conv2D layers to maintain spatial dimensions for the resize operation,
+        # analogous to the Linear layers in the original PyTorch code.
+        self.model = tf.keras.Sequential([
+            tf.keras.layers.Conv2D(conv1_size, (3, 3), activation='relu'),
+            TFResizeNearestNeighbor(size=(14, 14)),
+            tf.keras.layers.Conv2D(conv2_size, (3, 3), activation='relu'),
+            TFResizeNearestNeighbor(size=(7, 7)),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(output_size)
+        ])
+
+    def call(self, x):
+        return self.model(x)
+
+# Reproducer logic
+if __name__ == "__main__":
+    # Create dummy input (Batch, Height, Width, Channels)
+    # Original input was 784 (flattened), here we use 28x28x1 to fit the resize logic.
+    dummy_input = tf.random.normal((1, 28, 28, 1))
+
+    model = CustomResizeModel()
+    
+    # Run the model to verify the API behavior
+    output = model(dummy_input)
+
+    # Verify output shape
+    assert output.shape == (1, 10), f"Expected shape (1, 10), got {output.shape}"
+    print("Test passed successfully.")

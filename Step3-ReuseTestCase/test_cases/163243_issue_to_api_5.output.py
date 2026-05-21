@@ -1,0 +1,49 @@
+import torch
+import unittest
+
+class TestTensorMHCompile(unittest.TestCase):
+    def test_mh_inductor_compile_complex64(self):
+        """
+        Test case for Issue 163243: .mH compile problem with inductor backend.
+        
+        The bug occurs when using Tensor.mH (Hermitian transpose) inside a function
+        compiled with torch.compile(backend="inductor"). The inductor backend 
+        previously failed with a stride error when trying to view ComplexFloat as Float.
+        """
+        
+        def repro_func(n=8):
+            dtype = torch.complex64
+
+            # Create input tensor A
+            A = torch.randn(4, n, n, dtype=dtype, requires_grad=True)
+            A = A.clone(memory_format=torch.contiguous_format)
+
+            # Create Identity matrix I
+            I0 = torch.eye(n, dtype=A.dtype, device=A.device)
+            I = I0.unsqueeze(0).expand(A.shape[0], n, n).contiguous()
+
+            # Operation involving .mH (Hermitian transpose)
+            # This line caused the stride/view error in the inductor backend
+            A = I + 0.5 * (A @ A.mH)
+
+            # Subsequent operations to ensure the graph is valid
+            R = torch.linalg.cholesky(A, upper=True)
+            loss = R.abs().sum()
+            loss.backward()
+            
+            return loss
+
+        # Compile the function with the problematic backend
+        # This should not raise "self.stride(-1) must be 1 to view ComplexFloat as Float"
+        compiled_repro = torch.compile(repro_func, backend="inductor")
+        
+        try:
+            result = compiled_repro()
+            # Basic assertion to ensure execution completed and returned a tensor
+            self.assertIsNotNone(result)
+            self.assertTrue(torch.is_tensor(result))
+        except Exception as e:
+            self.fail(f"torch.compile with inductor failed on .mH operation: {e}")
+
+if __name__ == '__main__':
+    unittest.main()

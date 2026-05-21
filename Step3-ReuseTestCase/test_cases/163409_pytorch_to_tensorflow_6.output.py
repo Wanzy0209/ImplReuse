@@ -1,0 +1,41 @@
+import torch
+import tensorflow as tf
+
+# Adapted test case for tf.keras.metrics.SpecificityAtSensitivity
+# based on the torch.nn.MaxUnpool3d segmentation fault bug.
+# The core logic being tested is passing mismatched tensor shapes
+# and incompatible dtypes (complex128, uint32) to the API.
+
+def test_specificity_at_sensitivity_invalid_inputs():
+    # Original PyTorch inputs:
+    # input: shape (9, 6, 3, 6, 9), dtype complex128
+    # indices: shape (5, 7, 9, 8, 5), dtype uint32
+    
+    # Mapping to TensorFlow API:
+    # y_pred (predictions) -> mapped to the 'input' tensor
+    # y_true (labels) -> mapped to the 'indices' tensor
+    
+    # Create y_pred with complex128 dtype and shape (9, 6, 3, 6, 9)
+    real_part = tf.ones((9, 6, 3, 6, 9), dtype=tf.float64)
+    imag_part = tf.ones((9, 6, 3, 6, 9), dtype=tf.float64)
+    y_pred = tf.complex(real_part, imag_part)
+    
+    # Create y_true with uint32 dtype and shape (5, 7, 9, 8, 5)
+    # Note: Shapes are completely mismatched between y_true and y_pred
+    y_true = tf.ones((5, 7, 9, 8, 5), dtype=tf.uint32)
+
+    # Initialize the metric
+    # PyTorch init was empty/invalid. TF requires sensitivity, so we provide a default.
+    metric = tf.keras.metrics.SpecificityAtSensitivity(sensitivity=0.5)
+
+    # Attempt to update state with the mismatched inputs
+    # This verifies if the API handles the invalid input gracefully or crashes
+    try:
+        metric.update_state(y_true, y_pred)
+        result = metric.result()
+        print(f"Result: {result}")
+    except Exception as e:
+        print(f"Exception caught: {type(e).__name__}: {e}")
+
+if __name__ == "__main__":
+    test_specificity_at_sensitivity_invalid_inputs()

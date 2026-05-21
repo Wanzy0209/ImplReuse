@@ -1,0 +1,66 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+import sys
+
+def test_recv_object_list():
+    """
+    Test case for torch.distributed.recv_object_list.
+    Verifies that a list of picklable objects can be successfully received
+    from a source rank.
+    """
+    
+    def worker(rank, world_size):
+        # Setup environment for distributed communication
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '29500'
+        
+        # Initialize the process group
+        dist.init_process_group(
+            backend="gloo", # gloo is generally sufficient for CPU object lists
+            rank=rank,
+            world_size=world_size
+        )
+
+        if rank == 0:
+            # Rank 0 acts as the sender
+            # We send a list containing an int, a string, and a tensor
+            objects_to_send = [
+                42,
+                "test_string",
+                torch.tensor([1.0, 2.0, 3.0])
+            ]
+            # Send to rank 1
+            dist.send_object_list(objects_to_send, dst=1)
+            
+        elif rank == 1:
+            # Rank 1 acts as the receiver
+            # The list must be pre-allocated with the correct size
+            received_objects = [None] * 3
+            
+            # Receive from rank 0
+            dist.recv_object_list(received_objects, src=0)
+            
+            # Verify the received data
+            assert received_objects[0] == 42, "Integer object mismatch"
+            assert received_objects[1] == "test_string", "String object mismatch"
+            assert torch.equal(received_objects[2], torch.tensor([1.0, 2.0, 3.0])), "Tensor object mismatch"
+            print("Test passed on rank 1.")
+
+        # Cleanup
+        dist.destroy_process_group()
+
+    if not torch.distributed.is_available():
+        print("Skipping test as torch.distributed is not available.")
+        return
+
+    world_size = 2
+    try:
+        mp.spawn(worker, args=(world_size,), nprocs=world_size, join=True)
+    except Exception as e:
+        print(f"Test failed with exception: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    test_recv_object_list()

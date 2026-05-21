@@ -1,0 +1,50 @@
+import torch
+import unittest
+
+class TestGridSampler3DNaNHandling(unittest.TestCase):
+    def test_grid_sampler_3d_nan_propagation(self):
+        """
+        Test that grid_sampler_3d correctly propagates NaN values in the grid
+        on the MPS backend, matching the CPU behavior.
+        
+        Bug Description: The MPS backend was setting NaN values in the grid to -1,
+        resulting in valid output values (1.0) instead of propagating the NaN.
+        Ref: Issue #163851
+        """
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS backend not available")
+
+        # Setup input and grid as per the bug report
+        # Input shape: (N, C, D, H, W) = (1, 1, 3, 3, 3)
+        input = torch.ones(1, 1, 3, 3, 3)
+        
+        # Grid shape: (N, D_out, H_out, W_out, 3) = (1, 1, 1, 2, 3)
+        # The first coordinate contains NaN, the second is valid
+        grid_nan = torch.tensor([[[[[torch.nan, 1., 1.], [1., 1., 1.]]]]])
+
+        # Compute on CPU (Expected behavior: NaN propagation)
+        out_cpu = torch.grid_sampler_3d(input, grid_nan, 0, 0, True)
+
+        # Compute on MPS
+        input_mps = input.to("mps")
+        grid_mps = grid_nan.to("mps")
+        out_mps = torch.grid_sampler_3d(input_mps, grid_mps, 0, 0, True)
+
+        # Bring MPS output back to CPU for comparison
+        out_mps_cpu = out_mps.cpu()
+
+        # Verify CPU behavior (baseline)
+        # The first element should be NaN because the grid coordinate was NaN
+        self.assertTrue(torch.isnan(out_cpu.flatten()[0]), "CPU output should contain NaN")
+
+        # Verify MPS behavior matches CPU
+        # The bug report indicates MPS returns 1.0 instead of NaN.
+        # We assert that the MPS output is also NaN to ensure the fix.
+        self.assertTrue(torch.isnan(out_mps_cpu.flatten()[0]), 
+                        "MPS output should propagate NaN like CPU, not clamp to valid values")
+
+        # Verify the second element (valid coordinate) is consistent between backends
+        self.assertEqual(out_cpu.flatten()[1].item(), out_mps_cpu.flatten()[1].item())
+
+if __name__ == '__main__':
+    unittest.main()

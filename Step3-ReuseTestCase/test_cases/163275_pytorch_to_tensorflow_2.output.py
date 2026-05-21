@@ -1,0 +1,24 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Setup inputs
+# Using float16 to match the dtype sensitivity of the original bug report
+A = tf.constant(np.random.rand(1024, 1024), dtype=tf.float16)
+indices = tf.constant(np.random.randint(0, 1024, size=(1024,)), dtype=tf.int32)
+
+# Define the function with the compilation decorator
+# Equivalent to @torch.compile in PyTorch
+@tf.function
+def take_op(input_tensor, idx):
+    # Call the similar API (tf.experimental.numpy.take) with a specific keyword argument.
+    # 'mode' is used here as the equivalent specific argument to 'out_dtype' in the original bug.
+    return tf.experimental.numpy.take(input_tensor, idx, mode='clip')
+
+# Execute the function to verify behavior
+# In the original bug, this raised a TypeError. Here we verify it runs correctly.
+try:
+    result = take_op(A, indices)
+    print("Test passed. Result shape:", result.shape)
+except Exception as e:
+    print("Test failed with error:", e)

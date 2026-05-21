@@ -1,0 +1,52 @@
+import torch
+import torch.distributed as dist
+import multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    if rank == 0:
+        # Adapted test case: 
+        # The original bug involved issues with float/half types (__half).
+        # We verify that send_object_list handles float16 tensors correctly.
+        tensor_half = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float16)
+        object_list = [tensor_half, "test_string", 123]
+        
+        # Send the list of objects to rank 1
+        dist.send_object_list(object_list, dst=1)
+        
+    elif rank == 1:
+        # Prepare a list to receive objects
+        # The receiver must provide a list of the correct size
+        object_list = [None, None, None]
+        
+        # Receive from rank 0
+        dist.recv_object_list(object_list, src=0)
+        
+        # Assertions to verify data integrity
+        assert isinstance(object_list[0], torch.Tensor)
+        assert object_list[0].dtype == torch.float16
+        assert torch.equal(object_list[0], torch.tensor([1.0, 2.0, 3.0], dtype=torch.float16))
+        assert object_list[1] == "test_string"
+        assert object_list[2] == 123
+        print("Test passed: send_object_list successfully handled float16 tensor and other objects.")
+
+    cleanup()
+
+def main():
+    world_size = 2
+    # Spawn processes for distributed testing
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()

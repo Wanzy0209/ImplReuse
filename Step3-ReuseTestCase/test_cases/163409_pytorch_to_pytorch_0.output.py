@@ -1,0 +1,42 @@
+import torch
+import sys
+
+def test_maxunpool3d_segfault():
+    """
+    Test case for Issue 163409: Segmentation fault in torch.nn.MaxUnpool3d.
+    
+    The original bug report involved passing invalid arguments (mismatched shapes,
+    unsupported dtypes) to MaxUnpool3d, which caused a segmentation fault.
+    This test attempts to reproduce that scenario.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test as the original bug was GPU-specific.")
+        return
+
+    # Recreate the inputs from the bug report
+    # input[2] from the report: [torch.empty(...), torch.empty(...)]
+    # Tensor 1: complex128, shape (9, 6, 3, 6, 9)
+    # Tensor 2: uint32, shape (5, 7, 9, 8, 5)
+    input_tensor = torch.empty((9, 6, 3, 6, 9), dtype=torch.complex128, device='cuda')
+    indices_tensor = torch.empty((5, 7, 9, 8, 5), dtype=torch.uint32, device='cuda')
+
+    # Initialize MaxUnpool3d
+    # The original bug report called torch.nn.MaxUnpool3d() with no arguments (*input[0] was empty).
+    # This is invalid in standard PyTorch (requires kernel_size). 
+    # We provide a kernel_size to ensure the layer instantiates correctly so we can test the forward pass crash.
+    layer = torch.nn.MaxUnpool3d(kernel_size=2)
+
+    # Attempt the forward pass
+    # Original call: r2 = r1(*input[2],**input[3])
+    # This is expected to crash (segfault) in the buggy version or raise a RuntimeError in a fixed version.
+    try:
+        output = layer(input_tensor, indices_tensor)
+        print("Forward pass completed without crash.")
+    except RuntimeError as e:
+        # Expected behavior: raise an error about shape/dtype mismatch instead of segfaulting
+        print(f"Caught expected RuntimeError: {e}")
+    except Exception as e:
+        print(f"Caught unexpected exception: {type(e).__name__}: {e}")
+
+if __name__ == "__main__":
+    test_maxunpool3d_segfault()

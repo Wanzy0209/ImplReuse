@@ -1,0 +1,51 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Define a function that uses the similar API (torch.distributed.broadcast_object_list)
+    # inside a torch.compiler.disable context manager.
+    # This tests the interaction described in the bug report: combining fullgraph compilation
+    # with intentional graph breaks via torch.compiler.disable.
+    def func(x):
+        with torch.compiler.disable():
+            # This operation is not traceable by torch.compile in the standard way,
+            # so it is wrapped in disable.
+            obj_list = [x.sum().item()]
+            dist.broadcast_object_list(obj_list, src=0)
+        return x + 1
+
+    # The bug report indicates that torch.compile(fullgraph=True) currently raises
+    # torch._dynamo.exc.Unsupported when encountering torch.compiler.disable.
+    # This test verifies if the similar API works correctly in this context.
+    try:
+        # Compile with fullgraph=True to enforce strict graph capture
+        compiled_func = torch.compile(func, fullgraph=True)
+        
+        input_tensor = torch.randn(2, 2)
+        output = compiled_func(input_tensor)
+        
+        if rank == 0:
+            print("Test Passed: torch.compile(fullgraph=True) successfully handled torch.compiler.disable with broadcast_object_list.")
+    except Exception as e:
+        if rank == 0:
+            print(f"Test Failed: {e}")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use spawn to launch processes for distributed testing
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

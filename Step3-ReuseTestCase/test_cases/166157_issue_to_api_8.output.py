@@ -1,0 +1,90 @@
+import unittest
+import tensorflow as tf
+import numpy as np
+
+class MockDeviceAllocator:
+    """
+    A Python mock of the OpenRegDeviceAllocator described in the issue.
+    It adapts the logic to track statistics for operations performed by 
+    the similar API (tf.keras.backend.exp).
+    """
+    def __init__(self):
+        # Mimicking c10::CachingDeviceAllocator::DeviceStats structure
+        self.stats = {
+            'allocated_bytes': 0,
+            'reserved_bytes': 0,
+            'num_alloc_retries': 0
+        }
+
+    def allocate_and_compute(self, x):
+        """
+        Simulates the allocate() override in the C++ implementation.
+        Instead of just calling orMalloc, we perform the exp operation
+        and track the memory footprint of the result.
+        """
+        # Leverage the similar API: tf.keras.backend.exp
+        # This replaces the direct orMalloc call but serves as the 
+        # resource-consuming operation we want to track.
+        result = tf.keras.backend.exp(x)
+        
+        # Calculate memory usage (assuming float32)
+        nbytes = result.numpy().nbytes
+        
+        # Logic from C++ fix:
+        # stats_.allocated_bytes[0].increase(nbytes);
+        # stats_.reserved_bytes[0].increase(nbytes);
+        self.stats['allocated_bytes'] += nbytes
+        self.stats['reserved_bytes'] += nbytes
+        
+        return result
+
+    def get_device_stats(self):
+        """
+        Mimics c10::DeviceAllocator::getDeviceStats()
+        """
+        return self.stats
+
+    def reset_accumulated_stats(self):
+        """
+        Mimics c10::DeviceAllocator::resetAccumulatedStats()
+        """
+        self.stats['allocated_bytes'] = 0
+        self.stats['reserved_bytes'] = 0
+        self.stats['num_alloc_retries'] = 0
+
+class TestMemoryStatistics(unittest.TestCase):
+    def test_stats_tracking_with_exp_api(self):
+        """
+        Test that the allocator correctly tracks statistics when using 
+        the similar API (tf.keras.backend.exp), addressing the issue 
+        where memory consumption was previously a "black box".
+        """
+        allocator = MockDeviceAllocator()
+        
+        # 1. Verify initial state (Bug scenario: no visibility)
+        initial_stats = allocator.get_device_stats()
+        self.assertEqual(initial_stats['allocated_bytes'], 0, 
+                         "Initial allocated bytes should be 0")
+
+        # 2. Perform operation using the similar API
+        # Create a tensor with 2 float32 elements (2 * 4 bytes = 8 bytes)
+        input_tensor = tf.constant([1.0, 2.0])
+        _ = allocator.allocate_and_compute(input_tensor)
+
+        # 3. Verify statistics are updated (Fix scenario: observability added)
+        current_stats = allocator.get_device_stats()
+        expected_bytes = 8  # 2 elements * 4 bytes/element
+        
+        self.assertEqual(current_stats['allocated_bytes'], expected_bytes,
+                         "Allocator should track bytes allocated by exp operation")
+        self.assertEqual(current_stats['reserved_bytes'], expected_bytes,
+                         "Allocator should track bytes reserved")
+
+        # 4. Test reset functionality (part of the proposed implementation)
+        allocator.reset_accumulated_stats()
+        reset_stats = allocator.get_device_stats()
+        self.assertEqual(reset_stats['allocated_bytes'], 0,
+                         "Stats should be reset to 0")
+
+if __name__ == '__main__':
+    unittest.main()

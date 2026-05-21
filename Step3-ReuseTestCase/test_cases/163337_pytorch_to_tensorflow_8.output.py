@@ -1,0 +1,58 @@
+import torch
+import tensorflow as tf
+import os
+import tempfile
+
+def test_save_model_float16():
+    """
+    Adapted test case for tf.keras.models.save_model.
+    
+    The original bug (Issue 163337) involved a compilation error with static_cast 
+    from float to __half (rocwmma::hfloat16_t) when loading a PyTorch extension.
+    
+    While tf.keras.models.save_model is a serialization API and does not trigger 
+    C++ compilation like torch.utils.cpp_extension.load, we adapt the test to 
+    verify the behavior of saving a model that utilizes float16 data types. 
+    This preserves the semantic context of handling half-precision (float16) data 
+    present in the original bug report.
+    """
+    
+    # Create a temporary directory for the saved model
+    with tempfile.TemporaryDirectory() as tmpdir:
+        model_path = os.path.join(tmpdir, "saved_model")
+
+        # Create a simple model using float16 to align with the __half/float16 context of the bug
+        # Note: We use float16 for the input/hidden layers to mimic the precision context
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(10, input_shape=(5,), dtype='float16', name='dense_fp16'),
+            tf.keras.layers.Dense(1, dtype='float32', name='output_fp32')
+        ])
+
+        # Compile the model (necessary for a valid SavedModel in some contexts, though not strictly for save)
+        model.compile(optimizer='adam', loss='mse')
+
+        # Adaptation: Call the similar API (save_model) instead of load
+        # The original API was: torch.utils.cpp_extension.load(name, sources, ...)
+        # The similar API is: tf.keras.models.save_model(model, filepath, ...)
+        try:
+            tf.keras.models.save_model(
+                model,
+                model_path,
+                overwrite=True,
+                save_format='tf'
+            )
+        except Exception as e:
+            print(f"Failed to save model: {e}")
+            raise
+
+        # Verify the model was saved successfully
+        assert os.path.exists(model_path), f"Model directory not found at {model_path}"
+        
+        # Verify the saved assets exist (e.g., saved_model.pb)
+        pb_file = os.path.join(model_path, "saved_model.pb")
+        assert os.path.exists(pb_file), f"saved_model.pb not found at {pb_file}"
+
+        print("Test passed: Model with float16 layers saved successfully.")
+
+if __name__ == "__main__":
+    test_save_model_float16()

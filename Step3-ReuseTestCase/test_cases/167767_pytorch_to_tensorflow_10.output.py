@@ -1,0 +1,44 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_clip_by_value():
+    # Note: tf.compat.v1.flags is for command line parsing, not tensor operations.
+    # The correct semantic equivalent to torch.clamp is tf.clip_by_value.
+    
+    # Test case 1: Clamping zero to 0.0
+    a = tf.constant([0.0])
+    a_clipped = tf.clip_by_value(a, clip_value_min=0.0, clip_value_max=np.inf)
+    print("Test 1 (min=0.0):")
+    print(f"  Input: {a.numpy()}")
+    print(f"  Output: {a_clipped.numpy()}")
+    assert a_clipped.numpy()[0] == 0.0
+
+    # Test case 2: Clamping zero to 1e-7
+    b = tf.constant([0.0])
+    c = tf.clip_by_value(b, clip_value_min=1e-7, clip_value_max=np.inf)
+    print("\nTest 2 (min=1e-7):")
+    print(f"  Input: {b.numpy()}")
+    print(f"  Output: {c.numpy()}")
+    # Expected behavior: 0.0 should be clamped to 1e-7
+    # The PyTorch bug reported that this resulted in 0.0
+    assert c.numpy()[0] == 1e-7, f"Expected 1e-7, got {c.numpy()[0]}"
+
+    # Test case 3: Clamping zero to 1e-7 with explicit max=None (using inf)
+    b = tf.constant([0.0])
+    c = tf.clip_by_value(b, clip_value_min=1e-7, clip_value_max=np.inf)
+    print("\nTest 3 (min=1e-7, max=inf):")
+    print(f"  Input: {b.numpy()}")
+    print(f"  Output: {c.numpy()}")
+    assert c.numpy()[0] == 1e-7
+
+    # Test case 4: Using tf.maximum (equivalent to clamp_min)
+    b = tf.constant([0.0])
+    c = tf.maximum(b, 1e-7)
+    print("\nTest 4 (tf.maximum):")
+    print(f"  Input: {b.numpy()}")
+    print(f"  Output: {c.numpy()}")
+    assert c.numpy()[0] == 1e-7
+
+if __name__ == "__main__":
+    test_tf_clip_by_value()

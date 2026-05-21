@@ -1,0 +1,20 @@
+import torch
+
+def foo(x):
+    x.tan_()
+    x = x.t()
+    return torch.rand_like(x)
+
+# Test with eager mode
+torch.manual_seed(0)
+x1 = torch.randn(4, 6)
+out1 = foo(x1)
+
+# Test with compiled mode
+# Reset seed to ensure deterministic comparison for the random operation
+torch.manual_seed(0)
+x2 = torch.randn(4, 6)
+cf = torch.compile(foo)
+out2 = cf(x2)
+
+torch.testing.assert_close(out1, out2)

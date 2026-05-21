@@ -1,0 +1,25 @@
+import tensorflow as tf
+
+# Create an empty tensor similar to the PyTorch example
+x = tf.constant([], dtype=tf.float32)
+print("Input tensor:", x)
+
+# relu on CPU
+with tf.device('/CPU:0'):
+    cpu_result = tf.nn.relu(x)
+print("CPU result:", cpu_result)
+
+# relu on GPU
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    with tf.device('/GPU:0'):
+        gpu_result = tf.nn.relu(x)
+    print("GPU result:", gpu_result)
+
+    # Verify consistency between backends
+    # The original bug showed a discrepancy (0 vs nan).
+    # Here we ensure the shape and values match for the similar API.
+    assert cpu_result.shape == gpu_result.shape, "Shape mismatch between CPU and GPU"
+    assert tf.reduce_all(tf.equal(cpu_result, gpu_result)), "Value mismatch between CPU and GPU"
+else:
+    print("GPU not available, skipping GPU comparison")

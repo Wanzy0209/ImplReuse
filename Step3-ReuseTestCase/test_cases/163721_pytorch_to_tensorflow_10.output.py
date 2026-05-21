@@ -1,0 +1,74 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Check for GPU availability (analogous to torch.backends.mps.is_available())
+# Note: TensorFlow supports MPS (Metal) on macOS, usually listed under GPU devices.
+gpus = tf.config.list_physical_devices('GPU')
+print(f"GPUs Available: {len(gpus)}")
+if gpus:
+    try:
+        # Attempt to run on the first available GPU (MPS if on Mac)
+        tf.config.experimental.set_visible_devices(gpus[0], 'GPU')
+        logical_gpus = tf.config.list_logical_devices('GPU')
+        print(f"Running on: {logical_gpus[0].name}")
+    except RuntimeError as e:
+        print(e)
+
+# Wrapper over the tf.keras.ops.isfinite operation.
+# Analogous to MPSSoftshrink in the original bug report.
+class IsFiniteLayer(tf.keras.layers.Layer):
+    def __init__(self):
+        super().__init__()
+
+    def call(self, inputs):
+        # Using the target API: tf.keras.ops.isfinite
+        # We cast back to float32 to ensure compatibility with subsequent Dense layers,
+        # similar to how the original softshrink returned a tensor compatible with Linear layers.
+        return tf.cast(tf.keras.ops.isfinite(inputs), tf.float32)
+
+# Wrapper over the Sequential layer, using the custom isfinite implementation.
+# Analogous to CustomMPSSoftshrinkModel.
+class CustomFiniteModel(tf.keras.Model):
+    def __init__(
+        self,
+        input_size: int = 784,
+        lin1_size: int = 256,
+        lin2_size: int = 256,
+        lin3_size: int = 256,
+        output_size: int = 10,
+    ):
+        super().__init__()
+
+        self.model = tf.keras.Sequential([
+            tf.keras.layers.Dense(lin1_size, input_shape=(input_size,)),
+            IsFiniteLayer(),
+            tf.keras.layers.Dense(lin2_size),
+            IsFiniteLayer(),
+            tf.keras.layers.Dense(lin3_size),
+            IsFiniteLayer(),
+            tf.keras.layers.Dense(output_size),
+        ])
+
+    def call(self, x):
+        return self.model(x)
+
+# Test execution
+if __name__ == "__main__":
+    # Create model
+    model = CustomFiniteModel()
+
+    # Create dummy input with some NaN/Inf values to test isfinite logic
+    # This mimics the input processing in the original reproducer.
+    x = np.random.rand(32, 784).astype(np.float32)
+    x[0, 0] = np.inf
+    x[1, 1] = np.nan
+
+    # Run the model
+    # This verifies that the API works within the model structure without crashing.
+    output = model(x)
+
+    # Verify output shape
+    assert output.shape == (32, 10), f"Expected shape (32, 10), got {output.shape}"
+
+    print("Test passed. Model executed successfully with tf.keras.ops.isfinite.")

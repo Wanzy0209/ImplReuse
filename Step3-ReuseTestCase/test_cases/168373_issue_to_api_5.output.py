@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+
+# Mimic the backend creation logic from the original bug report
+def create_custom_backend(name):
+    # In the original bug, aot_autograd returns a fresh function object every time.
+    # Here we return a simple lambda to represent that unique backend object.
+    return lambda x: x + name
+
+# Wrapper function similar to torch_compile_with_custom_backend
+def tf_compile_with_custom_backend(module, backend):
+    @tf.function
+    def compiled_graph(x):
+        # Leverage the similar API: tf.autograph.trace
+        # This executes during the tracing phase. By passing the backend object,
+        # we can observe if the tracing is happening due to backend mismatches.
+        tf.autograph.trace(f"Tracing with backend: {backend}")
+        return module(x)
+    return compiled_graph
+
+class SubMod(tf.Module):
+    def __call__(self, x):
+        return tf.sin(x)
+
+class Mod(tf.Module):
+    def __init__(self):
+        super().__init__()
+        self.mod_a = SubMod()
+        self.mod_b = SubMod()
+
+        # Reproduce the bug logic: creating a fresh backend for each call.
+        # This leads to separate traces (recompilations) because the backend
+        # object identity is different, similar to the PyTorch issue.
+        self.mod_a = tf_compile_with_custom_backend(self.mod_a, create_custom_backend("backend_a"))
+        self.mod_b = tf_compile_with_custom_backend(self.mod_b, create_custom_backend("backend_b"))
+
+    def __call__(self, x):
+        return self.mod_a(x) + self.mod_b(x)
+
+if __name__ == "__main__":
+    mod = Mod()
+    x = tf.random.normal((4,))
+    
+    # This execution will trigger tracing.
+    # We expect to see two trace outputs because the backends (closures) are different,
+    # mimicking the recompilation issue described in the bug report.
+    mod(x)

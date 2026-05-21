@@ -1,0 +1,36 @@
+import torch
+import tensorflow as tf
+
+# Adapted from the PyTorch bug report for torch.nn.MaxUnpool3d
+# Original logic: Passing complex128 and uint32 tensors to an operation that expects specific types.
+# PyTorch crashed with a segfault. We test if tf.signal.mdct handles these invalid types gracefully.
+
+print("TensorFlow Version:", tf.__version__)
+
+# Recreate the tensors from the PyTorch input[2]
+# PyTorch: torch.empty((9, 6, 3, 6, 9), dtype=torch.complex128, device='cuda')
+# Note: We use CPU here for general compatibility, but the type mismatch is the key factor.
+input_complex = tf.empty((9, 6, 3, 6, 9), dtype=tf.complex128)
+
+# PyTorch: torch.empty((5, 7, 9, 8, 5), dtype=torch.uint32, device='cuda')
+input_uint = tf.empty((5, 7, 9, 8, 5), dtype=tf.uint32)
+
+# tf.signal.mdct requires 'frame_length' to be divisible by 4.
+# We use a valid frame_length to isolate the type mismatch error.
+frame_length = 4
+
+print("\n--- Test Case 1: Input with complex128 dtype ---")
+try:
+    # tf.signal.mdct expects float32 or float64
+    result_complex = tf.signal.mdct(input_complex, frame_length=frame_length)
+    print("Result:", result_complex.shape)
+except Exception as e:
+    print(f"Exception caught: {type(e).__name__}: {e}")
+
+print("\n--- Test Case 2: Input with uint32 dtype ---")
+try:
+    # tf.signal.mdct expects float32 or float64
+    result_uint = tf.signal.mdct(input_uint, frame_length=frame_length)
+    print("Result:", result_uint.shape)
+except Exception as e:
+    print(f"Exception caught: {type(e).__name__}: {e}")

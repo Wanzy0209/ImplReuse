@@ -1,0 +1,77 @@
+import unittest
+from unittest.mock import patch, MagicMock
+import torch.utils.cpp_extension as cpp_ext
+
+class TestCppExtensionSecurity(unittest.TestCase):
+    def test_include_paths_injection_in_load_inline(self):
+        """
+        Test case to demonstrate OS command injection risk when leveraging 
+        torch.utils.cpp_extension.include_paths to populate arguments for 
+        torch.utils.cpp_extension.load_inline with use_pch=True.
+        
+        The vulnerability arises because the build helper executes commands via 
+        subprocess.check_output(..., shell=True) without sanitizing user-supplied 
+        inputs like extra_include_paths.
+        """
+        
+        # 1. Leverage the similar API (include_paths) to get standard paths
+        # This simulates a developer using the API to get default paths
+        standard_paths = cpp_ext.include_paths()
+        
+        # 2. Prepare a malicious payload
+        # This simulates untrusted input being injected into the build flags
+        malicious_payload = "; echo 'COMMAND_INJECTION'; #"
+        
+        # 3. Combine the API output with the malicious payload
+        # This represents the 'reuse' of the similar API in a vulnerable context
+        compromised_include_paths = standard_paths + [malicious_payload]
+        
+        # 4. Mock subprocess.check_output to capture the command execution attempt
+        # We patch it in the torch.utils.cpp_extension module where the vulnerability resides
+        with patch('torch.utils.cpp_extension.subprocess.check_output') as mock_subprocess:
+            # Mock the return value to prevent actual build failures during the test
+            mock_subprocess.return_value = b"Mocked Build Output"
+            
+            # Minimal C++ code required for load_inline
+            cpp_code = """
+            #include <torch/extension.h>
+            void test_func() {}
+            PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+                m.def("test_func", &test_func);
+            }
+            """
+            
+            try:
+                # 5. Call the Original API Under Test (load_inline)
+                # use_pch=True is required to trigger the specific vulnerable code path
+                cpp_ext.load_inline(
+                    name="test_extension",
+                    cpp_sources=cpp_code,
+                    extra_include_paths=compromised_include_paths,
+                    with_pybind11=True,
+                    use_pch=True
+                )
+            except Exception:
+                # Exceptions may occur due to missing compilers or environment issues,
+                # but we are primarily interested in the subprocess call arguments.
+                pass
+
+            # 6. Verify the vulnerability conditions
+            if mock_subprocess.called:
+                # Retrieve the command string passed to the shell
+                call_args = mock_subprocess.call_args
+                cmd = call_args[0][0] if call_args[0] else call_args[1].get('cmd', '')
+                shell_flag = call_args[1].get('shell', False)
+                
+                # Assertion 1: Verify the command is executed with shell=True
+                self.assertTrue(shell_flag, 
+                                "Vulnerability condition: subprocess called with shell=True")
+                
+                # Assertion 2: Verify the malicious payload is present in the command
+                self.assertIn(malicious_payload, str(cmd), 
+                              "Vulnerability condition: Malicious payload injected into command")
+            else:
+                self.fail("subprocess.check_output was not called, build logic might have changed")
+
+if __name__ == '__main__':
+    unittest.main()

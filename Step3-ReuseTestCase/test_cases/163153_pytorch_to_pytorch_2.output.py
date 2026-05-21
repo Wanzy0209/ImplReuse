@@ -1,0 +1,70 @@
+import os
+import torch
+import torch.distributed as dist
+from torch.distributed.fsdp import fully_shard
+import torch.hub
+
+# Use torchvision for a standard model to load weights for
+try:
+    import torchvision.models as models
+except ImportError:
+    print("This test requires torchvision. Please install it via `pip install torchvision`.")
+    exit(1)
+
+def main():
+    # Adapted setup from original example to maintain distributed context
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    is_distributed = world_size > 1
+    
+    if is_distributed:
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        # Original API Under Test: torch.distributed.init_process_group
+        # We keep this to establish the context for the similar API test
+        dist.init_process_group(backend=backend)
+        device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else f"cpu")
+    else:
+        device = torch.device("cpu")
+
+    # Create a standard model (ResNet18) to replace the custom Transformer
+    # This allows us to use a real URL for the similar API
+    model = models.resnet18().to(device)
+
+    # Apply FSDP2 (Context from original bug report)
+    # Note: fully_shard requires the module to be on the device first
+    fully_shard(model)
+
+    # Test the similar API: torch.hub.load_state_dict_from_url
+    url = "https://download.pytorch.org/models/resnet18-f37072fd.pth"
+    
+    print(f"Rank {rank}: Attempting to load state dict from URL...")
+    
+    # Load state dict
+    # We map to CPU first to avoid OOM or device mismatch issues before loading
+    state_dict = torch.hub.load_state_dict_from_url(url, map_location='cpu', progress=True)
+    
+    # Load into the FSDP model
+    # This verifies the API works in the distributed/FSDP context
+    try:
+        # FSDP2's load_state_dict handles the sharding logic
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        
+        # In FSDP, some keys might be unexpected or missing depending on the sharding strategy
+        # but the core weights should load.
+        print(f"Rank {rank}: Load complete. Missing keys: {len(missing_keys)}, Unexpected keys: {len(unexpected_keys)}")
+        
+        # Simple assertion to verify weights are loaded and accessible
+        # Accessing a parameter triggers the gather in FSDP
+        weight_sum = model.conv1.weight.sum().item()
+        assert weight_sum != 0, "Weights appear to be zero or uninitialized"
+        print(f"Rank {rank}: Verification passed. Weight sum: {weight_sum}")
+        
+    except Exception as e:
+        print(f"Rank {rank}: Failed to load state dict: {e}")
+        raise
+
+    if is_distributed:
+        dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

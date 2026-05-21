@@ -1,0 +1,41 @@
+import torch
+from packaging import version
+
+def test_cuda_version_and_backend_sdp():
+    """
+    Test case derived from Issue 166068 (HIP version parsing) 
+    and the similar API torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed.
+    
+    This test verifies that the CUDA version string (the counterpart to the HIP version 
+    in the bug report) is PEP 440 compliant, and checks the similar CUDA backend API 
+    to ensure it returns a valid boolean.
+    """
+    if not torch.cuda.is_available():
+        # Skip if CUDA is not available, as the APIs under test are CUDA-specific
+        return
+
+    # Leverage the similar API: Check the SDP math allowance
+    # This verifies the backend API is accessible and returns the expected type.
+    sdp_allowed = torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
+    assert isinstance(sdp_allowed, bool), \
+        "torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed should return a boolean"
+
+    # Preserve original bug reproduction logic: Parse the version string
+    # The bug report states torch.version.cuda works (e.g., "12.6"), unlike torch.version.hip.
+    # We assert this behavior to ensure the CUDA version string remains valid.
+    cuda_version = torch.version.cuda
+    assert cuda_version is not None, \
+        "torch.version.cuda should not be None when CUDA is available"
+
+    try:
+        parsed_version = version.parse(cuda_version)
+        # If parsing succeeds, the version is valid
+        assert parsed_version is not None
+    except version.InvalidVersion as e:
+        raise AssertionError(
+            f"torch.version.cuda '{cuda_version}' is not PEP 440 compliant. "
+            f"This mirrors the HIP bug reported in Issue 166068. Error: {e}"
+        )
+
+if __name__ == "__main__":
+    test_cuda_version_and_backend_sdp()

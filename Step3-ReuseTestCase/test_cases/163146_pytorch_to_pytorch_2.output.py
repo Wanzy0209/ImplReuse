@@ -1,0 +1,40 @@
+import torch
+import torch.library
+
+def test_slice_opcheck_with_dynamic_index():
+    """
+    Test case for torch.library.opcheck based on Issue 163146.
+    
+    The original issue reported a data-dependent error during torch.export.export
+    when slicing a tensor using another tensor as the stop index:
+        selected_item_embedding = item_embedding[:, :max_item_num, :]
+    
+    This test uses torch.library.opcheck to verify the behavior of the underlying
+    aten::slice.Tensor operator when provided with a scalar tensor as the end index.
+    """
+    
+    # Setup inputs based on the bug report's "Locals"
+    # item_embedding: Tensor(shape: torch.Size([s10, s64, 64]))
+    # max_item_num: Tensor(shape: torch.Size([]))
+    item_embedding = torch.randn(10, 64, 64)
+    max_item_num = torch.tensor(5)
+
+    # The failing operation corresponds to aten::slice.Tensor
+    # Python syntax: tensor[:, :max_item_num, :]
+    # Op syntax: slice.Tensor(Tensor self, int dim, int start, int end, int step)
+    # Mapping: dim=1, start=0, end=max_item_num (Tensor), step=1
+    
+    op = torch.ops.aten.slice.Tensor
+    args = (item_embedding, 1, 0, max_item_num, 1)
+
+    # Run opcheck to validate the operator with these specific arguments
+    try:
+        result = torch.library.opcheck(op, args)
+        print("opcheck passed successfully.")
+        print("Result:", result)
+    except Exception as e:
+        print(f"opcheck failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_slice_opcheck_with_dynamic_index()

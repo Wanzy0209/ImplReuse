@@ -1,0 +1,61 @@
+import tensorflow as tf
+import numpy as np
+
+class TestModel(tf.keras.Model):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = tf.keras.layers.Dense(20)
+        self.fc2 = tf.keras.layers.Dense(1)
+        self.relu = tf.keras.layers.ReLU()
+
+    def call(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+def get_default_model():
+    return TestModel()
+
+def get_sample_inputs():
+    # Check for GPU availability to place inputs correctly
+    device = '/GPU:0' if tf.config.list_physical_devices('GPU') else '/CPU:0'
+    with tf.device(device):
+        # TensorFlow does not have requires_grad in tensor creation, 
+        # gradients are tracked via tf.GradientTape
+        x = tf.random.normal((4, 10))
+    return (x,)
+
+def main():
+    model = get_default_model()
+    inputs = get_sample_inputs()
+    
+    # Run original model in eager mode
+    original_output = model(*inputs)
+    print('Original model output shape:', original_output.shape)
+
+    if tf.config.list_physical_devices('GPU'):
+        print("CUDA available, testing graph context compatibility")
+
+        # In TensorFlow, tf.function is the primary mechanism for defining and capturing graphs.
+        # We test the compatibility of tf.keras.backend.name_scope within this graph context.
+        # This mirrors the original test's intent to verify API behavior during graph capture.
+        
+        @tf.function
+        def graph_execution_fn(x):
+            # Using the similar API: tf.keras.backend.name_scope
+            # This API is a context manager used to provide a name scope for operations.
+            with tf.keras.backend.name_scope("compiled_scope"):
+                return model(x)
+
+        graph_output = graph_execution_fn(*inputs)
+        print('Graph execution output shape:', graph_output.shape)
+        
+        # Verify that the behavior is consistent between eager and graph execution
+        # Note: We use a small tolerance for floating point comparison
+        assert tf.reduce_all(tf.abs(original_output - graph_output) < 1e-5), "Output mismatch between original and graph execution"
+    else:
+        print("CUDA not available, skipping graph context test")
+
+if __name__ == "__main__":
+    main()

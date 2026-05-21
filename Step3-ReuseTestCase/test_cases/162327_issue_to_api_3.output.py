@@ -1,0 +1,32 @@
+import torch
+import tensorflow as tf
+
+print("TensorFlow version:", tf.__version__)
+
+# Recreate the tensors from the PyTorch bug report to test the similar API
+# Original PyTorch input: torch.empty((5, 7, 4, 3, 7, 6), dtype=torch.int8)
+input_tensor = tf.zeros((5, 7, 4, 3, 7, 6), dtype=tf.int8)
+
+# Original PyTorch indices: torch.empty((4, 9, 2), dtype=torch.int32)
+# Note: tf.keras.ops.diagonal takes a single tensor, but we test both shapes
+# to see if the specific dimensionalities trigger similar issues.
+indices_tensor = tf.zeros((4, 9, 2), dtype=tf.int32)
+
+# The original bug passed an empty tuple () for output_size.
+# Here we test tf.keras.ops.diagonal with the high-dimensional tensor.
+# We manipulate axes and offset to stress the shape inference logic
+# similar to the original bug's invalid parameters.
+
+try:
+    # Test with the 6D tensor, using axes that might trigger internal moveaxis logic
+    result = tf.keras.ops.diagonal(input_tensor, offset=0, axis1=0, axis2=5)
+    print("Test 1 passed. Result shape:", result.shape)
+except Exception as e:
+    print(f"Test 1 failed with error: {e}")
+
+try:
+    # Test with the 3D tensor, using a large offset to mimic invalid parameter usage
+    result = tf.keras.ops.diagonal(indices_tensor, offset=100, axis1=0, axis2=1)
+    print("Test 2 passed. Result shape:", result.shape)
+except Exception as e:
+    print(f"Test 2 failed with error: {e}")

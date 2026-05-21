@@ -1,0 +1,103 @@
+import torch
+import tensorflow as tf
+import sys
+
+def test_batch_scatter_update_large_dim():
+    """
+    Adapted test case for tf.compat.v1.batch_scatter_update based on 
+    PyTorch reflect padding bug (Issue 165861).
+    
+    The original bug occurs when a batch dimension is larger than uint16 max (2**16).
+    This test verifies if the TensorFlow scatter operation handles large dimensions
+    correctly without crashing or producing incorrect results.
+    """
+    
+    print("Testing tf.compat.v1.batch_scatter_update with large dimensions...")
+
+    # Case 1: Dimension size equals 2**16 (The failing case in PyTorch)
+    # Shape: (65536, 2)
+    print("\n1. Testing with dimension size 2**16 (65536)...")
+    try:
+        # Create a variable with a large batch dimension
+        ref = tf.Variable(tf.zeros((2**16, 2), dtype=tf.float32))
+        
+        # Indices: Update the first element (index 0) of the last dimension for every row
+        # Shape: (65536, 1)
+        indices = tf.zeros((2**16, 1), dtype=tf.int32)
+        
+        # Updates: Set them to 1.0
+        # Shape: (65536, 1)
+        updates = tf.ones((2**16, 1), dtype=tf.float32)
+        
+        with tf.compat.v1.Session() as sess:
+            sess.run(tf.compat.v1.global_variables_initializer())
+            # Perform the scatter update
+            op = tf.compat.v1.batch_scatter_update(ref, indices, updates)
+            result = sess.run(op)
+            
+            # Verify the update happened
+            # ref[0, 0] should be 1.0
+            assert result[0, 0] == 1.0, "Update failed at index 0"
+            print("   Success: Operation completed for dimension 2**16.")
+            
+    except Exception as e:
+        print(f"   Failed: {e}")
+        return False
+
+    # Case 2: Dimension size equals 2**16 - 1 (The passing case in PyTorch)
+    # Shape: (65535, 2)
+    print("\n2. Testing with dimension size 2**16 - 1 (65535)...")
+    try:
+        ref = tf.Variable(tf.zeros((2**16 - 1, 2), dtype=tf.float32))
+        indices = tf.zeros((2**16 - 1, 1), dtype=tf.int32)
+        updates = tf.ones((2**16 - 1, 1), dtype=tf.float32)
+        
+        with tf.compat.v1.Session() as sess:
+            sess.run(tf.compat.v1.global_variables_initializer())
+            op = tf.compat.v1.batch_scatter_update(ref, indices, updates)
+            result = sess.run(op)
+            
+            assert result[0, 0] == 1.0, "Update failed at index 0"
+            print("   Success: Operation completed for dimension 2**16 - 1.")
+            
+    except Exception as e:
+        print(f"   Failed: {e}")
+        return False
+
+    # Case 3: Large dimension in the middle (similar to x = torch.rand(1, 2**16, 2))
+    # Shape: (1, 65536, 2)
+    print("\n3. Testing with large middle dimension (1, 2**16, 2)...")
+    try:
+        ref = tf.Variable(tf.zeros((1, 2**16, 2), dtype=tf.float32))
+        # Indices shape must match leading dims of ref (1, ...) + 1
+        # We want to update indices in the last dim.
+        # indices shape: (1, 65536, 1)
+        indices = tf.zeros((1, 2**16, 1), dtype=tf.int32)
+        # updates shape: (1, 65536, 1)
+        updates = tf.ones((1, 2**16, 1), dtype=tf.float32)
+        
+        with tf.compat.v1.Session() as sess:
+            sess.run(tf.compat.v1.global_variables_initializer())
+            op = tf.compat.v1.batch_scatter_update(ref, indices, updates)
+            result = sess.run(op)
+            
+            assert result[0, 0, 0] == 1.0, "Update failed at index 0"
+            print("   Success: Operation completed for shape (1, 2**16, 2).")
+            
+    except Exception as e:
+        print(f"   Failed: {e}")
+        return False
+
+    return True
+
+if __name__ == "__main__":
+    # Disable eager execution to ensure compat.v1 behavior
+    tf.compat.v1.disable_eager_execution()
+    
+    success = test_batch_scatter_update_large_dim()
+    if success:
+        print("\nAll tests passed.")
+        sys.exit(0)
+    else:
+        print("\nSome tests failed.")
+        sys.exit(1)

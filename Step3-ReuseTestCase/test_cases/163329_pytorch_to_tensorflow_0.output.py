@@ -1,0 +1,55 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Enable logging to monitor compilation/recompilation behavior
+# Analogous to torch._logging.set_logs(recompiles=True)
+tf.get_logger().setLevel('INFO')
+import logging
+logging.getLogger('tensorflow').setLevel(logging.INFO)
+
+# Define a simple computation to mimic the FluxPipeline transformer
+def transformer_computation(inputs):
+    # Simple linear layer operation to represent a block
+    w = tf.Variable(tf.random.normal([512, 512]), dtype=tf.float32)
+    b = tf.Variable(tf.zeros([512]), dtype=tf.float32)
+    return tf.matmul(inputs, w) + b
+
+# Initialize TPU (Required for tf.compat.v1.tpu.rewrite)
+try:
+    resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(resolver)
+    tf.tpu.experimental.initialize_tpu_system(resolver)
+    strategy = tf.distribute.TPUStrategy(resolver)
+    print("TPU initialized")
+except Exception as e:
+    print(f"TPU initialization failed (expected if not on TPU): {e}")
+    # Fallback for code validity, though tpu.rewrite is specific to TPU
+    strategy = tf.distribute.get_strategy()
+
+with strategy.scope():
+    # Prepare input data (mimicking prompt embeddings)
+    # Corresponds to the prompt processing in the original test case
+    inputs = [tf.random.normal([1, 512], dtype=tf.float32)]
+
+    # Use tf.compat.v1.tpu.rewrite to compile the computation
+    # This is analogous to pipe.transformer.compile_repeated_blocks()
+    # It compiles the 'transformer_computation' for TPU execution.
+    
+    # Note: tpu.rewrite expects a function that builds the graph.
+    # We wrap the execution in tf.function to trigger compilation.
+    
+    @tf.function
+    def run_inference():
+        return tf.compat.v1.tpu.rewrite(
+            computation=transformer_computation,
+            inputs=inputs
+        )
+
+    # Execute the compiled pipeline
+    # This step corresponds to image = pipe(...)
+    try:
+        result = run_inference()
+        print("Inference complete. Result shape:", result.shape)
+    except Exception as e:
+        print(f"Execution failed: {e}")

@@ -1,0 +1,31 @@
+import torch
+import tensorflow as tf
+
+print("TensorFlow Version:", tf.__version__)
+
+# Adapted inputs based on the PyTorch bug report structure
+# PyTorch: input (int8, 6D), indices (int32, 3D), output_size (()), padding (False)
+# TF mapping: x (int8, 6D), noise_shape (int32, 3D), rate (()), seed (False)
+
+# 1. Input tensor: High dimension (6D) and integer type (int8)
+# Corresponds to torch.empty((5, 7, 4, 3, 7, 6), dtype=torch.int8)
+x = tf.zeros((5, 7, 4, 3, 7, 6), dtype=tf.int8)
+
+# 2. Rate: Empty tuple
+# Corresponds to the empty tuple () passed as output_size in PyTorch
+rate = ()
+
+# 3. Noise shape: 3D tensor of int32
+# Corresponds to torch.empty((4, 9, 2), dtype=torch.int32) passed as indices
+noise_shape = tf.zeros((4, 9, 2), dtype=tf.int32)
+
+# 4. Seed: Boolean
+# Corresponds to False passed as padding in PyTorch
+seed = False
+
+try:
+    # Call the API with the adapted malformed inputs to test robustness
+    result = tf.compat.v1.nn.dropout(x, rate, noise_shape=noise_shape, seed=seed)
+    print("Result:", result)
+except Exception as e:
+    print(f"Exception caught: {type(e).__name__}: {e}")

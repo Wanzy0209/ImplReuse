@@ -1,0 +1,29 @@
+import torch
+import unittest
+import sys
+import tensorflow as tf
+
+class TestTracebackFilteringConfig(unittest.TestCase):
+    def test_enable_traceback_filtering(self):
+        """
+        Test case for tf.keras.config.enable_traceback_filtering.
+        This test mirrors the pattern of the original bug report where a user
+        calls a global configuration API (torch.set_float32_matmul_precision).
+        Here we verify the behavior of the similar TensorFlow API.
+        """
+        if sys.version_info >= (3, 7):
+            # In the original bug, calling the config API triggered unwanted warnings.
+            # Here we call the similar API and assert it executes without error.
+            try:
+                tf.keras.config.enable_traceback_filtering()
+            except Exception as e:
+                self.fail(f"tf.keras.config.enable_traceback_filtering raised an unexpected exception: {e}")
+        else:
+            # The API documentation specifies a RuntimeError for Python < 3.7
+            with self.assertRaises(RuntimeError) as context:
+                tf.keras.config.enable_traceback_filtering()
+            
+            self.assertIn("Python 3.7 or higher", str(context.exception))
+
+if __name__ == '__main__':
+    unittest.main()

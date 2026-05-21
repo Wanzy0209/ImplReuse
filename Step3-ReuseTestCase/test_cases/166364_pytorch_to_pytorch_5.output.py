@@ -1,0 +1,46 @@
+import torch
+import torch.nn as nn
+
+def test_any_with_learnable_scalar(use_compile=False):
+    """
+    Test function to verify torch.any works with learnable scalars.
+    This tests both forward and backward passes to catch compilation errors,
+    similar to the flex_attention bug report regarding learnable scalars.
+    """
+    # Learnable scalar parameter
+    threshold = nn.Parameter(torch.tensor(0.5))
+
+    def any_mod(x):
+        # Use torch.any with the learnable scalar
+        # This mimics the usage of a scalar parameter in the score_mod function
+        return torch.any(x > threshold)
+
+    # Input tensor
+    x = torch.randn(2, 3, requires_grad=True)
+
+    if use_compile:
+        any_mod = torch.compile(any_mod)
+
+    # Forward pass
+    result = any_mod(x)
+    assert result.dtype == torch.bool
+    print(f"Forward result: {result}")
+
+    # Backward pass
+    # We need a scalar loss to perform backward pass
+    loss = result.float().sum()
+    loss.backward()
+    
+    # Verify gradients are computed
+    assert threshold.grad is not None
+    assert x.grad is not None
+    print(f"Backward passed. Grad on threshold: {threshold.grad}")
+
+if __name__ == "__main__":
+    print("Testing torch.any with learnable scalar (Eager)...")
+    test_any_with_learnable_scalar(use_compile=False)
+    
+    print("Testing torch.any with learnable scalar (Compiled)...")
+    test_any_with_learnable_scalar(use_compile=True)
+    
+    print("All tests passed.")

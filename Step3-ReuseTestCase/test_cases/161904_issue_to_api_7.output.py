@@ -1,0 +1,154 @@
+import os
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.pipelining import PipelineStage
+from torch.distributed.pipelining.schedules import get_schedule_class
+
+def setup():
+    """Initialize the distributed environment."""
+    # Check if running under torchrun or initialize for testing
+    if "RANK" not in os.environ and "WORLD_SIZE" not in os.environ:
+        os.environ["RANK"] = "0"
+        os.environ["WORLD_SIZE"] = "1"
+        # For single GPU testing without torchrun, we might need to mock the mesh
+        # but this test is designed for multi-GPU pipeline parallelism.
+        # We will assume standard torchrun invocation.
+        pass
+    
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    
+    if world_size > 1:
+        dist.init_process_group("nccl")
+    return rank, world_size
+
+class TransformerBlock(nn.Module):
+    """
+    A minimal transformer-like block.
+    Includes a usage of torch.linalg.eig (the successor to torch.eig)
+    to satisfy the constraint of leveraging the similar API family,
+    ensuring the compilation handles complex linear algebra ops within the pipeline.
+    """
+    def __init__(self, embed_dim):
+        super().__init__()
+        self.linear = nn.Linear(embed_dim, embed_dim)
+        self.embed_dim = embed_dim
+
+    def forward(self, x):
+        x = self.linear(x)
+        
+        # Leveraging the similar API family (torch.linalg.eig) 
+        # to ensure the test covers operations related to the deprecated torch.eig.
+        # We perform a dummy eigenvalue decomposition on a small matrix derived from x
+        # to verify compilation stability with such ops in the pipeline.
+        if self.training:
+            # Create a small 2x2 matrix from the first 2 features of the first item in batch
+            # This is just to invoke the op, not for mathematical correctness of the model.
+            batch_size = x.shape[0]
+            # Reshape part of x to (Batch, 2, 2) for eig
+            mat = x[:, :2, :2].view(-1, 2, 2) 
+            # torch.linalg.eig returns (eigenvalues, eigenvectors)
+            # It returns complex tensors, so we take .real to keep dtype consistent for the Linear layers
+            eig_vals, _ = torch.linalg.eig(mat)
+            # Add a small perturbation based on eigenvalues to ensure gradient flow
+            x = x + eig_vals.real.mean(dim=1, keepdim=True).expand(-1, self.embed_dim)
+            
+        return x
+
+class SimpleModel(nn.Module):
+    def __init__(self, num_layers=4, embed_dim=32):
+        super().__init__()
+        self.layers = nn.ModuleList([TransformerBlock(embed_dim) for _ in range(num_layers)])
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+def main():
+    rank, world_size = setup()
+    device = torch.device(f"cuda:{rank}")
+    
+    # Model parameters
+    num_layers = 4
+    embed_dim = 32
+    batch_size = 8
+    seq_len = 128
+    
+    # 1. Create the model
+    with torch.device("meta"):
+        model = SimpleModel(num_layers=num_layers, embed_dim=embed_dim)
+    
+    # 2. Split the model for Pipeline Parallelism
+    # We split the layers manually for this minimal example
+    # Rank 0 gets first half, Rank 1 gets second half
+    layers_per_stage = num_layers // world_size
+    my_layers = model.layers[rank * layers_per_stage : (rank + 1) * layers_per_stage]
+    
+    # Create the submodule for this stage
+    submod = nn.Sequential(*my_layers)
+    submod.to_empty(device=device)
+    submod.train()
+    
+    # 3. Apply torch.compile (The core of the bug report)
+    # The bug states that ZeroBubble and DualPipeV fail with torch.compiled models.
+    # We compile the submodule here.
+    print(f"Rank {rank}: Compiling submodule...")
+    compiled_submod = torch.compile(submod)
+    
+    # 4. Setup Pipeline Stage
+    # Note: init_device_mesh requires world_size > 1 usually, but for testing logic:
+    if world_size > 1:
+        mesh = init_device_mesh("cuda", (world_size,), mesh_dim_names=("pp",))
+    else:
+        # Fallback for single process testing (though pipeline needs 2+ to be meaningful)
+        # We create a dummy mesh or handle logic if strictly 1 GPU, 
+        # but pipeline parallelism inherently requires >1.
+        # Assuming standard torchrun --nproc_per_node=2
+        mesh = init_device_mesh("cuda", (world_size,), mesh_dim_names=("pp",))
+
+    stage = PipelineStage(
+        compiled_submod,
+        mesh,
+        rank,
+    )
+    
+    # 5. Get Schedule
+    # The bug mentions "ZBVZeroBubble" and "DualPipeV".
+    # Since these might be specific to TorchTitan or newer PyTorch versions,
+    # we use "1F1B" (OneFoneOneBack) which is standard, to verify the general
+    # pipeline + compile interaction. If ZBVZeroBubble is available, it could be used.
+    try:
+        schedule_cls = get_schedule_class("ZBVZeroBubble")
+        print("Rank {}: Using ZBVZeroBubble schedule".format(rank))
+    except (ValueError, AttributeError):
+        # Fallback to standard schedule if specific ones not found
+        schedule_cls = get_schedule_class("1F1B")
+        print("Rank {}: ZBVZeroBubble not found, falling back to 1F1B".format(rank))
+
+    schedule = schedule_cls(stage)
+    
+    # 6. Run a step
+    # Create dummy input
+    if rank == 0:
+        input_tensor = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    else:
+        input_tensor = None
+        
+    # Run the pipeline step
+    # This is where the bug would manifest (failure with compiled model)
+    try:
+        if rank == 0:
+            output = schedule.step(input_tensor)
+            print(f"Rank {rank}: Step completed successfully. Output shape: {output.shape}")
+        else:
+            output = schedule.step()
+            print(f"Rank {rank}: Step completed successfully.")
+    except Exception as e:
+        print(f"Rank {rank}: Error during pipeline step: {e}")
+        raise
+
+if __name__ == "__main__":
+    main()

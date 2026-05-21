@@ -1,0 +1,74 @@
+import torch
+import tensorflow as tf
+import os
+import tempfile
+import time
+
+class FileModel(tf.Module):
+    """
+    A minimal model mimicking the structure of the PyTorch MyModel.
+    Uses tf.io.write_file as the core operation.
+    """
+    def __init__(self):
+        super().__init__()
+
+    @tf.function
+    def __call__(self, filename, content):
+        # tf.io.write_file is the target API.
+        # It writes 'content' (string tensor) to 'filename' (string tensor).
+        # This operation is a side-effect, similar to how unique modifies data flow.
+        tf.io.write_file(filename, content)
+        
+        # Return a tuple to mimic the original model's return structure
+        return content, filename
+
+def get_input():
+    """Generates inputs for the model."""
+    tmpdir = tempfile.mkdtemp()
+    # Create a unique filename
+    path = os.path.join(tmpdir, "test_output.txt")
+    content = b"Hello from TensorFlow Graph"
+    return path, content
+
+def run_once(model, filename, content, label):
+    """Runs the model once and verifies the output."""
+    t0 = time.perf_counter()
+    
+    try:
+        # Convert inputs to tensors for graph execution
+        filename_tensor = tf.constant(filename)
+        content_tensor = tf.constant(content)
+        
+        # Execute
+        result_content, result_path = model(filename_tensor, content_tensor)
+        
+        # Verification: Check if file was actually written
+        if os.path.exists(filename):
+            with open(filename, "rb") as f:
+                read_data = f.read()
+            
+            elapsed = (time.perf_counter() - t0) * 1000
+            print(f"[{label}] ok, file written successfully, "
+                  f"content_match={read_data == content}, "
+                  f"time={elapsed:.3f}ms")
+        else:
+            print(f"[{label}] failed: File not created at {filename}")
+            
+    except Exception as e:
+        print(f"[{label}] error: {e}")
+
+def main():
+    print("tensorflow.__version__ =", tf.__version__)
+
+    # Initialize Model
+    model = FileModel()
+    
+    # Get Inputs
+    path, content = get_input()
+    
+    # Run in Graph Mode (via @tf.function)
+    # This corresponds to torch.compile(fullgraph=True)
+    run_once(model, path, content, "tf.function_graph")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,48 @@
+import torch
+import sys
+
+def test_torch_device():
+    """
+    Adapted test case based on Issue 161915 (share_memory_ for NestedTensor).
+    Original Issue: Calling share_memory_() on a NestedTensor caused a segmentation fault.
+    Similar API: torch.device
+    
+    This test verifies that torch.device can be instantiated correctly and that 
+    tensors created on a specific device support the share_memory_() operation 
+    without crashing.
+    """
+    print("Testing torch.device instantiation and share_memory interaction...")
+
+    # 1. Create a torch.device object (Similar to creating nt in the original bug)
+    device = torch.device('cpu')
+    
+    # 2. Verify the object type and properties (Adapted from original inspection)
+    print(f"Device: {device}")
+    assert type(device) == torch.device, f"Expected type torch.device, got {type(device)}"
+    
+    # 3. Create tensors on the specific device
+    a = torch.randn(3, device=device)
+    b = torch.randn(5, device=device)
+    
+    # 4. Verify tensor creation
+    assert a.device == device
+    assert b.device == device
+    
+    # 5. Call share_memory_() (The method that caused the crash in the original bug)
+    # We apply this to standard tensors on the device to ensure the device context
+    # handles memory sharing correctly.
+    try:
+        a.share_memory_()
+        b.share_memory_()
+    except Exception as e:
+        print(f"ERROR: share_memory_() failed: {e}")
+        sys.exit(1)
+        
+    # 6. Verify that memory is actually shared
+    assert a.is_shared(), "Tensor 'a' should be in shared memory"
+    assert b.is_shared(), "Tensor 'b' should be in shared memory"
+    
+    print("Test passed: torch.device works correctly with share_memory_().")
+
+if __name__ == "__main__":
+    test_torch_device()

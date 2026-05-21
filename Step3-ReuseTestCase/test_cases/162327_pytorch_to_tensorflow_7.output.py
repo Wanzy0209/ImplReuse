@@ -1,0 +1,50 @@
+import torch
+import tensorflow as tf
+
+def test_dropout_with_malformed_inputs():
+    """
+    Adapted test case based on PyTorch Issue 162327.
+    Original Bug: heap-buffer-overflow in torch.nn.functional.max_unpool1d
+    Trigger: Mismatched tensor shapes, unexpected dtypes (int8, int32), and empty arguments.
+    
+    This test verifies if tf.keras.backend.dropout handles similar malformed inputs
+    gracefully (raising an exception) or crashes (memory corruption).
+    """
+    print(f"TensorFlow Version: {tf.__version__}")
+
+    # Mapping inputs from the original PyTorch bug report to tf.keras.backend.dropout arguments:
+    # Original: torch.empty((5, 7, 4, 3, 7, 6), dtype=torch.int8)
+    # Target (x): High-dimensional tensor with int8 dtype (unusual for dropout)
+    x = tf.zeros((5, 7, 4, 3, 7, 6), dtype=tf.int8)
+
+    # Original: torch.empty((4, 9, 2), dtype=torch.int32)
+    # Target (rate): Passing a tensor where a float is expected
+    rate = tf.zeros((4, 9, 2), dtype=tf.int32)
+
+    # Original: ()
+    # Target (noise_shape): Empty tuple
+    noise_shape = ()
+
+    # Original: False
+    # Target (seed): Boolean where an integer is expected
+    seed = False
+
+    try:
+        # Execute the call with the adapted inputs
+        result = tf.keras.backend.dropout(x, rate, noise_shape=noise_shape, seed=seed)
+        
+        # If the call succeeds, we verify the output
+        print("API call succeeded.")
+        print(f"Result shape: {result.shape}")
+        assert result is not None, "Result should not be None"
+        
+    except Exception as e:
+        # We expect a TypeError or ValueError due to input mismatches.
+        # This is a "pass" condition for robustness (graceful failure vs crash).
+        print(f"Caught expected exception: {type(e).__name__}")
+        print(f"Message: {e}")
+        assert isinstance(e, (TypeError, ValueError, tf.errors.InvalidArgumentError)), \
+            f"Unexpected exception type: {type(e)}"
+
+if __name__ == "__main__":
+    test_dropout_with_malformed_inputs()

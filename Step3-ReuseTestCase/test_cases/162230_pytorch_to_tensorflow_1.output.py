@@ -1,0 +1,83 @@
+import torch
+import subprocess
+import sys
+import tempfile
+import os
+
+def test_tf_concat_subprocess_timeout():
+    """
+    Adapted test case for tf.concat based on the failing PyTorch test_scalar_multiply.
+    
+    The original bug (Issue 162230) involves a subprocess.TimeoutExpired when running
+    a graph-based operation. This test adapts that logic to TensorFlow by executing
+    a tf.concat operation within a tf.function (graph mode) via a subprocess with a
+    strict timeout, mirroring the failure condition of the original test.
+    """
+    
+    # The script content to be executed in the subprocess.
+    # We use tf.function to ensure graph execution, similar to the FX graph context in PyTorch.
+    script_content = """
+import tensorflow as tf
+import sys
+
+# Enable strict graph mode to mimic the FX graph runnable environment
+@tf.function(experimental_compile=False) 
+def concat_operation():
+    # Create tensors. 
+    # While torch.mul is multiplication, we adapt the logic to tf.concat 
+    # as requested by the similarity mapping.
+    # We use simple tensors to ensure the operation itself isn't the bottleneck,
+    # allowing us to catch environment/graph hangs.
+    t1 = tf.constant([[1, 2], [3, 4]])
+    t2 = tf.constant([[5, 6]])
+    
+    # Perform the concat operation
+    result = tf.concat([t1, t2], axis=0)
+    return result
+
+if __name__ == "__main__":
+    try:
+        # Execute the operation
+        res = concat_operation()
+        # Print success to stdout so the parent process can verify
+        print("SUCCESS")
+    except Exception as e:
+        # Print error to stderr
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+"""
+
+    # Create a temporary file to hold the script
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write(script_content)
+        script_path = f.name
+
+    try:
+        # Run the script in a subprocess with a timeout.
+        # The original test failed with a 30-second timeout.
+        # We preserve this constraint to check for similar hanging behavior.
+        res = subprocess.run(
+            [sys.executable, script_path],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        # Verify the process completed successfully and output the expected result
+        assert res.returncode == 0, f"Subprocess failed with error:\n{res.stderr}"
+        assert "SUCCESS" in res.stdout, f"Subprocess did not produce expected output.\nStdout: {res.stdout}\nStderr: {res.stderr}"
+        
+    except subprocess.TimeoutExpired as e:
+        # This is the specific bug we are testing for (adapted to the new API)
+        print(f"Test failed due to timeout (similar to Issue 162230): {e}")
+        print(f"Stdout: {e.stdout}")
+        print(f"Stderr: {e.stderr}")
+        raise  # Re-raise to signal the test failure
+    finally:
+        # Clean up the temporary file
+        if os.path.exists(script_path):
+            os.unlink(script_path)
+
+if __name__ == "__main__":
+    test_tf_concat_subprocess_timeout()
+    print("Test passed: tf.concat completed within timeout.")

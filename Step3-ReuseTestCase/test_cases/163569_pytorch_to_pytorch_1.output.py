@@ -1,0 +1,74 @@
+import torch
+import sys
+
+# Replicate the configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    # Adapted for conv3d:
+    # Original dimensions were (Batch, Channels, Length) or similar.
+    # We adapt to (Batch, Channels, Depth, Height, Width) for 3D convolution.
+    
+    # t0: size=(2, 261, 17, 4, 5, 6), dtype=bfloat16, device=cuda
+    t0 = arg0
+    # t1: size=(261, 17, 4, 5, 6)
+    t1 = t0.max(dim=0).values
+    # t2: size=(17, 261, 4, 5, 6)
+    t2 = t1.transpose(1, 0)
+    
+    # t3: size=(17, 64, 4, 5, 6), dtype=float32, device=cuda
+    t3 = arg1
+    # t4: size=(17, 64, 4, 5, 6)
+    t4 = torch.exp(t3)
+    
+    # t5: size=(261, 1, 64, 1, 1, 1), dtype=float32, device=cuda
+    # We add extra dimensions to allow reshaping to the 3D kernel size (1, 1, 1)
+    t5 = arg2
+    # t6: size=(261, 64, 1, 1, 1) -> (Out_Channels, In_Channels, kD, kH, kW)
+    t6 = t5.transpose(2, 1)
+    
+    # Call the similar API: torch.nn.functional.conv3d
+    # Input t4: (Batch=17, In_Ch=64, D=4, H=5, W=6)
+    # Weight t6: (Out_Ch=261, In_Ch=64, kD=1, kH=1, kW=1)
+    # Output t7: (Batch=17, Out_Ch=261, D=4, H=5, W=6)
+    t7 = torch.nn.functional.conv3d(t4, t6, stride=1, padding=0)
+    
+    t8 = t7.clone()
+    t8.zero_()
+    
+    # t2 is (17, 261, 4, 5, 6), t7 is (17, 261, 4, 5, 6), t8 is (17, 261, 4, 5, 6)
+    t9 = t2 * t7 * t8
+    output = t9
+    return output
+
+if __name__ == '__main__':
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        sys.exit(0)
+
+    # Adapted inputs for conv3d
+    # arg0: (2, 261, 17, 4, 5, 6)
+    arg0 = torch.rand([2, 261, 17, 4, 5, 6], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+    
+    # arg1: (17, 64, 4, 5, 6)
+    arg1 = torch.rand([17, 64, 4, 5, 6], dtype=torch.float32, device='cuda', requires_grad=True)
+    
+    # arg2: (261, 1, 64, 1, 1, 1) to facilitate transpose to (261, 64, 1, 1, 1)
+    arg2 = torch.rand([261, 1, 64, 1, 1, 1], dtype=torch.float32, device='cuda', requires_grad=True)
+
+    print("Testing Eager Execution...")
+    out_eager = foo(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+
+    print("Testing Compiled Execution...")
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+    print('Compile Success! ')
+
+    # Verify consistency
+    assert torch.allclose(out_eager, out_compiled), "Outputs differ between eager and compiled"
+    print("Outputs match. Test Passed.")

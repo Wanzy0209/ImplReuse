@@ -1,0 +1,73 @@
+import torch
+import torch.nn.functional as F
+
+# Reproduce the configuration from the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch.manual_seed(52676)
+
+def test_sigmoid_dynamo_divergence():
+    """
+    Test case for torch.nn.functional.sigmoid based on the fuzzer issue 165081.
+    The original issue reported an eager/compile divergence with data-dependent guards.
+    This test verifies that sigmoid behaves correctly in a similar complex graph context.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    device = torch.device("cuda")
+    dtype = torch.float64
+
+    # Initialize arguments based on the bug report's comments
+    # arg_0: size=(9, 9, 9)
+    arg_0 = torch.randn(9, 9, 9, dtype=dtype, device=device)
+    # arg_1: size=(9, 9, 11)
+    arg_1 = torch.randn(9, 9, 11, dtype=dtype, device=device)
+    # arg_2: size=(9, 12, 8)
+    arg_2 = torch.randn(9, 12, 8, dtype=dtype, device=device)
+    # arg_3: size=(9, 8, 13)
+    arg_3 = torch.randn(9, 8, 13, dtype=dtype, device=device)
+    # arg_4: size=(9, 13, 7)
+    arg_4 = torch.randn(9, 13, 7, dtype=dtype, device=device)
+
+    def fuzzed_program_sigmoid(arg_0, arg_1, arg_2, arg_3, arg_4):
+        # Reproduce the logic from the bug report
+        var_node_6 = arg_0
+        var_node_7 = arg_1
+        var_node_5 = torch.matmul(var_node_6.to(torch.float64), var_node_7.to(torch.float64))
+        
+        var_node_9 = torch.full((9, 11, 12), 1.5758497316910556, dtype=torch.float64, device=device)
+        var_node_10 = arg_2
+        var_node_8 = torch.matmul(var_node_9.to(torch.float64), var_node_10.to(torch.float64))
+        
+        var_node_4 = torch.matmul(var_node_5.to(torch.float64), var_node_8.to(torch.float64))
+        
+        # --- Integration of Similar API: torch.nn.functional.sigmoid ---
+        # Apply sigmoid to the intermediate result to test behavior in this graph
+        var_node_4_sigmoid = F.sigmoid(var_node_4)
+        # -------------------------------------------------------------
+        
+        var_node_13 = arg_3
+        var_node_14 = arg_4
+        var_node_12 = torch.matmul(var_node_13.to(torch.float64), var_node_14.to(torch.float64))
+        
+        # Continue the chain using the sigmoid output to ensure it affects the graph
+        # var_node_4_sigmoid shape: (9, 9, 8), var_node_12 shape: (9, 8, 7)
+        # Resulting shape: (9, 9, 7)
+        var_node_final = torch.matmul(var_node_4_sigmoid, var_node_12)
+        
+        return var_node_final
+
+    # Run Eager
+    eager_out = fuzzed_program_sigmoid(arg_0, arg_1, arg_2, arg_3, arg_4)
+    
+    # Run Compiled
+    compiled_fn = torch.compile(fuzzed_program_sigmoid)
+    compiled_out = compiled_fn(arg_0, arg_1, arg_2, arg_3, arg_4)
+    
+    # Check for divergence
+    assert torch.allclose(eager_out, compiled_out), "Eager and Compiled outputs diverged!"
+
+if __name__ == "__main__":
+    test_sigmoid_dynamo_divergence()

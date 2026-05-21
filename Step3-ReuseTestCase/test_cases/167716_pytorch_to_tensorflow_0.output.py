@@ -1,0 +1,60 @@
+import torch
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+
+def test_tf_experimental_numpy_diagonal_sparse():
+    """
+    Adapted test case based on PyTorch Issue 167716.
+    Original Bug: torch.sparse.mm(A, B) followed by to_dense() caused a Segmentation fault 
+    when A and B were specific sparse tensors.
+    
+    This test verifies the robustness of the similar TensorFlow API 
+    (tf.experimental.numpy.diagonal) when handling sparse tensors with 
+    the same structure and data patterns.
+    """
+    
+    # Recreate the sparse tensors from the PyTorch bug report
+    # A: Sparse tensor (3, 4)
+    indices_A = tf.constant([[0, 1, 2], [0, 2, 3]], dtype=tf.int64)
+    values_A = tf.constant([1.0, 2.0, 3.0], dtype=tf.float32)
+    A_sparse = tf.SparseTensor(indices_A, values_A, dense_shape=(3, 4))
+
+    # B: Sparse tensor (4, 2)
+    indices_B = tf.constant([[0, 1, 2, 3], [0, 1, 1, 2]], dtype=tf.int64)
+    values_B = tf.constant([4.0, 5.0, 6.0, 7.0], dtype=tf.float32)
+    B_sparse = tf.SparseTensor(indices_B, values_B, dense_shape=(4, 2))
+
+    # Test the similar API: tf.experimental.numpy.diagonal
+    # We pass the sparse tensors directly. The API should handle the conversion 
+    # (via asarray) and extraction without crashing, similar to how torch.sparse.mm 
+    # is expected to handle the operation and subsequent to_dense().
+    
+    # Extract diagonal from A
+    # A is 3x4. Diagonal elements are at (0,0), (1,1), (2,2).
+    # Values: (0,0)=1.0, (1,1)=0.0 (implicit), (2,2)=0.0 (implicit)
+    diag_A = tnp.diagonal(A_sparse)
+    
+    # Extract diagonal from B
+    # B is 4x2. Diagonal elements are at (0,0), (1,1).
+    # Values: (0,0)=4.0, (1,1)=5.0
+    diag_B = tnp.diagonal(B_sparse)
+
+    # Assertions to verify correctness and stability
+    # Check shapes
+    assert diag_A.shape == (3,), f"Expected shape (3,) for diag_A, got {diag_A.shape}"
+    assert diag_B.shape == (2,), f"Expected shape (2,) for diag_B, got {diag_B.shape}"
+
+    # Check values
+    # Note: tnp.diagonal returns a tf.Tensor
+    expected_diag_A = tf.constant([1.0, 0.0, 0.0])
+    expected_diag_B = tf.constant([4.0, 5.0])
+
+    assert tf.reduce_all(tf.equal(diag_A, expected_diag_A)), \
+        f"Values mismatch for diag_A: {diag_A} != {expected_diag_A}"
+    assert tf.reduce_all(tf.equal(diag_B, expected_diag_B)), \
+        f"Values mismatch for diag_B: {diag_B} != {expected_diag_B}"
+
+    print("Test passed: tf.experimental.numpy.diagonal handled sparse inputs correctly.")
+
+if __name__ == "__main__":
+    test_tf_experimental_numpy_diagonal_sparse()

@@ -1,0 +1,48 @@
+import torch
+import unittest
+
+class TestTorchCompileDivergence(unittest.TestCase):
+    def setUp(self):
+        # Configure Dynamo settings specific to the bug report
+        torch._dynamo.config.capture_scalar_outputs = True
+        torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+    def test_compile_keyerror_u0(self):
+        """
+        Test case for Issue 164685: [Fuzzer][Eager/Compile Divergence] KeyError: u0
+        Verifies that torch.compile handles scalar operations and dynamic shapes
+        correctly under specific configurations.
+        """
+        torch.manual_seed(19989)
+
+        def fuzzed_program(arg_0, sentinel):
+            var_node_2 = -6
+            var_node_3 = arg_0
+            var_node_1 = var_node_2 * var_node_3
+            var_node_5 = torch.full((), 1, dtype=torch.int64)
+            var_node_4 = var_node_5.item()
+            var_node_0 = var_node_1 / var_node_4
+            # Ensure gradient computation by multiplying with sentinel
+            result = var_node_0 * sentinel
+            if result.is_complex():
+                result = result.real
+            return result
+
+        # Sentinel tensor to ensure gradient computation
+        sentinel = torch.tensor(1.0, requires_grad=True)
+        
+        # Generate input argument as per the bug report
+        arg_0 = torch.tensor(torch.randn(()), dtype=torch.int32).item()
+
+        # Execute in eager mode
+        result_eager = fuzzed_program(arg_0, sentinel)
+
+        # Execute in compiled mode
+        compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+        result_compiled = compiled_program(arg_0, sentinel)
+
+        # Assert that the compiled result matches the eager result
+        self.assertTrue(torch.equal(result_eager, result_compiled))
+
+if __name__ == '__main__':
+    unittest.main()

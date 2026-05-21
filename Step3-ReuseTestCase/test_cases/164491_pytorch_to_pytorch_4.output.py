@@ -1,0 +1,64 @@
+import torch
+import torch.nn.functional as F
+
+def test_pixel_shuffle_non_contiguous():
+    """
+    Test case adapted from Issue 164491 regarding performance/errors with 
+    specific memory layouts (row-major vs column-major).
+    
+    Original Issue: _scaled_mm and _int_mm are slow or raise errors with 
+    row-major (transposed) rhs matrices.
+    
+    Adaptation: Verify that torch.nn.functional.pixel_shuffle handles 
+    non-contiguous (transposed/strided) inputs correctly without raising errors 
+    or producing incorrect results.
+    """
+    
+    # Setup parameters
+    upscale_factor = 2
+    batch_size = 1
+    # Channels must be divisible by (upscale_factor ** 2)
+    channels = 4 * (upscale_factor ** 2) 
+    height = 8
+    width = 8
+
+    # 1. Create a standard contiguous tensor
+    x_contiguous = torch.randn(batch_size, channels, height, width)
+    
+    # 2. Create a non-contiguous tensor with the same logical shape
+    # We simulate the "transposed" or "strided" access pattern mentioned in the bug report.
+    # By transposing dimensions 1 and 2, we get a tensor that is non-contiguous 
+    # but still valid for the operation (assuming the operation handles strides).
+    x_non_contiguous = x_contiguous.transpose(1, 2)
+    
+    # Verify the input is indeed non-contiguous
+    assert not x_non_contiguous.is_contiguous(), "Test setup failed: input should be non-contiguous"
+
+    # 3. Execute pixel_shuffle on the non-contiguous input
+    # The original bug report mentions _scaled_mm raising an error. 
+    # We check if pixel_shuffle handles this gracefully.
+    try:
+        result_non_contiguous = F.pixel_shuffle(x_non_contiguous, upscale_factor)
+    except RuntimeError as e:
+        print(f"pixel_shuffle failed on non-contiguous input: {e}")
+        raise
+
+    # 4. Verify correctness
+    # We compare the result against the output of the function run on a 
+    # contiguous version of the exact same data.
+    x_non_contiguous_made_contiguous = x_non_contiguous.contiguous()
+    result_expected = F.pixel_shuffle(x_non_contiguous_made_contiguous, upscale_factor)
+
+    # Assert that the results are close
+    assert torch.allclose(result_non_contiguous, result_expected), \
+        "pixel_shuffle produced different results for non-contiguous input"
+
+    # 5. Verify output memory format (optional but good for performance checks)
+    # The reference implementation includes .clone(), suggesting the output should be contiguous.
+    assert result_non_contiguous.is_contiguous(), \
+        "pixel_shuffle output is not contiguous"
+
+    print("Test passed: pixel_shuffle handles non-contiguous inputs correctly.")
+
+if __name__ == "__main__":
+    test_pixel_shuffle_non_contiguous()

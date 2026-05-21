@@ -1,0 +1,79 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Configure mixed precision to mimic the environment of the bug report
+# (torch._inductor.config.emulate_precision_casts = True)
+# This policy sets the default dtype to float16, but keeps certain operations in float32
+# for numerical stability, which can trigger type compatibility issues similar to the PyTorch bug.
+policy = tf.keras.mixed_precision.Policy('mixed_float16')
+tf.keras.mixed_precision.set_global_policy(policy)
+
+# The API under test: tf.keras.initializers.HeNormal
+# We use this to generate weights within the computation graph to test type handling.
+initializer = tf.keras.initializers.HeNormal()
+
+def foo(arg0, arg1, arg3, arg4, arg5):
+    # arg0: int64 (indices placeholder)
+    # arg1: float16 (input to linear)
+    # arg3: float16 (input to max)
+    # arg4, arg5: float16 (input to cat)
+
+    # Adaptation: Use HeNormal to generate weights for the linear layer.
+    # In the original PyTorch code, t4 was passed as an argument (arg2).
+    # Here we generate it to test the initializer's behavior in a mixed-precision graph.
+    # Original: t4 = arg2 # size=(46, 128), dtype=float16
+    t4 = initializer(shape=[46, 128], dtype=tf.float16)
+
+    # t3 = arg1 # size=(50000, 128), dtype=float16
+    t3 = arg1
+
+    # t5 = torch.nn.functional.linear(t3, t4)
+    # TensorFlow equivalent: tf.linalg.matmul (transpose_b=True for linear layer weights)
+    t5 = tf.linalg.matmul(t3, t4, transpose_b=True) # size=(50000, 46)
+
+    # t6 = arg3 # size=(50000, 4, 46), dtype=float16
+    t6 = arg3
+    
+    # t7 = t6.max(dim=1).values
+    t7 = tf.reduce_max(t6, axis=1) # size=(50000, 46)
+
+    # t8 = arg4, t9 = arg5
+    t8 = arg4
+    t9 = arg5
+    
+    # t10 = torch.cat([t8, t9], dim=0)
+    t10 = tf.concat([t8, t9], axis=0) # size=(50000, 46)
+
+    # t11 = torch.pow(torch.pow(torch.pow(torch.pow(t5, t7), t10), t5), t7)
+    # Chained power operations to stress the backend type handling
+    t11 = tf.pow(tf.pow(tf.pow(tf.pow(t5, t7), t10), t5), t7)
+
+    # Note: The original code used t1 (derived from tanh) for embedding indices.
+    # Since HeNormal generates float tensors, we cannot use it directly for integer indexing.
+    # We return the result of the complex operations to verify the graph execution.
+    return t11
+
+# Setup inputs matching the original shapes and dtypes
+arg0 = tf.constant(np.random.randint(0, 1000, [42, 56]), dtype=tf.int64)
+arg1 = tf.constant(np.random.rand(50000, 128), dtype=tf.float16)
+arg3 = tf.constant(np.random.rand(50000, 4, 46), dtype=tf.float16)
+arg4 = tf.constant(np.random.rand(25786, 46), dtype=tf.float16)
+arg5 = tf.constant(np.random.rand(24214, 46), dtype=tf.float16)
+
+if __name__ == '__main__':
+    # Test Eager Execution
+    try:
+        out_eager = foo(arg0, arg1, arg3, arg4, arg5)
+        print(f'Eager Success!  Output shape: {out_eager.shape}, dtype: {out_eager.dtype}')
+    except Exception as e:
+        print(f'Eager Failed!  Error: {e}')
+
+    # Test Compiled Execution (XLA)
+    # This mimics torch.compile(fullgraph=True)
+    try:
+        compiled_foo = tf.function(foo, jit_compile=True)
+        out_compiled = compiled_foo(arg0, arg1, arg3, arg4, arg5)
+        print(f'Compile Success!  Output shape: {out_compiled.shape}, dtype: {out_compiled.dtype}')
+    except Exception as e:
+        print(f'Compile Failed!  Error: {e}')

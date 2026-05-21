@@ -1,0 +1,63 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Use 'gloo' backend for CPU-based object list transfer
+    dist.init_process_group(
+        backend="gloo",
+        rank=rank,
+        world_size=world_size
+    )
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    if rank == 0:
+        # Sender: Create a list of various picklable objects
+        objects_to_send = [
+            torch.tensor([1, 2, 3]),
+            "test_string",
+            {"key": "value"},
+            [1, 2, 3, 4]
+        ]
+        
+        # Send the list of objects to rank 1
+        dist.send_object_list(objects_to_send, dst=1)
+        print(f"Rank {rank}: Sent object list.")
+
+    elif rank == 1:
+        # Receiver: Prepare a list to receive objects
+        # The list must be of the same size as the list being sent
+        recv_list = [None] * 4
+        
+        # Receive objects from rank 0
+        dist.recv_object_list(recv_list, src=0)
+        
+        # Verify consistency (The original bug was about inconsistency between states)
+        # Here we verify the received state matches the sent state.
+        expected_tensor = torch.tensor([1, 2, 3])
+        assert torch.equal(recv_list[0], expected_tensor), f"Tensor mismatch: {recv_list[0]} vs {expected_tensor}"
+        assert recv_list[1] == "test_string", f"String mismatch: {recv_list[1]}"
+        assert recv_list[2] == {"key": "value"}, f"Dict mismatch: {recv_list[2]}"
+        assert recv_list[3] == [1, 2, 3, 4], f"List mismatch: {recv_list[3]}"
+        
+        print(f"Rank {rank}: Received and verified object list successfully.")
+
+    cleanup()
+
+def main():
+    world_size = 2
+    # Spawn 2 processes to simulate the distributed environment
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()

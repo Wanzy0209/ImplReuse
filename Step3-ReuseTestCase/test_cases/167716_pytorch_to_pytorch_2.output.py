@@ -1,0 +1,14 @@
+import torch
+
+# Create a float tensor with the last dimension of size 2 (representing real and imaginary parts)
+# This mimics the setup of the original test case, adapting the input for the target API.
+a = torch.tensor([[1., 2.], [3., 4.]], requires_grad=True)
+
+# Call the similar API: torch.view_as_complex
+y = torch.view_as_complex(a)
+
+# Verify the result to ensure no corruption or crash occurs
+# (analogous to the to_dense() check in the original bug report)
+assert y.dtype == torch.complex64
+expected = torch.tensor([1+2j, 3+4j])
+assert torch.allclose(y, expected)

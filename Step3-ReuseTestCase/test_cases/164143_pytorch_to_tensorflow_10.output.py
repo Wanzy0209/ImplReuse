@@ -1,0 +1,43 @@
+import torch
+import tensorflow as tf
+
+def test_range_input_producer_with_debug_mode():
+    """
+    Adapted from PyTorch Issue 164143: DebugMode silently disables torch.compile.
+    
+    This test verifies that tf.compat.v1.train.range_input_producer behaves correctly
+    (i.e., is traced/compiled or errors explicitly) when used inside a tf.function
+    (TensorFlow's compilation mechanism) while a global debug mode is active.
+    """
+    
+    # 1. Define the function to be "compiled" using tf.function
+    @tf.function
+    def get_producer(limit):
+        # This is the API under test: tf.compat.v1.train.range_input_producer
+        return tf.compat.v1.train.range_input_producer(limit, shuffle=False)
+
+    # 2. Enable a "Debug Mode"
+    # In TensorFlow, enable_check_numerics acts as a global debug mode that 
+    # injects checks into the graph, similar to how PyTorch's DebugMode wraps execution.
+    tf.debugging.enable_check_numerics()
+
+    # 3. Execute the compiled function
+    # In the original PyTorch bug, torch.compile would silently skip compilation here.
+    # We test that the TensorFlow equivalent either works or raises a clear error.
+    try:
+        limit = 10
+        queue = get_producer(limit)
+        
+        # Assertions to verify the API was actually invoked and traced
+        assert queue is not None, "Queue creation failed silently (API was skipped)"
+        assert isinstance(queue, tf.queue.QueueBase), f"Expected QueueBase, got {type(queue)}"
+        
+        print("Test Passed: API traced successfully with debug mode active.")
+        
+    except Exception as e:
+        # Explicit errors are acceptable; the bug to avoid is a silent failure/skip.
+        print(f"Test raised exception: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_range_input_producer_with_debug_mode()

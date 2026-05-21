@@ -1,0 +1,67 @@
+import tensorflow as tf
+import tempfile
+import shutil
+import os
+
+def test_tf_summary_histogram_resource_cleanup():
+    """
+    Test case for tf.compat.v1.summary.histogram to verify resource cleanup.
+    
+    This test adapts the logic from the PyTorch distributed issue (Issue ID: 163741),
+    where resources (CUDA context) persisted after process group destruction.
+    Here, we check if resources (file handles/writer state) are properly released
+    after the summary writer is closed.
+    """
+    # Setup: Create a temporary directory for the summary writer
+    log_dir = tempfile.mkdtemp()
+    
+    # Initialize resource (Mimics dist.init_process_group)
+    # We create a FileWriter which acts as the resource manager for summaries.
+    writer = tf.compat.v1.summary.FileWriter(log_dir)
+    
+    try:
+        # Start a TensorFlow session to execute operations
+        with tf.compat.v1.Session() as sess:
+            # Initialize global variables
+            sess.run(tf.compat.v1.global_variables_initializer())
+            
+            # Perform work (Mimics the 'do something' and dist.barrier section)
+            # Create a tensor to be summarized
+            tensor_data = tf.random.normal(shape=[1000, 10], name='test_tensor')
+            
+            # Leverage the similar API: tf.compat.v1.summary.histogram
+            # This operation writes a histogram summary using the writer resource.
+            histogram_op = tf.compat.v1.summary.histogram("test_histogram", tensor_data)
+            
+            # Execute the operation
+            summary_str = sess.run(histogram_op)
+            
+            # Add the summary to the writer
+            writer.add_summary(summary_str, global_step=1)
+            
+            # Flush ensures data is written to disk before we check for cleanup
+            writer.flush()
+            
+    finally:
+        # Cleanup (Mimics dist.destroy_process_group)
+        # We explicitly close the writer to release resources.
+        writer.close()
+        
+    # Verification (Mimics the nvidia-smi memory check in the original issue)
+    # In the original issue, unexpected memory allocation persisted.
+    # Here, we check if the log directory can be removed, which implies file handles
+    # and resources have been properly released.
+    try:
+        shutil.rmtree(log_dir)
+        # If successful, resources were cleaned up appropriately.
+        assert True
+    except OSError as e:
+        # If removal fails, it indicates a resource leak (e.g., open file handles).
+        raise AssertionError(
+            f"Resource leak detected: Failed to remove log directory {log_dir}. "
+            f"Error: {e}. This suggests that resources were not properly released "
+            f"after the writer was closed, similar to the CUDA context issue."
+        )
+
+if __name__ == '__main__':
+    test_tf_summary_histogram_resource_cleanup()

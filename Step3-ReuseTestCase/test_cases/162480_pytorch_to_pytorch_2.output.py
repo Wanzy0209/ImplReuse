@@ -1,0 +1,40 @@
+import torch
+import unittest
+
+class TestTorchProdFloatRebind(unittest.TestCase):
+    def test_compile_prod_float_shape(self):
+        """
+        Test that torch.compile handles torch.prod when used to calculate
+        shapes with float values, ensuring rebind_unbacked does not crash.
+        
+        This test case is derived from Issue #162480, where rebind_unbacked
+        lacked handling for float values. We verify that torch.prod can be
+        used in a shape calculation context (producing a float) without
+        causing a compilation error.
+        """
+        def func(x):
+            # Simulate a scenario where shape calculation involves floats.
+            # This can happen in complex models (e.g., DocLayout-YOLO).
+            # We convert shape dimensions to float, take product, then cast back to int.
+            # This path may trigger rebind_unbacked with a float value.
+            dims = torch.tensor(x.shape[1:], dtype=torch.float32)
+            prod_val = torch.prod(dims)
+            return x.reshape(x.shape[0], int(prod_val))
+
+        # Compile with aot_eager to trigger the specific symbolic shape passes
+        compiled_func = torch.compile(func, backend="aot_eager")
+
+        # Test inputs with different shapes to ensure dynamic handling
+        x1 = torch.randn(2, 3, 4)
+        x2 = torch.randn(5, 6, 7)
+
+        # Execute compiled function
+        y1 = compiled_func(x1)
+        y2 = compiled_func(x2)
+
+        # Verify results match eager execution
+        self.assertTrue(torch.equal(y1, func(x1)))
+        self.assertTrue(torch.equal(y2, func(x2)))
+
+if __name__ == '__main__':
+    unittest.main()

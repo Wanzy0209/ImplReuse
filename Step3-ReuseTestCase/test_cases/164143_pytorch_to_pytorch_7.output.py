@@ -1,0 +1,82 @@
+import torch
+import torch.distributed as dist
+import os
+import tempfile
+import sys
+
+def test_send_object_list_with_compile_and_debug_mode():
+    """
+    Test case to verify behavior of torch.distributed.send_object_list 
+    when used inside torch.compile under a DebugMode (dispatch mode).
+    
+    Based on Issue 164143: DebugMode silently disables torch.compile.
+    The fix should either raise an error or support the mode.
+    """
+    
+    if not dist.is_available():
+        print("torch.distributed not available. Skipping test.")
+        return
+
+    # Setup minimal distributed environment for single process
+    # Using file store for simplicity in a single-process test script
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store_file = os.path.join(tmpfile, "store")
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '29500'
+        
+        try:
+            # Initialize process group
+            dist.init_process_group(
+                backend='gloo', 
+                rank=0, 
+                world_size=1,
+                store=dist.FileStore(store_file, 1) # Use FileStore for local testing
+            )
+        except Exception as e:
+            print(f"Failed to initialize process group: {e}")
+            return
+
+        # Define a function that uses the similar API: torch.distributed.send_object_list
+        def forward_func(tensor):
+            # We wrap the distributed call in a try/except because sending to self (rank 0)
+            # is often invalid, but we are primarily testing the compilation behavior here.
+            try:
+                # send_object_list requires a list of objects and a destination rank
+                obj_list = [tensor.item()]
+                dist.send_object_list(obj_list, dst=0)
+            except RuntimeError as e:
+                # Ignore expected distributed errors for this specific test setup
+                pass
+            return tensor + 1
+
+        # Enable a DebugMode (non-infra torch dispatch mode)
+        # torch.autograd.detect_anomaly is a common mode that triggers the "skipping" behavior
+        with torch.autograd.detect_anomaly():
+            print("Testing torch.compile with DebugMode and send_object_list...")
+            
+            try:
+                # Attempt to compile the function
+                compiled_forward = torch.compile(forward_func)
+                
+                x = torch.randn(2)
+                result = compiled_forward(x)
+                
+                # If the bug is fixed to "work", this executes successfully.
+                # If the bug is fixed to "error", an exception is raised below.
+                print("Execution completed. Result:", result)
+                
+            except RuntimeError as e:
+                # Expected if the fix enforces an error for unsupported modes
+                if "non-infra torch dispatch mode" in str(e) or "not supported" in str(e):
+                    print(f"Caught expected error regarding dispatch mode: {e}")
+                else:
+                    print(f"Caught unexpected RuntimeError: {e}")
+                    raise
+            except Exception as e:
+                print(f"Caught unexpected exception: {e}")
+                raise
+            finally:
+                dist.destroy_process_group()
+
+if __name__ == "__main__":
+    test_send_object_list_with_compile_and_debug_mode()

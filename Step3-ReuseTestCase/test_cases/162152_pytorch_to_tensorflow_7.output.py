@@ -1,0 +1,42 @@
+import tensorflow as tf
+
+# Ensure we are in graph mode for collections to work as expected in TF1 style
+tf.compat.v1.disable_eager_execution()
+
+# Define a custom collection key (analogous to the custom backend in the bug report)
+CUSTOM_BACKEND_KEY = "my_custom_backend"
+
+# Simulate the "Model" and "Devices" using scopes and variables
+# In the original bug, the user implemented custom primitives.
+# Here we define custom variables in specific scopes.
+with tf.compat.v1.Graph().as_default():
+    # Simulate device_ids=[0, 1, 2, 3]
+    device_ids = [0, 1, 2, 3]
+    variables = []
+
+    for device_id in device_ids:
+        with tf.compat.v1.variable_scope(f"device_{device_id}"):
+            # Create a variable representing a part of the model
+            var = tf.compat.v1.get_variable(f"var_{device_id}", shape=[10, 20])
+            # "Monkey patch" / Bind to the custom backend by adding to the collection
+            tf.compat.v1.add_to_collection(CUSTOM_BACKEND_KEY, var)
+            variables.append(var)
+
+    # Test the API: tf.compat.v1.get_collection
+    # This corresponds to the DataParallel gathering step
+    retrieved_vars = tf.compat.v1.get_collection(CUSTOM_BACKEND_KEY)
+
+    # Verify behavior (Assertions)
+    # The bug implies the API might fail or return incorrect results with custom backends.
+    # We assert that it works correctly here.
+    assert len(retrieved_vars) == len(device_ids), \
+        f"Expected {len(device_ids)} variables, got {len(retrieved_vars)}"
+
+    # Test scope filtering (analogous to scatter/individual device access)
+    # Note: get_collection scope argument filters by regex match on name
+    device_0_vars = tf.compat.v1.get_collection(CUSTOM_BACKEND_KEY, scope="device_0")
+    assert len(device_0_vars) == 1, \
+        f"Expected 1 variable for device_0, got {len(device_0_vars)}"
+    assert device_0_vars[0] is variables[0], "Variable mismatch for device_0"
+
+    print("success")

@@ -1,0 +1,49 @@
+import tensorflow as tf
+import numpy as np
+
+def test_tf_dropout_2d_input():
+    """
+    Adapted test case for tf.nn.dropout based on the PyTorch EmbeddingBag bug report.
+    
+    Original Bug: EmbeddingBag with include_last_offset=True generated incorrect 
+    offsets [0, 4] instead of [0, 4, 8] when input was 2D.
+    
+    Adaptation: Verify that tf.nn.dropout correctly handles 2D inputs and 
+    preserves the expected shape and behavior, ensuring no dimension handling 
+    issues similar to the original bug.
+    """
+    # Setup: Create a 2D input tensor similar to the PyTorch example.
+    # Note: Dropout operates on float data, so we convert the indices to floats.
+    input_tensor = tf.constant([[1.0, 2.0, 4.0, 5.0], [4.0, 3.0, 2.0, 9.0]], dtype=tf.float32)
+    
+    # Parameters for the API call
+    rate = 0.5
+    seed = 42  # Seed is required for deterministic testing and highlighted in the provided snippet
+
+    # Execute the API call
+    # The original bug was about internal state (offsets) being wrong for 2D input.
+    # Here we verify the output shape and behavior for 2D input.
+    output = tf.nn.dropout(input_tensor, rate=rate, seed=seed)
+
+    # Assertions
+    # 1. Verify the output shape matches the input shape (2D preservation)
+    assert output.shape == input_tensor.shape, \
+        f"Shape mismatch for 2D input. Expected {input_tensor.shape}, got {output.shape}"
+    
+    # 2. Verify that the output is a float tensor (type preservation)
+    assert output.dtype == tf.float32, \
+        f"Dtype mismatch. Expected tf.float32, got {output.dtype}"
+
+    # 3. Verify that dropout was actually applied (values should be scaled or zeroed)
+    # With seed=42, the result is deterministic.
+    # We check that the output is not exactly equal to the input (unless rate is 0.0)
+    if rate > 0.0:
+        # Note: Depending on the implementation, some elements might be kept (scaled) or dropped (0).
+        # We just ensure the tensor was processed.
+        assert not tf.reduce_all(tf.equal(input_tensor, output)).numpy(), \
+            "Output is identical to input, dropout might not have been applied correctly."
+
+    print("Test passed: tf.nn.dropout handles 2D input correctly.")
+
+if __name__ == "__main__":
+    test_tf_dropout_2d_input()

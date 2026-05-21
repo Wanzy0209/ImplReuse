@@ -1,0 +1,36 @@
+import torch
+import tensorflow as tf
+
+# Test case derived from Issue 165861: Reflect padding CUDA error with dim > 2**16
+# The original bug involves a failure when a tensor dimension is exactly 2**16.
+# This test verifies that the similar API (tf.compat.dimension_value) correctly
+# handles this specific boundary value, ensuring it does not inherit the same
+# limitation or error when processing large dimension sizes.
+
+def test_large_dimension_value_extraction():
+    # The critical value from the bug report (uint16 max + 1)
+    critical_dim = 2**16
+
+    # Scenario 1: Extracting from a TensorShape (mimicking tensor shape inspection)
+    # Original bug context: x = torch.rand(2**16, 2)
+    shape = tf.TensorShape([critical_dim, 2])
+    val_from_shape = tf.compat.dimension_value(shape[0])
+
+    # Scenario 2: Passing the integer directly (as per API signature)
+    val_from_int = tf.compat.dimension_value(critical_dim)
+
+    # Scenario 3: Handling None (edge case for compatibility)
+    val_from_none = tf.compat.dimension_value(None)
+
+    # Assertions
+    assert val_from_shape == critical_dim, \
+        f"Failed to extract dimension value {critical_dim} from TensorShape"
+    assert val_from_int == critical_dim, \
+        f"Failed to return dimension value {critical_dim} from integer input"
+    assert val_from_none is None, \
+        "Failed to handle None dimension value"
+
+    print("Test passed: tf.compat.dimension_value correctly handles dimension size 2**16.")
+
+if __name__ == "__main__":
+    test_large_dimension_value_extraction()

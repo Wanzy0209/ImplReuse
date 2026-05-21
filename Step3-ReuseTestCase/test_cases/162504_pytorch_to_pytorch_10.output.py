@@ -1,0 +1,27 @@
+import torch
+import io
+import sys
+
+# Define inputs for torch.hub.help
+github = "pytorch/vision"
+model = "resnet18"
+
+# Capture stdout to verify the output of torch.hub.help
+captured_output = io.StringIO()
+sys.stdout = captured_output
+
+# Call the similar API
+# Note: torch.hub.help is a documentation utility and does not support
+# CUDA graph capture or gradient computation, unlike the original API.
+# Therefore, we test its basic functionality here.
+torch.hub.help(github, model)
+
+# Restore stdout
+sys.stdout = sys.__stdout__
+
+# Verify the output
+output = captured_output.getvalue()
+assert len(output) > 0, "torch.hub.help produced no output"
+assert model in output, f"Expected model name '{model}' in help output"
+
+print("Test passed.")

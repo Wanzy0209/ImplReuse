@@ -1,0 +1,55 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# The original bug (Issue 164063) involves a TypeError when handling bfloat16 tensors
+# during a reduction operation (var) with precision emulation enabled.
+# The similar API (tf.keras.losses.categorical_hinge) contains an explicit cast:
+# y_true = math_ops.cast(y_true, y_pred.dtype)
+#
+# This test case verifies that the categorical_hinge loss handles bfloat16 inputs
+# and the associated casting logic correctly, mirroring the precision handling
+# context of the original bug.
+
+def test_categorical_hinge_bfloat16_precision():
+    # 1. Setup inputs
+    # y_true is typically one-hot encoded (integers or floats)
+    y_true = tf.constant([[1, 0, 0], [0, 1, 0]], dtype=tf.int32)
+
+    # y_pred is set to bfloat16 to match the dtype in the original bug report
+    y_pred = tf.constant([[0.9, 0.05, 0.05], [0.1, 0.8, 0.1]], dtype=tf.bfloat16)
+
+    # 2. Test Eager Execution
+    try:
+        loss_eager = tf.keras.losses.categorical_hinge(y_true, y_pred)
+        print(f"Eager execution successful. Loss: {loss_eager}")
+    except TypeError as e:
+        print(f"Eager execution failed with TypeError: {e}")
+        raise
+
+    # 3. Test Graph/Compiled Execution (analogous to torch.compile)
+    @tf.function
+    def compiled_loss(y_t, y_p):
+        return tf.keras.losses.categorical_hinge(y_t, y_p)
+
+    try:
+        loss_compiled = compiled_loss(y_true, y_pred)
+        print(f"Compiled execution successful. Loss: {loss_compiled}")
+    except TypeError as e:
+        print(f"Compiled execution failed with TypeError: {e}")
+        raise
+
+    # 4. Assertions
+    # Verify shapes match expectations
+    assert loss_eager.shape == (2,), f"Expected shape (2,), got {loss_eager.shape}"
+    assert loss_compiled.shape == (2,), f"Expected shape (2,), got {loss_compiled.shape}"
+
+    # Verify that the cast operation (y_true -> y_pred.dtype) didn't cause a type mismatch
+    # The output of categorical_hinge should generally match y_pred.dtype or float32 depending on implementation,
+    # but primarily we check that it runs without the 'unexpected type' error.
+    assert loss_eager.dtype == tf.bfloat16 or loss_eager.dtype == tf.float32
+
+    print("Test Passed: Categorical hinge handles bfloat16 casting without TypeError.")
+
+if __name__ == "__main__":
+    test_categorical_hinge_bfloat16_precision()

@@ -1,0 +1,74 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_slice_input_producer_bfloat16():
+    """
+    Adapted test case for tf.compat.v1.train.slice_input_producer based on 
+    PyTorch Issue 166042.
+    
+    The original issue involved a fuzzer generating bfloat16 tensors and 
+    encountering an assertion error related to index types in torch.nn.functional.embedding.
+    
+    This test adapts the data characteristics (bfloat16 dtype and specific tensor shapes)
+    to the TensorFlow API slice_input_producer to verify robustness.
+    """
+    
+    # Disable eager execution to use tf.compat.v1 components
+    tf.compat.v1.disable_eager_execution()
+    
+    # Use the seed from the original bug report
+    seed = 1352030645
+    
+    # Recreate tensors with shapes and dtypes found in the PyTorch fuzzer output.
+    # slice_input_producer requires all tensors in the list to have the same 
+    # first dimension size.
+    # From PyTorch trace:
+    # var_node_3: size=(4, 7), dtype=bfloat16
+    # var_node_1: size=(4, 9), dtype=bfloat16
+    
+    # We use numpy to create the data and cast to bfloat16
+    # Note: tf.bfloat16 is supported in TensorFlow
+    data_1 = np.ones((4, 7), dtype=np.float16)
+    data_2 = np.ones((4, 9), dtype=np.float16)
+    
+    tensor_1 = tf.constant(data_1, dtype=tf.bfloat16)
+    tensor_2 = tf.constant(data_2, dtype=tf.bfloat16)
+    
+    # Call the target API
+    # The original bug was related to indices, but this API handles slicing internally.
+    # We pass the bfloat16 tensors to check if the API handles the specific dtype 
+    # that caused issues in the PyTorch embedding layer.
+    slice_input = tf.compat.v1.train.slice_input_producer(
+        [tensor_1, tensor_2], 
+        shuffle=True, 
+        seed=seed,
+        capacity=32
+    )
+    
+    # Initialize the graph and run
+    with tf.compat.v1.Session() as sess:
+        # Local variables initialization is required for queue runners
+        sess.run(tf.compat.v1.local_variables_initializer())
+        
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+        
+        try:
+            # Retrieve a slice
+            result_1, result_2 = sess.run(slice_input)
+            
+            # Assertions to verify behavior
+            # The output should be slices of the first dimension
+            assert result_1.shape == (7,), f"Expected shape (7,), got {result_1.shape}"
+            assert result_2.shape == (9,), f"Expected shape (9,), got {result_2.shape}"
+            assert result_1.dtype == np.float16 # TF returns numpy arrays, bfloat16 might be represented as float16 or similar depending on backend
+            
+            print("Test passed: slice_input_producer handled bfloat16 inputs correctly.")
+            
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_slice_input_producer_bfloat16()

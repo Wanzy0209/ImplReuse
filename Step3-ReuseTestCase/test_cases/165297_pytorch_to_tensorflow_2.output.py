@@ -1,0 +1,83 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_multinomial_bfloat16_large():
+    """
+    Adapted test case for tf.raw_ops.Multinomial based on the 
+    torch.nn.MaxPool2d channels_last + bfloat16 bug.
+    
+    Original Bug Context:
+    - Large tensors with bfloat16 on CUDA caused NaNs or illegal memory access.
+    - Specific memory format (channels_last) was a trigger.
+    
+    Adaptation Logic:
+    - Multinomial operates on 2D tensors [batch_size, num_classes], so channels_last 
+      (NHWC) is not applicable. We focus on the 'Large Tensor' + 'bfloat16' + 'GPU' aspect.
+    - We check for valid execution and output bounds (since Multinomial outputs integers, 
+      checking for NaNs is not applicable, but checking for illegal indices/crashes is).
+    """
+    
+    # Check for CUDA/GPU availability
+    gpus = tf.config.list_physical_devices('GPU')
+    device = "/GPU:0" if gpus else "/CPU:0"
+    
+    if not gpus:
+        print("Warning: No GPU found. Running on CPU. The original bug was CUDA-specific.")
+
+    with tf.device(device):
+        # Adapt "Large input tensor"
+        # Original PyTorch size: (84, 64, 512, 960) ~ 2.6 billion elements.
+        # We use a large 2D tensor to stress the GPU memory and kernel.
+        batch_size = 10000
+        num_classes = 10000
+        
+        # Case 1: bfloat16 (Primary trigger in original bug)
+        # We use random normal values to simulate the input data.
+        logits = tf.random.normal([batch_size, num_classes], dtype=tf.bfloat16)
+        
+        # Note: channels_last memory format is specific to 4D image tensors (NCHW/NHWC).
+        # tf.raw_ops.Multinomial expects 2D input, so we proceed with standard layout.
+        
+        print(f"Input tensor: shape={logits.shape}, dtype={logits.dtype}, device={device}")
+
+        num_samples = 10
+        
+        try:
+            # Execute the operation
+            # tf.raw_ops.Multinomial is the low-level API equivalent to torch.nn.MaxPool2d in this context
+            y = tf.raw_ops.Multinomial(
+                logits=logits, 
+                num_samples=num_samples, 
+                output_dtype=tf.int32
+            )
+
+            # Verify output shape
+            expected_shape = tf.TensorShape([batch_size, num_samples])
+            assert y.shape == expected_shape, f"Shape mismatch: expected {expected_shape}, got {y.shape}"
+
+            # Verify output validity
+            # Since Multinomial returns indices (integers), we check for out-of-bounds indices
+            # instead of NaNs (which don't exist for integers).
+            # This detects memory corruption similar to how NaN detection detects calculation errors.
+            min_val = tf.reduce_min(y)
+            max_val = tf.reduce_max(y)
+            
+            print(f"Output stats: min={min_val.numpy()}, max={max_val.numpy()}")
+            
+            # Assert indices are within valid range [0, num_classes)
+            is_valid = tf.reduce_all((y >= 0) & (y < num_classes))
+            
+            if not is_valid.numpy():
+                print("FAILURE: Output contains invalid indices (out of bounds). Possible memory corruption.")
+            else:
+                print("SUCCESS: No invalid indices or crashes detected.")
+
+        except tf.errors.InternalError as e:
+            # Catch potential illegal memory access or internal CUDA errors
+            print(f"FAILURE: Internal Error (Illegal Memory Access?) - {e}")
+        except Exception as e:
+            print(f"FAILURE: Unexpected exception - {e}")
+
+if __name__ == "__main__":
+    test_multinomial_bfloat16_large()

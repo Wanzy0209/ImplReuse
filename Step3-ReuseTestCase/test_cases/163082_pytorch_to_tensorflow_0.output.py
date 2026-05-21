@@ -1,0 +1,36 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Set seed for reproducibility
+tf.random.set_seed(1337)
+
+# Define the compiled version (analogous to @torch.compile)
+@tf.function
+def cbrt_func(x):
+    return tf.experimental.numpy.cbrt(x)
+
+# Define the non-compiled version
+def cbrt_func_without_compile(x):
+    return tf.experimental.numpy.cbrt(x)
+
+# Attempt to use GPU if available, similar to the original bug's context
+device_name = '/GPU:0' if tf.config.list_physical_devices('GPU') else '/CPU:0'
+
+with tf.device(device_name):
+    # Create input tensor matching the original test case values
+    # Original: [[3.799999 ,0.0, 0.0]]
+    c = tf.constant([[3.799999, 0.0, 0.0]], dtype=tf.float32)
+    
+    print("Input vector", c.numpy()[0].tolist())
+    
+    # Run compiled
+    xyz = cbrt_func(c)
+    print("Result vector (compile):", xyz.numpy()[0].tolist(), "Reconstructed (cbrt^3) of component 0", tf.pow(xyz[0, 0], 3).numpy().item())
+    
+    # Run non-compiled
+    xyz = cbrt_func_without_compile(c)
+    print("Result vector (without compile):", xyz.numpy()[0].tolist(), "Reconstructed (cbrt^3) of component 0", tf.pow(xyz[0, 0], 3).numpy().item())
+
+# Note: For cbrt, we check if (result)^3 equals the input to verify precision,
+# analogous to checking if the norm is 1.0 in the original normalize bug.

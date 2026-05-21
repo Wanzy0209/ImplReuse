@@ -1,0 +1,19 @@
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+
+# Adapt the input to be a 2D array as required by tf.experimental.numpy.triu
+# (Original input was [1, -3, 5], we expand it to a matrix)
+input_tensor = tnp.array([[1, -3, 5], [7, 8, 9], [10, 11, 12]])
+
+# Call the similar API
+result = tnp.triu(input_tensor)
+
+# Verify the behavior
+# The upper triangle of the matrix should remain, lower triangle set to 0
+expected_output = tnp.array([[1, -3, 5], [0, 8, 9], [0, 0, 12]])
+
+# Check if the result matches the expected output
+assert tnp.array_equal(result, expected_output), f"Expected {expected_output}, but got {result}"
+
+print("Test passed. Result:")
+print(result)

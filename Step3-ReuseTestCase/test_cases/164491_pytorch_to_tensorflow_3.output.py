@@ -1,0 +1,92 @@
+import tensorflow as tf
+import numpy as np
+
+def test_resize_volumes_data_format_handling():
+    """
+    Adapted from PyTorch issue regarding row-major vs column-major handling.
+    
+    The original bug report highlights that `_scaled_mm` and `_int_mm` have issues
+    (errors or slowness) when the RHS matrix is in row-major layout compared to 
+    column-major. 
+    
+    This test verifies that `tf.keras.backend.resize_volumes` correctly handles
+    both 'channels_first' and 'channels_last' data formats, which are analogous
+    to different memory layouts (row-major vs column-major) in 5D tensors.
+    """
+    
+    # Setup dimensions
+    batch_size = 2
+    channels = 3
+    depth = 4
+    height = 5
+    width = 6
+    
+    # Factors for resizing
+    depth_factor = 2
+    height_factor = 3
+    width_factor = 4
+
+    # Test Case 1: channels_last (Standard layout)
+    # Analogous to one of the matrix layouts in the PyTorch bug
+    print("Testing data_format='channels_last'...")
+    try:
+        # Input shape: (Batch, Depth, Height, Width, Channels)
+        x_last = tf.ones((batch_size, depth, height, width, channels))
+        
+        out_last = tf.keras.backend.resize_volumes(
+            x_last, depth_factor, height_factor, width_factor, data_format='channels_last'
+        )
+        
+        # Verify output shape
+        expected_shape = (batch_size, depth * depth_factor, height * height_factor, width * width_factor, channels)
+        assert out_last.shape == expected_shape, \
+            f"Shape mismatch for channels_last. Expected {expected_shape}, got {out_last.shape}"
+        
+        # Verify content (repetition logic)
+        # resize_volumes uses repeat_elements. 
+        # If input is 1s, output should be 1s.
+        assert tf.reduce_all(out_last == 1.0), "Content mismatch for channels_last"
+        
+        print("  channels_last: PASSED")
+    except Exception as e:
+        print(f"  channels_last: FAILED with {e}")
+
+    # Test Case 2: channels_first (Alternative layout)
+    # Analogous to the other matrix layout in the PyTorch bug that caused issues
+    print("Testing data_format='channels_first'...")
+    try:
+        # Input shape: (Batch, Channels, Depth, Height, Width)
+        x_first = tf.ones((batch_size, channels, depth, height, width))
+        
+        out_first = tf.keras.backend.resize_volumes(
+            x_first, depth_factor, height_factor, width_factor, data_format='channels_first'
+        )
+        
+        # Verify output shape
+        expected_shape = (batch_size, channels, depth * depth_factor, height * height_factor, width * width_factor)
+        assert out_first.shape == expected_shape, \
+            f"Shape mismatch for channels_first. Expected {expected_shape}, got {out_first.shape}"
+            
+        # Verify content
+        assert tf.reduce_all(out_first == 1.0), "Content mismatch for channels_first"
+        
+        print("  channels_first: PASSED")
+    except Exception as e:
+        print(f"  channels_first: FAILED with {e}")
+
+    # Test Case 3: Invalid data_format
+    # Ensuring the API handles invalid inputs gracefully (as per docstring)
+    print("Testing invalid data_format...")
+    try:
+        x_invalid = tf.ones((batch_size, depth, height, width, channels))
+        out_invalid = tf.keras.backend.resize_volumes(
+            x_invalid, 1, 1, 1, data_format='invalid_format'
+        )
+        print("  invalid_format: FAILED (Did not raise ValueError)")
+    except ValueError:
+        print("  invalid_format: PASSED (Raised ValueError as expected)")
+    except Exception as e:
+        print(f"  invalid_format: FAILED (Raised unexpected error: {e})")
+
+if __name__ == "__main__":
+    test_resize_volumes_data_format_handling()

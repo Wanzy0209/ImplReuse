@@ -1,0 +1,32 @@
+import torch
+import tensorflow as tf
+
+# Adapt the original PyTorch test case logic to TensorFlow.
+# The original bug involves passing tensors of specific dtypes (complex128, uint32)
+# to an API that expects different types, potentially causing a segmentation fault.
+# Here we test tf.compat.v1.nn.ctc_beam_search_decoder with these dtypes.
+
+# Mimic the tensor creation from the PyTorch bug report.
+# PyTorch: torch.empty((9, 6, 3, 6, 9), dtype=torch.complex128, device='cuda')
+# Adapted for TF CTC inputs (max_time, batch_size, num_classes).
+# We use a compatible shape (9, 6, 3) but keep the complex128 dtype.
+inputs = tf.empty((9, 6, 3), dtype=tf.complex128)
+
+# PyTorch: torch.empty((5, 7, 9, 8, 5), dtype=torch.uint32, device='cuda')
+# Adapted for TF CTC sequence_length (batch_size).
+# We match the batch_size (6) from inputs and keep the uint32 dtype.
+sequence_length = tf.empty((6,), dtype=tf.uint32)
+
+print(f"TensorFlow Version: {tf.__version__}")
+print("Testing tf.compat.v1.nn.ctc_beam_search_decoder with complex128 inputs and uint32 sequence_length...")
+
+try:
+    # Attempt to call the API with the mismatched types
+    decoded, log_prob = tf.compat.v1.nn.ctc_beam_search_decoder(
+        inputs=inputs,
+        sequence_length=sequence_length
+    )
+    print("Test Result: API call succeeded (no crash).")
+    print("Decoded:", decoded)
+except Exception as e:
+    print(f"Test Result: Caught Exception: {type(e).__name__}: {e}")

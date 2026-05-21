@@ -1,0 +1,30 @@
+import tensorflow as tf
+
+# Enable eager execution as specified by the similar API.
+# This allows operations to execute immediately rather than being traced into a graph,
+# which is the context where the PyTorch bug (tracing failure) occurs.
+tf.compat.v1.enable_eager_execution()
+
+class Config:
+    def __repr__(self):
+        return "Config()"
+
+def forward(x, config):
+    # Calling repr() on non-constant user object.
+    # In eager mode, this executes as standard Python code.
+    return x * len(repr(config))
+
+config = Config()
+# Use a constant tensor for deterministic testing
+x = tf.constant([[1.0, 2.0], [3.0, 4.0]])
+
+# Execute the function
+result = forward(x, config)
+
+# Verify the result
+# repr(config) returns "Config()", which has a length of 8.
+# The operation is x * 8.
+expected = x * 8
+assert tf.reduce_all(tf.equal(result, expected)).numpy(), "Test failed: output does not match expected value"
+
+print("Test passed: repr() handled correctly in eager execution mode.")

@@ -1,0 +1,47 @@
+import tensorflow as tf
+from tensorflow.experimental import dtensor
+
+def test_dtensor_view_dtype_preservation():
+    """
+    Reproduces the logic of the PyTorch bug (as_strided lowering throws away .view(dtype))
+    using TensorFlow's dtensor.device_name API.
+
+    The bug involved a tensor viewed as uint8 being passed to a kernel as float8.
+    This test ensures that a bitcast (view) is preserved when executing on the DTensor device.
+    """
+    # Use the similar API to get the device context
+    # This mimics the setup where the kernel execution occurs
+    device_name = dtensor.device_name()
+
+    @tf.function
+    def compiled_op():
+        with tf.device(device_name):
+            # Create a tensor of one dtype (e.g., float32)
+            x = tf.constant([1.0, 2.0, 3.0], dtype=tf.float32)
+
+            # Perform a 'view' operation (bitcast) to change dtype without changing data
+            # Analogous to tensor.view(dtype) in PyTorch
+            x_view = tf.bitcast(x, tf.int32)
+
+            # Perform an operation that strictly requires the viewed dtype (int32)
+            # If the view was "thrown away" (like in the PyTorch bug),
+            # and x was treated as float32, this bitwise operation would fail.
+            result = tf.bitwise.left_shift(x_view, 1)
+
+            return result
+
+    # Run the compiled operation
+    result = compiled_op()
+
+    # Verify the result matches the expected behavior of the viewed dtype
+    # 1.0 (float32) -> 1065353216 (int32) -> 2130706432 (int32)
+    expected_input = tf.constant([1.0, 2.0, 3.0], dtype=tf.float32)
+    expected_view = tf.bitcast(expected_input, tf.int32)
+    expected_result = tf.bitwise.left_shift(expected_view, 1)
+
+    assert tf.reduce_all(tf.equal(result, expected_result)).numpy(), \
+        "The dtype view was not preserved during execution."
+
+if __name__ == "__main__":
+    test_dtensor_view_dtype_preservation()
+    print("Test passed: dtype view preserved on DTensor device.")

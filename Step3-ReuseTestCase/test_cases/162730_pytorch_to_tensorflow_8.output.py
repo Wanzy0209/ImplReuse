@@ -1,0 +1,39 @@
+import torch
+import tensorflow as tf
+
+# Create test strings
+# Mimicking the creation of W in the original PyTorch example
+# Original: W = torch.randn(12, 64, 768)
+# We create a flat list of strings and reshape it to simulate the tensor structure
+num_strings = 12 * 64
+raw_strings = [f"string_{i}" for i in range(num_strings)]
+W = tf.constant(raw_strings)
+
+# Create non-contiguous weight via rearrange (reshape)
+# PyTorch: w_noncontig = einops.rearrange(W, "h d m -> m (h d)")
+# Here we reshape to a 2D tensor to simulate a change in memory layout/strides
+w_noncontig = tf.reshape(W, [64, 12])
+
+# Create contiguous version
+# PyTorch: w_contig = w_noncontig.contiguous()
+# In TensorFlow, we use tf.identity to create a copy, ensuring a contiguous memory block
+w_contig = tf.identity(w_noncontig)
+
+# Note: TensorFlow tensors do not expose an .is_contiguous() method in the public API like PyTorch.
+# We assume the reshape creates a view-like structure and identity creates a copy.
+
+num_buckets = 1000
+
+# These should be identical
+# PyTorch: result1 = torch.nn.functional.linear(x, w_noncontig, bias)
+result1 = tf.compat.v1.string_to_hash_bucket(w_noncontig, num_buckets)
+result2 = tf.compat.v1.string_to_hash_bucket(w_contig, num_buckets)
+
+# Check match
+# PyTorch: torch.allclose(result1, result2, atol=1e-5)
+# TF: tf.reduce_all(tf.equal(result1, result2))
+results_match = tf.reduce_all(tf.equal(result1, result2)).numpy()
+print(f"Results match: {results_match}")
+
+# Assert to verify behavior
+assert results_match, "Results differ between non-contiguous and contiguous inputs"

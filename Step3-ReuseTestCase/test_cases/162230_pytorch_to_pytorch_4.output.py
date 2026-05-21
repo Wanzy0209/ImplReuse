@@ -1,0 +1,44 @@
+import torch
+import unittest
+
+class TestSquareAPI(unittest.TestCase):
+    def test_square_basic(self):
+        """
+        Test case for torch.square, adapted from the context of test_scalar_multiply.
+        Verifies that torch.square works correctly in both eager and compiled modes.
+        """
+        def fn(x):
+            return torch.square(x)
+
+        # Test with random tensor
+        x = torch.randn(3, 3)
+        
+        # Eager execution
+        expected = fn(x)
+        
+        # Compiled execution (simulating the FxGraphRunnableTest context)
+        compiled_fn = torch.compile(fn)
+        actual = compiled_fn(x)
+        
+        self.assertTrue(torch.allclose(expected, actual))
+
+    def test_square_with_scalar_multiply(self):
+        """
+        Test torch.square combined with scalar multiplication,
+        reflecting the original test's context.
+        """
+        def fn(x):
+            # Similar to the extracted call chain: (3 * a) ** 2
+            # Using torch.square explicitly
+            return torch.square(3 * x)
+
+        x = torch.randn(3, 3)
+        
+        expected = fn(x)
+        compiled_fn = torch.compile(fn)
+        actual = compiled_fn(x)
+        
+        self.assertTrue(torch.allclose(expected, actual))
+
+if __name__ == '__main__':
+    unittest.main()

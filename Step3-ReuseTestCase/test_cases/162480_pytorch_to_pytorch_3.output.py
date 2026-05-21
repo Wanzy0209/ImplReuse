@@ -1,0 +1,54 @@
+import torch
+import torch.library
+
+# Define a custom operator to be used with the abstract implementation
+torch.library.define("test_ns::float_shape_op", "(Tensor x) -> Tensor")
+
+# Register the abstract implementation using torch.library.impl_abstract
+# This API defines the behavior of the operator on FakeTensors (metadata only).
+@torch.library.impl_abstract("test_ns::float_shape_op")
+def float_shape_op_abstract(x):
+    """
+    Abstract implementation for the custom operator.
+    This function interacts with the symbolic shape engine.
+    The bug fix in rebind_unbacked handles cases where symbolic shape
+    variables might be floats (e.g., resulting from division).
+    """
+    # Simulate a shape calculation that involves a float.
+    # If x.size(0) is symbolic, x.size(0) / 2.0 is a float expression.
+    # The compiler's symbolic shape engine (rebind_unbacked) must handle
+    # this float value gracefully.
+    dim = x.size(0)
+    new_dim = int(dim / 2.0)
+    return x.new_empty((new_dim,))
+
+# Register the concrete implementation for CPU
+@torch.library.impl("test_ns::float_shape_op", "CPU")
+def float_shape_op_impl(x):
+    # Concrete logic: slice the tensor to half its size
+    return x[: x.size(0) // 2]
+
+# Test function that utilizes the custom operator
+def test_function(x):
+    return torch.ops.test_ns.float_shape_op(x)
+
+# Main test execution
+if __name__ == "__main__":
+    # Create a sample tensor
+    input_tensor = torch.randn(10, 10)
+    
+    # Compile the function using torch.compile (AOTInductor context)
+    # This triggers the symbolic shape tracing where the bug occurred.
+    compiled_fn = torch.compile(test_function, mode="reduce-overhead")
+    
+    # Execute the compiled function
+    result = compiled_fn(input_tensor)
+    
+    # Execute the eager function for comparison
+    expected = test_function(input_tensor)
+    
+    # Assertions to verify correctness
+    assert torch.allclose(result, expected), "Compiled output does not match eager output"
+    assert result.shape == (5, 10), f"Expected shape (5, 10), got {result.shape}"
+    
+    print("Test passed: torch.library.impl_abstract handles float shapes correctly under torch.compile.")

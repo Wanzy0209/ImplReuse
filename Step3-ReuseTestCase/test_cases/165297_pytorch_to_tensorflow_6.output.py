@@ -1,0 +1,61 @@
+import tensorflow as tf
+import numpy as np
+
+def test_distribution_bfloat16_large_tensor():
+    """
+    Adapted test case for tf.compat.v1.distributions.Distribution.
+    
+    Original Bug: MaxPool2d with channels_last + bfloat16 on CUDA produces NaNs 
+    for large tensors.
+    
+    Adaptation: We test a concrete Distribution (Normal) with large bfloat16 
+    tensors on GPU to check for numerical instability (NaNs) during sampling 
+    or probability calculations, mirroring the stress conditions of the original bug.
+    """
+    
+    # Check for GPU availability to match the original bug context
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        print("Test skipped: GPU not available.")
+        return
+
+    print("Running test on GPU...")
+
+    # Adapt dimensions to be large, similar to the PyTorch bug report
+    # PyTorch: N, C, H, W = 84, 64, 512, 960
+    # We flatten the spatial dimensions for the distribution event shape
+    batch_size = 84
+    event_size = 64 * 512 * 960
+
+    # Use bfloat16 as in the original bug report
+    dtype = tf.bfloat16
+
+    # Create large parameters for the distribution
+    # Using random values to stress the computation
+    loc = tf.random.normal([batch_size, event_size], dtype=dtype)
+    scale = tf.random.uniform([batch_size, event_size], minval=0.1, maxval=1.0, dtype=dtype)
+
+    # Instantiate a concrete Distribution subclass (Normal)
+    # Note: tf.compat.v1.distributions.Distribution is a base class, 
+    # so we use Normal here to execute the logic.
+    dist = tf.compat.v1.distributions.Normal(loc=loc, scale=scale)
+
+    # Perform a heavy computation (sampling) which might trigger NaNs
+    # similar to the MaxPool operation in the original bug.
+    samples = dist.sample()
+
+    # Check for NaNs
+    has_nan = tf.reduce_any(tf.math.is_nan(samples))
+    has_inf = tf.reduce_any(tf.math.is_inf(samples))
+
+    print(f"Output contains NaN? {has_nan.numpy()}")
+    print(f"Output contains Inf? {has_inf.numpy()}")
+
+    # Assertion to fail if NaNs are detected (reproducing the bug)
+    assert not has_nan.numpy(), "Detected NaNs in Distribution sample output!"
+    assert not has_inf.numpy(), "Detected Infs in Distribution sample output!"
+
+    print("Test passed: No NaNs or Infs detected.")
+
+if __name__ == "__main__":
+    test_distribution_bfloat16_large_tensor()

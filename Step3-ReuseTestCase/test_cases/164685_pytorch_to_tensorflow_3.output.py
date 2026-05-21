@@ -1,0 +1,62 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# The target API is tf.compat.v1.enable_eager_execution.
+# We call it to ensure eager mode is active (standard in TF2, but explicit here).
+# Note: In TF 2.x, this is a no-op if already enabled, but required if running in a TF1-like environment.
+tf.compat.v1.enable_eager_execution()
+
+# Set seed for reproducibility
+tf.random.set_seed(19989)
+
+# Define the program logic
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = -6  # dtype=int64 (Python int)
+    var_node_3 = arg_0  # dtype=int32 (Python scalar from .item())
+    var_node_1 = var_node_2 * var_node_3  # dtype=int32 (Python scalar)
+
+    # torch.full((), 1, dtype=torch.int64)
+    var_node_5 = tf.constant(1, dtype=tf.int64)
+    # .item() converts to Python scalar
+    var_node_4 = var_node_5.numpy()
+
+    # Division: int32 scalar / int64 scalar
+    var_node_0 = var_node_1 / var_node_4
+
+    # Sentinel multiplication
+    # Ensure sentinel is float to match typical gradient requirements, or cast appropriately
+    # In PyTorch, multiplying a scalar by a tensor yields a tensor.
+    result = var_node_0 * tf.cast(sentinel, tf.float64)
+
+    # Check complex (TF doesn't have .is_complex() method on tensor, check dtype)
+    if result.dtype.is_complex:
+        result = tf.math.real(result)
+
+    return result
+
+# Sentinel tensor to ensure gradient computation
+# PyTorch: torch.tensor(1.0, requires_grad=True)
+# TF: tf.Variable(1.0)
+sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+# arg_0 generation
+# PyTorch: torch.tensor(torch.randn(()), dtype=torch.int32).item()
+# TF: tf.cast(tf.random.normal(()), tf.int32)
+# Note: .item() in PyTorch returns a Python scalar. In TF, we use .numpy() to get the scalar value.
+arg_0 = tf.cast(tf.random.normal(shape=()), tf.int32).numpy()
+
+# 1. Run in Eager Mode
+result_eager = fuzzed_program(arg_0, sentinel)
+print(' eager success')
+
+# 2. Run in Compiled/Graph Mode (using tf.function to simulate torch.compile)
+# This preserves the "Divergence" check logic from the original bug report.
+compiled_program = tf.function(fuzzed_program)
+result_compiled = compiled_program(arg_0, sentinel)
+print(' compile success')
+
+# Verify consistency
+# Use numpy() for comparison in eager context
+if not np.allclose(result_eager.numpy(), result_compiled.numpy()):
+    raise AssertionError(f"Divergence detected: Eager={result_eager.numpy()}, Compiled={result_compiled.numpy()}")

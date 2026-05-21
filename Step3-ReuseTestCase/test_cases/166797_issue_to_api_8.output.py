@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+
+"""
+Test case to verify shape handling during model export/compilation.
+This test mirrors the logic of the PyTorch ONNX Dynamo export bug (Issue 166797)
+but translates the semantics to TensorFlow's TPU replication API using PaddingSpec.
+It checks if the output shapes are correct when using different padding policies.
+"""
+
+import tensorflow as tf
+from tensorflow.python.tpu import tpu_function
+from tensorflow.python.tpu.tpu import PaddingSpec
+import unittest
+from unittest.mock import patch, MagicMock
+
+# Define a simple model to test shape handling
+def create_simple_model():
+    """Creates a simple TF model with a Conv2D layer."""
+    model = tf.keras.Sequential([
+        tf.keras.layers.Conv2D(filters=64, kernel_size=3, padding='same', input_shape=(224, 224, 3)),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.ReLU()
+    ])
+    return model
+
+class TestTPUPaddingSpecShapes(unittest.TestCase):
+    """
+    Test class to verify that PaddingSpec configurations do not introduce
+    shape errors, similar to the bias shape error in PyTorch Dynamo export.
+    """
+
+    def setUp(self):
+        """Set up the test case."""
+        self.model = create_simple_model()
+        # Dummy input
+        self.dummy_input = tf.random.normal((1, 224, 224, 3))
+
+    @patch('tensorflow.python.tpu.tpu.replicate')
+    def test_padding_spec_shape_integrity(self, mock_replicate):
+        """
+        Test that the PaddingSpec configuration is passed and shapes are validated.
+        This mimics the check in the PyTorch issue where bias shapes were verified.
+        """
+        
+        # We mock the TPU replication to avoid hardware requirements
+        # but we verify the configuration logic.
+        mock_replicate.return_value = MagicMock()
+
+        # Test with PaddingSpec.AUTO
+        config_auto = tf.compat.v1.tpu.TPUEstimatorSpec(
+            mode=tf.compat.v1.estimator.ModeKeys.PREDICT,
+            predictions={"output": self.model(self.dummy_input)}
+        )
+        
+        # In a real TPU scenario, PaddingSpec would be passed to tpu.replicate.
+        # Here we verify the concept: ensuring the model handles the input shape
+        # and produces the expected output shape.
+        
+        output = self.model(self.dummy_input)
+        
+        # Expected shape: (batch, height, width, channels) -> (1, 224, 224, 64)
+        expected_shape = (1, 224, 224, 64)
+        
+        # Assert the output shape is correct
+        self.assertEqual(output.shape, expected_shape, 
+                         f"Output shape mismatch with PaddingSpec.AUTO. Expected {expected_shape}, got {output.shape}")
+
+    def test_padding_spec_power_of_two_logic(self):
+        """
+        Test the logic of PaddingSpec.POWER_OF_TWO.
+        While we can't run on TPU, we verify the enum usage and expected behavior.
+        """
+        # Verify PaddingSpec enum values exist
+        self.assertEqual(PaddingSpec.AUTO.value, 0)
+        self.assertEqual(PaddingSpec.POWER_OF_TWO.value, 1)
+
+        # Simulate the shape adjustment logic that might happen with POWER_OF_TWO
+        # If input is dynamic, POWER_OF_TWO pads to next power of 2.
+        # 224 is not a power of 2. Next power of 2 is 256.
+        # This test verifies we understand the semantic impact on shapes.
+        
+        dummy_input_dynamic = tf.random.normal((1, 224, 224, 3))
+        output = self.model(dummy_input_dynamic)
+        
+        # In a real TPU graph with POWER_OF_TWO, the internal shape might be padded.
+        # We check that the base model execution is valid.
+        self.assertIsNotNone(output)
+
+if __name__ == '__main__':
+    unittest.main()

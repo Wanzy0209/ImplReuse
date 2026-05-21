@@ -1,0 +1,23 @@
+import torch
+import tensorflow as tf
+
+def test_keras_backend_epsilon_return_type():
+    """
+    Test case for tf.keras.backend.epsilon based on the logic of Issue 165125.
+    
+    The original issue reported that torch.utils.cpp_extension._jit_compile 
+    was annotated to return 'None' but actually returned a module or str.
+    
+    This test verifies that tf.keras.backend.epsilon returns the correct type 
+    (float) and explicitly checks that it does not return None, ensuring 
+    consistency between actual behavior and expected return types.
+    """
+    # Call the similar API
+    result = tf.keras.backend.epsilon()
+    
+    # Verify the return type is correct (float) as per documentation
+    assert isinstance(result, float), f"Expected return type float, but got {type(result)}"
+    
+    # Verify the return value is not None, addressing the specific 
+    # bug pattern where a function might be incorrectly annotated as returning None.
+    assert result is not None, "Return value should not be None"

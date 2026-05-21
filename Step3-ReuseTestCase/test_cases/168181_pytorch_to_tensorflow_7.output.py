@@ -1,0 +1,58 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_name_scope_device_transfer():
+    """
+    Adapts the PyTorch test for torch.compile + .cpu() correctness to 
+    TensorFlow, focusing on tf.keras.backend.name_scope behavior 
+    during device transfers in graph mode.
+    """
+    
+    # Check for GPU availability to match the original test's requirements
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        print("Test skipped: No GPU available.")
+        return
+
+    # Simulating a user-defined kernel (like the Triton kernel in the PyTorch test)
+    def custom_kernel(x, y):
+        return x + y
+
+    # The function logic to be tested
+    def f(x, y):
+        # Using the similar API: tf.keras.backend.name_scope
+        # This acts as the context manager for the operations, similar to how 
+        # the kernel call is scoped in the original issue.
+        with tf.keras.backend.name_scope("custom_kernel_scope"):
+            # PyTorch: out = torch.zeros_like(x); add_kernel[(1,)](x, y, out, 16, 16)
+            # TF equivalent: Perform the operation
+            out = custom_kernel(x, y)
+
+            # PyTorch: out_cpu = out.cpu() + 1
+            # TF equivalent: Explicitly switch device context to CPU
+            with tf.device("/CPU:0"):
+                out_cpu = out + 1
+            return out_cpu
+
+    # Create inputs on GPU
+    with tf.device("/GPU:0"):
+        x = tf.random.normal((4, 4))
+        y = tf.random.normal((4, 4))
+
+    # 1. Eager Execution (Baseline)
+    eager_out = f(x, y)
+
+    # 2. Compiled Execution (tf.function is the TensorFlow equivalent of torch.compile)
+    # We wrap the function in tf.function to test the graph compilation behavior.
+    compiled_f = tf.function(f)
+    compiled_out = compiled_f(x, y)
+
+    # 3. Assertion
+    # Verify that the compiled version produces the same result as the eager version,
+    # specifically checking the device transfer logic inside the name_scope.
+    np.testing.assert_allclose(compiled_out.numpy(), eager_out.numpy())
+    print("Test passed: name_scope handles device transfer correctly in graph mode.")
+
+if __name__ == "__main__":
+    test_name_scope_device_transfer()

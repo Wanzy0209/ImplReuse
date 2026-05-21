@@ -1,0 +1,90 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use tf.compat.v1 queues and graph mode (similar to torch.compile)
+tf.compat.v1.disable_eager_execution()
+
+# Constants
+BATCH_SIZE = 4
+NUM_CLASSES = 10
+LEARNING_RATE = 0.01
+LIMIT = 100  # Limit for range_input_producer
+
+# 1. Define Model (ResNet equivalent)
+# Using a simple ResNet from Keras applications to match the original bug report's model type
+model = tf.keras.applications.ResNet50V2(weights=None, classes=NUM_CLASSES)
+
+# 2. Define Optimizer and Loss
+optimizer = tf.keras.optimizers.SGD(learning_rate=LEARNING_RATE)
+loss_fn = tf.keras.losses.SparseCategoricalCrossentropy()
+
+# 3. Setup Data Pipeline using the requested API: tf.compat.v1.train.range_input_producer
+# This API produces integers from 0 to limit-1 in a queue.
+# We use this to generate labels for the training step.
+labels_producer = tf.compat.v1.train.range_input_producer(
+    limit=LIMIT,
+    num_epochs=None,
+    shuffle=True,
+    seed=None,
+    capacity=32,
+    shared_name=None,
+    name="label_producer"
+)
+
+# Batch the labels produced by the queue
+label_batch = tf.compat.v1.train.batch(
+    [labels_producer], 
+    batch_size=BATCH_SIZE, 
+    capacity=32 + 3 * BATCH_SIZE,
+    name="label_batch"
+)
+
+# Generate random images (mimicking torch.randn)
+# In graph mode, this op will be executed in the session
+images = tf.random.normal((BATCH_SIZE, 3, 224, 224), dtype=tf.float32, name="images")
+
+# 4. Define Training Step (Forward + Backward)
+# In TF V1 graph mode, the graph construction acts as the compilation phase.
+# We define the forward pass and the gradient computation (minimize).
+with tf.name_scope("training"):
+    logits = model(images, training=True)
+    loss = loss_fn(label_batch, logits)
+    
+    # Compute gradients and apply them (equivalent to loss.backward() + optimizer.step())
+    train_op = optimizer.minimize(loss, var_list=model.trainable_variables)
+
+# 5. Run Session
+# This executes the compiled graph.
+with tf.compat.v1.Session() as sess:
+    # Initialize all variables
+    sess.run(tf.compat.v1.global_variables_initializer())
+    # Initialize local variables (required for range_input_producer epochs)
+    sess.run(tf.compat.v1.local_variables_initializer())
+    
+    # Start queue runners to feed data from range_input_producer
+    coord = tf.compat.v1.train.Coordinator()
+    threads = tf.compat.v1.train.start_queue_runners(coord=coord)
+
+    try:
+        print("Starting training step...")
+        # Run a training step
+        # This mimics the train(images, labels) call in the original PyTorch code
+        _, loss_val = sess.run([train_op, loss])
+        print(f"Training step completed. Loss: {loss_val}")
+        
+        # Assertion to verify the step ran successfully
+        assert loss_val is not None, "Loss value should not be None"
+        print("Test Passed: Training step executed successfully with range_input_producer.")
+
+    except RuntimeError as e:
+        # Catching potential runtime errors similar to the MPS backend bug
+        print(f"Runtime Error during backward pass/execution: {e}")
+        raise
+    except Exception as e:
+        print(f"Unexpected Error: {e}")
+        raise
+    finally:
+        # Stop queue runners
+        coord.request_stop()
+        coord.join(threads)

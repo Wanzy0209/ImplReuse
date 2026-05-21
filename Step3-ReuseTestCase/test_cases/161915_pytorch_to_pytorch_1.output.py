@@ -1,0 +1,27 @@
+import torch
+import unittest
+
+class TestAsNestedTensorShareMemory(unittest.TestCase):
+    def test_share_memory_support(self):
+        """
+        Test case to verify share_memory_() support for NestedTensors 
+        created via torch.nested.as_nested_tensor.
+        Adapted from Issue #161915.
+        """
+        # Create input tensors with different sizes to ensure jagged layout
+        a = torch.randn(3)
+        b = torch.randn(5)
+
+        # Use the similar API: torch.nested.as_nested_tensor
+        # We pass layout=torch.jagged to match the original bug report's context closely.
+        nt = torch.nested.as_nested_tensor([a, b], layout=torch.jagged)
+
+        # The original bug resulted in a Segmentation Fault at this line.
+        # We call the method to verify if the similar API is affected or handles it correctly.
+        nt.share_memory_()
+
+        # Assertion to verify the operation succeeded and the tensor is in shared memory.
+        self.assertTrue(nt.is_shared())
+
+if __name__ == '__main__':
+    unittest.main()

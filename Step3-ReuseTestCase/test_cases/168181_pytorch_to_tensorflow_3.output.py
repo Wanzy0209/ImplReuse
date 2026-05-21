@@ -1,0 +1,56 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Enable eager execution as per the similar API context
+tf.compat.v1.enable_eager_execution()
+
+def test_gpu_to_cpu_correctness():
+    """
+    Adapted test case to verify consistency between eager and compiled execution
+    when transferring data from GPU to CPU, analogous to the PyTorch 
+    test_triton_kernel_to_cpu issue.
+    """
+    # Check for GPU availability
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        print("Test skipped: No GPU available.")
+        return
+
+    # Define inputs on GPU
+    with tf.device('/GPU:0'):
+        x = tf.random.normal((4, 4))
+        y = tf.random.normal((4, 4))
+
+    # Define the computation logic
+    # Analogous to PyTorch: 
+    #   out = torch.zeros_like(x)
+    #   add_kernel[(1,)](x, y, out, 16, 16)
+    #   out_cpu = out.cpu() + 1
+    def computation_fn(x, y):
+        # Simulate a kernel operation (e.g., addition) on GPU
+        # In TensorFlow, standard ops automatically run on the device of the inputs
+        out = x + y
+        
+        # Move to CPU and perform operation
+        # Explicitly switching device context forces the transfer, similar to .cpu()
+        with tf.device('/CPU:0'):
+            out_cpu = out + 1
+        return out_cpu
+
+    # 1. Run in Eager mode (baseline)
+    eager_out = computation_fn(x, y)
+
+    # 2. Run in Compiled mode (tf.function is analogous to torch.compile)
+    # This tests the graph/compiled execution path.
+    compiled_fn = tf.function(computation_fn)
+    compiled_out = compiled_fn(x, y)
+
+    # 3. Verify correctness
+    # The original bug was that the compiled version produced incorrect results
+    # compared to the eager version due to synchronization/memory handling issues.
+    np.testing.assert_allclose(compiled_out.numpy(), eager_out.numpy(), rtol=1e-5)
+    print("Test Passed: Eager and Compiled results match.")
+
+if __name__ == "__main__":
+    test_gpu_to_cpu_correctness()

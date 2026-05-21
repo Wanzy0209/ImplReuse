@@ -1,0 +1,48 @@
+import torch
+import tensorflow as tf
+import os
+import tempfile
+
+def test_tf_checkpoint_options():
+    """
+    Adapted test case for tf.train.CheckpointOptions.
+    
+    The original issue involved a compilation error in PyTorch's JIT extension 
+    loading mechanism (torch.utils.cpp_extension.load) specific to ROCm headers.
+    
+    Since tf.train.CheckpointOptions is a high-level Python API for configuring 
+    I/O behavior and does not perform on-the-fly C++ compilation or include 
+    custom ROCm headers, the specific C++ static_cast error cannot be reproduced 
+    here. 
+    
+    This test verifies the correct usage and behavior of the similar TensorFlow API.
+    """
+    
+    # Create a temporary directory for saving the checkpoint
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # 1. Setup: Create a variable and a Checkpoint
+        step = tf.Variable(0, name="step")
+        checkpoint = tf.train.Checkpoint(step=step)
+        
+        # 2. API Usage: Configure CheckpointOptions
+        # This corresponds to the "configuration" aspect of the original PyTorch API call.
+        # We set an experimental IO device to mimic the configuration of low-level behavior.
+        options = tf.train.CheckpointOptions(
+            experimental_io_device="/job:localhost"
+        )
+        
+        # 3. Execution: Save the checkpoint using the options
+        save_path = checkpoint.save(os.path.join(tmpdir, "ckpt"), options=options)
+        
+        # 4. Verification: Ensure the checkpoint was saved successfully
+        # TensorFlow checkpoints usually generate a .index file and a data file.
+        assert os.path.exists(save_path + ".index"), "Checkpoint index file not found."
+        
+        # 5. Restoration: Verify the state can be read back
+        status = checkpoint.restore(save_path)
+        status.assert_existing_objects_matched() # Asserts restoration was successful
+        
+        print(f"Test passed. Checkpoint saved successfully to {save_path} with options.")
+
+if __name__ == "__main__":
+    test_tf_checkpoint_options()

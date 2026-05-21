@@ -1,0 +1,60 @@
+import torch
+import torch.nn.functional as F
+
+def test_rrelu_compile_regression():
+    """
+    Test case for torch.compile regression affecting torch.nn.functional.rrelu_.
+    
+    This test is based on Issue 164301, which reported a performance regression 
+    in torch.compile for specific memory access patterns (mxfp8 quantization).
+    The API torch.nn.functional.rrelu_ has high code similarity (0.98) to the 
+    affected code, suggesting it may share underlying inductor codegen patterns.
+    
+    This test verifies that torch.compile executes rrelu_ correctly and efficiently
+    on large tensors, mirroring the reproduction logic of the original issue.
+    """
+    # The original issue was specific to CUDA (B200 GPUs)
+    if not torch.cuda.is_available():
+        print("CUDA not available. Skipping test.")
+        return
+
+    # Setup: Create a large tensor similar to the issue's context (M=16384, K=16384)
+    # to stress the compiler and memory bandwidth.
+    x = torch.randn(16384, 16384, device='cuda')
+
+    # Define the function using the similar API (torch.nn.functional.rrelu_)
+    def func(inp):
+        return F.rrelu_(inp)
+
+    # Compile the function using torch.compile (the API under test in the issue)
+    compiled_func = torch.compile(func)
+
+    # Warmup run to allow compilation to finish before measurement
+    _ = compiled_func(x.clone())
+
+    # Benchmark run (mimicking the cast_bench.py logic from the issue)
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+
+    start_event.record()
+    result = compiled_func(x)
+    end_event.record()
+    torch.cuda.synchronize()
+
+    time_ms = start_event.elapsed_time(end_event)
+    print(f"Execution time: {time_ms:.4f} ms")
+
+    # Assertions to ensure correctness and expected behavior
+    # 1. Check that the operation ran successfully
+    assert result is not None
+    
+    # 2. Check correctness: rrelu_ output should be >= 0 (Leaky ReLU property)
+    assert torch.all(result >= 0), "rrelu_ produced negative values, indicating incorrect logic"
+    
+    # 3. Check in-place behavior: rrelu_ modifies the tensor in place
+    assert result.data_ptr() == x.data_ptr(), "rrelu_ did not operate in-place as expected"
+
+    print("Test passed: torch.compile handled rrelu_ correctly.")
+
+if __name__ == "__main__":
+    test_rrelu_compile_regression()

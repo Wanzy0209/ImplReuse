@@ -1,0 +1,64 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_batch_parallel_dim0_quantization():
+    """
+    Adapts the PyTorch torch.compile regression test for dim0 mxfp8 quantization
+    to TensorFlow's tf.compat.v1.tpu.batch_parallel.
+
+    The original bug involves performance degradation in row-wise (dim0) scaling.
+    In TensorFlow, batch_parallel shards computation along the batch dimension (dim 0).
+    This test verifies that a row-wise computation (similar to the quantization logic)
+    can be successfully distributed and executed.
+    """
+    # Initialize TPU system (Required for batch_parallel)
+    # Note: This requires a TPU environment to run.
+    resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(resolver)
+    topology = tf.tpu.experimental.initialize_tpu_system(resolver)
+    
+    # Parameters from the original bug report
+    M, K = 16384, 16384
+    BLOCK_SIZE = 32 # Used in original, conceptually maps to row width here
+
+    # Define the computation that mimics the quantization logic
+    # The original bug is about 'dim0_mxfp8_floor', which implies scaling along rows.
+    def computation_fn(inputs):
+        x = inputs[0]
+        # Simulate row-wise scaling (dim 0)
+        # In the original bug, this is (1 x block_size) scaling.
+        # Here, since batch_parallel splits dim 0, each shard gets a chunk of rows.
+        # We perform a heavy operation on these rows.
+        scale = tf.reduce_max(tf.abs(x), axis=1, keepdims=True)
+        # Simulate quantization/dequantization or just heavy math
+        # to check for performance/regression logic.
+        # Since we can't easily measure "gbps" in a unit test without hardware,
+        # we will verify correctness and structure.
+        return x / scale
+
+    # Create input data
+    # The original test uses random data for benchmarking
+    inputs = [tf.random.normal([M, K])]
+
+    # Determine number of shards (TPU cores)
+    num_shards = topology.num_cores
+
+    # Execute using batch_parallel
+    # This API shards the input along dim 0 (rows) and runs computation_fn in parallel
+    outputs = tf.compat.v1.tpu.batch_parallel(
+        computation_fn,
+        inputs=inputs,
+        num_shards=num_shards
+    )
+
+    # Verify output shape matches input shape (concatenation of shards)
+    assert outputs.shape == (M, K), f"Shape mismatch: expected {(M, K)}, got {outputs.shape}"
+
+    # Verify values are finite (sanity check for the math operation)
+    assert tf.reduce_all(tf.math.is_finite(outputs)).numpy(), "Output contains NaN or Inf"
+
+    print("Test passed: batch_parallel executed row-wise logic successfully.")
+
+if __name__ == "__main__":
+    test_batch_parallel_dim0_quantization()

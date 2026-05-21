@@ -1,0 +1,35 @@
+import torch
+import torch.utils.cpp_extension
+
+# Minimal HIP source code that triggers the inclusion of the problematic header.
+# The bug is located in rocwmma/internal/layout/../vector.hpp:446.
+# Including the main rocwmma header is sufficient to trigger the parsing of the
+# problematic template definition in the reported environment.
+hip_source = """
+#include <rocwmma/rocwmma.hpp>
+
+// The error occurs during the parsing of the header, specifically in the
+// HIP_vector_base constructor definition which attempts:
+// static_cast<rocwmma::hfloat16_t>(0.0f)
+// We define a dummy kernel to ensure the HIP compiler is invoked.
+__global__ void dummy_kernel() {}
+"""
+
+# Adapted call using torch.utils.cpp_extension.load_inline
+# Note: extra_hip_cflags from the original API maps to extra_cuda_cflags here
+# when PyTorch is built with ROCm support.
+try:
+    module = torch.utils.cpp_extension.load_inline(
+        name="rocwmma_bug_test",
+        cpp_sources="",
+        cuda_sources=hip_source,
+        extra_cuda_cflags=[], # Placeholder for any specific flags
+        with_cuda=True,
+        is_python_module=False,
+        verbose=True
+    )
+    print("Test passed: Extension compiled successfully.")
+except Exception as e:
+    print(f"Test failed: {e}")
+    # In a real automated test, you might assert the specific error message here.
+    # assert "no matching conversion for static_cast" in str(e)

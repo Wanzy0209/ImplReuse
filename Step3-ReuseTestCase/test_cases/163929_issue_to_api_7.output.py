@@ -1,0 +1,36 @@
+import tensorflow as tf
+import numpy as np
+
+def foo(x):
+    # Mimic in-place mutation x.tan_()
+    x.assign(tf.math.tan(x))
+    
+    # Mimic transpose x = x.t()
+    x = tf.transpose(x)
+    
+    # Leverage similar API: tf.ensure_shape
+    # The original shape was (4, 6), so transposed is (6, 4).
+    # This ensures the shape is statically known and correct before reduction.
+    x = tf.ensure_shape(x, [6, 4])
+    
+    # Mimic return x.argmin()
+    # tf.argmin returns the index of the minimum value in the flattened tensor by default.
+    return tf.argmin(x, output_type=tf.int32)
+
+# Setup
+np.random.seed(0)
+# Use tf.Variable to allow in-place mutation similar to PyTorch
+x1 = tf.Variable(np.random.randn(4, 6), dtype=tf.float32)
+x2 = tf.Variable(np.random.randn(4, 6), dtype=tf.float32)
+
+# Eager execution
+out1 = foo(x1)
+
+# Compiled execution (tf.function)
+cf = tf.function(foo)
+out2 = cf(x2)
+
+# Assertion
+# Check if the results from eager and compiled execution match
+assert tf.equal(out1, out2).numpy(), f"Scalars are not equal! Expected {out1.numpy()} but got {out2.numpy()}"
+print("Test passed.")

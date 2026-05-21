@@ -1,0 +1,20 @@
+import torch
+import tensorflow as tf
+
+# Setup input data similar to the original test case
+# Using float16 to match the dtype context of the original bug report
+A = tf.random.uniform((1024, 1024), dtype=tf.float16)
+
+# Use tf.function as the equivalent to torch.compile
+@tf.function
+def extract_diagonal(input_tensor):
+    # Note: tf.experimental.numpy.diagonal does not have an out_dtype argument.
+    # We verify the API's behavior under compilation (tf.function).
+    return tf.experimental.numpy.diagonal(input_tensor)
+
+# Execute the compiled function
+result = extract_diagonal(A)
+
+# Verify the output shape and dtype to ensure correct behavior
+assert result.shape == (1024,)
+assert result.dtype == tf.float16

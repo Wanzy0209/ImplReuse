@@ -1,0 +1,50 @@
+import torch
+from torch.distributions import constraints
+
+def test_constraint_event_dim_handling():
+    """
+    Test case adapted from the EmbeddingBag offset bug (Issue 167974).
+    
+    Original Bug Logic:
+    - API: torch.nn.EmbeddingBag
+    - Flag: include_last_offset=True
+    - Input: 2D tensor
+    - Issue: The flag was ignored, resulting in incorrect offsets (missing the last element).
+    
+    Adapted Test for torch.distributions.constraints.Constraint:
+    - API: Constraint (specifically checking event_dim behavior)
+    - Flag: event_dim=1 (inherent to constraints.simplex)
+    - Input: 2D tensor
+    - Goal: Verify that the event_dim flag is respected and affects the output shape of check().
+            If event_dim is ignored (like include_last_offset was), the output shape will be incorrect.
+    """
+    
+    # We use constraints.simplex which has event_dim=1.
+    # This acts as our "Flag=True" configuration.
+    constraint = constraints.simplex
+    
+    # Input is a 2D tensor (Batch size 2, Event size 2)
+    # Analogous to the 2D input in the EmbeddingBag bug.
+    input_tensor = torch.tensor([[0.5, 0.5], [0.2, 0.8]])
+    
+    # Perform the check
+    result = constraint.check(input_tensor)
+    
+    # Expected behavior:
+    # Since event_dim=1, the check should reduce the rightmost dimension (the event).
+    # The output shape should be (2,), corresponding to the batch dimension.
+    # 
+    # Bug behavior (if event_dim is ignored):
+    # The check would return a result for every element, resulting in shape (2, 2).
+    
+    expected_shape = torch.Size([2])
+    
+    assert result.shape == expected_shape, (
+        f"Constraint check failed to respect event_dim flag. "
+        f"Expected shape {expected_shape} (batch only), but got {result.shape} (batch + event). "
+        f"This mirrors the EmbeddingBag bug where include_last_offset was ignored."
+    )
+
+if __name__ == "__main__":
+    test_constraint_event_dim_handling()
+    print("Test passed: event_dim is correctly respected.")

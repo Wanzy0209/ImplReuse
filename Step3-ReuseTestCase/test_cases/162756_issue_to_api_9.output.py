@@ -1,0 +1,58 @@
+import torch
+import unittest
+import sys
+
+# The bug is specific to CUDA and Triton code generation
+if not torch.cuda.is_available():
+    print("Skipping test: CUDA not available", file=sys.stderr)
+else:
+    class TestCompileComboKernels(unittest.TestCase):
+        def setUp(self):
+            # Leverage the pattern of setting a global configuration flag
+            # before execution, similar to the usage of tf.experimental.enable_strict_mode().
+            # This enables the combo_kernels feature which triggers the bug.
+            torch._inductor.config.combo_kernels = True
+
+        def test_cumsum_with_combo_kernels(self):
+            """
+            Test that torch.compile works correctly when combo_kernels is enabled
+            and operations requiring helper functions (like cumsum) are used.
+            
+            This reproduces the issue where a NameError is raised for 
+            undefined Triton helper functions (e.g., _triton_helper_fn_add0).
+            """
+            # Define a function with operations that require helper functions
+            # and other reductions to potentially trigger combo kernel logic.
+            @torch.compile
+            def fn(x, y, z):
+                return x.sum(1), y.mean(1), z.cumsum(1)
+
+            inps = (
+                torch.rand(16, 128, device="cuda"),
+                torch.rand(32, 128, device="cuda"),
+                torch.rand(32, 256, device="cuda"),
+            )
+
+            # Execute the compiled function.
+            # If the bug is present, this will raise:
+            # NameError: '_triton_helper_fn_add0 is not defined'
+            try:
+                result = fn(*inps)
+                
+                # Verify that the function executed and returned expected number of outputs
+                self.assertEqual(len(result), 3)
+                
+                # Verify correctness against eager execution
+                expected_x = inps[0].sum(1)
+                expected_y = inps[1].mean(1)
+                expected_z = inps[2].cumsum(1)
+                
+                torch.testing.assert_close(result[0], expected_x)
+                torch.testing.assert_close(result[1], expected_y)
+                torch.testing.assert_close(result[2], expected_z)
+                
+            except NameError as e:
+                self.fail(f"torch.compile failed with NameError (helper function missing): {e}")
+
+    if __name__ == "__main__":
+        unittest.main()

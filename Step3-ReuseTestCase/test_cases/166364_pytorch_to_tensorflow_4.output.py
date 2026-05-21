@@ -1,0 +1,79 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Ensure TF 1.x behavior is active to mimic the 'compile' / graph environment
+# and match the API scope (tf.compat.v1)
+if tf.__version__.startswith('2.'):
+    tf.compat.v1.disable_eager_execution()
+
+def test_string_input_producer_scalar_support():
+    """
+    Adapted test case for tf.compat.v1.train.string_input_producer.
+    
+    Original Bug: Flex Attention fails with a learnable scalar (0-D tensor) 
+    inside a score modification function, but works with a batched (1-D) tensor.
+    
+    Adaptation: Verify if string_input_producer handles a scalar (0-D) Variable 
+    input vs a batched (1-D) Variable input. The API expects a 1-D tensor, 
+    so passing a scalar should raise a ValueError, mirroring the "unsupported scalar" 
+    behavior of the original bug.
+    """
+    
+    with tf.compat.v1.Session() as sess:
+        # --- Scenario 1: Learnable Scalar (Failing Case in PyTorch) ---
+        # Original: temp = nn.Parameter(torch.tensor(0.0))
+        # Adaptation: A 0-D string Variable
+        scalar_input = tf.compat.v1.Variable("single_string", dtype=tf.string, name="scalar_input")
+        
+        print("Testing with scalar (0-D) input...")
+        try:
+            sess.run(tf.compat.v1.global_variables_initializer())
+            # Attempt to create the input producer with a scalar
+            # This mimics passing the scalar parameter to the API
+            q = tf.compat.v1.train.string_input_producer(scalar_input)
+            
+            # Try to run the queue to trigger the graph execution
+            coord = tf.train.Coordinator()
+            threads = tf.train.start_queue_runners(coord=coord, sess=sess)
+            
+            # If we get here, it supports scalars (unexpected based on API spec)
+            result = sess.run(q.dequeue())
+            print(f"Scalar input succeeded (unexpected): {result}")
+            
+            coord.request_stop()
+            coord.join(threads)
+            
+        except ValueError as e:
+            # Expected behavior: API does not support 0-D tensors
+            print(f"Scalar input failed as expected: {e}")
+        except Exception as e:
+            print(f"Scalar input failed with unexpected error: {e}")
+
+        # --- Scenario 2: Batched Input (Working Case in PyTorch) ---
+        # Original: temp = nn.Parameter(torch.randn(B))
+        # Adaptation: A 1-D string Variable
+        batched_input = tf.compat.v1.Variable(["file1.txt", "file2.txt", "file3.txt"], 
+                                              dtype=tf.string, name="batched_input")
+        
+        print("\nTesting with batched (1-D) input...")
+        try:
+            sess.run(tf.compat.v1.global_variables_initializer())
+            # Create the input producer with a 1-D tensor
+            q = tf.compat.v1.train.string_input_producer(batched_input, num_epochs=1)
+            
+            coord = tf.train.Coordinator()
+            threads = tf.train.start_queue_runners(coord=coord, sess=sess)
+            
+            # Dequeue an item to verify it works
+            result = sess.run(q.dequeue())
+            print(f"Batched input succeeded: {result}")
+            
+            coord.request_stop()
+            coord.join(threads)
+            
+        except Exception as e:
+            print(f"Batched input failed (unexpected): {e}")
+
+if __name__ == "__main__":
+    test_string_input_producer_scalar_support()

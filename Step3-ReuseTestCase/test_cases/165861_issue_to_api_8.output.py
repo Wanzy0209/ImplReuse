@@ -1,0 +1,33 @@
+import torch
+import torch.special
+
+def test_expm1_large_dimension():
+    """
+    Test case adapted from Issue 165861 logic applied to torch.special.expm1.
+    
+    The original issue reported a failure in torch.nn.functional.pad with mode='reflect' 
+    when a dimension size exceeded the uint16 max value (2**16). 
+    This test verifies that torch.special.expm1 handles large dimension tensors 
+    correctly under the same conditions.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping CUDA specific test.")
+        return
+
+    # Reproduce the specific dimension size that triggered the original bug
+    # Shape: (2**16, 2)
+    x = torch.rand(2**16, 2, device="cuda")
+
+    # Apply the similar API
+    # Unlike the reflect padding bug, expm1 is expected to work on this shape
+    try:
+        result = torch.special.expm1(x)
+        # Verify output shape matches input
+        assert result.shape == x.shape
+        print("torch.special.expm1 handled large dimension tensor successfully.")
+    except RuntimeError as e:
+        print(f"Error with torch.special.expm1 on large dimension: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_expm1_large_dimension()

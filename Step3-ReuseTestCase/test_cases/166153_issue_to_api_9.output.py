@@ -1,0 +1,44 @@
+import torch
+import torch.nn.attention as attention
+from collections import namedtuple
+
+# The similar API tf.compat.v1.train.SessionRunArgs is a namedtuple used to bundle
+# arguments (fetches, feed_dict, options) for a session run.
+# We adopt this pattern to bundle arguments for flex_attention to test the recompilation issue.
+FlexAttentionArgs = namedtuple("FlexAttentionArgs", ["query", "key", "value", "score_mod"])
+
+def score_mod(score, b, h, m, n):
+    return score
+
+def run_flex_attention(args):
+    # Unpacking arguments similar to how Session.run might use SessionRunArgs
+    return attention.flex_attention(
+        args.query, args.key, args.value, args.score_mod
+    )
+
+# Compile the function. The bug report indicates issues with torch.compile and recompile limits.
+# We use 'reduce-overhead' to emphasize the compilation aspect.
+compiled_fn = torch.compile(run_flex_attention, mode="reduce-overhead")
+
+# The bug report mentions hitting the recompile_limit (default is 8).
+# We run 9 iterations to trigger the warning/failure if the bug exists.
+print("Testing flex_attention recompilation limit...")
+for i in range(9):
+    # Create inputs. The bug log suggests issues with dtype checks and object IDs.
+    # We create fresh tensors to simulate dynamic object IDs while keeping dtypes consistent.
+    query = torch.randn(2, 4, 8, 16, dtype=torch.float32)
+    key = torch.randn(2, 4, 8, 16, dtype=torch.float32)
+    value = torch.randn(2, 4, 8, 16, dtype=torch.float32)
+
+    # Bundle arguments using the namedtuple pattern
+    args = FlexAttentionArgs(query, key, value, score_mod)
+
+    try:
+        output = compiled_fn(args)
+        # If we reach here without warnings/errors, the bug might be fixed or not triggered.
+        # The bug specifically manifests as a warning log and performance drop.
+    except Exception as e:
+        print(f"Error on iteration {i}: {e}")
+        break
+
+print("Test completed.")

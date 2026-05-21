@@ -1,0 +1,38 @@
+import torch
+import torch.nn.functional as F
+
+def test_repeat_interleave_compile():
+    """
+    Test case to verify that torch.compile correctly handles the parameters
+    of torch.repeat_interleave, specifically ensuring that the 'dim' argument
+    is not ignored (similar to how alpha/beta were ignored in the addmm bug).
+    """
+    if not torch.cuda.is_available():
+        print("Test skipped: CUDA not available")
+        return
+
+    # Setup input tensor
+    x = torch.rand(2, 3, device="cuda")
+
+    # Define a function using the similar API (torch.repeat_interleave)
+    # We include a point-wise operation (relu) to mimic the context of the
+    # original bug where a point-wise user triggered the decomposition.
+    # We specify a non-default 'dim' to check if it is respected.
+    f = lambda x: F.relu(torch.repeat_interleave(x, repeats=2, dim=1))
+
+    # Compile the function
+    fc = torch.compile(f)
+
+    # Execute eager and compiled versions
+    res_eager = f(x)
+    res_compiled = fc(x)
+
+    # Assert that the results are close
+    # If 'dim' is ignored (e.g., treated as 0 or None), the shape/values will differ.
+    assert torch.allclose(res_eager, res_compiled), \
+        f"Mismatch found:\nEager:\n{res_eager}\nCompiled:\n{res_compiled}"
+
+    print("Test passed: torch.compile respects repeat_interleave parameters.")
+
+if __name__ == "__main__":
+    test_repeat_interleave_compile()

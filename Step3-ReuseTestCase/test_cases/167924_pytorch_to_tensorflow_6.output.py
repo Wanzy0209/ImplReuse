@@ -1,0 +1,60 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_vdot_with_sliced_tensor():
+    """
+    Adapts the PyTorch MPS crash scenario (Issue 167924) to tf.keras.ops.vdot.
+    
+    The original bug involves passing a sliced tensor (non-contiguous memory)
+    to an operation. Here, we test if tf.keras.ops.vdot handles sliced 
+    input tensors robustly, similar to how repeat_interleave failed with 
+    counts[1:3].
+    """
+    
+    # Attempt to use GPU (MPS equivalent on macOS) to mimic the crash environment
+    physical_devices = tf.config.list_physical_devices('GPU')
+    device_name = '/CPU:0'
+    
+    if physical_devices:
+        try:
+            # Configure memory growth to prevent allocation issues
+            tf.config.experimental.set_memory_growth(physical_devices[0], True)
+            device_name = '/GPU:0'
+        except RuntimeError as e:
+            print(f"GPU configuration failed: {e}")
+
+    print(f"Running test on device: {device_name}")
+
+    with tf.device(device_name):
+        # Setup tensors mirroring the PyTorch reproduction case
+        # Original: counts = torch.tensor([0, 1, 0], device="mps")
+        # Original: data = torch.arange(2, device="mps")
+        
+        # We map 'data' to vector 'a' and 'counts' to vector 'b'
+        a = tf.range(2, dtype=tf.float32) # [0, 1]
+        b = tf.constant([0, 1, 0], dtype=tf.float32) # [0, 1, 0]
+
+        # The core logic from the bug: using a sliced tensor (non-prefix slice)
+        # Original: counts[1:3] results in [1, 0]
+        b_sliced = b[1:3]
+
+        # Execute the similar API: tf.keras.ops.vdot
+        # vdot(a, b) flattens inputs and computes the dot product.
+        # vdot([0, 1], [1, 0]) -> 0*1 + 1*0 = 0
+        try:
+            result = tf.keras.ops.vdot(a, b_sliced)
+            
+            # Verify the result to ensure no silent corruption occurred
+            expected = 0.0
+            assert np.isclose(result.numpy(), expected), \
+                f"Expected {expected}, but got {result.numpy()}"
+            
+            print("Test passed: tf.keras.ops.vdot handled sliced tensor correctly.")
+            
+        except Exception as e:
+            print(f"Test failed with exception: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_vdot_with_sliced_tensor()

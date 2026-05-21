@@ -1,0 +1,50 @@
+import torch
+import time
+from torch import nn
+
+class MyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        # Replacing torch.unique with torch.sinc
+        # torch.sinc is an element-wise operation, so output shape is static
+        # and should not trigger the "Dynamic shape operator" error.
+        _x = torch.sinc(x)
+        _x = _x.clone().detach()
+        # torch.sinc returns a single tensor, unlike unique which returns (values, inverse)
+        return self.relu(_x)
+
+def run_once(model, x, label):
+    model.eval()
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        y = model(x)
+    print(f"[{label}] ok, output type={type(y)} "
+          f"time={(time.perf_counter()-t0)*1000:.3f}ms")
+    return y
+
+def main():
+    print("torch.__version__ =", torch.__version__)
+    model = MyModel()
+    x = torch.randn(8)
+
+    # Eager execution
+    y_eager = run_once(model, x, "Eager")
+
+    # Compiled execution with fullgraph=True
+    # torch.sinc should work here because it preserves shape (static shape)
+    # unlike torch.unique which has dynamic output shape.
+    try:
+        compiled_model = torch.compile(model, fullgraph=True)
+        y_compiled = run_once(compiled_model, x, "Compiled (fullgraph)")
+
+        # Verify correctness
+        assert torch.allclose(y_eager, y_compiled), "Outputs differ!"
+        print("Test Passed: torch.sinc works correctly with torch.compile(fullgraph=True)")
+    except Exception as e:
+        print(f"Test Failed: {e}")
+
+if __name__ == "__main__":
+    main()

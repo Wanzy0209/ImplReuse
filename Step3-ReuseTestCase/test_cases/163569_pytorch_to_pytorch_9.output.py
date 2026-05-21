@@ -1,0 +1,50 @@
+import torch
+import sys
+
+# Replicate the configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+# Setup the Similar API: torch.nn.TransformerDecoderLayer
+# We use d_model=64 to match one of the dimensions in the original bug (arg1 had 64 channels)
+d_model = 64
+nhead = 4  # nhead must divide d_model
+decoder_layer = torch.nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead, batch_first=True).cuda().to(torch.bfloat16)
+
+def foo(tgt, memory):
+    # Adapt the test to use TransformerDecoderLayer
+    # The original bug involved specific tensor manipulations, here we test the layer directly
+    # under the same compilation conditions.
+    return decoder_layer(tgt, memory)
+
+# Generate inputs
+# Original shapes involved (2, 261, 17, 358) and (17, 64, 358).
+# We adapt to TransformerDecoderLayer inputs: (Batch, Seq, Feature)
+batch_size = 2
+seq_len = 261
+feature_dim = d_model
+
+# Create inputs with non-contiguous strides to mimic the original bug's complexity
+# Original t0 had stride (1588446, 6086, 358, 1), indicating non-contiguous memory.
+tgt_base = torch.rand([batch_size, feature_dim, seq_len], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+tgt = tgt_base.transpose(1, 2) # Shape: (2, 261, 64), non-contiguous stride
+
+memory_base = torch.rand([batch_size, feature_dim, seq_len], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+memory = memory_base.transpose(1, 2) # Shape: (2, 261, 64), non-contiguous stride
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(tgt, memory)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+
+    # Compiled execution
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(tgt, memory)
+    out_compiled.sum().backward()
+    print('Compile Success! ')
+
+    # Assertion to check for divergence
+    # Using a tolerance suitable for bfloat16
+    assert torch.allclose(out_eager, out_compiled, atol=1e-2, rtol=1e-2), "Eager and Compile outputs diverged!"

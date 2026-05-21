@@ -1,0 +1,70 @@
+import torch
+import gc
+import sys
+
+def test_dynamo_object_aliasing_guard_ref_count():
+    """
+    Test case for Issue 165722: RelationalGuard classes store raw PyObject* 
+    without proper reference counting.
+
+    This test verifies that torch._dynamo.reset() correctly handles the 
+    lifecycle of objects stored by guards (specifically OBJECT_ALIASING).
+    It mirrors the pattern of holding a reference (similar to how 
+    tf.io.VarLenFeature holds a dtype configuration) to ensure the 
+    reference counting logic prevents dangling pointers.
+    """
+    
+    # Ensure a clean state
+    torch._dynamo.reset()
+
+    # Define a function that triggers the OBJECT_ALIASING guard.
+    # This guard is typically triggered when the compiler needs to verify
+    # if two inputs are the same object (identity check).
+    def check_identity(x, y):
+        # The 'is' check forces the compiler to insert a guard that verifies
+        # if x and y are the same object instance.
+        if x is y:
+            return x + 1
+        else:
+            return x + y
+
+    # Compile the function with dynamo
+    compiled_fn = torch.compile(check_identity, backend="eager")
+
+    # Create a tensor
+    t1 = torch.randn(2)
+
+    # 1. First call with aliased inputs.
+    # The OBJECT_ALIASING guard will store a pointer to t1 (_first_tensor).
+    # Bug: Without Py_INCREF, this is a borrowed reference.
+    res1 = compiled_fn(t1, t1)
+    assert torch.equal(res1, t1 + 1), "Aliased execution failed"
+
+    # 2. Call with non-aliased inputs to exercise the guard logic.
+    t2 = torch.randn(2)
+    res2 = compiled_fn(t1, t2)
+    assert torch.equal(res2, t1 + t2), "Non-aliased execution failed"
+
+    # 3. Reset the dynamo cache.
+    # The bug manifests here or during subsequent calls if the stored pointer
+    # in the guard becomes dangling (e.g., if the object was deleted or 
+    # if the reset logic interacts poorly with the raw pointer).
+    torch._dynamo.reset()
+
+    # Force garbage collection to potentially trigger use-after-free if ref counting is wrong
+    gc.collect()
+
+    # 4. Re-compile and run again.
+    # If the previous guard held a dangling pointer and accessed it during reset 
+    # or re-compilation, the process might have crashed or behaved incorrectly.
+    # We verify stability by running again.
+    compiled_fn = torch.compile(check_identity, backend="eager")
+    
+    t3 = torch.randn(2)
+    res3 = compiled_fn(t3, t3)
+    assert torch.equal(res3, t3 + 1), "Re-compiled aliased execution failed"
+
+    print("Test passed: No dangling pointer issues detected.")
+
+if __name__ == "__main__":
+    test_dynamo_object_aliasing_guard_ref_count()

@@ -1,0 +1,44 @@
+import tensorflow as tf
+
+def test_enable_eager_execution_config():
+    """
+    Adapted test case for tf.compat.v1.enable_eager_execution.
+    
+    The original PyTorch issue involved a configuration pass (joint_custom_pre_pass)
+    being applied twice due to a merge mistake. This test verifies that the 
+    TensorFlow equivalent (configuring and enabling eager execution) is applied 
+    correctly and results in the expected behavior (immediate execution).
+    """
+    
+    # 1. Setup Configuration
+    # Analogous to checking 'config.joint_custom_pre_pass' in PyTorch.
+    # We create a ConfigProto to customize the execution environment.
+    config = tf.compat.v1.ConfigProto()
+    # Set a device policy to ensure the configuration object is utilized.
+    config.device_policy = tf.compat.v1.device_policy.SILENT
+
+    # 2. Apply Configuration / Enable Execution
+    # Analogous to GraphTransformObserver(...).apply_graph_pass(...).
+    # This enables eager execution with the specified config.
+    # Note: This must be done at program startup before any other TF ops.
+    tf.compat.v1.enable_eager_execution(config=config)
+
+    # 3. Verify Behavior
+    # Analogous to verifying the graph transformation was successful.
+    # We check if eager execution is actually active and operations return concrete values.
+    
+    assert tf.executing_eagerly(), "Eager execution should be enabled after calling enable_eager_execution."
+
+    # Test a simple operation to ensure immediate execution (concrete values)
+    # This mirrors the expectation that the graph pass modifies execution flow correctly.
+    x = tf.constant(6)
+    y = tf.constant(7)
+    result = tf.multiply(x, y)
+    
+    # In eager mode, .numpy() should be available immediately
+    assert result.numpy() == 42, "Operations should return concrete values in eager mode."
+
+    print("Test passed: Eager execution enabled and configuration applied successfully.")
+
+if __name__ == "__main__":
+    test_enable_eager_execution_config()

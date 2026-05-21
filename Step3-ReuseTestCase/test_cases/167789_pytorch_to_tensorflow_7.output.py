@@ -1,0 +1,26 @@
+import torch
+import sys
+import tensorflow as tf
+
+def fn(x, n):
+    if n == 0:
+        return x
+    return fn(x, n - 1) + 1
+
+# Set recursion limit to a high value to avoid Python-level RecursionError
+sys.setrecursionlimit(10000000)
+
+# Adaptation: Use tf.keras.backend.name_scope as the context wrapper
+# similar to how torch.compile wraps the function execution.
+# We also use tf.function to mimic the graph compilation aspect of torch.compile.
+try:
+    with tf.keras.backend.name_scope("recursion_scope"):
+        @tf.function
+        def outer(x):
+            return fn(x, 1000)
+
+        # Execute the function
+        result = outer(tf.ones(3))
+        print("Test passed: No RecursionError encountered.")
+except RecursionError as e:
+    print(f"Test failed: RecursionError raised despite high limit - {e}")

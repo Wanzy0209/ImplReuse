@@ -1,0 +1,57 @@
+import tensorflow as tf
+import numpy as np
+
+def test_sparse_categorical_accuracy_layout_robustness():
+    """
+    Adapts the logic of testing row-major/transposed matrix handling 
+    (from the PyTorch _int_mm/_scaled_mm bug) to the TensorFlow 
+    sparse_categorical_accuracy API.
+    
+    The PyTorch bug highlights that transposed weights (row-major RHS) 
+    cause issues (errors or slowness). This test verifies that 
+    sparse_categorical_accuracy handles predictions derived from 
+    such layouts correctly and robustly.
+    """
+    # Define ground truth labels
+    y_true = tf.constant([0, 1, 2], dtype=tf.int64)
+
+    # Case 1: Standard prediction (Row-major, default in TensorFlow)
+    # Shape: (Batch=3, Classes=3)
+    y_pred_standard = tf.constant([
+        [0.9, 0.05, 0.05],  # Pred: 0
+        [0.05, 0.9, 0.05],  # Pred: 1
+        [0.05, 0.05, 0.9]   # Pred: 2
+    ], dtype=tf.float32)
+
+    # Case 2: Prediction derived from a transposed layout
+    # Simulating the "transposed weights" scenario mentioned in the bug report.
+    # We create the data in (Classes, Batch) format (Column-major logic relative to output)
+    # and transpose it to (Batch, Classes).
+    # This mimics the memory layout change that caused issues in PyTorch's internal kernels.
+    y_pred_transposed_source = tf.constant([
+        [0.9, 0.05, 0.05], # Class 0 logits across batch
+        [0.05, 0.9, 0.05], # Class 1 logits across batch
+        [0.05, 0.05, 0.9]  # Class 2 logits across batch
+    ], dtype=tf.float32)
+    
+    # Transpose to (Batch, Classes) to match API requirements
+    y_pred_from_transposed = tf.transpose(y_pred_transposed_source)
+
+    # Calculate accuracy for both cases
+    acc_standard = tf.keras.metrics.sparse_categorical_accuracy(y_true, y_pred_standard)
+    acc_transposed = tf.keras.metrics.sparse_categorical_accuracy(y_true, y_pred_from_transposed)
+
+    # Verify that the layout origin does not affect correctness
+    # (In the PyTorch bug, this caused errors or significant slowness)
+    assert tf.reduce_all(tf.equal(acc_standard, acc_transposed)).numpy(), \
+        "Accuracy mismatch: Layout origin affects results"
+    
+    # Verify the actual values are correct (all 1.0 in this case)
+    expected_acc = tf.constant([1.0, 1.0, 1.0], dtype=tf.float32)
+    assert tf.reduce_all(tf.equal(acc_standard, expected_acc)).numpy(), \
+        "Standard accuracy calculation is incorrect"
+
+    print("Test passed: sparse_categorical_accuracy handles transposed layout inputs correctly.")
+
+if __name__ == "__main__":
+    test_sparse_categorical_accuracy_layout_robustness()

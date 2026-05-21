@@ -1,0 +1,37 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def monitored_barrier_test(rank, world_size):
+    """
+    Test function for torch.distributed.monitored_barrier.
+    Adapted from the DataParallel test case structure.
+    """
+    # Setup environment for distributed communication
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Initialize the process group
+    # Using 'gloo' backend as it is generally available for testing
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Create dummy input data to mimic the original test case context
+    batch_size = 20
+    input_data = torch.randn(batch_size, 10)
+
+    # Call the similar API: torch.distributed.monitored_barrier
+    # This replaces the DataParallel model execution with a synchronization barrier
+    try:
+        dist.monitored_barrier()
+        if rank == 0:
+            print("success")
+    except Exception as e:
+        print(f"Rank {rank} failed: {e}")
+    finally:
+        dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Use 2 processes to demonstrate the barrier functionality
+    world_size = 2
+    mp.spawn(monitored_barrier_test, args=(world_size,), nprocs=world_size, join=True)

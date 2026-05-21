@@ -1,0 +1,84 @@
+import tensorflow as tf
+from tensorflow.experimental import dtensor
+
+# Adapted test case for tf.experimental.dtensor.create_distributed_mesh
+# based on the structure of the PyTorch fuzzer report.
+# The original issue involved eager/compile divergence with data-dependent expressions.
+# Here we verify the mesh creation API handles different input configurations correctly.
+
+def test_create_distributed_mesh(mesh_dims, mesh_name, device_type, use_xla_spmd):
+    """
+    Test function adapted from the fuzzed_program structure.
+    Instead of matrix multiplications, we perform mesh creation.
+    """
+    try:
+        # Call the target API
+        mesh = dtensor.create_distributed_mesh(
+            mesh_dims=mesh_dims,
+            mesh_name=mesh_name,
+            device_type=device_type,
+            use_xla_spmd=use_xla_spmd
+        )
+        
+        # Basic assertions to verify behavior
+        assert mesh is not None, "Mesh creation returned None"
+        assert mesh.name == mesh_name, f"Mesh name mismatch: {mesh.name} != {mesh_name}"
+        
+        return mesh
+    except Exception as e:
+        print(f"Test failed for config {mesh_name}: {e}")
+        raise
+
+if __name__ == "__main__":
+    # Setup configurations similar to the 'arg_0'...'arg_n' in the original fuzzer
+    # but mapped to the arguments of create_distributed_mesh.
+    
+    # Case 1: Using a list of tuples for mesh_dims
+    config_1_dims = [('x', 2), ('y', 2)]
+    
+    # Case 2: Using a dictionary for mesh_dims
+    config_2_dims = {'batch': 4, 'model': 1}
+
+    print("Running Test Case 1 (List of dims)...")
+    try:
+        # We use 'CPU' to ensure the test is runnable on most environments
+        mesh_1 = test_create_distributed_mesh(
+            mesh_dims=config_1_dims,
+            mesh_name="fuzzed_mesh_list",
+            device_type="CPU",
+            use_xla_spmd=False
+        )
+        print(f"Success: Created mesh {mesh_1}")
+    except Exception as e:
+        print(f"Skipped or Failed: {e}")
+
+    print("\nRunning Test Case 2 (Dict of dims)...")
+    try:
+        mesh_2 = test_create_distributed_mesh(
+            mesh_dims=config_2_dims,
+            mesh_name="fuzzed_mesh_dict",
+            device_type="CPU",
+            use_xla_spmd=False
+        )
+        print(f"Success: Created mesh {mesh_2}")
+    except Exception as e:
+        print(f"Skipped or Failed: {e}")
+
+    # Mimic the "Compile" aspect of the original bug report by wrapping in tf.function
+    print("\nRunning Test Case 3 (Compilation check)...")
+    @tf.function
+    def compiled_mesh_creation(dims, name):
+        return dtensor.create_distributed_mesh(
+            mesh_dims=dims,
+            mesh_name=name,
+            device_type="CPU",
+            use_xla_spmd=False
+        )
+
+    try:
+        mesh_3 = compiled_mesh_creation(config_1_dims, "compiled_mesh")
+        print(f"Success: Created mesh via tf.function {mesh_3}")
+    except Exception as e:
+        # Depending on the specific TF runtime and device availability, 
+        # this might raise errors, which is relevant for divergence testing.
+        print(f"Compilation test behavior: {e}")

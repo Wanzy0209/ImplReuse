@@ -1,0 +1,32 @@
+import torch
+import unittest
+
+class TestNestedTensorShareMemory(unittest.TestCase):
+    def test_nested_tensor_share_memory_jagged_layout(self):
+        """
+        Test case for Issue #161915.
+        Verifies that calling share_memory_() on a NestedTensor with jagged layout
+        does not cause a segmentation fault and correctly enables shared memory.
+        
+        This test preserves the original bug reproduction logic where creating
+        a NestedTensor and calling share_memory_() led to a crash.
+        """
+        # Setup tensors with different sizes as per the issue report
+        a = torch.randn(3)
+        b = torch.randn(5)
+
+        # Create NestedTensor with jagged layout
+        nt = torch.nested.nested_tensor([a, b], layout=torch.jagged)
+
+        # The original bug was a segmentation fault occurring here.
+        # We assert that the call completes successfully.
+        try:
+            nt.share_memory_()
+        except Exception as e:
+            self.fail(f"share_memory_() raised an exception unexpectedly: {e}")
+
+        # Verify that the tensor is actually in shared memory
+        self.assertTrue(nt.is_shared(), "NestedTensor should be in shared memory after calling share_memory_()")
+
+if __name__ == '__main__':
+    unittest.main()

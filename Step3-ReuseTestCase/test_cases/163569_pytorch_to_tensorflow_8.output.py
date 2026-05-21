@@ -1,0 +1,49 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def run_pipeline(buffer_size, count, seed):
+    """
+    Mimics the structure of the original 'foo' function but adapted for 
+    tf.data.experimental.shuffle_and_repeat.
+    """
+    # Create a dataset to act as the input data
+    # Original test used specific tensor shapes, here we use a simple range dataset
+    dataset = tf.data.Dataset.from_tensor_slices(np.arange(10))
+    
+    # Apply the API under test: tf.data.experimental.shuffle_and_repeat
+    # This corresponds to the torch.nn.functional.conv1d line in the original
+    processed_dataset = dataset.apply(
+        tf.data.experimental.shuffle_and_repeat(buffer_size, count, seed=seed)
+    )
+    
+    # Consume the dataset to verify execution
+    results = list(processed_dataset.as_numpy_iterator())
+    return results
+
+# Define arguments
+buffer_size = 5
+count = 2
+seed = 42
+
+if __name__ == '__main__':
+    # 1. Eager Execution Check
+    print("Running Eager...")
+    try:
+        out_eager = run_pipeline(buffer_size, count, seed)
+        # Basic assertion to ensure the pipeline ran and produced expected volume
+        assert len(out_eager) == 10 * count, f"Eager: Expected {10 * count} elements, got {len(out_eager)}"
+        print('Eager Success! ')
+    except Exception as e:
+        print(f'Eager Failed! : {e}')
+
+    # 2. Compiled Execution Check (tf.function)
+    # This mimics the torch.compile check in the original bug report
+    print("Running Compiled (tf.function)...")
+    try:
+        compiled_run_pipeline = tf.function(run_pipeline)
+        out_compiled = compiled_run_pipeline(buffer_size, count, seed)
+        assert len(out_compiled) == 10 * count, f"Compiled: Expected {10 * count} elements, got {len(out_compiled)}"
+        print('Compile Success! ')
+    except Exception as e:
+        print(f'Compile Failed! : {e}')

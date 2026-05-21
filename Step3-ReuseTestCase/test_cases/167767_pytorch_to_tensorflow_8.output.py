@@ -1,0 +1,45 @@
+import torch
+import tensorflow as tf
+
+# Adapted test case for tf.keras.initializers.RandomUniform
+# The original bug report highlights an issue where torch.clamp on the MPS backend 
+# failed to enforce a minimum value (1e-7) on a tensor of zeros.
+# This test verifies that the TensorFlow RandomUniform initializer correctly respects 
+# the minval and maxval boundaries, ensuring generated values fall within the specified range.
+
+def test_random_uniform_bounds(minval, maxval, test_name):
+    print(f"--- {test_name} ---")
+    # RandomUniform generates values, so we verify the bounds of the generated tensor
+    # We use a larger shape to increase the likelihood of catching boundary violations
+    init = tf.keras.initializers.RandomUniform(minval=minval, maxval=maxval)
+    c = init(shape=(10,))
+    print(f"Generated values sample: {c[:5]}")
+    
+    # Verify bounds
+    if minval is not None:
+        assert tf.reduce_all(c >= minval), f"Bug: Values found below minval {minval}"
+    if maxval is not None:
+        assert tf.reduce_all(c <= maxval), f"Bug: Values found above maxval {maxval}"
+    print("Bounds check passed.")
+
+# Test 1: Corresponds to a.clamp(min=0.0)
+# PyTorch bug context: Ensuring basic min clamping works.
+test_random_uniform_bounds(minval=0.0, maxval=1.0, test_name="Test 1: minval=0.0")
+
+# Test 2: Corresponds to b.clamp(min=1e-7)
+# PyTorch bug context: This is the specific case that failed in the bug report (0 became 0 instead of 1e-7).
+# Here we ensure RandomUniform does not generate values < 1e-7.
+test_random_uniform_bounds(minval=1e-7, maxval=1.0, test_name="Test 2: minval=1e-7")
+
+# Test 3: Corresponds to b.clamp(min=1e-7, max=None)
+# PyTorch bug context: Checking min enforcement when max is not specified.
+# RandomUniform requires maxval, so we use a large number to simulate "None" (unbounded).
+test_random_uniform_bounds(minval=1e-7, maxval=1e9, test_name="Test 3: minval=1e-7, maxval=None (simulated)")
+
+# Test 4: Corresponds to b.clamp(min=1e-7, max=torch.inf)
+# PyTorch bug context: Checking min enforcement with infinite max.
+test_random_uniform_bounds(minval=1e-7, maxval=1e9, test_name="Test 4: minval=1e-7, maxval=inf (simulated)")
+
+# Test 5: Corresponds to b.clamp_min(1e-7)
+# PyTorch bug context: Specific method for minimum clamping.
+test_random_uniform_bounds(minval=1e-7, maxval=1.0, test_name="Test 5: clamp_min equivalent (minval=1e-7)")

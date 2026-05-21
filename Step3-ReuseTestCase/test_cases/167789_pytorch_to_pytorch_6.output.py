@@ -1,0 +1,31 @@
+import sys
+import torch
+
+# Create a simple symmetric positive definite matrix for lobpcg
+A = torch.randn(3, 3)
+A = A @ A.T
+
+def fn(x, n):
+    if n == 0:
+        # Call the similar API torch.lobpcg at the base case
+        return torch.lobpcg(x, k=1)
+    # Recursive step: pass through to test recursion depth handling
+    return fn(x, n - 1)
+
+@torch.compile(backend="eager")
+def outer(x):
+    # Use a reasonably high recursion depth to test the limit.
+    # We keep it lower than 1000 to ensure the test runs quickly,
+    # but high enough to verify the recursion limit logic.
+    return fn(x, 500)
+
+sys.setrecursionlimit(10000000)
+
+# Run the test
+result = outer(A)
+
+# Assertions to verify the output
+assert isinstance(result, tuple), "torch.lobpcg should return a tuple"
+assert len(result) == 2, "torch.lobpcg should return eigenvalues and eigenvectors"
+assert result[0].shape == (1,), "Eigenvalues shape mismatch"
+assert result[1].shape == (3, 1), "Eigenvectors shape mismatch"

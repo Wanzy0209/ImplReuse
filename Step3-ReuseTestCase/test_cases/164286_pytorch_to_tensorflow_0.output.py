@@ -1,0 +1,36 @@
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+
+# Enable numpy behavior for better compatibility
+tf.experimental.numpy.enable_numpy_behavior()
+
+def f(a):
+    # Check tensor properties inside the function
+    # Analogous to checking a.layout in the PyTorch bug report
+    print(f"Inside function: Shape={a.shape}, Dtype={a.dtype}")
+    return tnp.diagonal(a)
+
+# Create input tensor
+# Original used sparse, but diagonal is typically dense. 
+# We use a 2D tensor as required by diagonal.
+a = tnp.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+
+# 1. Normal call
+print("--- Normal Call ---")
+print(f(a))
+
+# 2. Gradient call (equivalent to vjp)
+# The original bug occurred because the layout was lost inside the vjp context.
+# Here we verify that properties are preserved inside the gradient context.
+print("\n--- Gradient Call ---")
+try:
+    with tf.GradientTape() as tape:
+        tape.watch(a)
+        result = f(a)
+    
+    # Compute gradient to ensure the backward pass is also valid
+    grad = tape.gradient(result, a)
+    print("Gradient computation successful.")
+    print(f"Gradient result: {grad}")
+except Exception as e:
+    print(f"Error occurred: {e}")

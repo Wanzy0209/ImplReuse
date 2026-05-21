@@ -1,0 +1,53 @@
+import torch
+import tensorflow as tf
+
+def test_dataset_initializer():
+    """
+    Adapted test case based on PyTorch NestedTensor share_memory_() segfault.
+    
+    Original Logic:
+    1. Create ragged/nested data structures (tensors a, b).
+    2. Initialize the specific container (NestedTensor).
+    3. Trigger the operation (share_memory_).
+    4. Result: Segmentation fault.
+
+    Adapted Logic for tf.data.experimental.DatasetInitializer:
+    1. Create data structures (Datasets for keys and values).
+    2. Initialize the specific container (DatasetInitializer).
+    3. Trigger the operation (Initialize StaticHashTable and Lookup).
+    4. Result: Successful lookup (verifying stability).
+    """
+
+    # 1. Setup Data
+    # PyTorch: a = torch.randn(3), b = torch.randn(5)
+    # TensorFlow: Create datasets for keys and values
+    keys = tf.data.Dataset.range(100)
+    values = tf.data.Dataset.range(100).map(lambda x: tf.strings.as_string(x * 2))
+    ds = tf.data.Dataset.zip((keys, values))
+
+    # 2. Create Object
+    # PyTorch: nt = torch.nested.nested_tensor([a, b], layout=torch.jagged)
+    # TensorFlow: init = tf.data.experimental.DatasetInitializer(ds)
+    init = tf.data.experimental.DatasetInitializer(ds)
+
+    # 3. Perform Operation
+    # PyTorch: nt.share_memory_() (Causes Segmentation Fault)
+    # TensorFlow: Initialize the table and perform a lookup to verify stability
+    table = tf.lookup.StaticHashTable(init, "")
+
+    # 4. Verification
+    # PyTorch: Segmentation fault
+    # TensorFlow: Should return correct values
+    input_keys = tf.constant([0, 1, 2], dtype=tf.int64)
+    result = table.lookup(input_keys)
+
+    # Assertions to verify the API works as expected
+    assert result.shape == (3,), "Shape of lookup result is incorrect"
+    assert result[0].numpy() == b'0', "Value for key 0 is incorrect"
+    assert result[1].numpy() == b'2', "Value for key 1 is incorrect"
+    assert result[2].numpy() == b'4', "Value for key 2 is incorrect"
+
+    print("Test passed. DatasetInitializer handled the dataset correctly.")
+
+if __name__ == "__main__":
+    test_dataset_initializer()

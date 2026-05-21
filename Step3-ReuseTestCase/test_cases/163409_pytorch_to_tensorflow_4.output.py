@@ -1,0 +1,38 @@
+import tensorflow as tf
+
+# Disable eager execution to ensure v1 metrics and graph execution are active,
+# which is more likely to trigger backend crashes similar to the PyTorch issue.
+tf.compat.v1.disable_eager_execution()
+
+# Reproduce the core bug reproduction logic:
+# Passing tensors with mismatched shapes and unsupported dtypes (complex, uint)
+# to an API that expects specific types (int/float).
+
+# Original PyTorch inputs:
+# 1. complex128, shape (9, 6, 3, 6, 9)
+# 2. uint32, shape (5, 7, 9, 8, 5)
+
+# Create labels (expected int) as complex128
+labels = tf.complex(
+    tf.zeros((9, 6, 3, 6, 9), dtype=tf.float64),
+    tf.zeros((9, 6, 3, 6, 9), dtype=tf.float64)
+)
+
+# Create predictions (expected float) as uint32
+predictions = tf.zeros((5, 7, 9, 8, 5), dtype=tf.uint32)
+
+try:
+    # Call the API with the invalid inputs
+    # k is a required parameter, set to 1
+    metric, update_op = tf.compat.v1.metrics.recall_at_k(labels, predictions, k=1)
+
+    # Execute the operation to trigger the backend kernel
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.local_variables_initializer())
+        # This attempts to run the computation with the bad inputs
+        result = sess.run(update_op)
+        print("Result:", result)
+
+except Exception as e:
+    # We expect a TypeError or ValueError, but we are checking for a Segmentation Fault.
+    print(f"Caught exception: {type(e).__name__}: {e}")

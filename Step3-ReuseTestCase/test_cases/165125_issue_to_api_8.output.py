@@ -1,0 +1,28 @@
+import torch
+import tensorflow as tf
+
+def test_tf_keras_backend_return_type():
+    """
+    Test case derived from Issue 165125 (PyTorch).
+    
+    The original bug reported that `torch.utils.cpp_extension._jit_compile` was 
+    annotated to return `None` but actually returned a module or string.
+    
+    This test verifies that the similar API `tf.keras.backend.backend` correctly 
+    returns a string value (specifically "tensorflow") and not None, ensuring 
+    the runtime behavior matches the expected return type.
+    """
+    # Call the similar API
+    result = tf.keras.backend.backend()
+
+    # 1. Verify the function returns a value (addressing the 'None' annotation bug)
+    assert result is not None, \
+        "tf.keras.backend.backend should return a value, not None"
+
+    # 2. Verify the return type is a string (as per the bug description's actual return)
+    assert isinstance(result, str), \
+        f"Expected return type 'str', but got {type(result).__name__}"
+
+    # 3. Verify the specific expected value
+    assert result == "tensorflow", \
+        f"Expected return value 'tensorflow', but got '{result}'"

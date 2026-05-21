@@ -1,0 +1,76 @@
+import torch
+import tensorflow as tf
+import sys
+
+def foo(arg0, arg1, arg2):
+    # t0 = arg0 
+    # Original size=(2, 261, 17, 358). 
+    # Adapted size=(2, 64, 17, 358) to match output channels of max_pool1d (which preserves channels)
+    # unlike conv1d which changes channels based on weight.
+    t0 = arg0 
+    
+    # t1 = t0.max(dim=0).values
+    # Reduces dimension 0
+    t1 = tf.reduce_max(t0, axis=0)
+    
+    # t2 = t1.transpose(1, 0)
+    # Swaps dimensions 1 and 0
+    t2 = tf.transpose(t1, [1, 0, 2])
+    
+    # t3 = arg1
+    t3 = arg1
+    
+    # t4 = torch.exp(t3)
+    t4 = tf.exp(t3)
+    
+    # t5 = arg2 (Weight tensor in original conv1d)
+    # t6 = t5.transpose(2, 1)
+    # Note: max_pool1d does not use a weight tensor. 
+    # We skip the weight usage but maintain the flow.
+    
+    # t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0)
+    # Replaced with tf.nn.max_pool1d
+    # t4 shape: (17, 64, 358) -> (Batch, Channels, Width) for data_format='NCW'
+    # ksize=1 matches the kernel size dimension of the original weight t6 (..., 1)
+    t7 = tf.nn.max_pool1d(input=t4, ksize=1, strides=1, padding='VALID', data_format='NCW')
+    
+    # t8 = t7.clone(); t8.zero_()
+    # Creates a zero tensor with the same shape and dtype as t7
+    t8 = tf.zeros_like(t7)
+    
+    # t9 = t2 * t7 * t8
+    t9 = t2 * t7 * t8
+    
+    output = t9
+    return output
+
+# Input setup
+# Adapted arg0 shape: changed 261 to 64 to ensure shape compatibility with max_pool1d output
+arg0 = tf.random.uniform((2, 64, 17, 358), dtype=tf.bfloat16)
+arg1 = tf.random.uniform((17, 64, 358), dtype=tf.float32)
+arg2 = tf.random.uniform((261, 1, 64), dtype=tf.float32)
+
+if __name__ == '__main__':
+    # Test Eager Execution
+    try:
+        out_eager = foo(arg0, arg1, arg2)
+        print('Eager Success! ')
+    except Exception as e:
+        print(f'Eager Failed! : {e}')
+        sys.exit(1)
+
+    # Test Compiled Execution (tf.function)
+    try:
+        compiled_foo = tf.function(foo)
+        out_compiled = compiled_foo(arg0, arg1, arg2)
+        print('Compile Success! ')
+    except Exception as e:
+        print(f'Compile Failed! : {e}')
+        sys.exit(1)
+
+    # Verify consistency (optional, but good practice for divergence tests)
+    # Since t8 is all zeros, t9 should be all zeros in both modes
+    if tf.reduce_all(tf.equal(out_eager, out_compiled)):
+        print("Outputs match. ")
+    else:
+        print("Outputs differ! ")

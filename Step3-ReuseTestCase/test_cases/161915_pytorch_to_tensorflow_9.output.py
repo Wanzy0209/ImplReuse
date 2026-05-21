@@ -1,0 +1,52 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_metrics_true_positives():
+    """
+    Adapted test case for tf.compat.v1.metrics.true_positives based on the 
+    PyTorch NestedTensor share_memory_ bug report.
+    
+    Original Logic:
+    1. Create random input tensors.
+    2. Instantiate the specific API object/call.
+    3. Perform the operation (share_memory_ vs metric calculation).
+    4. Verify behavior (Original crashed, this should run successfully).
+    """
+    
+    # Setup inputs similar to the PyTorch random generation
+    # PyTorch: a = torch.randn(3), b = torch.randn(5)
+    # TensorFlow: Create random labels and predictions
+    num_samples = 10
+    labels = tf.random.uniform((num_samples,), maxval=2, dtype=tf.int32)
+    predictions = tf.random.uniform((num_samples,), maxval=2, dtype=tf.int32)
+
+    # Call the API
+    # PyTorch: nt = torch.nested.nested_tensor([a, b], layout=torch.jagged)
+    # TensorFlow: Call the metric function
+    metric, update_op = tf.compat.v1.metrics.true_positives(
+        labels=labels,
+        predictions=predictions,
+        name='true_positives_test'
+    )
+
+    # Verify behavior
+    # PyTorch: nt.share_memory_() caused a Segmentation fault.
+    # TensorFlow: We verify the metric runs without crashing and returns a valid tensor.
+    with tf.compat.v1.Session() as sess:
+        # Initialize local variables (required for metrics)
+        sess.run(tf.compat.v1.local_variables_initializer())
+        
+        # Run the update operation to calculate the metric
+        sess.run(update_op)
+        
+        # Retrieve the result
+        result = sess.run(metric)
+        
+        # Assertions to ensure valid behavior
+        assert isinstance(result, (np.ndarray, float, int)), "Metric result should be a number"
+        assert result >= 0, "True positives count cannot be negative"
+        print(f"Test passed. True Positives: {result}")
+
+if __name__ == "__main__":
+    test_tf_metrics_true_positives()

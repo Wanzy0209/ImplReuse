@@ -1,0 +1,52 @@
+import torch
+import tensorflow as tf
+import time
+import numpy as np
+
+class MyModel(tf.Module):
+    def __init__(self):
+        super().__init__()
+        # Note: tf.nn.relu is used here to mimic the structure of the original PyTorch model
+        # although the core operation being tested is tf.math.add.
+        self.relu = tf.nn.relu
+
+    @tf.function # Equivalent to torch.compile
+    def __call__(self, x):
+        # Adapted from torch.unique(x, sorted=True, return_inverse=True)
+        # to tf.math.add.
+        # Note: tf.math.add performs element-wise addition and preserves shape,
+        # unlike torch.unique which results in dynamic output shapes.
+        y = tf.math.add(x, x)
+        
+        # Mimic the post-processing in the original bug report
+        y = self.relu(y)
+        return y
+
+def get_input():
+    # Returns a tensor with random values
+    return tf.random.normal((8,))
+
+def run_once(model, x, label):
+    t0 = time.perf_counter()
+    y = model(x)
+    print(f"[{label}] ok, type={type(y)} "
+          f"time={(time.perf_counter()-t0)*1000:.3f}ms")
+    return y
+
+def main():
+    print("tf.__version__ =", tf.__version__)
+
+    model = MyModel()
+    x = get_input()
+
+    # Run in 'compiled' mode (tf.function)
+    # In the original PyTorch issue, this failed with a Dynamic shape operator error.
+    # For tf.math.add, we expect this to succeed as it preserves static shapes.
+    y_tf = run_once(model, x, "tf.function")
+
+    # Verify output shape matches input shape (static behavior)
+    assert y_tf.shape == x.shape, "Shape mismatch for tf.math.add"
+    print("Test passed: tf.math.add executed successfully in graph mode.")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,80 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Note: QueueRunners are not compatible with eager execution.
+# We must disable eager execution to use tf.compat.v1.train.add_queue_runner.
+tf.compat.v1.disable_eager_execution()
+
+def test_add_queue_runner_with_sparse():
+    """
+    Adapts the PyTorch sparse tensor bug reproduction logic to TensorFlow.
+    Original logic: Input -> Sparse -> Operation -> Dense -> Output.
+    Target API: tf.compat.v1.train.add_queue_runner (managing the data pipeline).
+    """
+    with tf.Graph().as_default():
+        # 1. Setup Input (mimicking torch.randn(10, 10))
+        x_dense = tf.compat.v1.placeholder(tf.float32, shape=[10, 10])
+
+        # 2. Convert to Sparse (mimicking x.to_sparse())
+        x_sparse = tf.sparse.from_dense(x_dense)
+
+        # 3. Setup Queue for Sparse Tensor components
+        # Queues hold standard Tensors, so we queue the components of the SparseTensor
+        # (indices, values, and shape) to pass it through the pipeline.
+        q = tf.queue.FIFOQueue(
+            capacity=10,
+            dtypes=[tf.int64, tf.float32, tf.int64],
+            shapes=[(None, 2), (), (2,)]
+        )
+
+        # Enqueue the sparse tensor components
+        enqueue_op = q.enqueue([x_sparse.indices, x_sparse.values, x_sparse.shape])
+
+        # 4. Create QueueRunner and use the API under test
+        # tf.compat.v1.train.add_queue_runner adds the runner to the graph collection
+        qr = tf.compat.v1.train.QueueRunner(q, [enqueue_op])
+        tf.compat.v1.train.add_queue_runner(qr)
+
+        # 5. Dequeue, Process, and Convert to Dense
+        # Dequeue components
+        d_indices, d_values, d_shape = q.dequeue()
+        
+        # Reconstruct SparseTensor
+        d_sparse = tf.SparseTensor(d_indices, d_values, d_shape)
+        
+        # Perform operation (mimicking result = x_sparse * 2)
+        d_sparse_op = d_sparse * 2
+        
+        # Convert to Dense (mimicking result.to_dense())
+        result = tf.sparse.to_dense(d_sparse_op)
+
+        # 6. Execution
+        with tf.compat.v1.Session() as sess:
+            # Initialize variables
+            sess.run(tf.compat.v1.global_variables_initializer())
+            sess.run(tf.compat.v1.local_variables_initializer())
+
+            # Start queue runners (this will pick up the runner added via add_queue_runner)
+            coord = tf.compat.v1.train.Coordinator()
+            threads = tf.compat.v1.train.start_queue_runners(coord=coord, sess=sess)
+
+            try:
+                # Generate random input data
+                input_data = np.random.randn(10, 10).astype(np.float32)
+                
+                # Run the graph
+                output = sess.run(result, feed_dict={x_dense: input_data})
+                
+                # Verify the output matches the expected transformation
+                expected = input_data * 2
+                assert np.allclose(output, expected), "Output does not match expected result"
+                print("Test passed. Output matches expected.")
+
+            finally:
+                # Stop threads
+                coord.request_stop()
+                coord.join(threads)
+
+if __name__ == "__main__":
+    test_add_queue_runner_with_sparse()

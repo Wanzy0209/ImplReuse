@@ -1,0 +1,40 @@
+import torch
+import tensorflow as tf
+from tensorflow.keras import backend as K
+
+def test_backend_state_after_reset():
+    """
+    Test case for tf.keras.backend.backend inspired by PyTorch Issue #165722.
+    
+    The original issue involves a dangling pointer in PyTorch's RelationalGuard
+    classes after a reset operation (torch._dynamo.reset). The guard stored a
+    raw PyObject* without proper reference counting, leading to invalid access
+    if the object was destroyed during the reset.
+    
+    This test verifies the behavior of the similar API (tf.keras.backend.backend)
+    in a scenario involving a state reset (K.clear_session). We ensure that
+    querying the backend state after a reset returns a valid, consistent result
+    and does not exhibit symptoms of invalid state or dangling references.
+    """
+    # Step 1: Capture the initial backend state (analogous to storing the first tensor)
+    initial_backend = K.backend()
+    assert initial_backend == 'tensorflow', "Initial backend should be 'tensorflow'"
+
+    # Step 2: Perform a reset operation (analogous to torch._dynamo.reset)
+    # K.clear_session() resets the global Keras state, potentially destroying
+    # objects and clearing internal caches.
+    K.clear_session()
+
+    # Step 3: Access the backend state again (analogous to the second check_nopybind call)
+    # In the PyTorch bug, accessing the stored pointer after reset could lead to a crash
+    # or undefined behavior. Here, we verify that the API returns a valid, correct value.
+    reset_backend = K.backend()
+    
+    # Assertions to ensure correctness and stability
+    assert reset_backend is not None, "Backend should not be None after reset"
+    assert reset_backend == 'tensorflow', "Backend should remain 'tensorflow' after reset"
+    assert initial_backend == reset_backend, "Backend identity should be consistent"
+
+if __name__ == "__main__":
+    test_backend_state_after_reset()
+    print("Test passed: Backend state is consistent after reset.")

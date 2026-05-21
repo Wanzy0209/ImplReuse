@@ -1,0 +1,64 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import unittest
+from torchvision.models.resnet import resnet18
+
+# Translating the pattern of tf.compat.v1.global_variables_initializer
+# which checks execution context (eager vs graph) and returns an appropriate Op.
+# Here we check the device context and return a compiled training step.
+
+def get_compiled_step_initializer(device):
+    """
+    Returns a compiled training step function for the specified device.
+    This mimics the structure of global_variables_initializer which checks
+    context and returns an initialization Op.
+    """
+    # Check context (MPS availability) similar to context.executing_eagerly()
+    if device == 'mps' and not torch.backends.mps.is_available():
+        return None # Indicate skip or handle error
+
+    # Define the core operation (similar to variables_initializer logic)
+    def _train_step(model, images, labels, optimizer, criterion):
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward() # The specific line failing in the bug report
+        optimizer.step()
+        return loss
+
+    # Apply the compilation (similar to returning the specific Op)
+    # The bug is that this fails on MPS during backward()
+    return torch.compile(_train_step)
+
+class TestTorchCompileMPS(unittest.TestCase):
+    def test_resnet18_backward_on_mps(self):
+        device = 'mps'
+        
+        # Get the compiled function using our initializer pattern
+        train_step = get_compiled_step_initializer(device)
+        
+        if train_step is None:
+            self.skipTest("MPS backend is not available.")
+
+        # Setup model and data
+        BATCH_SIZE = 4
+        NUM_CLASSES = 10
+        model = resnet18(num_classes=NUM_CLASSES).to(device)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.SGD(model.parameters(), lr=0.01)
+        
+        images = torch.randn(BATCH_SIZE, 3, 224, 224).to(device)
+        labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,)).to(device)
+        
+        # Execute the compiled step
+        # This should trigger the bug if not fixed
+        try:
+            loss = train_step(model, images, labels, optimizer, criterion)
+            # If we reach here, the backward pass succeeded
+            self.assertIsNotNone(loss)
+        except RuntimeError as e:
+            self.fail(f"torch.compile failed on MPS backend during backward pass: {e}")
+
+if __name__ == '__main__':
+    unittest.main()

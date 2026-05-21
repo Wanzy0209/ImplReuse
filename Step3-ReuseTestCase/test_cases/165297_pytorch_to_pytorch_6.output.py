@@ -1,0 +1,36 @@
+import torch
+import torch.nn as nn
+
+device = torch.device("cuda")
+
+def test_crossentropy_nan():
+    # Large input tensor matching the dimensions in the original bug report
+    N, C, H, W = 84, 64, 512, 960
+    
+    # Case 1: bfloat16 + channels_last
+    x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+
+    # Convert to NHWC channels_last layout
+    x = x.to(memory_format=torch.channels_last)
+
+    # Uncommenting the line below avoids NaNs in the original bug
+    # x = x.contiguous()
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+    print(f"Input stride: {x.stride()}")
+
+    # CrossEntropyLoss expects targets of shape (N, H, W) for inputs of shape (N, C, H, W)
+    target = torch.randint(0, C, (N, H, W), device=device)
+
+    criterion = nn.CrossEntropyLoss().to(device)
+    loss = criterion(x, target)
+
+    print(f"Output contains NaN? {torch.isnan(loss).any().item()}")
+    print(f"Output contains Inf? {torch.isinf(loss).any().item()}")
+    print(f"Stats: loss={loss.item()}")
+
+    if torch.isnan(loss).any():
+        print("Detected NaNs in CrossEntropyLoss output!")
+
+if __name__ == "__main__":
+    test_crossentropy_nan()

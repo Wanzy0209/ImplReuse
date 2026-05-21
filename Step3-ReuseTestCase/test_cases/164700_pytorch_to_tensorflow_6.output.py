@@ -1,0 +1,51 @@
+import torch
+import tensorflow as tf
+
+def f(x, y):
+    # Cast y to int64 to match x's type, ensuring concat works as implied by the original logic
+    # (PyTorch cat requires matching dtypes, and the original report implies the code runs)
+    y = tf.cast(y, tf.int64)
+
+    # y2 = torch.cat([x[:, 1:], y[:, None] + 32 * 2048], dim=1)
+    y2 = tf.concat(
+        [
+            x[:, 1:],
+            tf.expand_dims(y, axis=1) + 32 * 2048,
+        ],
+        axis=1,
+    )
+
+    # x2 = x[:, 1:, None]
+    x2 = tf.expand_dims(x[:, 1:], axis=2)
+
+    # y3 = y2[:, -1:, None]
+    y3 = tf.expand_dims(y2[:, -1:], axis=2)
+
+    # return (torch.cat([x2, y3], dim=1) + torch.arange(-2048, 0, device=device)[None, None, :]).reshape(1, 32 * 2048)
+    # Note: tf.range start is inclusive, stop is exclusive. PyTorch arange is exclusive.
+    # PyTorch: arange(-2048, 0) -> -2048 to -1.
+    arange_tensor = tf.range(-2048, 0, dtype=tf.int64)
+    arange_expanded = tf.expand_dims(tf.expand_dims(arange_tensor, axis=0), axis=0)
+
+    return tf.reshape(
+        tf.concat([x2, y3], axis=1) + arange_expanded,
+        (1, 32 * 2048)
+    )
+
+# Adapt the test to use tf.compat.v1.name_scope
+# This verifies that the tensor operations execute correctly within the scope context.
+with tf.compat.v1.name_scope("compile_reproduction"):
+    # Initialize inputs
+    # x: torch.zeros(1, 32, dtype=torch.int64)
+    x = tf.zeros((1, 32), dtype=tf.int64)
+    
+    # y: torch.zeros(1, dtype=torch.int32)
+    y = tf.zeros((1,), dtype=tf.int32)
+
+    # Execute the function
+    result = f(x, y)
+
+    # Verify the output shape matches the expected result (1, 65536)
+    assert result.shape == (1, 32 * 2048), f"Expected shape (1, 65536), got {result.shape}"
+    
+    print("Test passed successfully within tf.compat.v1.name_scope.")

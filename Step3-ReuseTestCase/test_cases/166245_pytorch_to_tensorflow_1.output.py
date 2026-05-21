@@ -1,0 +1,83 @@
+import tensorflow as tf
+import numpy as np
+import os
+
+# Reproduce the seed from the original issue to ensure deterministic behavior
+tf.random.set_seed(751735337)
+np.random.seed(751735337)
+
+def test_csv_logger_behavior():
+    """
+    Adapted test case for tf.keras.callbacks.CSVLogger.
+    
+    Note: The original PyTorch issue involved tensor manipulation operations 
+    (chunk, index_select, gather) which are semantically different from 
+    CSVLogger (a callback for logging metrics). This test verifies the 
+    core functionality of CSVLogger (writing training metrics to a file) 
+    using the seed and data dimensions inspired by the original fuzzed input.
+    """
+    
+    # Setup file path
+    filename = 'training_log.csv'
+    if os.path.exists(filename):
+        os.remove(filename)
+
+    # Create dummy data. 
+    # Dimensions loosely inspired by the original tensor shapes (e.g., 15, 27, 108)
+    # x_train: (15, 108) -> mimics the (15, 108, 4) input flattened or reduced
+    # y_train: (15, 1) -> binary classification target
+    x_train = np.random.random((15, 108)).astype(np.float32)
+    y_train = np.random.randint(2, size=(15, 1))
+
+    # Build a simple model to generate metrics
+    # Using 27 units as a nod to the 'var_node_8' size in the original code
+    model = tf.keras.models.Sequential([
+        tf.keras.layers.Dense(27, activation='relu'),
+        tf.keras.layers.Dense(1, activation='sigmoid')
+    ])
+    
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+    # Instantiate the CSVLogger
+    # Testing basic initialization
+    csv_logger = tf.keras.callbacks.CSVLogger(filename, separator=',', append=False)
+
+    # Run training for a few epochs to generate log data
+    model.fit(x_train, y_train, epochs=2, callbacks=[csv_logger], verbose=0)
+
+    # --- Verification ---
+    
+    # 1. Check if file was created
+    assert os.path.exists(filename), "CSVLogger failed to create the log file."
+
+    # 2. Check file content
+    with open(filename, 'r') as f:
+        content = f.read()
+        lines = content.strip().split('\n')
+        
+        # Expect header + 2 epochs = 3 lines
+        assert len(lines) == 3, f"Expected 3 lines in log, got {len(lines)}"
+        
+        # Check for standard headers
+        header = lines[0]
+        assert 'epoch' in header, "Log missing 'epoch' column"
+        assert 'accuracy' in header, "Log missing 'accuracy' column"
+        assert 'loss' in header, "Log missing 'loss' column"
+
+    # 3. Test append mode (optional robustness check)
+    csv_logger_append = tf.keras.callbacks.CSVLogger(filename, separator=',', append=True)
+    model.fit(x_train, y_train, epochs=1, callbacks=[csv_logger_append], verbose=0)
+    
+    with open(filename, 'r') as f:
+        lines = f.read().strip().split('\n')
+        # Should now have header + 2 + 1 = 4 lines
+        assert len(lines) == 4, "Append mode failed to write correctly"
+
+    print("Test passed: CSVLogger behavior verified.")
+
+    # Cleanup
+    if os.path.exists(filename):
+        os.remove(filename)
+
+if __name__ == "__main__":
+    test_csv_logger_behavior()

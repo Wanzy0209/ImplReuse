@@ -1,0 +1,75 @@
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use TF v1 queue APIs
+tf.compat.v1.disable_eager_execution()
+
+def test_string_input_producer_logic():
+    # 1. Setup Data
+    # Original PyTorch tensor: [[1,2,3],[4,5,6],[7,8,9],[10,11,12]]
+    raw_data = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]], dtype=np.float32)
+    
+    # Convert to strings for string_input_producer
+    string_data = [",".join(map(str, row)) for row in raw_data]
+
+    # 2. Define the Graph
+    # Use string_input_producer to create a queue
+    queue = tf.compat.v1.train.string_input_producer(string_data, shuffle=False, num_epochs=1, capacity=4)
+    
+    # Dequeue and parse strings
+    reader = queue.dequeue()
+    record_defaults = [[0.0], [0.0], [0.0]]
+    cols = tf.io.decode_csv(reader, record_defaults=record_defaults)
+    row = tf.stack(cols)
+
+    # Batch the rows to reconstruct the tensor structure
+    batch = tf.compat.v1.train.batch([row], batch_size=4, capacity=4, allow_smaller_final_batch=False)
+
+    # 3. Adapt the Logic from PyTorch 'foo' function
+    # Original:
+    # x[0].sin_()
+    # x[1].sin_()
+    # y = zeros_like(x)
+    # y[2] = x[0]
+    # y[3] = x[1]
+    
+    # TensorFlow equivalent:
+    # Apply sin to the first two rows
+    x0 = tf.sin(batch[0])
+    x1 = tf.sin(batch[1])
+    
+    # Initialize y with zeros
+    y = tf.zeros_like(batch)
+    
+    # Update y[2] with x0 and y[3] with x1
+    indices = tf.constant([[2], [3]])
+    updates = tf.stack([x0, x1])
+    y = tf.tensor_scatter_nd_update(y, indices, updates)
+
+    # 4. Execute and Assert
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.local_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
+        
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord)
+        
+        try:
+            result = sess.run(y)
+            
+            # Calculate expected values
+            # Expected y[2] = sin(x[0]) and y[3] = sin(x[1])
+            expected = np.zeros_like(raw_data)
+            expected[2] = np.sin(raw_data[0])
+            expected[3] = np.sin(raw_data[1])
+            
+            # Assert close
+            np.testing.assert_allclose(result, expected, rtol=1e-5)
+            print("Test passed: string_input_producer logic matches expected behavior.")
+            
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_string_input_producer_logic()

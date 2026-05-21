@@ -1,0 +1,55 @@
+import torch
+import tensorflow as tf
+
+def test_tf_floordiv_complex_expression():
+    """
+    Test case adapted from the PyTorch FloorDiv issue.
+    The original issue involved FloorDiv simplifying to a Rational (true division)
+    instead of maintaining the FloorDiv structure.
+    
+    Note: The provided similar API 'tf.compat.v1.no_regularizer' is semantically 
+    unrelated to 'torch.div' (it is a regularization utility returning None). 
+    To preserve the core bug reproduction logic (floor division behavior), 
+    this test uses 'tf.math.floordiv', the functionally equivalent TensorFlow API.
+    """
+
+    # Create symbolic variables (using Tensors in TensorFlow)
+    # We use specific integer values to verify the calculation logic
+    s14 = tf.constant(4032, dtype=tf.int32)  # Divisible by 2016
+    s37 = tf.constant(1, dtype=tf.int32)
+    s46 = tf.constant(1, dtype=tf.int32)
+
+    print("Testing tf.math.floordiv with complex expression...")
+
+    # Build the numerator expression step by step
+    # Original: FloorDiv(s14, 2016)
+    inner_expr = tf.math.floordiv(s14, 2016)
+    
+    # Original: (24 * s37 + 672) * inner_expr
+    middle_expr = (24 * s37 + 672) * inner_expr
+    
+    # Original: middle_expr + 21
+    numerator = middle_expr + 21
+    denominator = 22
+
+    print(f"Numerator: {numerator.numpy()}")
+    print(f"Denominator: {denominator}")
+
+    # Create the FloorDiv expression
+    # Original: FloorDiv(numerator, denominator)
+    result = tf.math.floordiv(numerator, denominator)
+    
+    print(f"tf.math.floordiv result: {result.numpy()}")
+    
+    # Verify the result matches the expected floor division logic
+    # (24*1 + 672) * (4032//2016) + 21 = 696 * 2 + 21 = 1392 + 21 = 1413
+    # 1413 // 22 = 64
+    expected_result = 1413 // 22
+    
+    assert result.numpy() == expected_result, \
+        f"Expected {expected_result}, but got {result.numpy()}"
+    
+    print("Test passed: FloorDiv logic preserved correctly.")
+
+if __name__ == "__main__":
+    test_tf_floordiv_complex_expression()

@@ -1,0 +1,63 @@
+import torch
+import torch.nn as nn
+from torch.nn.attention.flex_attention import flex_attention
+
+# Leveraging the pattern of tf.keras.backend.epsilon for numerical stability
+def get_epsilon():
+    """Returns the value of the fuzz factor used in numeric expressions."""
+    return 1e-7
+
+class SimpleFlexAttention(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.scale = nn.Parameter(torch.ones(1))
+
+    def score_mod(self, score, b, h, q, kv):
+        # Apply a scaling factor and add a small epsilon for stability
+        # This mimics the usage pattern of epsilon in backends
+        return score * self.scale + get_epsilon()
+
+    def forward(self, q, k, v):
+        return flex_attention(q, k, v, score_mod=self.score_mod)
+
+def test_compile_flex_attention_with_custom_score_mod():
+    """
+    Test case for Issue 163300: Inductor failure with custom score_mod.
+    Verifies that torch.compile works with flex_attention when a custom
+    score_mod (leveraging an epsilon constant) is used.
+    """
+    if not torch.cuda.is_available():
+        print("Test skipped: CUDA not available")
+        return
+
+    device = "cuda"
+    B, H, N, d = 2, 4, 16, 32
+    
+    model = SimpleFlexAttention().to(device)
+    
+    # The bug manifests specifically when compiling the module
+    compiled_model = torch.compile(model, dynamic=False)
+
+    q = torch.randn(B, H, N, d, device=device, dtype=torch.float16)
+    k = torch.randn(B, H, N, d, device=device, dtype=torch.float16)
+    v = torch.randn(B, H, N, d, device=device, dtype=torch.float16)
+
+    # Run eager to establish baseline
+    with torch.no_grad():
+        out_eager = model(q, k, v)
+
+    # Run compiled - this should not raise LoweringException
+    try:
+        with torch.no_grad():
+            out_compiled = compiled_model(q, k, v)
+        
+        # Verify output shape matches
+        assert out_eager.shape == out_compiled.shape
+        print("Test Passed: torch.compile succeeded with custom score_mod.")
+        
+    except Exception as e:
+        print(f"Test Failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_compile_flex_attention_with_custom_score_mod()

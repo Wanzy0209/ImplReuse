@@ -1,0 +1,113 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Set seeds for reproducibility
+tf.random.set_seed(9)
+np.random.seed(9)
+
+def fuzzed_program(arg_0):
+    # var_node_1: size=(1, 2), dtype=int64
+    var_node_1 = tf.convert_to_tensor(arg_0, dtype=tf.int64)
+
+    # var_node_5: size=(1, 2), dtype=int32, value=-66
+    var_node_5 = tf.cast(tf.fill((1, 2), -66), dtype=tf.int32)
+
+    # var_node_6: size=(1, 2), dtype=int64, value=77
+    var_node_6 = tf.cast(tf.fill((1, 2), 77), dtype=tf.int64)
+
+    # var_node_4 = add(var_node_5, var_node_6)
+    # PyTorch behavior: int32 + int64 -> int32 (based on bug description comments)
+    var_node_4 = tf.cast(tf.add(var_node_5, tf.cast(var_node_6, tf.int32)), tf.int32)
+
+    # var_node_7: size=(1, 2), dtype=int32, value=-64
+    var_node_7 = tf.cast(tf.fill((1, 2), -64), dtype=tf.int32)
+
+    # var_node_3 = mul(var_node_4, var_node_7)
+    var_node_3 = tf.multiply(var_node_4, var_node_7)
+
+    # var_node_9: size=(3, 4), dtype=bool, value=False
+    # Using tf.convert_to_tensor to create the boolean mask, testing the similar API
+    bool_mask_np = np.full((3, 4), False, dtype=bool)
+    var_node_9 = tf.convert_to_tensor(bool_mask_np, dtype=tf.bool)
+
+    # var_node_8 = nonzero(var_node_9)
+    # In TensorFlow, tf.where(condition) returns the indices of True elements.
+    # Since var_node_9 is all False, this returns an empty tensor of shape (0, 2).
+    # We wrap this in tf.convert_to_tensor to ensure the API is exercised on the result.
+    var_node_8 = tf.convert_to_tensor(tf.where(var_node_9), dtype=tf.int32)
+
+    # var_node_2 = add(var_node_3, var_node_8)
+    # Broadcasting (1, 2) with (0, 2) results in (1, 2).
+    var_node_2 = tf.add(var_node_3, var_node_8)
+
+    # var_node_0 = div(var_node_1, var_node_2)
+    # PyTorch integer division truncates. We use tf.math.floordiv to mimic this.
+    # We cast inputs to float32 first to match standard division behavior then floor, 
+    # or use floordiv directly if types match. PyTorch div result is int64.
+    var_node_0 = tf.cast(tf.math.floordiv(tf.cast(var_node_1, tf.float32), tf.cast(var_node_2, tf.float32)), tf.int64)
+
+    return var_node_0
+
+# Prepare inputs
+# arg_0: size=(1, 2), dtype=int64
+arg_0 = tf.constant(np.random.randint(0, 3, (1, 2)), dtype=tf.int64)
+
+# 1. Test Eager Execution
+print("Testing Eager Execution...")
+try:
+    result_eager = fuzzed_program(arg_0)
+    print(f" Eager success. Result: {result_eager.numpy()}, Shape: {result_eager.shape}")
+except Exception as e:
+    print(f" Eager failed: {e}")
+
+# 2. Test Compiled Execution (tf.function)
+# This mimics torch.compile in the original bug report
+print("\nTesting Compiled Execution (tf.function)...")
+try:
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(arg_0)
+    print(f" Compile success. Result: {result_compiled.numpy()}, Shape: {result_compiled.shape}")
+except Exception as e:
+    print(f" Compile failed: {e}")
+
+# 3. Compare Results
+if 'result_eager' in locals() and 'result_compiled' in locals():
+    if np.array_equal(result_eager.numpy(), result_compiled.numpy()):
+        print("\n Eager and Compiled results match.")
+    else:
+        print("\n Divergence detected between Eager and Compiled results!")
+        print(f"Eager: {result_eager.numpy()}")
+        print(f"Compiled: {result_compiled.numpy()}")
+
+# 4. Test Gradient Computation
+# The original code included a sentinel for gradient checking.
+print("\nTesting Gradient Computation...")
+try:
+    with tf.GradientTape() as tape:
+        tape.watch(arg_0)
+        # To compute gradients, we need a float output. 
+        # We adapt the program slightly to return a float for gradient checking.
+        def fuzzed_program_float(arg_0):
+            var_node_1 = tf.cast(arg_0, tf.float32)
+            var_node_5 = tf.cast(tf.fill((1, 2), -66), tf.float32)
+            var_node_6 = tf.cast(tf.fill((1, 2), 77), tf.float32)
+            var_node_4 = tf.add(var_node_5, var_node_6)
+            var_node_7 = tf.cast(tf.fill((1, 2), -64), tf.float32)
+            var_node_3 = tf.multiply(var_node_4, var_node_7)
+            
+            bool_mask_np = np.full((3, 4), False, dtype=bool)
+            var_node_9 = tf.convert_to_tensor(bool_mask_np, dtype=tf.bool)
+            var_node_8 = tf.cast(tf.where(var_node_9), tf.float32)
+            
+            var_node_2 = tf.add(var_node_3, var_node_8)
+            # Avoid division by zero issues in gradient check if var_node_2 is 0
+            # (In this specific fuzz, var_node_2 is -704, so safe)
+            var_node_0 = tf.math.divide(var_node_1, var_node_2)
+            return var_node_0
+
+        result_grad = fuzzed_program_float(arg_0)
+        grads = tape.gradient(result_grad, arg_0)
+        print(f" Gradient computation success. Gradients: {grads.numpy()}")
+except Exception as e:
+    print(f" Gradient computation failed: {e}")

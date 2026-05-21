@@ -1,0 +1,77 @@
+import tensorflow as tf
+import numpy as np
+
+def test_lstmcell_row_major_rhs():
+    """
+    Adapted from PyTorch Issue 164491.
+    
+    Bug Description:
+    In PyTorch, _scaled_mm and _int_mm (used for matrix multiplication) are 
+    slow or raise errors when the right-hand side (rhs) matrix is in row-major 
+    layout. This is common in Linear layers during backward passes or specific 
+    weight storage configurations.
+
+    Test Logic:
+    This test verifies that tf.keras.layers.LSTMCell, which performs matrix 
+    multiplication internally (math_ops.matmul), handles row-major right-hand 
+    side (weights) matrices correctly and efficiently. Since TensorFlow tensors 
+    are row-major by default, this test ensures the standard execution path 
+    works without errors or implicit performance-degrading transpositions.
+    """
+    # Parameters
+    batch_size = 4
+    input_dim = 16
+    units = 32
+
+    # 1. Setup Input Data
+    # Input tensor x: [batch_size, input_dim]
+    x = tf.random.normal([batch_size, input_dim])
+    
+    # Initial states: [batch_size, units]
+    h_prev = tf.random.normal([batch_size, units])
+    c_prev = tf.random.normal([batch_size, units])
+    states = [h_prev, c_prev]
+
+    # 2. Create LSTMCell
+    lstm_cell = tf.keras.layers.LSTMCell(units)
+
+    # 3. Explicitly construct weights in Row-Major layout (C-contiguous)
+    # In TensorFlow/Numpy, the default memory layout is row-major.
+    # The kernel weights act as the RHS in the internal matmul operations.
+    # Kernel shape: [input_dim, 4 * units]
+    # Recurrent kernel shape: [units, 4 * units]
+    
+    kernel_weights = np.random.randn(input_dim, 4 * units).astype(np.float32)
+    recurrent_weights = np.random.randn(units, 4 * units).astype(np.float32)
+    bias = np.random.randn(4 * units).astype(np.float32)
+
+    # 4. Build the cell and set the explicit row-major weights
+    # We build the cell first to initialize the variables
+    lstm_cell.build([None, input_dim])
+    lstm_cell.set_weights([kernel_weights, recurrent_weights, bias])
+
+    # 5. Execute the cell
+    # The LSTMCell will perform: output = activation(matmul(inputs, weights) + bias)
+    # We verify this operation completes without error (unlike the PyTorch bug 
+    # where _scaled_mm might error).
+    try:
+        output, new_states = lstm_cell(x, states)
+    except Exception as e:
+        print(f"Test Failed: LSTMCell raised an error with row-major RHS weights: {e}")
+        raise
+
+    # 6. Assertions
+    # Check output shapes
+    assert output.shape == (batch_size, units), \
+        f"Output shape mismatch. Expected ({batch_size}, {units}), got {output.shape}"
+    
+    assert new_states[0].shape == (batch_size, units), \
+        f"Hidden state shape mismatch. Expected ({batch_size}, {units}), got {new_states[0].shape}"
+    
+    assert new_states[1].shape == (batch_size, units), \
+        f"Cell state shape mismatch. Expected ({batch_size}, {units}), got {new_states[1].shape}"
+
+    print("Test Passed: tf.keras.layers.LSTMCell handles row-major RHS weights correctly.")
+
+if __name__ == "__main__":
+    test_lstmcell_row_major_rhs()

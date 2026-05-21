@@ -1,0 +1,47 @@
+import torch
+import warnings
+import sys
+
+def test_tf_keras_image_iterator_futurewarning():
+    """
+    Test case to verify that importing tf.keras.preprocessing.image 
+    does not introduce FutureWarnings related to functools.partial in Enums.
+    
+    This mirrors the issue found in torch.distributed.algorithms.ddp_comm_hooks
+    where Enum members were assigned functools.partial objects without enum.member(),
+    triggering warnings in Python 3.13+.
+    """
+    # The specific FutureWarning is introduced in Python 3.13
+    if sys.version_info < (3, 13):
+        print("SKIP: Python version < 3.13, FutureWarning not applicable.")
+        return
+
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        # Ensure all warnings are captured
+        warnings.simplefilter("always")
+
+        # Import the module containing the similar API
+        # Note: We import the module to trigger any module-level Enum definitions
+        try:
+            import tensorflow.keras.preprocessing.image
+        except ImportError:
+            print("SKIP: TensorFlow not installed.")
+            return
+
+        # Filter for the specific FutureWarning pattern
+        partial_warnings = []
+        for w in caught_warnings:
+            if issubclass(w.category, FutureWarning):
+                msg = str(w.message)
+                if "functools.partial" in msg and "enum.member" in msg:
+                    partial_warnings.append(w)
+
+        # Assert that no such warnings were raised
+        assert len(partial_warnings) == 0, (
+            f"Importing tensorflow.keras.preprocessing.image introduced FutureWarnings:\n"
+            + "\n".join(f"{w.filename}:{w.lineno}: {w.message}" for w in partial_warnings)
+        )
+
+if __name__ == "__main__":
+    test_tf_keras_image_iterator_futurewarning()
+    print("PASS: Test completed successfully.")

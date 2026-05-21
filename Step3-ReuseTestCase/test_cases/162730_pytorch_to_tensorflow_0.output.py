@@ -1,0 +1,46 @@
+import tensorflow as tf
+import numpy as np
+
+def test_bessel_y0_contiguous():
+    """
+    Adapted test case for tf.compat.v1.math.special.bessel_y0 based on 
+    PyTorch Issue 162730 regarding inconsistent results with non-contiguous tensors.
+    """
+    
+    # Create test tensors
+    # Using a shape similar to the original bug report to ensure robustness
+    shape = (12, 64, 768)
+    x = tf.random.normal(shape, dtype=tf.float32)
+
+    # Create non-contiguous tensor via transpose (analogous to rearrange in the original bug)
+    # Transposing changes the strides/memory layout
+    x_noncontig = tf.transpose(x, perm=[2, 0, 1])
+
+    # Create contiguous version (analogous to .contiguous())
+    # tf.identity creates a new tensor, effectively copying the data to a contiguous block
+    x_contig = tf.identity(x_noncontig)
+
+    # Apply the API under test
+    # tf.compat.v1.math.special.bessel_y0 computes the Bessel function element-wise.
+    # It should produce identical results regardless of memory layout.
+    result1 = tf.compat.v1.math.special.bessel_y0(x_noncontig)
+    result2 = tf.compat.v1.math.special.bessel_y0(x_contig)
+
+    # Verify behavior
+    # Calculate max difference
+    diff = tf.abs(result1 - result2)
+    max_diff = tf.reduce_max(diff)
+    
+    # Check if results match within a reasonable tolerance
+    # Note: Since this is an element-wise operation, results should be bitwise identical 
+    # or extremely close, regardless of contiguity.
+    match = tf.reduce_all(diff < 1e-5)
+
+    print(f"Results match: {match.numpy()}")
+    print(f"Max difference: {max_diff.numpy()}")
+
+    # Assertion to catch regressions similar to the PyTorch MPS bug
+    assert match.numpy(), f"Results differ between contiguous and non-contiguous tensors! Max diff: {max_diff.numpy()}"
+
+if __name__ == "__main__":
+    test_bessel_y0_contiguous()

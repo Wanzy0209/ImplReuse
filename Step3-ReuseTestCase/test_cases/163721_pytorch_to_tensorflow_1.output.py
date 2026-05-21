@@ -1,0 +1,84 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Check for TensorFlow availability (mimicking torch.backends.mps.is_available)
+assert tf.__version__ is not None
+
+# Determine device to use (mimicking torch.device selection)
+# We try to use GPU if available, otherwise CPU, to parallel the hardware intent.
+gpus = tf.config.list_physical_devices('GPU')
+device_name = "/GPU:0" if gpus else "/CPU:0"
+
+# Wrapper over the tf.compat.v1.metrics.sparse_precision_at_k metric.
+# This mimics the structure of the MPSSoftshrink class in the original bug report.
+class TFSparsePrecisionAtK:
+    __constants__ = ["k", "class_id"]
+    k: int
+    class_id: int
+
+    def __init__(self, k: int = 5, class_id: int = None) -> None:
+        super().__init__()
+        self.k = k
+        self.class_id = class_id
+
+    def __call__(self, labels, predictions):
+        # tf.compat.v1.metrics returns (value, update_op)
+        return tf.compat.v1.metrics.sparse_precision_at_k(
+            labels=labels,
+            predictions=predictions,
+            k=self.k,
+            class_id=self.class_id,
+            name="sparse_precision_at_k_wrapper"
+        )
+
+    def extra_repr(self):
+        return f"k={self.k}, class_id={self.class_id}"
+
+# Wrapper over a model evaluation step, using the metric implementation.
+# This mimics the CustomMPSSoftshrinkModel class.
+class CustomMetricModel:
+    def __init__(
+        self,
+        num_classes: int = 10,
+        k: int = 5,
+    ):
+        super().__init__()
+        self.metric_op = TFSparsePrecisionAtK(k=k)
+
+    def evaluate(self, labels, predictions):
+        return self.metric_op(labels, predictions)
+
+# Main execution block to reproduce the behavior/verify the API
+if __name__ == "__main__":
+    # Disable eager execution to use tf.compat.v1.metrics properly
+    tf.compat.v1.disable_eager_execution()
+
+    with tf.compat.v1.Session() as sess:
+        with tf.device(device_name):
+            # Initialize local variables for metrics
+            sess.run(tf.compat.v1.local_variables_initializer())
+            sess.run(tf.compat.v1.global_variables_initializer())
+
+            # Create dummy data
+            batch_size = 32
+            num_classes = 10
+            
+            # Random predictions (logits or probabilities)
+            predictions = tf.random.uniform((batch_size, num_classes), minval=0, maxval=1)
+            # Random sparse labels
+            labels = tf.random.uniform((batch_size,), minval=0, maxval=num_classes, dtype=tf.int64)
+
+            # Instantiate the model wrapper
+            model = CustomMetricModel(num_classes=num_classes, k=5)
+            
+            # Run the metric operation
+            precision, update_op = model.evaluate(labels, predictions)
+            
+            # Execute the graph
+            precision_val, _ = sess.run([precision, update_op])
+
+            # Verify the output is within valid bounds [0, 1]
+            assert 0.0 <= precision_val <= 1.0, f"Precision out of bounds: {precision_val}"
+            
+            print(f"Test passed. Sparse Precision at K: {precision_val}")

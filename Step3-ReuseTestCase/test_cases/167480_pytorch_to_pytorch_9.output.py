@@ -1,0 +1,52 @@
+import torch
+import torch.distributed as dist
+import os
+import sys
+
+def test_init_process_group_injection():
+    """
+    Test case adapted from Issue 167480 (OS command injection).
+    Verifies that torch.distributed.init_process_group does not allow
+    OS command injection via the init_method parameter, similar to the
+    vulnerability found in torch.utils.cpp_extension.load_inline.
+    """
+    # Define a marker file to verify command execution
+    marker_file = "/tmp/injection_marker"
+    if os.path.exists(marker_file):
+        os.remove(marker_file)
+
+    # Construct a malicious payload
+    # This attempts to append a shell command to the init_method URL
+    # using shell metacharacters (;).
+    malicious_payload = f"; touch {marker_file}"
+    
+    # Attempt to initialize the process group with the malicious payload.
+    # We use a dummy TCP URL. The call is expected to fail (connection refused/invalid),
+    # but we must ensure the shell command does NOT execute in the process.
+    try:
+        # Note: 'gloo' backend is used as a common default, but availability varies.
+        # The test focuses on the argument handling, not successful initialization.
+        dist.init_process_group(
+            backend="gloo",
+            init_method=f"tcp://127.0.0.1:12345{malicious_payload}",
+            rank=0,
+            world_size=1
+        )
+    except Exception as e:
+        # We expect exceptions here (e.g., RuntimeError, socket errors).
+        # The critical part is checking the side effect below.
+        pass
+
+    # Verify that the marker file was NOT created.
+    # If the file exists, the command injection was successful (Vulnerability Present).
+    assert not os.path.exists(marker_file), \
+        "Security Alert: OS Command Injection detected in torch.distributed.init_process_group!"
+
+    # Cleanup
+    if os.path.exists(marker_file):
+        os.remove(marker_file)
+        
+    print("Test passed: No OS command injection detected.")
+
+if __name__ == "__main__":
+    test_init_process_group_injection()

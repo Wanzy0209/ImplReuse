@@ -1,0 +1,61 @@
+import tensorflow as tf
+import os
+import shutil
+
+# Define a simple TensorFlow model similar to the PyTorch Module
+class M(tf.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear1 = tf.keras.layers.Dense(4, input_shape=(2,))
+        self.relu = tf.keras.layers.ReLU()
+        self.linear2 = tf.keras.layers.Dense(8)
+
+    # Using tf.function with jit_compile=True to mimic AOT compilation behavior
+    @tf.function(jit_compile=True)
+    def __call__(self, x):
+        return self.linear2(self.relu(self.linear1(x)))
+
+def test_aot_compile_and_load():
+    # Setup device and inputs
+    device = "/cpu:0" 
+    m = M()
+    sample_inputs = tf.random.normal((2, 2))
+    
+    # Run eager execution
+    eager_out = m(sample_inputs)
+
+    # AOT Compile / Save workflow
+    compiled_fn_path = "./m_tf"
+    if os.path.exists(compiled_fn_path):
+        shutil.rmtree(compiled_fn_path)
+
+    # Save the compiled model (similar to aot_compile + save)
+    tf.saved_model.save(m, compiled_fn_path)
+    
+    # Load the compiled function
+    with tf.device(device):
+        loaded_fn = tf.saved_model.load(compiled_fn_path)
+
+    assert loaded_fn is not None
+
+    # Test 1: Verify loaded function produces correct output
+    # This mirrors the original bug's assertion logic
+    compiled_out = loaded_fn(sample_inputs)
+    assert tf.reduce_all(tf.abs(eager_out - compiled_out) < 1e-5)
+
+    # Test 2: Leverage the Similar API (tf.errors.InvalidArgumentError)
+    # The original bug involves serialization/execution failures. 
+    # We verify that the loaded function handles invalid arguments correctly 
+    # by raising the specific error associated with argument mismatches.
+    try:
+        # Pass an input with a mismatched shape (10, 10) vs expected (2, 2)
+        bad_inputs = tf.random.normal((10, 10))
+        loaded_fn(bad_inputs)
+        # If we reach here, the test fails because the error was not raised
+        assert False, "Expected tf.errors.InvalidArgumentError for mismatched input shape"
+    except tf.errors.InvalidArgumentError as e:
+        # Successfully caught the expected error
+        assert "shape" in str(e).lower() or "dimension" in str(e).lower()
+
+if __name__ == "__main__":
+    test_aot_compile_and_load()

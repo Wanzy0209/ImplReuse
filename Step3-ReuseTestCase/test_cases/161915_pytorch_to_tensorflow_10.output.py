@@ -1,0 +1,44 @@
+import torch
+import tensorflow as tf
+
+def test_compute_weighted_loss_with_ragged_input():
+    """
+    Adapted test case based on PyTorch Issue 161915.
+    
+    Original Issue: Calling share_memory_() on a PyTorch NestedTensor (jagged layout) 
+    caused a segmentation fault.
+    
+    Adaptation: TensorFlow does not have a direct equivalent to share_memory_() for 
+    inter-process sharing in the same way. However, the similar API identified is 
+    tf.compat.v1.losses.compute_weighted_loss. We adapt the test by passing a 
+    RaggedTensor (the TensorFlow equivalent of a jagged NestedTensor) to this 
+    function to verify it handles the complex data structure without crashing.
+    """
+    
+    # 1. Create input data analogous to the PyTorch example
+    # PyTorch: a = torch.randn(3), b = torch.randn(5)
+    # We create a RaggedTensor with row lengths 3 and 5
+    values = tf.random.normal([3 + 5])
+    row_splits = tf.constant([0, 3, 8], dtype=tf.int64)
+    losses = tf.RaggedTensor.from_row_splits(values, row_splits)
+
+    # 2. Call the similar API
+    # PyTorch: nt.share_memory_()
+    # TensorFlow: tf.compat.v1.losses.compute_weighted_loss
+    # We verify that the API processes the ragged input without error (segfault).
+    try:
+        result = tf.compat.v1.losses.compute_weighted_loss(losses)
+        
+        # 3. Verify behavior
+        # The original bug resulted in a crash. Here we assert the operation completes
+        # and returns a valid scalar (default reduction is SUM_OVER_BATCH_SIZE).
+        assert result is not None
+        assert result.shape == ()
+        print(f"Test passed. Result: {result.numpy()}")
+        
+    except Exception as e:
+        print(f"Test failed with exception: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_compute_weighted_loss_with_ragged_input()

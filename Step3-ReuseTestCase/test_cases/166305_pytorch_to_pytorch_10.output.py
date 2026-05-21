@@ -1,0 +1,62 @@
+# ddp_gather_object_test.py
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+# Setup distributed environment
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+dist.init_process_group(backend="nccl" if dist.is_nccl_available() else "gloo")
+
+# Minimal custom autograd.Function from the original bug report
+class SimplistDoubleFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x): return x * 2
+    @staticmethod
+    def backward(ctx, grad_out): return grad_out * 2
+
+class DoubleLayer(nn.Module):
+    def forward(self, x): return SimplistDoubleFn.apply(x)
+
+def main():
+    device = torch.device(f"cuda:{LOCAL_RANK}")
+    # Model setup
+    model = nn.Sequential(nn.Conv2d(3,3,3,padding=1), DoubleLayer()).to(device)
+    # Note: torch.compile is removed as we are testing torch.distributed.gather_object
+    model = DDP(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK, find_unused_parameters=True)
+    opt = torch.optim.SGD(model.parameters(), lr=1e-4)
+
+    for it in range(3):
+        x = torch.rand(2,3,256,256, device=device)
+        out = model(x)
+        loss = F.mse_loss(out, x)
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        opt.step()
+
+        # --- Adaptation: Using torch.distributed.gather_object ---
+        # We gather the loss value (a Python float) from all ranks to rank 0.
+        loss_val = loss.item()
+        
+        # Prepare the list for gathering on the destination rank (rank 0)
+        if LOCAL_RANK == 0:
+            gather_list = [None] * dist.get_world_size()
+        else:
+            gather_list = None
+
+        # Call the similar API
+        dist.gather_object(loss_val, gather_list, dst=0)
+
+        if LOCAL_RANK == 0:
+            print(f"Iter {it+1}: Gathered losses from all ranks: {gather_list}")
+            # Assertion to verify the API worked as expected
+            assert len(gather_list) == dist.get_world_size()
+            assert all(isinstance(l, float) for l in gather_list)
+        # ---------------------------------------------------------
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

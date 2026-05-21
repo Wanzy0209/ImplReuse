@@ -1,0 +1,47 @@
+import torch
+
+def test_torch_all_compile_consistency():
+    """
+    Test case for torch.all inside torch.compile.
+    Verifies consistency between cache miss and cache hit executions,
+    addressing the context of Issue 166012 regarding inconsistent entries
+    during compilation.
+    """
+    # Define a function that uses torch.all
+    def fn(x):
+        # Test torch.all with and without dimension argument
+        # to cover different graph paths
+        all_full = torch.all(x > 0)
+        all_dim = torch.all(x > 0, dim=1)
+        return all_full, all_dim
+
+    # Compile the function using torch.compile
+    compiled_fn = torch.compile(fn)
+
+    # Create a dummy input tensor
+    x = torch.randn(4, 4)
+
+    # First run: This is expected to be a cache miss
+    result_miss_full, result_miss_dim = compiled_fn(x)
+
+    # Second run: This is expected to be a cache hit
+    result_hit_full, result_hit_dim = compiled_fn(x)
+
+    # Compute expected results using eager mode
+    expected_full, expected_dim = fn(x)
+
+    # Assertions to verify correctness
+    assert torch.equal(result_miss_full, expected_full), "Cache miss result mismatch (full reduction)"
+    assert torch.equal(result_miss_dim, expected_dim), "Cache miss result mismatch (dim reduction)"
+    
+    assert torch.equal(result_hit_full, expected_full), "Cache hit result mismatch (full reduction)"
+    assert torch.equal(result_hit_dim, expected_dim), "Cache hit result mismatch (dim reduction)"
+
+    # Assertions to verify consistency between cache hit and miss
+    # This directly addresses the "inconsistent" nature of the bug report
+    assert torch.equal(result_miss_full, result_hit_full), "Inconsistency between cache hit and miss (full reduction)"
+    assert torch.equal(result_miss_dim, result_hit_dim), "Inconsistency between cache hit and miss (dim reduction)"
+
+if __name__ == "__main__":
+    test_torch_all_compile_consistency()
+    print("Test passed.")

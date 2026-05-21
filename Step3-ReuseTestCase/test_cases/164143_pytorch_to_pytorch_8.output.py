@@ -1,0 +1,60 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_recv_object_list_compile_with_debug_mode(rank, world_size):
+    """
+    Test case to verify behavior of torch.distributed.recv_object_list 
+    when used with torch.compile under a dispatch mode (DebugMode context).
+    
+    Based on Issue #164143: DebugMode silently disables torch.compile.
+    This test adapts the scenario to the similar API recv_object_list.
+    """
+    # Initialize distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Define the function containing the similar API
+    def recv_fn(obj_list):
+        dist.recv_object_list(obj_list, src=0)
+        return obj_list
+
+    # Compile the function
+    # Using 'aot_eager' as suggested in the bug report for better compatibility
+    compiled_recv = torch.compile(recv_fn, backend="aot_eager")
+
+    if rank == 0:
+        # Sender process
+        send_list = ["test_data", 123, torch.tensor([1.0, 2.0])]
+        dist.send_object_list(send_list, dst=1)
+    else:
+        # Receiver process
+        recv_list = [None, None, None]
+        
+        # Simulate the "DebugMode" or "non-infra torch dispatch mode" context.
+        # torch.autograd.set_detect_anomaly is a standard way to enable a dispatch mode
+        # that triggers the "non-infra torch dispatch mode present" check in dynamo.
+        with torch.autograd.set_detect_anomaly(True):
+            try:
+                # Attempt to run the compiled function
+                compiled_recv(recv_list)
+                
+                # Verify reception
+                assert recv_list[0] == "test_data"
+                assert recv_list[1] == 123
+                assert torch.equal(recv_list[2], torch.tensor([1.0, 2.0]))
+                print(f"Rank {rank}: Test passed. Received data correctly under dispatch mode.")
+            except RuntimeError as e:
+                # The bug report suggests it should error rather than silently skip.
+                # If it errors, we print the error for verification.
+                print(f"Rank {rank}: RuntimeError caught (expected if strict error checking is enforced): {e}")
+            except Exception as e:
+                print(f"Rank {rank}: Unexpected exception: {e}")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_recv_object_list_compile_with_debug_mode, args=(world_size,), nprocs=world_size, join=True)

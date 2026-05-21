@@ -1,0 +1,50 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+import sys
+
+def worker(rank, world_size):
+    """
+    Worker function to initialize the process group and attempt all_to_all.
+    """
+    # Setup environment variables for distributed communication
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
+    
+    try:
+        # Initialize the process group with GLOO backend
+        dist.init_process_group(backend='gloo', rank=rank, world_size=world_size)
+        
+        # Create input and output tensors
+        # Input: [rank, rank, ...]
+        # Output: [0, 0, ...] (placeholder)
+        output_tensor_list = [torch.zeros(1, dtype=torch.int64) for _ in range(world_size)]
+        input_tensor_list = [torch.ones(1, dtype=torch.int64) * rank for _ in range(world_size)]
+        
+        # Attempt to perform all_to_all
+        # According to the issue, this should raise RuntimeError for GLOO backend
+        dist.all_to_all(output_tensor_list, input_tensor_list)
+        
+        # If we reach here, the bug might be fixed (or documentation was correct)
+        print(f"Rank {rank}: all_to_all executed successfully.")
+        
+    except RuntimeError as e:
+        if "Backend gloo does not support alltoall" in str(e):
+            print(f"Rank {rank}: Confirmed behavior - {e}")
+        else:
+            print(f"Rank {rank}: Unexpected error - {e}")
+            raise
+    finally:
+        dist.destroy_process_group()
+
+def test_gloo_all_to_all_support():
+    """
+    Test case to verify the behavior of dist.all_to_all with GLOO backend.
+    """
+    world_size = 2
+    # Use spawn to launch processes
+    mp.spawn(worker, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    test_gloo_all_to_all_support()

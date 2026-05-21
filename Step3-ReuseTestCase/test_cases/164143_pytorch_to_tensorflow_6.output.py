@@ -1,0 +1,53 @@
+import torch
+import tensorflow as tf
+
+def test_name_scope_silent_disable():
+    """
+    Adapted from PyTorch Issue 164143: DebugMode silently disables torch.compile.
+    
+    The original bug describes a scenario where a specific mode (DebugMode) causes
+    torch.compile to silently skip compilation instead of erroring or working.
+    
+    This test adapts that logic to tf.compat.v1.name_scope. In TensorFlow,
+    tf.compat.v1.name_scope has a parameter `skip_on_eager` (default True).
+    When in eager mode, it returns a NullContextManager, effectively "silently
+    disabling" the scoping functionality, similar to the PyTorch bug.
+    
+    This test verifies that behavior:
+    1. It checks the default "silent skip" behavior in eager mode.
+    2. It checks the behavior when forced to work (skip_on_eager=False).
+    """
+    
+    # Ensure we are in eager mode (the "mode" that triggers the skip)
+    if not tf.executing_eagerly():
+        tf.compat.v1.enable_eager_execution()
+
+    print("Testing tf.compat.v1.name_scope behavior in eager mode...")
+
+    # Case 1: Default behavior (skip_on_eager=True)
+    # This mimics the "bug" scenario: the API is present but effectively disabled
+    # by the execution mode.
+    with tf.compat.v1.name_scope("my_scope") as scope:
+        # In eager mode with default settings, this context might be a NullContextManager
+        # or simply not enforce naming strictly as it does in graph mode.
+        # We verify that operations can still run, but the scoping might be skipped.
+        x = tf.constant(1.0)
+        # Note: In TF2 eager, name_scope often still applies names to ops, 
+        # but the 'skip_on_eager' logic specifically refers to returning a NullContext
+        # to avoid overhead. We verify the context manager is entered.
+        assert scope is not None
+
+    # Case 2: Explicitly disable skipping (skip_on_eager=False)
+    # This mimics the "fix" desired in the bug report: the API should work
+    # regardless of the mode.
+    with tf.compat.v1.name_scope("active_scope", skip_on_eager=False) as scope:
+        y = tf.constant(1.0, name="const")
+        # Verify the scope name is actually applied to the operation
+        assert "active_scope" in y.name, \
+            f"Expected 'active_scope' in tensor name, but got {y.name}. " \
+            "This implies the scope was silently skipped."
+
+    print("Test passed: Verified name_scope handles execution modes as expected.")
+
+if __name__ == "__main__":
+    test_name_scope_silent_disable()

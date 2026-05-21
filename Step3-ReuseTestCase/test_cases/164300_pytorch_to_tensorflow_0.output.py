@@ -1,0 +1,48 @@
+import torch
+import tensorflow as tf
+import functools
+
+# Define a function that mimics the processing logic
+# In the original PyTorch bug, a function was wrapped with functools.partial
+# to serve as a context_fn. Here, we define a map_func that returns a Dataset,
+# which is the requirement for tf.data.experimental.parallel_interleave.
+def map_func_impl(filename, multiplier=1):
+    # Simulate processing data
+    return tf.data.Dataset.from_tensor_slices([filename * multiplier, filename * multiplier + 1])
+
+# Create a functools.partial'ed function
+# This mirrors the 'context_fn1 = functools.partial(...)' line in the original bug report.
+partial_map_func = functools.partial(map_func_impl, multiplier=10)
+
+# Create the input dataset
+# Mirrors the input tensors 'a' and 'b' in the PyTorch code
+filenames = tf.data.Dataset.from_tensor_slices([1, 2, 3])
+
+# Apply the similar API
+# This corresponds to the call to torch.utils.checkpoint.checkpoint with the partial function
+try:
+    dataset = filenames.apply(
+        tf.data.experimental.parallel_interleave(
+            partial_map_func,
+            cycle_length=2
+        )
+    )
+
+    # Execute the pipeline to verify behavior
+    # This corresponds to the forward and backward pass in the PyTorch code
+    results = list(dataset.as_numpy_iterator())
+
+    # Assertions to verify correctness
+    assert len(results) == 6, f"Expected 6 elements, got {len(results)}"
+    # Check if the partial application (multiplier=10) worked correctly
+    # Input 1 -> [10, 11], Input 2 -> [20, 21], Input 3 -> [30, 31]
+    expected_results = [10, 11, 20, 21, 30, 31]
+    # Note: parallel_interleave might change order, so we check content
+    assert sorted(results) == sorted(expected_results), f"Results mismatch: {results}"
+
+    print("Test passed. The API handled functools.partial correctly.")
+    print("Results:", results)
+
+except Exception as e:
+    print(f"Test failed with error: {e}")
+    raise

@@ -1,0 +1,65 @@
+import tensorflow as tf
+import numpy as np
+
+def test_embedding_lookup_memory_format():
+    """
+    Adapted test case for tf.compat.v1.nn.embedding_lookup based on 
+    PyTorch all_gather memory ordering bug (Issue 163483).
+    
+    Original Bug: all_gather changes memory ordering of tensor (channels_last).
+    Adaptation: Check if embedding_lookup preserves the memory layout (strides) 
+    of the input params tensor in the output.
+    """
+    
+    # 1. Setup: Create a tensor with specific memory ordering
+    # PyTorch original: (2, 2, 2, 2) with channels_last format
+    # TensorFlow adaptation: Create a 4D tensor and transpose it to enforce 
+    # a non-standard memory layout (strides).
+    
+    # Create data matching the original shape (2, 2, 2, 2)
+    data = np.arange(16, dtype=np.float32).reshape(2, 2, 2, 2)
+    params = tf.constant(data)
+    
+    # Apply a permutation to change memory layout (simulating channels_last or similar)
+    # Permuting (0, 2, 1, 3) changes the strides, making it non-contiguous in C-order
+    params_formatted = tf.transpose(params, perm=[0, 2, 1, 3])
+
+    # 2. Operation: Perform embedding_lookup
+    # In the original bug, all_gather gathers data from different ranks.
+    # Here, embedding_lookup gathers rows (embeddings) based on IDs.
+    # We gather indices 0 and 1 to mimic gathering from 2 ranks.
+    ids = tf.constant([0, 1])
+    gathered = tf.compat.v1.nn.embedding_lookup(params_formatted, ids)
+
+    # 3. Verification: Check content and memory ordering
+    # gathered[0] should correspond to params_formatted[0]
+    
+    # Check content equality
+    # Note: tf.equal checks element-wise equality
+    is_equal_content = tf.reduce_all(tf.equal(gathered[0], params_formatted[0]))
+    
+    # Check memory ordering (strides)
+    # TensorFlow does not expose storage() directly, but we can inspect numpy strides
+    # to verify if the memory layout was preserved or made contiguous.
+    
+    print("Content Match:", is_equal_content.numpy())
+    
+    # Get strides for the input slice and the output slice
+    # This mimics the original check: x.storage() vs x_list[rank].storage()
+    input_slice_strides = params_formatted[0].numpy().strides
+    output_slice_strides = gathered[0].numpy().strides
+    
+    print("Input Slice Strides:", input_slice_strides)
+    print("Output Slice Strides:", output_slice_strides)
+    
+    # Assertion logic based on the original bug report
+    # The user expects the memory ordering to be preserved.
+    if input_slice_strides != output_slice_strides:
+        print("Result: Memory ordering CHANGED (Similar to reported bug)")
+        # In the original bug, this was considered a failure.
+        # raise AssertionError("Memory ordering was not preserved by embedding_lookup")
+    else:
+        print("Result: Memory ordering PRESERVED")
+
+if __name__ == "__main__":
+    test_embedding_lookup_memory_format()

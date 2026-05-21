@@ -1,0 +1,91 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Set seeds for reproducibility
+tf.random.set_seed(1166094474)
+np.random.seed(1166094474)
+
+# Define inputs mimicking the PyTorch structure
+# arg_0: size=(12,), dtype=bool
+arg_0 = tf.constant(np.random.randint(0, 2, 12).astype(bool), dtype=tf.bool)
+# arg_1: size=(10,), dtype=int64 (unused in the core logic but present in signature)
+arg_1 = tf.constant(np.random.randint(5, 30, 10), dtype=tf.int64)
+# arg_2: size=(6, 4), dtype=bool
+arg_2 = tf.constant(np.random.randint(0, 2, (6, 4)).astype(bool), dtype=tf.bool)
+# arg_3: size=(2,), dtype=bool
+arg_3 = tf.constant(np.random.randint(0, 2, 2).astype(bool), dtype=tf.bool)
+
+# Sentinel tensor
+sentinel = tf.constant(1.0, dtype=tf.float32)
+
+def fuzzed_program(arg_0, arg_1, arg_2, arg_3, sentinel):
+    # var_node_3 = torch.full((12,), False, dtype=torch.bool)
+    var_node_3 = tf.fill([12], False)
+
+    # var_node_2 = torch.chunk(var_node_3, 4, dim=0)[0]
+    # Adaptation: Use tf.raw_ops.ZerosLike
+    # Note: torch.chunk reduces size, ZerosLike preserves shape.
+    # Original shape: (3,), New shape: (12,)
+    var_node_2 = tf.raw_ops.ZerosLike(x=var_node_3)
+
+    # var_node_6 = arg_0
+    var_node_6 = arg_0
+
+    # _input_size_var_node_5 = var_node_6.size(0)
+    _input_size_var_node_5 = tf.shape(var_node_6)[0]
+
+    # _index_var_node_5 = torch.randint(0, _input_size_var_node_5, (10,), device=var_node_6.device)
+    _index_var_node_5 = tf.random.uniform((10,), minval=0, maxval=_input_size_var_node_5, dtype=tf.int32)
+
+    # var_node_5 = torch.gather(var_node_6, 0, _index_var_node_5)
+    var_node_5 = tf.gather(var_node_6, _index_var_node_5, axis=0)
+
+    # var_node_4 = torch.chunk(var_node_5, 2, dim=0)[0]
+    # Adaptation: Use tf.raw_ops.ZerosLike
+    # Original shape: (5,), New shape: (10,)
+    var_node_4 = tf.raw_ops.ZerosLike(x=var_node_5)
+
+    # var_node_10 = arg_2
+    var_node_10 = arg_2
+
+    # var_node_9 = torch.chunk(var_node_10, 4, dim=1)[0]
+    # Adaptation: Use tf.raw_ops.ZerosLike
+    # Original shape: (6, 1), New shape: (6, 4)
+    var_node_9 = tf.raw_ops.ZerosLike(x=var_node_10)
+
+    # var_node_8 = torch.squeeze(var_node_9)
+    # Original: (6, 1) -> (6,).
+    # Current: (6, 4) -> (6, 4) (squeeze does nothing).
+    # We reshape to 1D to allow concatenation with other 1D tensors, mimicking the flow.
+    var_node_8 = tf.reshape(var_node_9, [-1])
+
+    # var_node_1 = torch.cat([var_node_2, var_node_4, var_node_8], dim=0)
+    var_node_1 = tf.concat([var_node_2, var_node_4, var_node_8], axis=0)
+
+    # var_node_11 = arg_3
+    var_node_11 = arg_3
+
+    # var_node_0 = torch.cat([var_node_1, var_node_11], dim=0)
+    var_node_0 = tf.concat([var_node_1, var_node_11], axis=0)
+
+    # Ensure gradient computation logic
+    result = var_node_0 * sentinel
+    return result
+
+# Run Eager
+print('Running Eager...')
+try:
+    result_original = fuzzed_program(arg_0, arg_1, arg_2, arg_3, sentinel)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# Run Compiled (tf.function)
+print('Running Compiled...')
+try:
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(arg_0, arg_1, arg_2, arg_3, sentinel)
+    print(' compile success')
+except Exception as e:
+    print(f' compile failed: {e}')

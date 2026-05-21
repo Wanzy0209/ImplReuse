@@ -1,0 +1,79 @@
+import tensorflow as tf
+import numpy as np
+
+def run_with_head_count(H, dtype):
+    """Run TPU rewrite with a specific head count, creating a captured buffer sized by H."""
+    B, S, D = 2, 256, 64
+
+    # Create captured buffer that depends on dynamic H
+    # Using tf.Variable to mimic requires_grad=True behavior for gradient checking
+    head_scale = tf.Variable(tf.random.normal([H], dtype=dtype))
+
+    def computation(q, k, v):
+        """
+        Mimics the flex_attention + score_mod logic.
+        The computation captures 'head_scale' from the outer scope.
+        """
+        # q shape: (B, H, S, D)
+        # head_scale shape: (H,)
+        # We broadcast head_scale to multiply with q
+        scale = tf.reshape(head_scale, [1, H, 1, 1])
+        return q * scale, k, v
+
+    print(f"  Running with H={H}, head_scale.shape={head_scale.shape}")
+
+    # Run multiple iterations with the same head_scale
+    for i in range(5):
+        q = tf.Variable(tf.random.normal((B, H, S, D), dtype=dtype))
+        k = tf.Variable(tf.random.normal((B, H, S, D), dtype=dtype))
+        v = tf.Variable(tf.random.normal((B, H, S, D), dtype=dtype))
+
+        with tf.GradientTape() as tape:
+            # tf.compat.v1.tpu.rewrite compiles the computation for TPU.
+            # It passes inputs [q, k, v] to the computation function.
+            # The computation function uses the captured 'head_scale'.
+            outputs = tf.compat.v1.tpu.rewrite(computation, [q, k, v])
+            
+            # outputs is a list of tensors returned by computation
+            loss = tf.reduce_sum(outputs[0])
+
+        # Calculate gradients to ensure the graph handles backward pass with dynamic buffers
+        grads = tape.gradient(loss, [q, k, v, head_scale])
+        
+        # Basic assertion to verify execution and gradient flow
+        assert grads[0] is not None, "Gradient for q is None"
+        assert grads[3] is not None, "Gradient for head_scale is None"
+
+    print(f"   Completed {i+1} iterations")
+
+
+def main():
+    # Initialize TPU
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        strategy = tf.distribute.TPUStrategy(resolver)
+        print(f"Running TPU rewrite with dynamic head counts on TPU")
+    except ValueError:
+        print("TPU not found. This test requires a TPU runtime to execute tf.compat.v1.tpu.rewrite.")
+        return
+
+    dtype = tf.float16
+    tf.random.set_seed(0)
+
+    # Test with different head counts - this makes H a dynamic dimension
+    # and the captured buffer (head_scale) changes size with H
+    head_counts = [4, 8, 4, 16, 4]
+
+    print(f"dtype={dtype}")
+    print(f"Testing head counts: {head_counts}\n")
+
+    with strategy.scope():
+        for iteration, H in enumerate(head_counts, start=1):
+            print(f"Iteration {iteration}:")
+            run_with_head_count(H, dtype)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,58 @@
+import torch
+import tensorflow as tf
+
+def test_with_space_to_batch_graph_behavior():
+    """
+    Test case adapted from PyTorch Issue 163798.
+    
+    Original Issue Logic:
+    - A function is compiled (torch.compile).
+    - Inside, an API (tolist()) is called which decomposes into graph operations.
+    - The result is used in arithmetic.
+    - The issue was that tolist() graphed (decomposed) unexpectedly/inconsistently compared to item().
+    
+    Adapted Logic for tf.nn.with_space_to_batch:
+    - A function is traced (tf.function).
+    - Inside, the similar API (with_space_to_batch) is called.
+    - This API is a Python wrapper that decomposes into lower-level ops (space_to_batch_nd, op, batch_to_space_nd).
+    - We verify that this decomposition works correctly within the graph context.
+    """
+    
+    # Define a simple operation to pass to with_space_to_batch.
+    # This mimics the arithmetic logic (return a*u0*u1) from the original issue,
+    # adapted to the signature expected by with_space_to_batch's 'op' argument.
+    def arithmetic_op(input_tensor, num_spatial_dims, padding):
+        # Perform a simple multiplication to verify the op executes within the graph
+        return input_tensor * 2.0
+
+    # The equivalent of torch.compile is tf.function
+    @tf.function
+    def func(input_tensor):
+        # Use the similar API: tf.nn.with_space_to_batch
+        # This API wraps the 'arithmetic_op' similar to how the original issue 
+        # involved operations surrounding the tolist() call.
+        return tf.nn.with_space_to_batch(
+            input=input_tensor,
+            dilation_rate=1, # Dilation 1 means it effectively just runs the op on the input
+            padding=[[0, 0], [0, 0]], # No padding
+            op=arithmetic_op
+        )
+
+    # Input tensor
+    # Shape: (batch, height, width, channels) -> (1, 2, 2, 1)
+    input_tensor = tf.constant([[[[1.0], [2.0]], [[3.0], [4.0]]]])
+
+    # Execute the compiled/traced function
+    result = func(input_tensor)
+
+    # Expected result: input * 2.0
+    expected = input_tensor * 2.0
+
+    # Assert that the graph execution produced the correct result
+    # This verifies that the decomposition of with_space_to_batch works correctly
+    # inside the graph, analogous to checking the graph output in the PyTorch issue.
+    assert tf.reduce_all(tf.equal(result, expected)).numpy(), "Graph execution of with_space_to_batch produced incorrect result"
+
+if __name__ == "__main__":
+    test_with_space_to_batch_graph_behavior()
+    print("Test passed.")

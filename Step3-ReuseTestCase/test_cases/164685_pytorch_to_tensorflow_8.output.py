@@ -1,0 +1,77 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Replicate the setup from the original bug report
+# torch._dynamo.config.capture_scalar_outputs = True
+# torch._dynamo.config.capture_dynamic_output_shape_ops = True
+# Note: TensorFlow does not have direct equivalents for these specific Dynamo configs,
+# but we will test the behavior in both eager and graph (compiled) modes.
+
+tf.random.set_seed(19989)
+np.random.seed(19989)
+
+# Sentinel tensor to ensure gradient computation
+# In PyTorch: requires_grad=True. In TF, we track it with GradientTape.
+sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+# arg_0 = torch.tensor(torch.randn(()), dtype=torch.int32).item()
+# Generates a random float, casts to int32, then extracts as Python int.
+arg_0 = int(np.random.randn().astype(np.int32))
+
+def fuzzed_program(arg_0, sentinel):
+    # Use the target API: tf.keras.name_scope
+    # This is the TensorFlow equivalent context manager for organizing graph operations.
+    with tf.keras.name_scope("fuzzed_scope"):
+        var_node_2 = -6  # dtype=int64 (Python int)
+        var_node_3 = arg_0  # dtype=int32 (Python int)
+        var_node_1 = var_node_2 * var_node_3  # dtype=int32 (Python int)
+
+        # var_node_5 = torch.full((), 1, dtype=torch.int64)
+        # TF equivalent: tf.fill
+        var_node_5 = tf.fill((), 1, dtype=tf.int64)
+
+        # var_node_4 = var_node_5.item()
+        # TF equivalent: extracting scalar value.
+        # Note: In tf.function (graph mode), calling .numpy() on a tensor is generally
+        # not allowed or causes a graph break. This mirrors the type of dynamic
+        # behavior that caused issues in the original PyTorch bug.
+        var_node_4 = var_node_5.numpy().item()
+
+        # var_node_0 = var_node_1 / var_node_4
+        # Python scalar division (int / int -> float)
+        var_node_0 = var_node_1 / var_node_4
+
+        # Ensure gradient computation by multiplying with sentinel
+        result = var_node_0 * sentinel
+
+        # if result.is_complex(): result = result.real
+        if result.dtype.is_complex:
+            result = tf.math.real(result)
+
+        return result
+
+# Test Eager Mode
+print("Running Eager Mode...")
+with tf.GradientTape() as tape:
+    result_eager = fuzzed_program(arg_0, sentinel)
+print(f' eager success: {result_eager}')
+
+# Test Compiled Mode (tf.function)
+# This is the TensorFlow equivalent to torch.compile
+print("Running Compiled Mode (tf.function)...")
+try:
+    compiled_program = tf.function(fuzzed_program)
+    with tf.GradientTape() as tape:
+        result_compiled = compiled_program(arg_0, sentinel)
+    print(f' compile success: {result_compiled}')
+
+    # Verify divergence
+    if tf.reduce_all(tf.abs(result_eager - result_compiled) < 1e-6).numpy():
+        print(" No divergence detected between eager and compiled modes.")
+    else:
+        print(" Divergence detected!")
+except Exception as e:
+    # The original bug involved a crash (KeyError). If TF crashes or errors here
+    # due to the .item() call inside the graph, it is a similar behavioral failure.
+    print(f" Compiled mode failed with error: {e}")

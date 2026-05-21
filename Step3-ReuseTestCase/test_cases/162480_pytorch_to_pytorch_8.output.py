@@ -1,0 +1,59 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_recv_object_list_compile(rank, world_size):
+    """
+    Test case for torch.distributed.recv_object_list under torch.compile.
+    This test verifies that the API works correctly when compiled, 
+    addressing the context of missing float handling in symbolic shapes.
+    """
+    # Initialize process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    if rank == 0:
+        # Rank 0: Sender
+        # We send a list containing a float tensor and a float value.
+        # This relates to the "missing float handling" aspect of the bug report.
+        tensor_data = torch.tensor([1.0, 2.5, 3.7], dtype=torch.float32)
+        float_data = 4.2
+        obj_list = [tensor_data, float_data, "test_string"]
+        
+        dist.send_object_list(obj_list, dst=1)
+    else:
+        # Rank 1: Receiver
+        # Define the function to be compiled
+        def recv_fn(obj_list):
+            dist.recv_object_list(obj_list, src=0)
+            return obj_list
+
+        # Compile the function using AOTInductor logic (aot_eager backend)
+        # The bug fix in rebind_unbacked is triggered during the compilation/tracing process.
+        compiled_recv_fn = torch.compile(recv_fn, backend="aot_eager")
+
+        # Prepare the list to receive data
+        received_objs = [None, None, None]
+        
+        # Execute the compiled function
+        result = compiled_recv_fn(received_objs)
+
+        # Assertions to verify correctness
+        assert isinstance(result[0], torch.Tensor), "Expected a Tensor"
+        assert torch.equal(result[0], torch.tensor([1.0, 2.5, 3.7], dtype=torch.float32)), "Tensor data mismatch"
+        
+        assert isinstance(result[1], float), "Expected a float"
+        assert result[1] == 4.2, "Float data mismatch"
+        
+        assert result[2] == "test_string", "String data mismatch"
+        
+        print(f"Rank {rank}: Test passed. torch.compile handled recv_object_list correctly.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use spawn to launch processes for distributed testing
+    mp.spawn(test_recv_object_list_compile, args=(world_size,), nprocs=world_size, join=True)

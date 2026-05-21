@@ -1,0 +1,41 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run(rank, world_size):
+    setup(rank, world_size)
+    
+    if rank == 0:
+        # Sender process
+        # Create the tensor similar to the bug report
+        x = torch.tensor([[1,2,3],[4,5,6],[7,8,9],[10,11,12]], dtype=torch.float32)
+        # Send the tensor as an object
+        dist.send_object_list([x], dst=1)
+    else:
+        # Receiver process
+        # Adaptation: Replace the torch.compile call site with recv_object_list
+        # We expect to receive the list of objects into this variable
+        obj_list = [None]
+        dist.recv_object_list(obj_list, src=0)
+        
+        # Verify the received object matches the expected value
+        # This mirrors the assertion in the original bug report to check for correctness
+        expected = torch.tensor([[1,2,3],[4,5,6],[7,8,9],[10,11,12]], dtype=torch.float32)
+        torch.testing.assert_close(obj_list[0], expected)
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn 2 processes
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)

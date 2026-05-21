@@ -1,0 +1,61 @@
+import torch
+import tensorflow as tf
+
+def example_function():
+    # Adaptation: Using tf.name_scope to group operations, similar to how torch.compile groups a graph.
+    # This helps in organizing the computation graph, which is relevant when using tf.function (compilation).
+    with tf.name_scope("linear_algebra_ops"):
+        def logp(x, matrix):
+            # PyTorch: p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+            # TensorFlow: tf.linalg.cholesky. Contiguous memory layout is handled implicitly by TF.
+            p_mat_sqrt = tf.linalg.cholesky(matrix)
+
+            # PyTorch: p_mat_sqrt_inv = p_mat_sqrt.inverse()
+            p_mat_sqrt_inv = tf.linalg.inv(p_mat_sqrt)
+
+            # PyTorch: val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+            # x is (5, 3), x[0, :] is (3,)
+            # p_mat_sqrt_inv is (3, 3)
+            # matmul result is (3,)
+            val = tf.reduce_sum((tf.matmul(p_mat_sqrt_inv, x[0, :]) ** 2))
+
+            return -val / 2
+
+        # PyTorch: torch.func.grad(logp, 0)
+        # TensorFlow: GradientTape
+        def grad_logp(x, matrix):
+            with tf.GradientTape() as tape:
+                tape.watch(x)
+                res = logp(x, matrix)
+            return tape.gradient(res, x)
+
+        # PyTorch: torch.vmap(torch.func.grad(logp, 0), (0, None))
+        # TensorFlow: tf.vectorized_map
+        def score_func(data, matrix):
+            return tf.vectorized_map(lambda x: grad_logp(x, matrix), data)
+
+        return score_func
+
+if __name__ == "__main__":
+    # Setup
+    dtype = tf.float32
+    # PyTorch: data = torch.zeros((2, 5, 3), ...)
+    data = tf.zeros((2, 5, 3), dtype=dtype)
+    
+    # PyTorch: p = torch.diag(...)
+    p_diag = tf.constant([20., 0.5, 5.], dtype=dtype) ** 2
+    p = tf.linalg.diag(p_diag)
+
+    # PyTorch: compiled_function = torch.compile(...)
+    # TensorFlow: tf.function (compilation to graph)
+    # We wrap the execution in tf.name_scope to satisfy the API requirement.
+    score_func = example_function()
+    compiled_function = tf.function(score_func)
+
+    with tf.name_scope("execution_scope"):
+        res = compiled_function(data, p)
+
+    # Verification
+    print("Result shape:", res.shape)
+    assert res.shape == (2, 5, 3), f"Expected shape (2, 5, 3), got {res.shape}"
+    print("Test passed successfully.")

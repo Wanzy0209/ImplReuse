@@ -1,0 +1,37 @@
+import torch
+
+# Setup similar to the original issue to trigger recompilation
+flag = True
+
+def fn(x):
+    x = x + 1
+    # Force a graph break to trigger the bytecode transformation logic
+    torch._dynamo.graph_break()
+    x = x + 2
+    
+    if flag:
+        # Use torch.unbind in the first branch
+        # This replaces the dummy.attr0 assignment from the original issue
+        unbound = torch.unbind(x, dim=0)
+        x = unbound[0] + 1
+    else:
+        # Use torch.unbind in the second branch
+        # This replaces the torch.no_grad block from the original issue
+        unbound = torch.unbind(x, dim=0)
+        x = unbound[0] + 2
+        
+    return x + 4
+
+inp = torch.ones(3)
+opt_fn = torch.compile(fn, backend="eager")
+
+# First execution with flag=True
+assert torch.allclose(fn(inp), opt_fn(inp))
+
+# Change flag to trigger the other branch and potential recompilation
+flag = False
+
+# Second execution with flag=False
+# This tests if torch.unbind handles the bytecode transformation correctly
+# when the control flow changes, similar to the original torch.no_grad issue.
+assert torch.allclose(fn(inp), opt_fn(inp))

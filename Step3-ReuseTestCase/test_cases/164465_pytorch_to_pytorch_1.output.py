@@ -1,0 +1,46 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def demo_reduce(rank, world_size):
+    setup(rank, world_size)
+
+    # Create an int64 tensor, mirroring the dtype involved in the original crash
+    # The original bug report highlighted issues with int64 in inductor.
+    tensor = torch.arange(1, 5, dtype=torch.int64) + rank
+
+    # Wrap the distributed reduce operation in torch.compile
+    # This adapts the original test case (which used @torch.compile) to the similar API.
+    @torch.compile
+    def reduce_op(t):
+        # torch.distributed.reduce is the similar API being tested
+        dist.reduce(t, dst=0)
+        return t
+
+    result = reduce_op(tensor)
+
+    if rank == 0:
+        print(f"Result on rank 0: {result}")
+        # Rank 0 tensor: [1, 2, 3, 4]
+        # Rank 1 tensor: [2, 3, 4, 5]
+        # Sum (ReduceOp.SUM is default): [3, 5, 7, 9]
+        expected = torch.tensor([3, 5, 7, 9], dtype=torch.int64)
+        assert torch.equal(result, expected), f"Expected {expected}, but got {result}"
+        print("Test passed.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use multiprocessing to spawn processes for distributed testing
+    mp.spawn(demo_reduce, args=(world_size,), nprocs=world_size, join=True)

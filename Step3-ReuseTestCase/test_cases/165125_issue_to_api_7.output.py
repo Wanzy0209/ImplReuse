@@ -1,0 +1,24 @@
+import torch
+import tensorflow as tf
+
+def test_keras_backend_return_type():
+    """
+    Test case based on Issue 165125: Type "str" is not assignable to return type "None".
+    
+    The original issue reported that torch.utils.cpp_extension._jit_compile was 
+    annotated to return None but actually returned a module or str.
+    
+    This test verifies that the similar API, tf.keras.backend.backend, correctly
+    returns a string value, ensuring it does not suffer from a similar type mismatch
+    where a string is returned but the type is incorrectly defined (e.g., as None).
+    """
+    # Call the similar API
+    backend_name = tf.keras.backend.backend()
+    
+    # Verify the return type is a string (not None)
+    assert isinstance(backend_name, str), \
+        f"Expected return type 'str', but got {type(backend_name)}"
+    
+    # Verify the specific value matches the expected string
+    assert backend_name == "tensorflow", \
+        f"Expected 'tensorflow', but got '{backend_name}'"

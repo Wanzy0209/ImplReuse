@@ -1,0 +1,75 @@
+import torch
+import tensorflow as tf
+import threading
+import time
+
+# Helper to detect GIL release
+# If GIL is released, a secondary thread can run.
+gil_check_counter = 0
+stop_thread = False
+
+def gil_monitor_thread():
+    global gil_check_counter, stop_thread
+    while not stop_thread:
+        gil_check_counter += 1
+        time.sleep(0.0001)
+
+def run_with_gil_check(func, *args):
+    global gil_check_counter, stop_thread
+    gil_check_counter = 0
+    stop_thread = False
+    
+    t = threading.Thread(target=gil_monitor_thread)
+    t.start()
+    
+    result = func(*args)
+    
+    # Allow the monitor thread to run a bit after the op finishes
+    # to capture the state
+    time.sleep(0.1) 
+    
+    stop_thread = True
+    t.join()
+    return result, gil_check_counter
+
+# Original API Under Test: torch.compile
+# Similar API: tf.keras.backend.name_scope
+
+def tf_standard_add(x: tf.Tensor, y: tf.Tensor):
+    return x + y
+
+def tf_name_scope_add(x: tf.Tensor, y: tf.Tensor):
+    # Using the similar API
+    with tf.keras.backend.name_scope("test_scope"):
+        return x + y
+
+def main():
+    # Create tensors
+    # Using large size to ensure the operation takes sufficient time to observe GIL behavior
+    x = tf.random.normal((4096, 4096))
+    y = tf.random.normal((4096, 4096))
+
+    print("Verifying GIL behavior for TensorFlow operations...")
+
+    # Warmup
+    tf_standard_add(x, y)
+    tf_name_scope_add(x, y)
+
+    # Test 1: Standard operation
+    _, count_std = run_with_gil_check(tf_standard_add, x, y)
+    print(f"Standard TF Add - Background thread progress: {count_std}")
+
+    # Test 2: Operation inside name_scope
+    _, count_scope = run_with_gil_check(tf_name_scope_add, x, y)
+    print(f"Name Scope TF Add - Background thread progress: {count_scope}")
+
+    # Assertions
+    # We expect TensorFlow to release the GIL during tensor operations.
+    # If the counter is low, it implies the GIL was held.
+    assert count_std > 50, "GIL appears to be held during standard TF operation"
+    assert count_scope > 50, "GIL appears to be held during name_scope operation"
+    
+    print("Test Passed: GIL is released as expected.")
+
+if __name__ == "__main__":
+    main()

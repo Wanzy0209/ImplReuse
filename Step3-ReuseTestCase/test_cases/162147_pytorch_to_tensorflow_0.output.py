@@ -1,0 +1,51 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_experimental_numpy_triu():
+    """
+    Adapted test case for tf.experimental.numpy.triu based on the 
+    FastLearnedCellX3 bug report context (Issue 162147).
+    
+    The original issue highlights performance and graph complexity problems 
+    with tensor indexing in PyTorch. This test verifies the functionality 
+    and graph compatibility of the similar TensorFlow API (triu) using 
+    tensor dimensions derived from the original bug report.
+    """
+    # Dimensions derived from FastLearnedCellX3 in the original bug report
+    D_in, H, D_out = 10, 5, 2
+    L_w1 = 12
+    
+    # Create a tensor mimicking the weight matrix W1: [L_w1, H, D_in]
+    # Using random values to simulate the initialized parameters
+    tensor = tf.random.normal((L_w1, H, D_in), dtype=tf.float32)
+    
+    # Test Case 1: Basic Functionality
+    # Apply triu to the last two dimensions (H, D_in) with an offset k=1
+    k = 1
+    result = tf.experimental.numpy.triu(tensor, k=k)
+    
+    # Verify shape is preserved
+    assert result.shape == tensor.shape, f"Shape mismatch: {result.shape} vs {tensor.shape}"
+    
+    # Verify correctness against numpy reference
+    expected = np.triu(tensor.numpy(), k=k)
+    np.testing.assert_allclose(result.numpy(), expected, rtol=1e-5)
+    
+    # Test Case 2: Graph Compilation (Addressing the "Make torch faster" / graph complexity issue)
+    # The original bug complained about graph complexity and compilation speed.
+    # We verify that this TF API compiles efficiently in a tf.function graph.
+    @tf.function
+    def compiled_triu_op(t):
+        return tf.experimental.numpy.triu(t, k=k)
+    
+    # Execute the compiled function
+    graph_result = compiled_triu_op(tensor)
+    
+    # Ensure the graph execution produces the same result
+    np.testing.assert_allclose(graph_result.numpy(), expected, rtol=1e-5)
+    
+    print("Test passed: tf.experimental.numpy.triu behaves correctly and compiles successfully.")
+
+if __name__ == "__main__":
+    test_tf_experimental_numpy_triu()

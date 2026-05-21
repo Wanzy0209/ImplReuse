@@ -1,0 +1,82 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import unittest
+import tempfile
+import os
+
+class TestDistributedGatherObjectCompile(unittest.TestCase):
+    """
+    Test case for torch.distributed.gather_object correctness with torch.compile.
+    Adapted from Issue 168181 which tested Triton kernels + .cpu().
+    This test verifies that gather_object works correctly when compiled,
+    specifically checking the handling of gathered objects and subsequent CPU operations.
+    """
+
+    def _test_gather_object_compile_impl(self, rank, world_size, file_path):
+        # Initialize process group
+        dist.init_process_group(
+            backend="gloo", # Using gloo for object gathering compatibility
+            init_method=f"file://{file_path}",
+            rank=rank,
+            world_size=world_size
+        )
+
+        # Create input tensor on GPU (if available) to mimic the original bug's context
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Add rank to tensor so we can distinguish gathered results
+        x = torch.randn(4, 4, device=device) + rank 
+
+        def f(x):
+            # Prepare output list for rank 0
+            if rank == 0:
+                gather_list = [None] * world_size
+            else:
+                gather_list = None
+            
+            # Call the similar API: gather_object
+            dist.gather_object(x, gather_list, dst=0)
+            
+            # Post-processing logic mimicking the original bug's .cpu() + 1
+            if rank == 0:
+                # gather_list now contains tensors from all ranks
+                # Stack them to create a single tensor
+                stacked = torch.stack(gather_list)
+                # Move to CPU and add 1, similar to the original repro
+                out_cpu = stacked.cpu() + 1
+                return out_cpu
+            return None
+
+        # Run eager
+        eager_out = f(x)
+        
+        # Run compiled
+        compiled_f = torch.compile(f)
+        compiled_out = compiled_f(x)
+        
+        # Assertions
+        if rank == 0:
+            self.assertEqual(eager_out, compiled_out)
+        
+        dist.destroy_process_group()
+
+    @unittest.skipIf(not torch.cuda.is_available(), "requires GPU to match original context")
+    def test_gather_object_compile(self):
+        world_size = 2
+        # Use a temporary file for process group initialization
+        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+            file_path = tmp_file.name
+        
+        try:
+            mp.spawn(
+                self._test_gather_object_compile_impl,
+                args=(world_size, file_path),
+                nprocs=world_size,
+                join=True
+            )
+        finally:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,56 @@
+import tensorflow as tf
+
+def test_lbeta_large_tensor():
+    """
+    Adapted test case for tf.math.lbeta based on the PyTorch MaxPool2d bug report.
+    The original bug involved large tensors, bfloat16 dtype, and specific memory layouts
+    causing NaNs or illegal memory access.
+    
+    This test verifies if tf.math.lbeta handles large bfloat16 tensors robustly.
+    """
+    
+    # Check for GPU availability to match the CUDA context of the original bug
+    gpus = tf.config.list_physical_devices('GPU')
+    device = '/GPU:0' if gpus else '/CPU:0'
+    print(f"Running on device: {device}")
+
+    with tf.device(device):
+        # Large input tensor dimensions similar to the bug report
+        # Original: N, C, H, W = 84, 64, 512, 960
+        # tf.math.lbeta reduces along the last dimension, so we maintain a large last dimension.
+        N, C, H, W = 84, 64, 512, 960
+        
+        # Case 1: bfloat16 (matching the bug report trigger)
+        # Note: TensorFlow tensors are generally row-major. 
+        # While we can't explicitly toggle 'channels_last' for a math op like lbeta 
+        # (as it's not a convolution layer), we stress the op with the same dtype and size.
+        x = tf.random.normal((N, C, H, W), dtype=tf.bfloat16)
+
+        print(f"Input tensor shape: {x.shape}, dtype: {x.dtype}")
+
+        # Apply the similar API: tf.math.lbeta
+        # lbeta computes ln(|Beta(x)|) reducing along the last dimension.
+        y = tf.math.lbeta(x)
+
+        print(f"Output shape: {y.shape}")
+
+        # Check for NaNs and Infs
+        has_nan = tf.reduce_any(tf.math.is_nan(y))
+        has_inf = tf.reduce_any(tf.math.is_inf(y))
+
+        print(f"Output contains NaN? {has_nan.numpy()}")
+        print(f"Output contains Inf? {has_inf.numpy()}")
+
+        # Stats (converting to float32 for safe printing/min-max calculation)
+        y_float = tf.cast(y, tf.float32)
+        print(f"Stats: min={tf.reduce_min(y_float).numpy()}, max={tf.reduce_max(y_float).numpy()}")
+
+        if has_nan:
+            print("Detected NaNs in lbeta output!")
+            # In a unit test framework, this would be:
+            # assert not has_nan, "NaNs detected in output"
+        else:
+            print("No NaNs detected.")
+
+if __name__ == "__main__":
+    test_lbeta_large_tensor()

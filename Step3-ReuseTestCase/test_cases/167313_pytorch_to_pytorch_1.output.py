@@ -1,0 +1,25 @@
+import torch
+
+# Ensure we run on CUDA if available to match the original bug environment
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Create input data
+# Using randn to generate values that span across the shrinkage threshold
+x = torch.randn(2, 3, device=device)
+
+# Define the function using the similar API: torch.nn.functional.softshrink
+# We specify a non-default lambd value (0.2) to test if it is preserved during compilation
+f = lambda x: torch.nn.functional.softshrink(x, lambd=0.2)
+
+# Compile the function
+fc = torch.compile(f)
+
+# Execute both versions
+res_eager = f(x)
+res_compiled = fc(x)
+
+# Check for equality
+# This assertion ensures that the 'lambd' parameter is not ignored or defaulted
+# (e.g., treated as 0.5 or 0) by the compiler backend.
+assert torch.allclose(res_eager, res_compiled), \
+    f"Bug: softshrink parameter 'lambd' ignored in compiled mode.\nEager: {res_eager}\nCompiled: {res_compiled}"

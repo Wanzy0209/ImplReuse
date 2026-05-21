@@ -1,0 +1,87 @@
+import tensorflow as tf
+import unittest
+
+# Disable eager execution to use tf.compat.v1 queue runners effectively
+tf.compat.v1.disable_eager_execution()
+
+class TestStringInputProducerFloatHandling(unittest.TestCase):
+    """
+    Adapted from PyTorch Issue 162480.
+    
+    The original PyTorch bug involved `rebind_unbacked` failing to handle float values,
+    leading to a crash. The fix added a check to discard float values.
+    
+    This test adapts that logic to `tf.compat.v1.train.string_input_producer` by verifying
+    that the API handles float inputs for integer parameters (like `num_epochs` or `capacity`)
+    gracefullyeither by accepting them (casting) or raising a clear TypeErrorrather than
+    causing an internal crash or undefined behavior.
+    """
+
+    def test_float_num_epochs_handling(self):
+        """
+        Test that string_input_producer handles a float input for num_epochs.
+        """
+        with tf.compat.v1.Session() as sess:
+            filenames = tf.constant(["file1.txt", "file2.txt", "file3.txt"])
+
+            try:
+                # Pass a float (2.5) where an integer is typically expected for num_epochs
+                queue = tf.compat.v1.train.string_input_producer(
+                    filenames, num_epochs=2.5, shuffle=False, capacity=32
+                )
+
+                # Initialize local variables (required for num_epochs counter)
+                sess.run(tf.compat.v1.local_variables_initializer())
+
+                # Start queue runners
+                coord = tf.train.Coordinator()
+                threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+
+                # Attempt to dequeue to verify the pipeline is functional
+                result = sess.run(queue)
+                self.assertIsInstance(result, bytes)
+
+                # Clean up
+                coord.request_stop()
+                coord.join(threads)
+
+            except (TypeError, ValueError) as e:
+                # It is acceptable for the API to strictly enforce integer types.
+                # The critical aspect is that it raises a standard error, not a crash.
+                pass
+            except Exception as e:
+                # Any other exception indicates a lack of robustness similar to the original bug.
+                self.fail(f"API failed to handle float num_epochs gracefully: {e}")
+
+    def test_float_capacity_handling(self):
+        """
+        Test that string_input_producer handles a float input for capacity.
+        """
+        with tf.compat.v1.Session() as sess:
+            filenames = tf.constant(["file1.txt"])
+
+            try:
+                # Pass a float (32.5) for capacity
+                queue = tf.compat.v1.train.string_input_producer(
+                    filenames, num_epochs=None, shuffle=False, capacity=32.5
+                )
+
+                sess.run(tf.compat.v1.global_variables_initializer())
+                
+                coord = tf.train.Coordinator()
+                threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+                
+                # Verify operation
+                _ = sess.run(queue)
+                
+                coord.request_stop()
+                coord.join(threads)
+
+            except (TypeError, ValueError) as e:
+                # Acceptable strict type checking
+                pass
+            except Exception as e:
+                self.fail(f"API failed to handle float capacity gracefully: {e}")
+
+if __name__ == "__main__":
+    unittest.main()

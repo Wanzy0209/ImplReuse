@@ -1,0 +1,55 @@
+import tensorflow as tf
+import numpy as np
+
+def test_tf_compat_v1_assert_type():
+    """
+    Adapted test case for tf.compat.v1.assert_type based on the 
+    PyTorch fuzzer output characteristics (float64 tensors, specific shapes).
+    """
+    # Shapes and dtypes extracted from the original PyTorch fuzzer program
+    # var_node_6: size=(9, 9, 9), dtype=float64
+    # var_node_7: size=(9, 9, 11), dtype=float64
+    # var_node_9: size=(9, 11, 12), dtype=float64
+    
+    shape_1 = (9, 9, 9)
+    shape_2 = (9, 9, 11)
+    shape_3 = (9, 11, 12)
+
+    # Test Case 1: Verify correct type assertion (float64)
+    # The original PyTorch code relied heavily on float64 operations.
+    print("Running Test Case 1: Asserting correct type (float64)...")
+    try:
+        tensor_1 = tf.constant(np.ones(shape_1), dtype=tf.float64)
+        tensor_2 = tf.constant(np.ones(shape_2), dtype=tf.float64)
+
+        # tf.compat.v1.assert_type should return a no_op if types match
+        op1 = tf.compat.v1.assert_type(tensor_1, tf.float64, message="tensor_1 type mismatch")
+        op2 = tf.compat.v1.assert_type(tensor_2, tf.float64, message="tensor_2 type mismatch")
+        
+        # In eager mode, assertions are checked immediately or upon op execution.
+        # Since types match, no exception should be raised.
+        assert op1 is not None
+        assert op2 is not None
+        print("Test Case 1 Passed: Types match as expected.")
+
+    except Exception as e:
+        print(f"Test Case 1 Failed: {e}")
+
+    # Test Case 2: Verify incorrect type assertion raises TypeError
+    # We create a float32 tensor but assert it is float64.
+    print("\nRunning Test Case 2: Asserting incorrect type (float32 as float64)...")
+    try:
+        tensor_3 = tf.constant(np.ones(shape_3), dtype=tf.float32)
+        
+        # This should raise a TypeError
+        tf.compat.v1.assert_type(tensor_3, tf.float64, message="tensor_3 type mismatch")
+        
+        print("Test Case 2 Failed: Expected TypeError was not raised.")
+
+    except TypeError as e:
+        print(f"Test Case 2 Passed: TypeError correctly raised: {e}")
+    except Exception as e:
+        print(f"Test Case 2 Failed with unexpected error: {e}")
+
+if __name__ == "__main__":
+    test_tf_compat_v1_assert_type()
