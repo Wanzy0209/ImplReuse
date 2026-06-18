@@ -1,0 +1,31 @@
+import torch
+import torch.nn as nn
+from torch import set_default_device
+
+def test_adaptive_max_pool(device: str = 'cuda'):
+    set_default_device(device) # Set the default device for tensor creation
+
+    # Create input tensor. Since default device is set, this tensor will be on 'device'.
+    # Shape: (Batch Size, Channels, Length)
+    input_tensor = torch.randn(1, 64, 8)
+
+    # Initialize the AdaptiveMaxPool1d layer
+    layer = nn.AdaptiveMaxPool1d(output_size=5)
+
+    # Perform forward pass
+    output = layer(input_tensor)
+
+    # Verify output shape
+    # Input length is 8, target output size is 5
+    assert output.shape == (1, 64, 5), f"Expected shape (1, 64, 5), got {output.shape}"
+
+    print(f"Device {device} worked.")
+
+# Test with CPU
+test_adaptive_max_pool(device='cpu')
+
+# Test with CUDA if available
+if torch.cuda.is_available():
+    test_adaptive_max_pool(device='cuda')
+else:
+    print("CUDA not available, skipping CUDA test.")

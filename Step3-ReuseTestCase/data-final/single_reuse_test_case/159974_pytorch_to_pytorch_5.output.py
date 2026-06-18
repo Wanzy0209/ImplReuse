@@ -1,0 +1,17 @@
+import torch
+
+def any_func(x):
+    # Using the similar API: torch.any
+    return torch.any(x)
+
+# Setup data on XPU as per the original bug report
+x = torch.randn(128).to("xpu")
+
+# Test eager mode
+out = any_func(x)
+print("eager mode passed")
+
+# Test compiled mode (where the segmentation fault occurred in the original issue)
+any_func_compiled = torch.compile(any_func)
+out = any_func_compiled(x)
+print("torch.compile passed")

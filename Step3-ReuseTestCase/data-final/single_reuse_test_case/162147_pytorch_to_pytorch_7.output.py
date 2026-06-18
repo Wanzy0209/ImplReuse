@@ -1,0 +1,105 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+from typing import Tuple
+
+class FastLearnedCellX3(nn.Module):
+    def __init__(self, D_in, H, D_out,
+                 L_w1=12, L_w2=12, L_b2=12,
+                 k1=3, k2=3, k3=3, tau1=1.0, tau2=1.0, tau3=1.0,
+                 d_addr=64,           # address bottleneck
+                 learn_addr=False,
+                 learn_tape_w1=True, learn_tape_w2=True, learn_tape_b2=True):
+        super().__init__()
+        self.D_in, self.H, self.D_out = D_in, H, D_out
+
+        # keep sizes as plain Python ints (compile-friendly)
+        self.L_w1, self.L_w2, self.L_b2 = int(L_w1), int(L_w2), int(L_b2)
+        self.k1, self.k2, self.k3 = int(k1), int(k2), int(k3)
+        self.t1, self.t2, self.t3 = float(tau1), float(tau2), float(tau3)
+
+        # address bottleneck
+        self.P = nn.Linear(D_in, d_addr, bias=False)
+        if not learn_addr:
+            for p in self.P.parameters():
+                p.requires_grad = False
+            with torch.no_grad():
+                nn.init.normal_(self.P.weight, std=1.0/math.sqrt(D_in))
+
+        def init_U(L, d, learn):
+            U = torch.randn(L, d)
+            U = U - U.mean(dim=1, keepdim=True)
+            U = U / (U.norm(dim=1, keepdim=True) + 1e-8)
+            return nn.Parameter(U, requires_grad=learn)
+
+        # three unembeddings in addr-space
+        self.U1 = init_U(self.L_w1, d_addr, learn_addr)
+        self.U2 = init_U(self.L_w2, d_addr, learn_addr)
+        self.U3 = init_U(self.L_b2, d_addr, learn_addr)
+
+        # value tapes
+        self.W1 = nn.Parameter(F.normalize(torch.randn(self.L_w1, H, D_in), dim=(1,2)), requires_grad=learn_tape_w1)
+        self.W2 = nn.Parameter(F.normalize(torch.randn(self.L_w2, D_out, H), dim=(1,2)), requires_grad=learn_tape_w2)
+        self.b2 = nn.Parameter(F.normalize(torch.randn(self.L_b2, D_out), dim=1),      requires_grad=learn_tape_b2)
+
+        self.act = nn.GELU()
+
+    @staticmethod
+    def _tk(z: torch.Tensor, k: int, tau: float) -> Tuple[torch.Tensor, torch.Tensor]:
+        topv, topi = torch.topk(z, k, dim=1, largest=True, sorted=False)
+        w = torch.softmax(topv / (tau + 1e-8), dim=1)
+        return topi, w
+
+    def _address(self, x_addr: torch.Tensor):
+        # Adapted to use torch.stack instead of torch.cat
+        # Original logic fused the U matrices and then split the result.
+        # Here we compute logits separately and stack them to verify torch.stack behavior.
+        
+        z1 = x_addr @ self.U1.t()
+        z2 = x_addr @ self.U2.t()
+        z3 = x_addr @ self.U3.t()
+        
+        # Use torch.stack to combine the logits along a new dimension
+        # Shape: [3, N, L] where 3 is the number of heads
+        Z_stacked = torch.stack([z1, z2, z3], dim=0)
+        
+        # Extract individual logits for processing
+        z1_s, z2_s, z3_s = Z_stacked[0], Z_stacked[1], Z_stacked[2]
+        
+        i1, w1 = FastLearnedCellX3._tk(z1_s, self.k1, self.t1)
+        i2, w2 = FastLearnedCellX3._tk(z2_s, self.k2, self.t2)
+        i3, w3 = FastLearnedCellX3._tk(z3_s, self.k3, self.t3)
+        return (i1, w1), (i2, w2), (i3, w3)
+
+    def forward(self, x):
+        x_addr = self.P(x)
+        (i1, w1), (i2, w2), (i3, w3) = self._address(x_addr)
+        
+        # Simplified forward pass for testing purposes
+        # In the full model, _apply_mixture would be called here
+        return w1, w2, w3
+
+if __name__ == "__main__":
+    # Test parameters
+    D_in, H, D_out = 128, 256, 10
+    batch_size = 4
+    
+    # Initialize model
+    model = FastLearnedCellX3(D_in, H, D_out)
+    
+    # Create dummy input
+    x = torch.randn(batch_size, D_in)
+    
+    # Run forward pass
+    w1, w2, w3 = model(x)
+    
+    # Assertions to verify output shapes and types
+    assert w1.shape == (batch_size, model.k1), f"Expected shape ({batch_size}, {model.k1}), got {w1.shape}"
+    assert w2.shape == (batch_size, model.k2), f"Expected shape ({batch_size}, {model.k2}), got {w2.shape}"
+    assert w3.shape == (batch_size, model.k3), f"Expected shape ({batch_size}, {model.k3}), got {w3.shape}"
+    
+    # Verify that the weights sum to 1 (approx) due to softmax
+    assert torch.allclose(w1.sum(dim=1), torch.ones(batch_size), atol=1e-5)
+    
+    print("Test case passed successfully. torch.stack integration verified.")

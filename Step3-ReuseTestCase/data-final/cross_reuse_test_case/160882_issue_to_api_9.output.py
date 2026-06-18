@@ -1,0 +1,35 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_serialize_quantizer_with_different_configs():
+    """
+    Test that tf.keras.quantizers.serialize handles different input configurations
+    correctly, analogous to the torch.compile issue where input shape changes
+    caused a crash.
+    """
+    # Define a function that uses the API
+    def serialize_q(quantizer):
+        return tf.keras.quantizers.serialize(quantizer)
+
+    # Input 1: Quantizer with initial configuration
+    # Analogous to r_src, i_src in the original bug report
+    q1 = tf.keras.quantizers.MinMax(min_value=0.0, max_value=1.0, axis=-1)
+    config1 = serialize_q(q1)
+
+    # Input 2: Quantizer with a "mismatched" configuration (different range/axis)
+    # Analogous to r_mismatch, i_mismatch in the original bug report
+    q2 = tf.keras.quantizers.MinMax(min_value=-1.0, max_value=1.0, axis=0)
+    config2 = serialize_q(q2)
+
+    # Assertions to verify correct behavior (no crash, correct output)
+    assert config1 is not None
+    assert config2 is not None
+    assert config1['config']['min_value'] == 0.0
+    assert config2['config']['min_value'] == -1.0
+    assert config1['config']['axis'] == -1
+    assert config2['config']['axis'] == 0
+
+if __name__ == "__main__":
+    test_serialize_quantizer_with_different_configs()
+    print("Test passed.")

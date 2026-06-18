@@ -1,0 +1,60 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_l1l2_non_contiguous():
+    """
+    Adapted test case for tf.keras.regularizers.L1L2 based on the 
+    PyTorch MPS linear bug (Issue 162730).
+    
+    Original Bug: torch.nn.functional.linear produced inconsistent results 
+    between contiguous and non-contiguous tensors on MPS.
+    
+    Adaptation: Verify that tf.keras.regularizers.L1L2 produces consistent 
+    results regardless of the tensor's memory layout (contiguous vs non-contiguous).
+    """
+    
+    # Create test tensors
+    # Mimicking the shape from the PyTorch example: (12, 64, 768)
+    W = tf.random.normal((12, 64, 768), seed=42)
+
+    # Create non-contiguous weight via transpose and reshape
+    # In PyTorch: einops.rearrange(W, "h d m -> m (h d)")
+    # This moves the last dimension to the front and flattens the rest.
+    
+    # 1. Contiguous path: Reshape directly (standard memory layout)
+    w_contig = tf.reshape(W, (768, 12 * 64))
+    
+    # 2. Non-contiguous path: Transpose first to change strides, then reshape
+    # Transposing (12, 64, 768) to (768, 12, 64) changes the memory access pattern
+    # effectively creating a non-contiguous view before the reshape.
+    w_transposed = tf.transpose(W, perm=[2, 0, 1])
+    w_noncontig = tf.reshape(w_transposed, (768, 12 * 64))
+
+    # Define the regularizer (The target API)
+    # Using non-zero l1 and l2 to test the full calculation
+    regularizer = tf.keras.regularizers.L1L2(l1=0.01, l2=0.01)
+
+    # Apply the regularizer to both tensor versions
+    # The L1L2 regularizer computes: l1 * sum(abs(x)) + l2 * sum(square(x))
+    loss_contig = regularizer(w_contig)
+    loss_noncontig = regularizer(w_noncontig)
+
+    print(f"Contiguous Loss: {loss_contig.numpy()}")
+    print(f"Non-Contiguous Loss: {loss_noncontig.numpy()}")
+
+    # Verify consistency
+    # These should be identical because the underlying data values are the same,
+    # just accessed via different memory strides.
+    results_match = np.allclose(loss_contig.numpy(), loss_noncontig.numpy(), atol=1e-5)
+    print(f"Results match: {results_match}")
+
+    if not results_match:
+        diff = np.abs(loss_contig.numpy() - loss_noncontig.numpy())
+        print(f"Max difference: {diff}")
+        raise AssertionError("L1L2 regularizer produced inconsistent results for contiguous vs non-contiguous tensors.")
+    
+    print("Test passed: L1L2 handles non-contiguous tensors correctly.")
+
+if __name__ == "__main__":
+    test_l1l2_non_contiguous()

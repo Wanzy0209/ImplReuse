@@ -1,0 +1,56 @@
+import torch
+import sys
+
+# Configuration from the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0
+    t1 = torch.sigmoid(t0)
+    t2 = arg1
+    t3 = torch.sigmoid(t2)
+    t4 = arg2
+    t5 = torch.exp(t4)
+    # baddbmm: batch1, batch2 must be 3-D tensors
+    # t1: (B, 6, 1), t3: (B, 6, 256), t5: (B, 256, 1)
+    # t3 @ t5 -> (B, 6, 1)
+    # t1 + (t3 @ t5) -> (B, 6, 1)
+    t6 = torch.baddbmm(t1, t3, t5)
+    t7 = t6.reshape((193, 386, 459))
+    return t7
+
+if __name__ == '__main__':
+    # Check for CUDA availability
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        sys.exit(0)
+
+    # Initialize inputs
+    arg0 = torch.rand([5699097, 6, 1], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+    arg1 = torch.rand([5699097, 6, 256], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+    arg2 = torch.rand([5699097, 256, 1], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+
+    # 1. Run Eager Mode
+    try:
+        out_eager = foo(arg0, arg1, arg2)
+        out_eager.sum().backward()
+        print('Eager Success! ')
+    except RuntimeError as e:
+        print(f'Eager Failed: {e}')
+        sys.exit(1)
+
+    # 2. Run Compiled Mode (torch.compile)
+    # Using the specific flags that triggered the OOM in the bug report
+    try:
+        compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+        out_compiled = compiled_foo(arg0, arg1, arg2)
+        out_compiled.sum().backward()
+        print('Compile Success! ')
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower():
+            print(f'Compile OOM (Bug Reproduced): {e}')
+            sys.exit(1)
+        else:
+            raise

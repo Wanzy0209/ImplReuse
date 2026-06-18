@@ -1,0 +1,31 @@
+import torch
+from torch.optim import AdamW
+from omegaconf import OmegaConf
+import pytest
+
+def test_adamw_betas_type_validation():
+    """
+    Test that AdamW validates the 'betas' parameter type to prevent 
+    unexpected serialization behavior with OmegaConf objects.
+    
+    This test reflects the relationship with torch.library.fallthrough_kernel
+    by ensuring the API raises an error immediately upon receiving invalid input,
+    rather than failing silently or later during execution.
+    """
+    # Create a config with nested structure
+    cfg = OmegaConf.create({
+        'model': {'betas': [0.9, 0.999]},
+        'data': {'batch_size': 32},
+    })
+
+    model = torch.nn.Linear(10, 1)
+
+    # Test that passing a ListConfig (OmegaConf) raises a TypeError
+    # This mimics the strict error-raising pattern seen in fallthrough_kernel
+    with pytest.raises(TypeError):
+        AdamW(model.parameters(), lr=1e-3, betas=cfg.model.betas)
+
+    # Verify that standard list and tuple types are still accepted
+    # to ensure the fix doesn't break valid usage
+    AdamW(model.parameters(), lr=1e-3, betas=(0.9, 0.999))
+    AdamW(model.parameters(), lr=1e-3, betas=[0.9, 0.999])

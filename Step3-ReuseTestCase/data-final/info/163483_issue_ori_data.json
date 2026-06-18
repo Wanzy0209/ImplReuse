@@ -1,0 +1,314 @@
+{
+  "title": "all_gather can change memory ordering of tensor",
+  "issue_id": "163483",
+  "bug_description": "### 🐛 Describe the bug\n\nI try the `all_gather` operation on a tensor with `channels_last` format , then I found the memory ordering of output is changed so that the output and input are not aligned. This is not as expected. I think it's a BUG.\n\nThe reproducible minimal example, test.py is:\n```\nimport torch\n\ntorch.distributed.init_process_group(backend='nccl')\nrank = torch.distributed.get_rank()\nworld_size = torch.distributed.get_world_size()\ntorch.cuda.set_device(rank)\n\nx = torch.arange(0, 16).reshape(2, 2, 2, 2).cuda().to(memory_format=torch.channels_last)\nx_list = [torch.zeros_like(x) for _ in range(world_size)]\ntorch.distributed.all_gather(x_list, x)\n\nprint('rank_{}: {}\\n x:\\n{}\\n gathered_x:\\n{}\\n'.format(rank, torch.equal(x, x_list[rank]), x.storage(), x_list[rank].storage()))\n```\nThe command is:\n`torchrun --nproc_per_node 2 test.py`\nThe result is:\n```\nrank_1: False\n x:\n 0\n 4\n 1\n 5\n 2\n 6\n 3\n 7\n 8\n 12\n 9\n 13\n 10\n 14\n 11\n 15\n[torch.storage.TypedStorage(dtype=torch.int64, device=cuda:1) of size 16]\n gathered_x:\n 0\n 2\n 4\n 6\n 1\n 3\n 5\n 7\n 8\n 10\n 12\n 14\n 9\n 11\n 13\n 15\n[torch.storage.TypedStorage(dtype=torch.int64, device=cuda:1) of size 16]\nrank_0: False\n x:\n 0\n 4\n 1\n 5\n 2\n 6\n 3\n 7\n 8\n 12\n 9\n 13\n 10\n 14\n 11\n 15\n[torch.storage.TypedStorage(dtype=torch.int64, device=cuda:0) of size 16]\n gathered_x:\n 0\n 2\n 4\n 6\n 1\n 3\n 5\n 7\n 8\n 10\n 12\n 14\n 9\n 11\n 13\n 15\n[torch.storage.TypedStorage(dtype=torch.int64, device=cuda:0) of size 16]\n``` \n\n### Versions\ntorch==2.7.0a0+79aa17489c.nv25.4\nNVIDIA L40S\nDriver Version: 535.161.08\nCUDA Version: 12.9\n\ncc @ezyang @gchanan @zou3519 @kadeng @msaroufim @H-Huang @awgu @wanchaol @fegin @fduwjj @wz337 @wconstab @d4l3k @pragupta @dcci",
+  "apis": [
+    "torch.arange",
+    "ntorch.distributed.all_gather",
+    "torch.distributed.init_process_group",
+    "tf",
+    "x.storage",
+    "torch.equal"
+  ],
+  "best_code": "import torch\n\ntorch.distributed.init_process_group(backend='nccl')\nrank = torch.distributed.get_rank()\nworld_size = torch.distributed.get_world_size()\ntorch.cuda.set_device(rank)\n\nx = torch.arange(0, 16).reshape(2, 2, 2, 2).cuda().to(memory_format=torch.channels_last)\nx_list = [torch.zeros_like(x) for _ in range(world_size)]\ntorch.distributed.all_gather(x_list, x)\n\nprint('rank_{}: {}\\n x:\\n{}\\n gathered_x:\\n{}\\n'.format(rank, torch.equal(x, x_list[rank]), x.storage(), x_list[rank].storage()))",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/163987",
+    "https://github.com/pytorch/pytorch/pull/163712"
+  ],
+  "_meta": {
+    "file": "163483_issue_ori_data.json",
+    "generated_at": "2026-04-21 03:09:50",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\163483_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\163483_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "I try the `all_gather` operation on a tensor with `channels_last` format , then I found the memory ordering of output is changed so that the output and input are not aligned. This is not as expected. I think it's a BUG.",
+  "repro_code": "import torch\n\ntorch.distributed.init_process_group(backend='nccl')\nrank = torch.distributed.get_rank()\nworld_size = torch.distributed.get_world_size()\ntorch.cuda.set_device(rank)\n\nx = torch.arange(0, 16).reshape(2, 2, 2, 2).cuda().to(memory_format=torch.channels_last)\nx_list = [torch.zeros_like(x) for _ in range(world_size)]\ntorch.distributed.all_gather(x_list, x)\n\nprint('rank_{}: {}\\n x:\\n{}\\n gathered_x:\\n{}\\n'.format(rank, torch.equal(x, x_list[rank]), x.storage(), x_list[rank].storage()))",
+  "repro_output": "all_gather can change memory ordering of tensor",
+  "affected_api": "torch.distributed.all_gather",
+  "trigger_conditions": {
+    "backend": "nccl",
+    "dtype": "int64",
+    "input_shape": "(2, 2, 2, 2)",
+    "other_conditions": "channels_last memory format"
+  },
+  "environment": {
+    "pytorch_version": "2.7.0a0+79aa17489c.nv25.4",
+    "python_version": "",
+    "os": "",
+    "hardware": "NVIDIA L40S"
+  },
+  "labels": [],
+  "add_fix_code": [
+    "    @requires_nccl()",
+    "    @skip_if_lt_x_gpu(2)",
+    "    def test_allgather_noncontig(self):",
+    "        store = dist.FileStore(self.file_name, self.world_size)",
+    "        dist.init_process_group(",
+    "            \"nccl\",",
+    "            world_size=self.world_size,",
+    "            rank=self.rank,",
+    "            store=store,",
+    "        )",
+    "        device = \"cuda\"",
+    "        tensor = (",
+    "            torch.arange(0, 16, device=torch.device(device))",
+    "            .view(2, 2, 2, 2)",
+    "            .to(memory_format=torch.channels_last)",
+    "        )",
+    "        tensor_list = [torch.empty_like(tensor) for _ in range(self.world_size)]",
+    "        dist.all_gather(tensor_list, tensor)",
+    "        for o in tensor_list:",
+    "            self.assertEqual(o, tensor)",
+    "",
+    "  if (t.is_contiguous()) { // we are checking for memory format, so tensor might",
+    "                           // not be contiguous",
+    "    // TODO handle all non-overlapping-and-dense, although if the strides",
+    "    // disagree in ranks we are opening a door for more bugs than currently",
+    "    // where channels-last might disagree between ranks",
+    "    // fast path, don't call empty_strided",
+    "    return at::empty(sizes, t.options());",
+    "  } else {",
+    "    // memory-dense, but not necessarily contiguous tensor",
+    "    std::vector<int64_t> strides{t.numel()};",
+    "    strides.insert(strides.end(), t.strides().begin(), t.strides().end());",
+    "    return at::empty_strided(sizes, strides, t.options());",
+    "  }",
+    "    at::Tensor flatOutputTensor =",
+    "        newLikeFlat(outputs[0], /*preserve_strides*/ false);",
+    "    return {newLikeFlat(outputs[0], /*preserve_strides*/ false)};",
+    "    return {newLikeFlat(output_lists[0], /*preserve_strides*/ false)};",
+    "      flatOutputTensor = newLikeFlat(outputs[0], /*preserve_strides*/ false);",
+    "                           : std::vector<at::Tensor>{newLikeFlat(",
+    "                                 outputs[0], /*preserve_strides*/ false)};",
+    "                          : std::vector<at::Tensor>{newLikeFlat(",
+    "                                inputs[0], /*preserve_strides*/ false)};",
+    "inline at::Tensor newLikeFlat(",
+    "    std::vector<at::Tensor>& tensors,",
+    "    bool preserve_strides = true) {",
+    "  if (t.is_contiguous() ||",
+    "      !preserve_strides) { // we are checking for memory format, so tensor might",
+    "    // not be contiguous"
+  ],
+  "sub_fix_code": [
+    "  return at::empty(sizes, t.options());",
+    "    at::Tensor flatOutputTensor = newLikeFlat(outputs[0]);",
+    "    return {newLikeFlat(outputs[0])};",
+    "    return {newLikeFlat(output_lists[0])};",
+    "      flatOutputTensor = newLikeFlat(outputs[0]);",
+    "                           : std::vector<at::Tensor>{newLikeFlat(outputs[0])};",
+    "                          : std::vector<at::Tensor>{newLikeFlat(inputs[0])};",
+    "inline at::Tensor newLikeFlat(std::vector<at::Tensor>& tensors) {",
+    "  if (t.is_contiguous()) { // we are checking for memory format, so tensor might",
+    "                           // not be contiguous"
+  ],
+  "core_api": "torch.distributed.all_gather",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [
+      {
+        "api_name": "tf.experimental.numpy.random.standard_normal",
+        "api_type": "tensorflow",
+        "similarity": 0.9944989085197449
+      },
+      {
+        "api_name": "tf.type_spec_from_value",
+        "api_type": "tensorflow",
+        "similarity": 0.9941948652267456
+      },
+      {
+        "api_name": "tf.compat.v1.nn.embedding_lookup",
+        "api_type": "tensorflow",
+        "similarity": 0.9941849708557129
+      },
+      {
+        "api_name": "tf.nn.embedding_lookup",
+        "api_type": "tensorflow",
+        "similarity": 0.9941849708557129
+      },
+      {
+        "api_name": "tf.compat.v1.assert_variables_initialized",
+        "api_type": "tensorflow",
+        "similarity": 0.9941235780715942
+      },
+      {
+        "api_name": "tf.keras.initializers.Ones",
+        "api_type": "tensorflow",
+        "similarity": 0.9940458536148071
+      },
+      {
+        "api_name": "tf.experimental.numpy.signbit",
+        "api_type": "tensorflow",
+        "similarity": 0.9940392971038818
+      },
+      {
+        "api_name": "tf.train.experimental.PythonState",
+        "api_type": "tensorflow",
+        "similarity": 0.9940235614776611
+      },
+      {
+        "api_name": "tf.keras.initializers.Zeros",
+        "api_type": "tensorflow",
+        "similarity": 0.9939947724342346
+      },
+      {
+        "api_name": "tf.experimental.dtensor.call_with_layout",
+        "api_type": "tensorflow",
+        "similarity": 0.9939638376235962
+      },
+      {
+        "api_name": "tf.experimental.numpy.cbrt",
+        "api_type": "tensorflow",
+        "similarity": 0.9939572811126709
+      }
+    ],
+    "issue_to_api": [
+      {
+        "api_name": "tf.errors.OperatorNotAllowedInGraphError",
+        "api_type": "issue",
+        "similarity": 0.9793246388435364
+      },
+      {
+        "api_name": "tf.test.is_built_with_cuda",
+        "api_type": "issue",
+        "similarity": 0.9787849187850952
+      },
+      {
+        "api_name": "tf.compat.dimension_value",
+        "api_type": "issue",
+        "similarity": 0.9771934747695923
+      },
+      {
+        "api_name": "tf.compat.v1.train.SessionRunValues",
+        "api_type": "issue",
+        "similarity": 0.9763921499252319
+      },
+      {
+        "api_name": "torch.special.exp2",
+        "api_type": "issue",
+        "similarity": 0.9762174487113953
+      },
+      {
+        "api_name": "tf.test.is_built_with_xla",
+        "api_type": "issue",
+        "similarity": 0.9761241674423218
+      },
+      {
+        "api_name": "tf.test.is_built_with_rocm",
+        "api_type": "issue",
+        "similarity": 0.9749101400375366
+      },
+      {
+        "api_name": "tf.keras.activations.linear",
+        "api_type": "issue",
+        "similarity": 0.9742952585220337
+      },
+      {
+        "api_name": "tf.lookup.TextFileIndex",
+        "api_type": "issue",
+        "similarity": 0.9740475416183472
+      },
+      {
+        "api_name": "tf.VariableSynchronization",
+        "api_type": "issue",
+        "similarity": 0.9739564657211304
+      },
+      {
+        "api_name": "torch.special.expm1",
+        "api_type": "issue",
+        "similarity": 0.9735255241394043
+      }
+    ],
+    "pytorch_to_pytorch": [
+      {
+        "api_name": "torch.distributed.all_gather",
+        "api_type": "pytorch",
+        "similarity": 1.0000001192092896
+      },
+      {
+        "api_name": "torch.distributed.reduce_scatter",
+        "api_type": "pytorch",
+        "similarity": 0.9998311996459961
+      },
+      {
+        "api_name": "torch.distributed.all_reduce",
+        "api_type": "pytorch",
+        "similarity": 0.9996827840805054
+      },
+      {
+        "api_name": "torch.distributed.broadcast",
+        "api_type": "pytorch",
+        "similarity": 0.9991971254348755
+      },
+      {
+        "api_name": "torch.baddbmm",
+        "api_type": "pytorch",
+        "similarity": 0.9987221956253052
+      },
+      {
+        "api_name": "torch.atleast_1d",
+        "api_type": "pytorch",
+        "similarity": 0.9984843134880066
+      },
+      {
+        "api_name": "torch.atleast_3d",
+        "api_type": "pytorch",
+        "similarity": 0.9984635710716248
+      },
+      {
+        "api_name": "torch.atleast_2d",
+        "api_type": "pytorch",
+        "similarity": 0.9984533786773682
+      },
+      {
+        "api_name": "torch.tile",
+        "api_type": "pytorch",
+        "similarity": 0.9983594417572021
+      },
+      {
+        "api_name": "torch.fmod",
+        "api_type": "pytorch",
+        "similarity": 0.9982078671455383
+      },
+      {
+        "api_name": "torch.as_tensor",
+        "api_type": "pytorch",
+        "similarity": 0.9981995820999146
+      }
+    ]
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "issue_to_api",
+      "test_cases": [
+        "163483_issue_to_api_0.output.py",
+        "163483_issue_to_api_1.output.py",
+        "163483_issue_to_api_10.output.py",
+        "163483_issue_to_api_2.output.py",
+        "163483_issue_to_api_3.output.py",
+        "163483_issue_to_api_4.output.py",
+        "163483_issue_to_api_5.output.py",
+        "163483_issue_to_api_6.output.py",
+        "163483_issue_to_api_7.output.py",
+        "163483_issue_to_api_8.output.py",
+        "163483_issue_to_api_9.output.py"
+      ]
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": [
+        "163483_pytorch_to_pytorch_0.output.py",
+        "163483_pytorch_to_pytorch_1.output.py",
+        "163483_pytorch_to_pytorch_10.output.py",
+        "163483_pytorch_to_pytorch_2.output.py",
+        "163483_pytorch_to_pytorch_3.output.py",
+        "163483_pytorch_to_pytorch_4.output.py",
+        "163483_pytorch_to_pytorch_5.output.py",
+        "163483_pytorch_to_pytorch_6.output.py",
+        "163483_pytorch_to_pytorch_7.output.py",
+        "163483_pytorch_to_pytorch_8.output.py",
+        "163483_pytorch_to_pytorch_9.output.py"
+      ]
+    }
+  }
+}

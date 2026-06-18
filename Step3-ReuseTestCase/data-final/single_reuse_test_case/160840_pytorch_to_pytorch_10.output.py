@@ -1,0 +1,49 @@
+import torch
+import numpy as np
+
+torch.manual_seed(0)
+# Keeping the configuration from the original issue to ensure similar testing conditions
+torch._inductor.config.fallback_random = True
+
+# Setup inputs for torch.nn.functional.ctc_loss
+# T: Time steps, N: Batch size, C: Number of classes (including blank)
+T, N, C = 50, 16, 20
+S = 30  # Max target length
+
+# Generate log_probs: (T, N, C)
+# Using float64 to match the original issue's precision focus
+x = torch.randn(T, N, C, dtype=torch.float64, requires_grad=True)
+log_probs = torch.nn.functional.log_softmax(x, dim=2)
+
+# Generate targets: (N, S)
+# Targets cannot be blank (0), so we sample from 1 to C-1
+targets = torch.randint(low=1, high=C, size=(N, S), dtype=torch.int32)
+
+# Generate input_lengths: (N)
+input_lengths = torch.randint(low=10, high=T, size=(N,), dtype=torch.int32)
+
+# Generate target_lengths: (N)
+target_lengths = torch.randint(low=5, high=S, size=(N,), dtype=torch.int32)
+
+def foo(log_probs, targets, input_lengths, target_lengths):
+    loss = torch.nn.functional.ctc_loss(
+        log_probs,
+        targets,
+        input_lengths,
+        target_lengths,
+        blank=0,
+        reduction='mean',
+        zero_infinity=False
+    )
+    return loss
+
+cfoo = torch.compile(foo)
+
+# Execute in eager mode
+eager_res = foo(log_probs, targets, input_lengths, target_lengths)
+
+# Execute in compiled mode
+compile_res = cfoo(log_probs, targets, input_lengths, target_lengths)
+
+# Verify consistency
+torch.testing.assert_close(eager_res, compile_res)

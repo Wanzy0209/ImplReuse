@@ -1,0 +1,70 @@
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution as tf.compat.v1.train.add_queue_runner is designed for graph mode
+tf.compat.v1.disable_eager_execution()
+
+class QueueRunnerModel:
+    """
+    A wrapper class to mimic the structure of the original VAE model,
+    but adapted for TensorFlow's QueueRunner mechanism.
+    """
+    def __init__(self):
+        # Define a simple FIFO queue
+        self.queue = tf.compat.v1.queue.FIFOQueue(capacity=10, dtypes=[tf.float32], shapes=[()])
+        # Define an enqueue operation
+        self.enqueue_op = self.queue.enqueue([1.0])
+        # Create a QueueRunner with 2 threads
+        self.runner = tf.train.QueueRunner(self.queue, [self.enqueue_op] * 2)
+
+    def forward(self):
+        """
+        Adds the QueueRunner to the graph collection.
+        This corresponds to the 'forward' pass where the API under test is utilized.
+        """
+        # Original API Under Test: tf.compat.v1.train.add_queue_runner
+        tf.compat.v1.train.add_queue_runner(self.runner)
+        return self.queue
+
+def get_default_model():
+    return QueueRunnerModel()
+
+def get_sample_inputs():
+    # Mimicking the input structure for consistency with the original test case format
+    return (np.array([1.0]),)
+
+def main():
+    model = get_default_model()
+    inputs = get_sample_inputs()
+    
+    # In TensorFlow 1.x graph mode, we use a Session to execute operations
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables and the queue
+        sess.run(tf.compat.v1.global_variables_initializer())
+        sess.run(model.queue.initializer)
+        
+        # Execute the 'forward' pass (add the runner to the graph)
+        queue = model.forward()
+        
+        # Verify behavior: Check if the runner was successfully added to the collection
+        # This adapts the logic of checking output properties in the original test case
+        runners = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.QUEUE_RUNNERS)
+        print(f'Queue runners in collection: {len(runners)}')
+        assert model.runner in runners, "Bug: QueueRunner was not added to the collection"
+        
+        # Start the queue runner threads to verify functional behavior
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+        
+        # Dequeue an item to ensure the pipeline is operational
+        result = sess.run(queue.dequeue())
+        print(f'Dequeued result: {result}')
+        
+        # Clean up threads
+        coord.request_stop()
+        coord.join(threads)
+        
+    print('Model executed successfully!')
+
+if __name__ == '__main__':
+    main()

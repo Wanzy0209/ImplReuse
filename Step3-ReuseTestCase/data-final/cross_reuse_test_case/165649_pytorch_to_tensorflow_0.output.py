@@ -1,0 +1,19 @@
+import tensorflow as tf
+
+# Recreate the tensors with the specific values that caused the crash in PyTorch
+# (INT64_MIN and -1)
+dividend = tf.fill((2, 3), tf.iinfo(tf.int64).min)
+divisor = tf.fill((3,), -1)
+
+print("Dividend tensor:", dividend)
+print("Divisor tensor:", divisor)
+
+# Adapt the test case to the similar API: tf.math.is_nan
+# We verify that tf.math.is_nan handles these specific integer values
+# without crashing. Since integers are never NaN, we expect all False.
+result = tf.math.is_nan(dividend)
+
+print("Result:", result)
+
+# Assertion to verify the expected behavior (no crash, all False)
+assert tf.reduce_all(result == False).numpy(), "Expected all False for integer inputs"

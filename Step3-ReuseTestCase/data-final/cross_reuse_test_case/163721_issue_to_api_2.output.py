@@ -1,0 +1,106 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_linear_operator_scaled_identity_sequential():
+    """
+    Test case adapted from PyTorch MPS extension segfault issue (ID: 163721).
+    
+    The original issue involves a custom MPS kernel (MPSSoftshrink) wrapped in a 
+    nn.Module and used within a Sequential model, causing a segfault.
+    
+    This test adapts the logic to TensorFlow using the similar API 
+    tf.linalg.LinearOperatorScaledIdentity. It wraps the operator in a Keras Layer
+    and uses it within a Sequential model to verify stability and correct execution
+    of the scaled identity operation within a similar structural context.
+    """
+
+    # Check for GPU availability (mirroring torch.backends.mps.is_available())
+    gpus = tf.config.list_physical_devices('GPU')
+    device_name = "/GPU:0" if gpus else "/CPU:0"
+    print(f"Running test on device: {device_name}")
+
+    # Wrapper over the LinearOperatorScaledIdentity, mirroring MPSSoftshrink(nn.Module)
+    class ScaledIdentityLayer(tf.keras.layers.Layer):
+        __constants__ = ["multiplier"]
+        multiplier: float
+
+        def __init__(self, num_rows: int, multiplier: float = 0.5, **kwargs):
+            super().__init__(**kwargs)
+            self.num_rows = num_rows
+            self.multiplier = multiplier
+            
+            # Initialize the LinearOperator similar to how the custom kernel was initialized
+            self.operator = tf.linalg.LinearOperatorScaledIdentity(
+                num_rows=num_rows, 
+                multiplier=multiplier
+            )
+
+        def call(self, inputs):
+            # Perform the operation (matrix-vector multiplication in this context)
+            return self.operator.matvec(inputs)
+
+        def get_config(self):
+            return {'num_rows': self.num_rows, 'multiplier': self.multiplier}
+
+    # Wrapper over the Sequential layer, mirroring CustomMPSSoftshrinkModel
+    class CustomScaledIdentityModel(tf.keras.Model):
+        def __init__(
+            self,
+            input_size: int = 784,
+            lin1_size: int = 256,
+            lin2_size: int = 256,
+            lin3_size: int = 256,
+            output_size: int = 10,
+        ):
+            super().__init__()
+
+            # Define a Sequential model using the custom ScaledIdentityLayer
+            # Note: We use Dense layers to change dimensions, and ScaledIdentityLayer 
+            # to apply the scaling operation, matching the structure of the PyTorch reproducer.
+            self.model = tf.keras.Sequential([
+                tf.keras.layers.Dense(lin1_size, input_shape=(input_size,)),
+                ScaledIdentityLayer(num_rows=lin1_size, multiplier=0.5),
+                tf.keras.layers.Dense(lin2_size),
+                ScaledIdentityLayer(num_rows=lin2_size, multiplier=0.5),
+                tf.keras.layers.Dense(lin3_size),
+                ScaledIdentityLayer(num_rows=lin3_size, multiplier=0.5),
+                tf.keras.layers.Dense(output_size),
+            ])
+
+        def call(self, x):
+            return self.model(x)
+
+    # Execute the test logic
+    with tf.device(device_name):
+        model = CustomScaledIdentityModel()
+        
+        # Create a random input tensor
+        x = tf.random.normal((32, 784)) # Batch size 32, Input size 784
+        
+        # Run forward pass
+        output = model(x)
+        
+        # Assertions to verify the operation completed successfully (no segfault/crash)
+        assert output.shape == (32, 10), f"Expected shape (32, 10), got {output.shape}"
+        assert output.dtype == tf.float32, f"Expected dtype float32, got {output.dtype}"
+        
+        # Verify the internal operator properties are valid (similar to checking operator state)
+        # We access the first ScaledIdentityLayer in the sequential model
+        first_layer = model.model.layers[1]
+        assert isinstance(first_layer, ScaledIdentityLayer)
+        assert first_layer.operator.shape == (256, 256)
+        
+        # Verify the scaling logic is applied correctly by checking the dense matrix representation
+        # This mimics the 'to_dense()' call often used to debug or verify operators
+        dense_matrix = first_layer.operator.to_dense()
+        np.testing.assert_array_almost_equal(
+            dense_matrix.numpy(), 
+            np.eye(256) * 0.5,
+            decimal=5
+        )
+
+    print("Test passed: LinearOperatorScaledIdentity executed successfully in Sequential model.")
+
+if __name__ == "__main__":
+    test_linear_operator_scaled_identity_sequential()

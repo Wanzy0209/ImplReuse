@@ -1,0 +1,88 @@
+import torch
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+def test_dtensor_copy_to_mesh_with_custom_gradient():
+    """
+    Adapted test case for tf.experimental.dtensor.copy_to_mesh based on 
+    PyTorch Issue 166305: torch.compile() + DDP fails with custom autograd.Function.
+    
+    This test verifies the interaction between:
+    1. Distributed data placement (copy_to_mesh)
+    2. Graph compilation (tf.function with jit_compile)
+    3. Custom gradient functions (@tf.custom_gradient)
+    """
+    
+    # 1. Setup Mesh (Equivalent to dist.init_process_group)
+    # We use a CPU mesh for minimal reproducibility, similar to the 'gloo' backend fallback.
+    try:
+        mesh = dtensor.create_mesh(
+            ['batch'],
+            dtensor.Mesh([tf.config.list_physical_devices('CPU')], [1]),
+        )
+    except Exception:
+        # Fallback if physical devices aren't configured in the test environment
+        mesh = dtensor.create_mesh(
+            ['batch'],
+            dtensor.Mesh([['cpu']], [1]),
+        )
+
+    # 2. Define Custom Gradient Function (Equivalent to torch.autograd.Function)
+    @tf.custom_gradient
+    def SimpleDoubleFn(x):
+        """
+        Mimics SimplistDoubleFn:
+        Forward: x * 2
+        Backward: grad * 2
+        """
+        def grad(dy):
+            return dy * 2
+        
+        return x * 2, grad
+
+    # 3. Define Layout (Equivalent to DDP replication strategy)
+    # Using replicated layout to mimic DDP's model replication behavior
+    layout = dtensor.Layout.replicated(mesh, rank=0)
+
+    # 4. Define Compiled Step (Equivalent to torch.compile)
+    @tf.function(jit_compile=True) 
+    def train_step(inputs, targets):
+        # API Under Test: copy_to_mesh
+        # Moves the regular tensor onto the DTensor mesh
+        d_inputs = dtensor.copy_to_mesh(inputs, layout)
+        
+        # Apply custom gradient function
+        # This is where the PyTorch bug triggered a failure in the graph backend
+        d_outputs = SimpleDoubleFn(d_inputs)
+        
+        # Calculate Loss
+        loss = tf.reduce_mean(tf.square(d_outputs - targets))
+        return loss
+
+    # 5. Execution
+    print("Starting DTensor copy_to_mesh + Custom Gradient test...")
+    
+    # Create dummy data
+    # Shape matches the PyTorch repro: (2, 3, 256, 256)
+    x = tf.random.normal((2, 3, 256, 256))
+    # Target is x * 2 (since our custom function doubles the input)
+    target = x * 2
+
+    with dtensor.default_mesh(mesh):
+        # Run forward pass
+        with tf.GradientTape() as tape:
+            loss = train_step(x, target)
+        
+        print(f"Loss computed: {loss.numpy()}")
+
+        # Verify gradients flow correctly (Equivalent to loss.backward())
+        # We check if gradients can be computed for the inputs
+        grads = tape.gradient(loss, x)
+        
+        assert grads is not None, "Gradients should not be None"
+        assert loss.numpy() < 1.0, "Loss should be reasonably small for matching targets"
+        
+        print("Test Passed: copy_to_mesh works with compiled custom gradients.")
+
+if __name__ == "__main__":
+    test_dtensor_copy_to_mesh_with_custom_gradient()

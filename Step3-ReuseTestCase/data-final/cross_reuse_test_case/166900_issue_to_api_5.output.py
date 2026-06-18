@@ -1,0 +1,67 @@
+import torch
+import tensorflow as tf
+import numpy as np
+import tempfile
+import os
+import shutil
+
+# Define a custom class (analogous to 'Bar' in the original issue)
+# This class represents a custom object that the framework needs to handle.
+class CustomLayer(tf.keras.layers.Layer):
+    def __init__(self, factor=1.0, **kwargs):
+        super(CustomLayer, self).__init__(**kwargs)
+        self.factor = factor
+
+    def call(self, inputs):
+        return inputs * self.factor
+
+    def get_config(self):
+        config = super(CustomLayer, self).get_config()
+        config.update({"factor": self.factor})
+        return config
+
+def test_load_model_with_custom_objects():
+    # Setup: Create a temporary directory for the model
+    temp_dir = tempfile.mkdtemp()
+    model_path = os.path.join(temp_dir, 'test_model')
+
+    try:
+        # 1. Create and save a model using the custom class
+        # This mirrors the setup in the original issue where a custom class 'Bar' is used.
+        model = tf.keras.Sequential([
+            CustomLayer(factor=2.0, input_shape=(3,))
+        ])
+        model.compile(optimizer='adam', loss='mse')
+        model.save(model_path)
+
+        # 2. Load the model using the similar API: tf.keras.models.load_model
+        # This mirrors the execution phase where torch.compile failed.
+        # We provide the 'custom_objects' dictionary to map the class name to the class definition,
+        # analogous to how pytree.register_constant informs the compiler about custom types.
+        loaded_model = tf.keras.models.load_model(
+            model_path,
+            custom_objects={'CustomLayer': CustomLayer}
+        )
+
+        # 3. Verify behavior (Assertion)
+        # Ensure the loaded model behaves identically to the original, 
+        # checking that the custom object was handled correctly.
+        x_test = np.random.rand(5, 3).astype(np.float32)
+        original_output = model.predict(x_test)
+        loaded_output = loaded_model.predict(x_test)
+
+        assert np.allclose(original_output, loaded_output, atol=1e-5), \
+            "Loaded model output does not match original model output."
+
+        print("Test Passed: tf.keras.models.load_model successfully handled custom objects.")
+
+    except Exception as e:
+        print(f"Test Failed: {e}")
+        raise
+    finally:
+        # Cleanup
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+
+if __name__ == "__main__":
+    test_load_model_with_custom_objects()

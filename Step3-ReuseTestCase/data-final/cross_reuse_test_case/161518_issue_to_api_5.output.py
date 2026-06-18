@@ -1,0 +1,42 @@
+import tensorflow as tf
+import time
+
+# Benchmarking memory throughput for tf.keras.backend.arange
+# Adapted from the PyTorch copy_/cat benchmark logic to test elementwise generation throughput
+
+target_mib = 128  # 128 MiB data target
+
+# Using dtypes supported by tf.keras.backend.arange
+dtypes = [tf.float16, tf.float32, tf.int32]
+
+print("DType\t\tTime (ms)\tBandwidth (TiB/s)")
+
+for dtype in dtypes:
+    element_size = dtype.size
+    # Calculate number of elements to reach target size
+    num_elements = (target_mib * 1024 * 1024) // element_size
+
+    # Warmup
+    _ = tf.keras.backend.arange(0, num_elements, 1, dtype=dtype)
+
+    # Benchmark loop
+    start = time.time()
+    for _ in range(100):
+        # Using tf.function to simulate graph execution (similar to cudagraphs in the original)
+        @tf.function
+        def bench():
+            return tf.keras.backend.arange(0, num_elements, 1, dtype=dtype)
+        
+        t = bench()
+        # Force synchronization to ensure accurate timing
+        _ = t.numpy()
+        
+    end = time.time()
+    
+    elapsed_ms = (end - start) * 1000 / 100
+    
+    # Calculate Bandwidth in TiB/s
+    # Formula: (Data_MiB / Time_ms) * 1000 (ms/s) / 1024 / 1024 (MiB to TiB)
+    bdwidth = (target_mib / elapsed_ms) * 1000 / 1024 / 1024
+
+    print(f"{dtype.name}\t\t{elapsed_ms:.2f}\t\t{bdwidth:.2f}")

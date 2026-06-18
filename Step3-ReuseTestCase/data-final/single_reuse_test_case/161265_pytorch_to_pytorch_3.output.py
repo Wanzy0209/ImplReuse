@@ -1,0 +1,53 @@
+import torch
+import sys
+
+def test_randint_large_tensor():
+    """
+    Test case to verify torch.randint correctly initializes tensors 
+    larger than 4GB on the MPS device, similar to the bug reported 
+    for torch.full/torch.ones (Issue 161265).
+    """
+    if not torch.backends.mps.is_available():
+        print("MPS device is not available. Skipping test.")
+        return
+
+    # Configuration to create a tensor larger than 4GB.
+    # Shape: 2 x (2^31 + 5) elements
+    # Dtype: int8 (1 byte per element)
+    # Total Size: (2^32 + 10) bytes > 4GB
+    shape = (2, (1 << 31) + 5)
+    low = 1
+    high = 10
+    
+    print(f"Attempting to allocate tensor of shape {shape} with dtype int8 on MPS...")
+    print(f"Total size: {shape[0] * shape[1]} bytes (~{shape[0] * shape[1] / (1<<30):.2f} GB)")
+
+    try:
+        # Generate random integers between 1 (inclusive) and 10 (exclusive)
+        a = torch.randint(low, high, shape, dtype=torch.int8, device='mps')
+        
+        # Verify elements at the tail end of the tensor (where the bug manifested in torch.ones)
+        # In the original bug, these values were 0 (uninitialized) instead of 1.
+        val_single = a[1, -2].item()
+        val_slice = a[:, -2]
+        
+        print(f"Value at a[1, -2]: {val_single}")
+        print(f"Values at a[:, -2]: {val_slice}")
+
+        # Assertions to check if the values are within the expected range
+        # and not 0 (which would indicate the buffer wasn't filled/written to correctly).
+        assert low <= val_single < high, f"Expected value in range [{low}, {high}), got {val_single}"
+        assert torch.all(val_slice >= low).item(), "Slice contains values less than low bound"
+        assert torch.all(val_slice < high).item(), "Slice contains values greater than or equal to high bound"
+        
+        print("Test passed: Large tensor initialized correctly with torch.randint.")
+
+    except RuntimeError as e:
+        print(f"RuntimeError during tensor creation or access: {e}")
+        sys.exit(1)
+    except AssertionError as e:
+        print(f"AssertionError: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    test_randint_large_tensor()

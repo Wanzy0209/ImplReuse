@@ -1,0 +1,40 @@
+import torch
+import torch.nn as nn
+
+def test_lppool_nan():
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    device = torch.device("cuda")
+
+    # Large input tensor dimensions from the bug report
+    N, C, H, W = 84, 64, 512, 960
+    
+    # Case 1: bfloat16 + channels_last
+    x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+
+    # Convert to NHWC channels_last layout
+    x = x.to(memory_format=torch.channels_last)
+
+    # Uncommenting the line below avoids NaNs if the bug is present
+    # x = x.contiguous()
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+    print(f"Input stride: {x.stride()}")
+
+    # Adapted to LPPool2d
+    # Note: LPPool2d does not take padding as an argument in the constructor
+    pool = nn.LPPool2d(norm_type=2, kernel_size=3, stride=2).to(device)
+    
+    y = pool(x)
+
+    print(f"Output contains NaN? {torch.isnan(y).any().item()}")
+    print(f"Output contains Inf? {torch.isinf(y).any().item()}")
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    if torch.isnan(y).any():
+        print("Detected NaNs in LPPool2d output!")
+
+if __name__ == "__main__":
+    test_lppool_nan()

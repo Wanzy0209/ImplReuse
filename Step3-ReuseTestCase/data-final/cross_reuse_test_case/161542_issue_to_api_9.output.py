@@ -1,0 +1,48 @@
+import tensorflow as tf
+
+# Define a flag to be used with set_default
+tf.compat.v1.flags.DEFINE_string('test_flag', 'default_value', 'A test flag')
+
+def test_set_default_with_nonlocal_scope():
+    """
+    Test case for tf.compat.v1.flags.set_default that mirrors the 
+    variable scoping logic of the PyTorch Dynamo bug (Issue 161542).
+    
+    The original bug involved a list comprehension creating a variable 'key',
+    an inner function using 'nonlocal key', and a graph break.
+    This test verifies that set_default handles the context correctly
+    within similar scoping constraints.
+    """
+    keys = range(10)
+    allowed = [0, 1, 2, 3]
+
+    def fn(x):
+        x = x + 1
+        
+        # Use the similar API (set_default) analogous to graph_break in the original issue
+        with tf.compat.v1.flags.set_default(test_flag='new_value'):
+            # Verify the flag is set within the context
+            assert tf.compat.v1.flags.FLAGS.test_flag == 'new_value'
+            
+            # Reproduce the list comprehension and nonlocal logic from the bug
+            key = [k for k in keys if k in allowed]
+
+            def inner():
+                nonlocal key
+                return key[0]
+
+            # Access the variable defined in the enclosing scope
+            return x + inner()
+
+    # Execute the function
+    result = fn(1)
+    
+    # Assertions
+    assert result == 2  # 1 + 1 (initial x) + 0 (key[0])
+    
+    # Verify the flag is restored to its original value outside the context
+    assert tf.compat.v1.flags.FLAGS.test_flag == 'default_value'
+
+if __name__ == "__main__":
+    test_set_default_with_nonlocal_scope()
+    print("Test passed.")

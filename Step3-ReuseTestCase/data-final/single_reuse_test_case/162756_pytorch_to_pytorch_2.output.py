@@ -1,0 +1,31 @@
+import torch
+
+# Ensure CUDA is available as the bug is specific to Triton/Inductor on CUDA
+if not torch.cuda.is_available():
+    raise RuntimeError("This test requires a CUDA device")
+
+# Enable the configuration that triggers the bug
+torch._inductor.config.combo_kernels = True
+
+@torch.compile
+def fn(x, y, z):
+    # Replacing cumsum with prod to test the similar API
+    return x.sum(1), y.mean(1), z.prod(1)
+
+inps = (
+    torch.rand(16, 128, device="cuda"),
+    torch.rand(32, 128, device="cuda"),
+    torch.rand(32, 256, device="cuda"),
+)
+
+# Run the compiled function
+# If the bug affects torch.prod similarly, this will raise a NameError
+# regarding a missing helper function (e.g., _triton_helper_fn_mul0)
+fn(*inps)
+
+# Verify correctness against eager execution
+expected = (inps[0].sum(1), inps[1].mean(1), inps[2].prod(1))
+actual = fn(*inps)
+
+for a, e in zip(actual, expected):
+    torch.testing.assert_close(a, e)

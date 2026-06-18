@@ -1,0 +1,64 @@
+import tensorflow as tf
+
+def test_bessel_j0_non_contiguous_input():
+    """
+    Adapted test case for tf.compat.v1.math.special.bessel_j0 based on 
+    PyTorch MPS Buffer Allocation Regression Bug (Issue 167154).
+    
+    The original bug involved passing a non-contiguous tensor (created via as_strided)
+    to a linear operation, causing a buffer allocation error in the MPS backend.
+    
+    This test attempts to replicate the scenario by creating a tensor with a 
+    broadcasted dimension (semantically similar to stride=0) and passing it to 
+    the TensorFlow Bessel J0 operation.
+    """
+    
+    # Check for GPU availability (MPS equivalent on Mac)
+    gpus = tf.config.list_physical_devices('GPU')
+    device_name = '/GPU:0' if gpus else '/CPU:0'
+    print(f"Testing on device: {device_name}")
+
+    with tf.device(device_name):
+        # Recreate the input tensor structure from the PyTorch bug report
+        # PyTorch: shape=(5, 499, 768), stride=(0, 768, 1)
+        # This implies a base tensor of shape (499, 768) broadcasted along the first dimension.
+        
+        # Calculate the base size to match the PyTorch logic
+        # PyTorch numel calculation: storage_offset + sum((shape[i] - 1) * stride[i]) + 1
+        # (5-1)*0 + (499-1)*768 + (768-1)*1 + 1 = 383232
+        base_numel = 383232
+        base = tf.range(base_numel, dtype=tf.float32)
+        
+        # Reshape base to (499, 768)
+        base_reshaped = tf.reshape(base, (499, 768))
+        
+        # Create the non-contiguous/broadcasted view
+        # In PyTorch, stride=(0, ...) is a broadcast.
+        # In TensorFlow, tf.broadcast_to is the semantic equivalent for creating a view
+        # that acts like a strided tensor with stride 0.
+        input_tensor = tf.broadcast_to(base_reshaped, (5, 499, 768))
+        
+        # The original API was F.linear(input, weight, bias).
+        # The similar API is tf.compat.v1.math.special.bessel_j0.
+        # We pass the complex input tensor to this API to test backend buffer handling.
+        
+        try:
+            # Call the target API
+            result = tf.compat.v1.math.special.bessel_j0(input_tensor)
+            
+            # Force execution to ensure any allocation errors are caught immediately
+            _ = result.numpy()
+            
+            print("Test passed. Operation completed without buffer allocation errors.")
+            return True
+            
+        except tf.errors.InternalError as e:
+            # Catching potential internal backend errors similar to the MPS assertion
+            print(f"Test failed with InternalError (Potential Buffer Issue): {e}")
+            return False
+        except Exception as e:
+            print(f"Test failed with unexpected error: {e}")
+            return False
+
+if __name__ == "__main__":
+    test_bessel_j0_non_contiguous_input()

@@ -1,0 +1,38 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Adapted from the original PyTorch test case structure.
+# The original bug was about Eager vs Compile divergence with specific dtypes (int64, bfloat16).
+# We test tf.compat.v1.no_regularizer with these dtypes to ensure consistent behavior.
+
+def foo(arg0, arg1):
+    # Original: t1 = torch.tanh(t0)
+    # Adapted: Call the similar API (tf.compat.v1.no_regularizer)
+    # This API is used to prevent regularization and returns None.
+    r1 = tf.compat.v1.no_regularizer(arg0)
+    r2 = tf.compat.v1.no_regularizer(arg1)
+    return r1, r2
+
+# Inputs mirroring the original bug's dtypes
+# arg0: int64 (corresponds to original t0)
+arg0 = tf.constant(np.random.randint(0, 1000, [4, 4]), dtype=tf.int64)
+# arg1: bfloat16 (corresponds to original t5/t7)
+arg1 = tf.constant(np.random.rand(4, 4), dtype=tf.bfloat16)
+
+if __name__ == '__main__':
+    # Eager Execution
+    out_eager = foo(arg0, arg1)
+    print('Eager Success! ')
+
+    # Graph Execution (Compile equivalent)
+    compiled_foo = tf.function(foo)
+    out_compiled = compiled_foo(arg0, arg1)
+    print('Compile Success! ')
+
+    # Assertions to verify behavior
+    # tf.compat.v1.no_regularizer should always return None
+    assert out_eager[0] is None, "Expected None for int64 input in eager mode"
+    assert out_eager[1] is None, "Expected None for bfloat16 input in eager mode"
+    assert out_compiled[0] is None, "Expected None for int64 input in graph mode"
+    assert out_compiled[1] is None, "Expected None for bfloat16 input in graph mode"

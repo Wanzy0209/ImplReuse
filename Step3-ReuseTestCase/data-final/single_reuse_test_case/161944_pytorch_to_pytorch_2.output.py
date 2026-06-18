@@ -1,0 +1,22 @@
+import torch
+
+# Set default device to CUDA as per the original issue context
+torch.set_default_device('cuda')
+
+inp = torch.randn(8192)
+
+# Replace torch.exp with the similar API torch.tanh
+func = torch.tanh
+
+# Eager execution (float32)
+out1 = func(inp)
+
+# Compiled execution (float32)
+out2 = torch.compile(func)(inp)
+
+# High precision reference (float64)
+out3_high = func(inp.to(torch.float64))
+
+# Check precision differences
+print("Max diff (Eager vs High):", (out3_high - out1).abs().max())
+print("Max diff (Compiled vs High):", (out3_high - out2).abs().max())

@@ -1,0 +1,15 @@
+import torch
+
+def test_quantized_quantile():
+    # Create a quantized tensor
+    quant_input = torch.quantize_per_tensor(torch.tensor([1.0, 2.0, 3.0]), scale=1.0, zero_point=0, dtype=torch.quint8)
+    
+    # Attempt to calculate the quantile (median) of the quantized tensor
+    # This replaces the original torch.zeros_like call to verify the similar API
+    out_tensor = torch.quantile(quant_input, 0.5)
+    
+    print("Quantized input:", quant_input)
+    print("Output tensor:", out_tensor)
+
+if __name__ == "__main__":
+    test_quantized_quantile()

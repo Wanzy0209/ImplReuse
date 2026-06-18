@@ -1,0 +1,74 @@
+import tensorflow as tf
+import numpy as np
+
+# Define a custom RMSNorm layer to match the specific layer type in the bug report.
+# This ensures the test targets the specific component mentioned in the issue.
+class RMSNorm(tf.keras.layers.Layer):
+    def __init__(self, epsilon=1e-6):
+        super().__init__()
+        self.epsilon = epsilon
+
+    def build(self, input_shape):
+        self.gamma = self.add_weight(
+            name='gamma',
+            shape=(input_shape[-1],),
+            initializer='ones',
+            trainable=True
+        )
+
+    def call(self, x):
+        variance = tf.reduce_mean(tf.square(x), axis=-1, keepdims=True)
+        x = x * tf.math.rsqrt(variance + self.epsilon)
+        return x * self.gamma
+
+# Define the model structure mirroring the PyTorch TestModule
+class TestModel(tf.keras.Model):
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.norm = RMSNorm()
+        self.output = tf.keras.layers.Dense(d_model)
+
+    def call(self, x: tf.Tensor) -> tf.Tensor:
+        x = self.norm(x)
+        x = self.output(x)
+        return x
+
+def main():
+    # Initialize the MultiWorkerMirroredStrategy.
+    # Note: In a real distributed environment, the 'TF_CONFIG' environment variable
+    # must be set to define the cluster.
+    strategy = tf.distribute.MultiWorkerMirroredStrategy()
+
+    d_model = 128
+
+    # Use the strategy scope to distribute variables and computation
+    with strategy.scope():
+        model = TestModel(d_model)
+        optimizer = tf.keras.optimizers.SGD()
+
+        @tf.function
+        def train_step(inputs):
+            with tf.GradientTape() as tape:
+                # Forward pass
+                y = model(inputs)
+                # Loss calculation (mimicking loss = y.sum())
+                loss = tf.reduce_sum(y)
+            
+            # Backward pass (mimicking loss.backward())
+            gradients = tape.gradient(loss, model.trainable_variables)
+            optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+            return loss
+
+    # Create dummy input data
+    x = tf.random.normal((16, d_model))
+
+    # Execute the distributed training step
+    # This corresponds to the 'with tracker, implicit_replication(): ...' block
+    # in the original PyTorch code, ensuring the forward/backward pass works
+    # with the RMSNorm layer under the distributed strategy.
+    print("Starting distributed step...")
+    loss = strategy.run(train_step, args=(x,))
+    print(f"Step completed successfully. Loss: {loss}")
+
+if __name__ == "__main__":
+    main()

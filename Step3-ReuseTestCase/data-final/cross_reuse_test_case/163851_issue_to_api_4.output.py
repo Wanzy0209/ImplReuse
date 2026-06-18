@@ -1,0 +1,46 @@
+import torch
+
+def test_unique_nan_consistency():
+    """
+    Test case to verify that torch.unique handles NaN values consistently 
+    between CPU and MPS backends, similar to the grid_sampler_3d issue.
+    """
+    # Create an input tensor containing NaN values
+    input_nan = torch.tensor([1.0, float('nan'), 2.0, float('nan'), 1.0])
+
+    # Compute unique values on CPU
+    out_cpu = torch.unique(input_nan)
+
+    # Compute unique values on MPS if available
+    if torch.backends.mps.is_available():
+        out_mps = torch.unique(input_nan.to("mps"))
+
+        print("CPU:", out_cpu)
+        print("MPS:", out_mps.cpu())
+
+        # Verify that the outputs are consistent
+        # 1. Check if the number of unique elements matches
+        assert out_cpu.numel() == out_mps.numel(), \
+            f"Element count mismatch: CPU {out_cpu.numel()} vs MPS {out_mps.numel()}"
+
+        # 2. Check if the positions of NaNs match
+        cpu_is_nan = torch.isnan(out_cpu)
+        mps_is_nan = torch.isnan(out_mps.cpu())
+        
+        assert torch.equal(cpu_is_nan, mps_is_nan), \
+            "NaN positions differ between CPU and MPS outputs"
+
+        # 3. Check if the non-NaN values match
+        # (torch.unique typically sorts output, so order should be identical)
+        cpu_vals = out_cpu[~cpu_is_nan]
+        mps_vals = out_mps.cpu()[~mps_is_nan]
+        
+        assert torch.equal(cpu_vals, mps_vals), \
+            "Non-NaN values differ between CPU and MPS outputs"
+            
+        print("Test passed: torch.unique handles NaN consistently on CPU and MPS.")
+    else:
+        print("MPS backend not available. Skipping MPS comparison.")
+
+if __name__ == "__main__":
+    test_unique_nan_consistency()

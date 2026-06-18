@@ -1,0 +1,16 @@
+import torch
+
+def test_maximum(device):
+    # Adapted from the original torch.var test case.
+    # torch.maximum is an element-wise operation and does not accept a 'dim' argument.
+    # We test if it handles zero-dimensional tensors correctly on different devices.
+    x = torch.tensor(3.0, device=device)
+    y = torch.tensor(5.0, device=device)
+    try:
+        output = torch.maximum(x, y)
+        print(f"maximum test succeeds for device: {device}. output: {output}")
+    except Exception as e:
+        print(f"maximum test fails for device: {device}: {e}")
+
+test_maximum(device="cpu")
+test_maximum(device="mps")

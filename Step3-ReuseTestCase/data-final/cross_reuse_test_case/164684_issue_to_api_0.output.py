@@ -1,0 +1,67 @@
+import torch
+import tensorflow as tf
+from tensorflow.keras.activations import serialize
+
+# Register the custom function to be serializable by Keras
+@tf.keras.utils.register_keras_serializable(package='test')
+def fuzzed_program(arg_0, sentinel):
+    """
+    Mimics the PyTorch logic:
+    1. Squeeze the boolean tensor.
+    2. Extract a scalar boolean value (mimicking .item()).
+    3. Multiply the scalar boolean with the sentinel tensor.
+    """
+    # var_node_1 = torch.squeeze(var_node_2)
+    var_node_1 = tf.squeeze(arg_0)
+    
+    # var_node_0 = var_node_1.item()
+    # In TensorFlow, extracting a Python scalar inside a graph function 
+    # typically requires tf.numpy_function or tf.py_func, which breaks XLA compilation.
+    def get_item(x):
+        return x.numpy().item()
+    
+    var_node_0 = tf.numpy_function(get_item, [var_node_1], tf.bool)
+    
+    # result = var_node_0 * sentinel
+    # Multiplying a scalar (extracted via numpy_function) with a tensor
+    result = var_node_0 * sentinel
+    
+    return result
+
+# Setup inputs
+# arg_0: size=(1,), dtype=bool
+arg_0 = tf.constant([True], dtype=tf.bool)
+# sentinel: size=(), dtype=float32, requires_grad=True equivalent (trainable)
+sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+# 1. Test Serialization (Leveraging the similar API)
+# We verify if the activation can be serialized, similar to how the similar API 
+# handles serialization of modules/functions.
+try:
+    serialized_name = serialize(fuzzed_program)
+    print(f"Serialization check: {serialized_name}")
+except ValueError as e:
+    print(f"Serialization check: Failed (expected for custom logic) - {e}")
+
+# 2. Test Eager Execution
+try:
+    # Note: We pass sentinel.read_value() or just sentinel depending on context, 
+    # here sentinel is a Variable.
+    result_eager = fuzzed_program(arg_0, sentinel)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# 3. Test Compiled Execution (XLA)
+# The PyTorch bug manifests as a failure in compile mode (Dynamo/XLA).
+# In TensorFlow, using tf.numpy_function inside a tf.function with jit_compile=True
+# is expected to fail or raise an error, mirroring the divergence.
+compiled_program = tf.function(fuzzed_program, jit_compile=True)
+
+try:
+    result_compiled = compiled_program(arg_0, sentinel)
+    print(' compile success')
+except Exception as e:
+    # This is the expected divergence, similar to the PyTorch issue where 
+    # SymBool * FakeTensor is not supported.
+    print(f' compile failed (divergence detected): {e}')

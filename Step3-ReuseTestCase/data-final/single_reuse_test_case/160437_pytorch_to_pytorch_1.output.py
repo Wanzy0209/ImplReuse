@@ -1,0 +1,39 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+@torch.compile(backend="eager")
+def fn(x, i):
+    # Adaptation: Replace torch._dynamo.graph_break() with torch.distributed.reduce
+    # Note: torch.distributed.reduce typically causes a graph break in dynamo
+    if i == 1:
+        # Reduce tensor x to rank 0
+        dist.reduce(x, dst=0)
+    return x + 1
+
+def run(rank, world_size):
+    setup(rank, world_size)
+    
+    inp = torch.randn(3)
+    
+    # Call the function multiple times to trigger different compilation paths
+    # i=0: No reduce
+    fn(inp, 0)
+    # i=1: Reduce happens (Graph break expected here)
+    fn(inp, 1)
+    # i=2: No reduce
+    fn(inp, 2)
+    
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)

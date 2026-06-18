@@ -1,0 +1,50 @@
+import torch
+import sys
+
+# Replicate the configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0 # size=(5699097, 6, 1), stride=(6, 1, 1), dtype=bfloat16, device=cuda
+    t1 = torch.sigmoid(t0) # size=(5699097, 6, 1), stride=(6, 1, 1), dtype=bfloat16, device=cuda
+    t2 = arg1 # size=(5699097, 6, 256), stride=(1536, 256, 1), dtype=bfloat16, device=cuda
+    t3 = torch.sigmoid(t2) # size=(5699097, 6, 256), stride=(1536, 256, 1), dtype=bfloat16, device=cuda
+    t4 = arg2 # size=(5699097, 256, 1), stride=(256, 1, 1), dtype=bfloat16, device=cuda
+    t5 = torch.exp(t4) # size=(5699097, 256, 1), stride=(256, 1, 1), dtype=bfloat16, device=cuda
+    
+    # Adaptation: Replace torch.baddbmm with torch.prod
+    # We combine the tensors to maintain similar shape characteristics before reduction
+    # t1 (B, 6, 1) * t3 (B, 6, 256) -> (B, 6, 256)
+    # torch.prod over dim 2 reduces it back to (B, 6, 1)
+    t6 = torch.prod(t1 * t3, dim=2, keepdim=True) # size=(5699097, 6, 1), dtype=bfloat16, device=cuda
+    
+    t7 = t6.reshape((193, 386, 459)) # size=(193, 386, 459), stride=(177174, 459, 1), dtype=bfloat16, device=cuda
+    output = t7  # output tensor
+    return output
+
+# Inputs from the original bug report
+arg0 = torch.rand([5699097, 6, 1], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+arg1 = torch.rand([5699097, 6, 256], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+arg2 = torch.rand([5699097, 256, 1], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    # Test Eager Execution
+    try:
+        out_eager = foo(arg0, arg1, arg2)
+        out_eager.sum().backward()
+        print('Eager Success! ')
+    except RuntimeError as e:
+        print(f'Eager Failed! : {e}')
+        sys.exit(1)
+
+    # Test Compiled Execution
+    try:
+        compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+        out_compiled = compiled_foo(arg0, arg1, arg2)
+        out_compiled.sum().backward()
+        print('Compile Success! ')
+    except RuntimeError as e:
+        print(f'Compile Failed! : {e}')
+        sys.exit(1)

@@ -1,0 +1,31 @@
+import torch
+from torch.testing._internal.common_methods_invocations import op_db
+
+# Find the OpInfo for batch_norm dynamically to ensure the test is runnable
+# without relying on a specific hardcoded index that might change.
+op_dict = next((op for op in op_db if op.name == "batch_norm"), None)
+
+if op_dict is None:
+    raise RuntimeError("Could not find batch_norm in op_db")
+
+# Adapt the function to match the batch_norm API.
+# We use *args to pass all arguments provided by the sample inputs generator,
+# which includes input, running_mean, running_var, weight, bias, training, etc.
+def fn(*args):
+    return torch.nn.functional.batch_norm(*args)
+
+# Sample inputs for CUDA and float32
+inputs = list(op_dict.sample_inputs("cuda", torch.float32, requires_grad=False))
+
+for sample in inputs:
+    # Reconstruct the full argument list: input tensor followed by other args
+    eager_args = (sample.input,) + sample.args
+    
+    compiled = torch.compile(fn, backend="inductor", mode="max-autotune")
+    
+    # Run eager and compiled versions
+    res1 = fn(*eager_args)
+    res2 = compiled(*eager_args)
+    
+    # Assert consistency
+    torch.testing.assert_close(res1, res2)

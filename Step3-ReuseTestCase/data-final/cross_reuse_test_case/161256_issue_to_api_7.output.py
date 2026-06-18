@@ -1,0 +1,30 @@
+import torch
+import torch.nn.functional as F
+
+def test_sigmoid_float64_rocm():
+    """
+    Test case adapted from Issue 161256 (Matmul segfault).
+    Verifies if the float64 + CUDA configuration that caused a segfault 
+    in matmul also affects torch.nn.functional.sigmoid.
+    """
+    # Preserve the specific environment setup from the bug report
+    torch.set_default_dtype(torch.float64)
+    
+    # Create tensors on the CUDA device with the same dimensions
+    x = torch.randn(1000, 1000, device="cuda")
+    
+    # Apply the similar API (sigmoid) instead of matmul
+    # Note: Sigmoid is element-wise, so we only need one input tensor,
+    # but we maintain the large tensor size to stress the GPU memory/compute.
+    z = F.sigmoid(x)
+    
+    # Access the result to ensure the kernel completes and data is accessible
+    # without causing a segmentation fault.
+    result = z[0, 0]
+    print(f"Result: {result}")
+    
+    # Assertion to verify the operation logic holds (sigmoid output is always 0 < x < 1)
+    assert 0.0 < result.item() < 1.0, "Sigmoid output should be between 0 and 1"
+
+if __name__ == "__main__":
+    test_sigmoid_float64_rocm()

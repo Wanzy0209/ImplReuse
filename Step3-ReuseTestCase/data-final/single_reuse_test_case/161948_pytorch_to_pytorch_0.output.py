@@ -1,0 +1,35 @@
+import torch
+
+def test_torch_set_num_threads():
+    """
+    Test that torch.set_num_threads correctly updates the number of threads
+    used by PyTorch for CPU operations.
+    """
+    # Store original number of threads to restore later
+    original_threads = torch.get_num_threads()
+
+    # List of thread counts to verify
+    threads_list = [1, 2, 4]
+
+    try:
+        for threads in threads_list:
+            # Set the number of threads using the API under test
+            torch.set_num_threads(threads)
+
+            # Verify that the setting was applied correctly
+            current_threads = torch.get_num_threads()
+            assert current_threads == threads, \
+                f"Expected {threads} threads, but got {current_threads}"
+
+            # Perform a simple operation to ensure the setting is active and stable
+            a = torch.randn(100, 100)
+            b = torch.randn(100, 100)
+            _ = torch.matmul(a, b)
+
+    finally:
+        # Restore original thread count
+        torch.set_num_threads(original_threads)
+
+if __name__ == "__main__":
+    test_torch_set_num_threads()
+    print("Test passed.")

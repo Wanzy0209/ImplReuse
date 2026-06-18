@@ -1,0 +1,59 @@
+import torch
+import sys
+
+# Configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    # Original tensor manipulations to create non-contiguous tensors
+    t0 = arg0 # size=(2, 261, 17, 358), dtype=bfloat16
+    t1 = t0.max(dim=0).values # size=(261, 17, 358), non-contiguous stride
+    t2 = t1.transpose(1, 0) # size=(17, 261, 358), non-contiguous stride
+
+    # Adaptation for torch.nn.functional.ctc_loss
+    # ctc_loss expects log_probs of shape (T, N, C) where T is length, N is batch size, C is classes.
+    # t2 has shape (17, 261, 358), which maps to (T=17, N=261, C=358).
+    # We must convert to float and apply log_softmax to get valid log probabilities.
+    log_probs = torch.log_softmax(t2.float(), dim=2)
+
+    T, N, C = log_probs.shape
+
+    # Generate valid targets and lengths for the batch
+    # input_lengths must be <= T (17)
+    input_lengths = torch.randint(1, T, (N,), device='cuda')
+    # target_lengths can be arbitrary, usually smaller than input_lengths
+    target_lengths = torch.randint(1, 10, (N,), device='cuda')
+    # targets are indices into the classes (0 to C-1)
+    targets = torch.randint(0, C, (target_lengths.sum(),), device='cuda')
+
+    # Replace the original conv1d call with ctc_loss
+    # Using reduction='none' to return a tensor per batch item, similar to the original tensor output
+    t7 = torch.nn.functional.ctc_loss(
+        log_probs,
+        targets,
+        input_lengths,
+        target_lengths,
+        reduction='none'
+    )
+
+    # Return the loss tensor
+    return t7
+
+# Inputs from the original bug report
+arg0 = torch.rand([2, 261, 17, 358], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+arg1 = torch.rand([17, 64, 358], dtype=torch.float32, device='cuda', requires_grad=True)
+arg2 = torch.rand([261, 1, 64], dtype=torch.float32, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    # Test Eager Mode
+    out_eager = foo(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+
+    # Test Compiled Mode
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+    print('Compile Success! ')

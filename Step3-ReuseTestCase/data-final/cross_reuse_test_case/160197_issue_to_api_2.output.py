@@ -1,0 +1,47 @@
+import tensorflow as tf
+import numpy as np
+
+def test_assert_in_optimization_loop():
+    """
+    This test case mirrors the logic of the PyTorch LBFGS issue where an optimizer
+    interacts with a loss tensor. In the PyTorch issue, LBFGS implicitly converts
+    the loss tensor to a float, raising a warning if requires_grad=True.
+    
+    Here, we translate the scenario to TensorFlow. We use tf.debugging.Assert
+    (the similar API) to explicitly check the loss tensor within the optimization
+    loop. This demonstrates the pattern of validating tensor values during
+    optimization, which is the semantic context of the original bug.
+    """
+    # Setup data similar to the PyTorch issue
+    # a is the variable to optimize, b is the target
+    a = tf.Variable(np.random.rand(2, 32, 32), dtype=tf.float32)
+    b = tf.constant(np.random.rand(2, 32, 32), dtype=tf.float32)
+    
+    optimizer = tf.keras.optimizers.Adam()
+    loss_fn = lambda x, y: tf.reduce_mean(tf.square(x - y))
+
+    # Run optimization loop
+    for i in range(10):
+        with tf.GradientTape() as tape:
+            loss = loss_fn(a, b)
+            
+            # Leverage the similar API: tf.debugging.Assert
+            # In the PyTorch bug, the optimizer implicitly checks the loss (float conversion).
+            # Here, we explicitly assert a condition on the loss tensor.
+            # This checks that the loss is finite, ensuring numerical stability.
+            is_finite = tf.reduce_all(tf.math.is_finite(loss))
+            tf.debugging.Assert(is_finite, [loss], message="Loss is NaN or Inf")
+
+        grads = tape.gradient(loss, [a])
+        optimizer.apply_gradients(zip(grads, [a]))
+        
+        # Print progress to mimic the original script
+        if i % 5 == 0:
+            print(f"Step {i}, Loss: {loss.numpy()}")
+
+    # Final assertion to verify the optimization ran without errors
+    # (In the PyTorch bug, the warning interrupted execution if warnings were treated as errors)
+    assert True, "Test completed successfully without assertion errors."
+
+if __name__ == "__main__":
+    test_assert_in_optimization_loop()

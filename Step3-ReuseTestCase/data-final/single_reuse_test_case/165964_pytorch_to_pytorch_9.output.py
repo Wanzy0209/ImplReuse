@@ -1,0 +1,19 @@
+import torch
+
+# Test case adapted for torch.matrix_power based on Issue 165964
+# The original issue reported an OOM error when creating a small tensor on CUDA.
+# This test verifies if torch.matrix_power encounters similar issues when operating on CUDA tensors.
+
+if torch.cuda.is_available():
+    # Create a small 2x2 matrix on CUDA
+    # Note: torch.ones is used here to create the input, mirroring the original failing call.
+    input_matrix = torch.ones(2, 2, device="cuda")
+    
+    # Execute the similar API: torch.matrix_power
+    # This operation requires memory allocation on the device for the result.
+    result = torch.matrix_power(input_matrix, 2)
+    
+    # Verify the result is computed and accessible
+    print(result)
+else:
+    print("CUDA is not available. Skipping test.")

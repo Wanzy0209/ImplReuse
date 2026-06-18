@@ -1,0 +1,225 @@
+{
+  "title": "DefaultSavePlanner._validate_global_planis costly slow when FSDP size is extremely large (quadratic)",
+  "issue_id": "163548",
+  "bug_description": "### 🚀 The feature, motivation and pitch\n\n## Problem\n[`_validate_global_plan`](https://github.com/pytorch/pytorch/blob/bf28990c3dd4d8bfa3eeb36a69cf53ed5f9e583e/torch/distributed/checkpoint/default_planner.py#L624) has O(n²) complexity that becomes unusably slow for modern LLMs. With 1024 tensors and `fsdp_size` 1024, validation takes 200+ seconds. if `fsdp_size` is 2048,  this can take 10+ minutes, making it unusable in production.\n\n## Reproduction\n```python\nfrom torch.distributed.checkpoint.default_planner import DefaultSavePlanner\nfrom torch.distributed.tensor import distribute_tensor, Shard\nfrom torch.distributed.device_mesh import init_device_mesh\nimport torch\nimport torch.distributed as dist\nimport time\n\npg = torch.distributed.init_process_group(backend=\"gloo\")\nworld_size = dist.get_world_size(pg)\nrank = dist.get_rank(pg)\ndevice_mesh = init_device_mesh(\"cpu\", (world_size,))\n\nfully_tensor = [torch.ones(1024, 1) for _ in range(1024)]\nsharded_tensor = [distribute_tensor(tensor=t, device_mesh=device_mesh, placements=[Shard(0)]) for t in fully_tensor]\nstate_dict = {str(key): value for key, value in enumerate(sharded_tensor)}\n\nplanner = DefaultSavePlanner()\nplanner.set_up_planner(state_dict=state_dict, is_coordinator=rank==0)\nlocal_plan = planner.create_local_plan()\ngather_objs = [None] * world_size\n\ndist.gather_object(obj=local_plan, object_gather_list=gather_objs if rank == 0 else None, dst=0, group=pg)\n\nif rank == 0:\n    start = time.time()\n    all_local_plans, global_metadata = planner.create_global_plan(gather_objs)\n    end = time.time()\n    print(f\"Create global planner cost {end - start}s\")\n\ndist.barrier()\n```\n\nRun with: `torchrun --nproc-per-node 1024 script.py`\n\n**Result**: Takes 200+ seconds for 1024 tensors\n\n\n\n### Alternatives\n\n_No response_\n\n### Additional context\n\n_No response_\n\ncc @H-Huang @awgu @wanchaol @fegin @fduwjj @wz337 @wconstab @d4l3k @pragupta @ezyang @msaroufim @dcci",
+  "apis": [
+    "active_ends.insert",
+    "active.insert",
+    "events.append",
+    "torch.distributed.init_process_group",
+    "ndist.barrier",
+    "chunks.sort"
+  ],
+  "best_code": "from torch.distributed.checkpoint.default_planner import DefaultSavePlanner\nfrom torch.distributed.tensor import distribute_tensor, Shard\nfrom torch.distributed.device_mesh import init_device_mesh\nimport torch\nimport torch.distributed as dist\nimport time\n\npg = torch.distributed.init_process_group(backend=\"gloo\")\nworld_size = dist.get_world_size(pg)\nrank = dist.get_rank(pg)\ndevice_mesh = init_device_mesh(\"cpu\", (world_size,))\n\nfully_tensor = [torch.ones(1024, 1) for _ in range(1024)]\nsharded_tensor = [distribute_tensor(tensor=t, device_mesh=device_mesh, placements=[Shard(0)]) for t in fully_tensor]\nstate_dict = {str(key): value for key, value in enumerate(sharded_tensor)}\n\nplanner = DefaultSavePlanner()\nplanner.set_up_planner(state_dict=state_dict, is_coordinator=rank==0)\nlocal_plan = planner.create_local_plan()\ngather_objs = [None] * world_size\n\ndist.gather_object(obj=local_plan, object_gather_list=gather_objs if rank == 0 else None, dst=0, group=pg)\n\nif rank == 0:\n    start = time.time()\n    all_local_plans, global_metadata = planner.create_global_plan(gather_objs)\n    end = time.time()\n    print(f\"Create global planner cost {end - start}s\")\n\ndist.barrier()",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/166820"
+  ],
+  "_meta": {
+    "file": "163548_issue_ori_data.json",
+    "generated_at": "2026-04-21 03:15:56",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\163548_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\163548_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "_validate_global_plan has O(n²) complexity that becomes unusably slow for modern LLMs. With 1024 tensors and fsdp_size 1024, validation takes 200+ seconds. If fsdp_size is 2048, this can take 10+ minutes, making it unusable in production.",
+  "repro_code": "from torch.distributed.checkpoint.default_planner import DefaultSavePlanner\nfrom torch.distributed.tensor import distribute_tensor, Shard\nfrom torch.distributed.device_mesh import init_device_mesh\nimport torch\nimport torch.distributed as dist\nimport time\n\npg = torch.distributed.init_process_group(backend=\"gloo\")\nworld_size = dist.get_world_size(pg)\nrank = dist.get_rank(pg)\ndevice_mesh = init_device_mesh(\"cpu\", (world_size,))\n\nfully_tensor = [torch.ones(1024, 1) for _ in range(1024)]\nsharded_tensor = [distribute_tensor(tensor=t, device_mesh=device_mesh, placements=[Shard(0)]) for t in fully_tensor]\nstate_dict = {str(key): value for key, value in enumerate(sharded_tensor)}\n\nplanner = DefaultSavePlanner()\nplanner.set_up_planner(state_dict=state_dict, is_coordinator=rank==0)\nlocal_plan = planner.create_local_plan()\ngather_objs = [None] * world_size\n\ndist.gather_object(obj=local_plan, object_gather_list=gather_objs if rank == 0 else None, dst=0, group=pg)\n\nif rank == 0:\n    start = time.time()\n    all_local_plans, global_metadata = planner.create_global_plan(gather_objs)\n    end = time.time()\n    print(f\"Create global planner cost {end - start}s\")\n\ndist.barrier()",
+  "repro_output": "DefaultSavePlanner._validate_global_planis costly slow when FSDP size is extremely large (quadratic)",
+  "affected_api": "DefaultSavePlanner._validate_global_plan",
+  "trigger_conditions": {
+    "backend": "gloo",
+    "dtype": "",
+    "input_shape": "1024 tensors of shape (1024, 1)",
+    "other_conditions": "FSDP size of 1024 or 2048, using Sharding with Shard(0)"
+  },
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "",
+    "hardware": "cpu"
+  },
+  "labels": [],
+  "add_fix_code": [
+    "    _validate_global_plan,",
+    "    Metadata,",
+    "class TestValidateGlobalPlan(TestCase):",
+    "    def _make_metadata(self, chunks, size):",
+    "        storage = TensorStorageMetadata(",
+    "            properties=TensorProperties(dtype=torch.float32),",
+    "            size=torch.Size(size),",
+    "            chunks=chunks,",
+    "        )",
+    "        return Metadata(state_dict_metadata={\"param\": storage})",
+    "",
+    "    def test_non_overlapping_chunks(self):",
+    "        chunks = [",
+    "            ChunkStorageMetadata(offsets=torch.Size([i]), sizes=torch.Size([1]))",
+    "            for i in range(4)",
+    "        ]",
+    "        metadata = self._make_metadata(chunks, [4])",
+    "        self.assertTrue(_validate_global_plan([SavePlan([])], metadata))",
+    "",
+    "    def test_detect_overlapping_chunks(self):",
+    "        chunks = [",
+    "            ChunkStorageMetadata(offsets=torch.Size([0]), sizes=torch.Size([2])),",
+    "            ChunkStorageMetadata(offsets=torch.Size([1]), sizes=torch.Size([2])),",
+    "        ]",
+    "        metadata = self._make_metadata(chunks, [4])",
+    "        self.assertFalse(_validate_global_plan([SavePlan([])], metadata))",
+    "",
+    "",
+    "import math",
+    "import sys",
+    "from bisect import bisect_right, insort",
+    "from collections import ChainMap",
+    "            # | does not work for Python 3.8 or older version.",
+    "            # merged_mappings = reduce(",
+    "            #     lambda x, y: x | y, (p.planner_data for p in global_plan)",
+    "            # )",
+    "            planner_data_dict = [p.planner_data for p in global_plan]",
+    "            merged_mappings = dict(ChainMap(*planner_data_dict))",
+    "        chunks = value.chunks",
+    "        for chunk in chunks:",
+    "            if not _check_box_bounds(value.size, chunk):",
+    "                    chunk,",
+    "            chunks_volume += math.prod(chunk.sizes)",
+    "",
+    "        if len(chunks) > 1:",
+    "            dims = len(value.size)",
+    "            sweep_dim = max(range(dims), default=0, key=lambda d: value.size[d])",
+    "            sorted_indices = sorted(",
+    "                range(len(chunks)),",
+    "                key=lambda idx: (",
+    "                    chunks[idx].offsets[sweep_dim],",
+    "                    *(chunks[idx].offsets[d] for d in range(dims)),",
+    "                ),",
+    "            )",
+    "            active: list[tuple[int, int]] = []",
+    "            for idx in sorted_indices:",
+    "                current = chunks[idx]",
+    "                start = current.offsets[sweep_dim]",
+    "                end = start + current.sizes[sweep_dim]",
+    "",
+    "                cutoff = bisect_right(active, (start, sys.maxsize))",
+    "                if cutoff:",
+    "                    del active[:cutoff]",
+    "",
+    "                for _, other_idx in active:",
+    "                    other = chunks[other_idx]",
+    "                    if _check_box_overlap(current, other):",
+    "                        logger.warning(",
+    "                            \"key:%s has overlapping chunks: %s %s\",",
+    "                            key,",
+    "                            current,",
+    "                            other,",
+    "                        )",
+    "                        all_good = False",
+    "",
+    "                insort(active, (end, idx))",
+    "        tensor_volume = math.prod(value.size)"
+  ],
+  "sub_fix_code": [
+    "import operator",
+    "from functools import reduce",
+    "            merged_mappings = reduce(",
+    "                lambda x, y: x | y, (p.planner_data for p in global_plan)",
+    "            )",
+    "        for chunk_idx, chunk0 in enumerate(value.chunks):",
+    "            if not _check_box_bounds(value.size, chunk0):",
+    "                    chunk0,",
+    "            chunks_volume += reduce(operator.mul, chunk0.sizes, 1)",
+    "",
+    "            # Check for overlap",
+    "            for chunk1 in value.chunks[chunk_idx + 1 :]:",
+    "                if _check_box_overlap(chunk0, chunk1):",
+    "                    logger.warning(",
+    "                        \"key:%s has overlapping chunks: %s %s\", key, chunk0, chunk1",
+    "                    )",
+    "                    all_good = False",
+    "        tensor_volume = reduce(operator.mul, value.size, 1)"
+  ],
+  "core_api": "torch.distributed.checkpoint",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [],
+    "issue_to_api": [
+      {
+        "api_name": "torch.special.logsumexp",
+        "api_type": "issue",
+        "similarity": 0.9872820973396301
+      },
+      {
+        "api_name": "torch.nn.utils.prune.CustomFromMask",
+        "api_type": "issue",
+        "similarity": 0.9869447946548462
+      },
+      {
+        "api_name": "torch.nn.Dropout",
+        "api_type": "issue",
+        "similarity": 0.986595869064331
+      },
+      {
+        "api_name": "torch.nn.functional.rrelu_",
+        "api_type": "issue",
+        "similarity": 0.9858663082122803
+      },
+      {
+        "api_name": "tf.errors.CancelledError",
+        "api_type": "issue",
+        "similarity": 0.985336422920227
+      },
+      {
+        "api_name": "torch.nn.functional.leaky_relu_",
+        "api_type": "issue",
+        "similarity": 0.9852842092514038
+      },
+      {
+        "api_name": "torch.special.log1p",
+        "api_type": "issue",
+        "similarity": 0.9852662682533264
+      },
+      {
+        "api_name": "torch.special.psi",
+        "api_type": "issue",
+        "similarity": 0.9847182631492615
+      },
+      {
+        "api_name": "torch.solve",
+        "api_type": "issue",
+        "similarity": 0.9845873117446899
+      },
+      {
+        "api_name": "torch.special.bessel_j0",
+        "api_type": "issue",
+        "similarity": 0.9845291376113892
+      },
+      {
+        "api_name": "torch.special.scaled_modified_bessel_k0",
+        "api_type": "issue",
+        "similarity": 0.9844557046890259
+      }
+    ],
+    "pytorch_to_pytorch": []
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "issue_to_api",
+      "test_cases": [
+        "163548_issue_to_api_0.output.py",
+        "163548_issue_to_api_1.output.py",
+        "163548_issue_to_api_10.output.py",
+        "163548_issue_to_api_2.output.py",
+        "163548_issue_to_api_3.output.py",
+        "163548_issue_to_api_4.output.py",
+        "163548_issue_to_api_5.output.py",
+        "163548_issue_to_api_6.output.py",
+        "163548_issue_to_api_7.output.py",
+        "163548_issue_to_api_8.output.py",
+        "163548_issue_to_api_9.output.py"
+      ]
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": []
+    }
+  }
+}

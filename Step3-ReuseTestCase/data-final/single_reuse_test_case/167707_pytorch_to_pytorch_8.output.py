@@ -1,0 +1,43 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def run(rank, size):
+    # Initialize the process group
+    # Use 'nccl' if CUDA is available to match the original context, otherwise 'gloo'
+    backend = 'nccl' if torch.cuda.is_available() else 'gloo'
+    dist.init_process_group(
+        backend, 
+        init_method='tcp://127.0.0.1:29500', 
+        rank=rank, 
+        world_size=size
+    )
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(rank)
+
+    # Adapted test logic for torch.distributed.irecv
+    if rank == 0:
+        # Rank 0 sends a tensor
+        x = torch.randn(2, device="cuda" if torch.cuda.is_available() else "cpu")
+        dist.send(x, dst=1)
+    elif rank == 1:
+        # Rank 1 receives the tensor asynchronously
+        x = torch.zeros(2, device="cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Call the similar API: torch.distributed.irecv
+        req = dist.irecv(x, src=0)
+        
+        # Wait for the operation to complete
+        req.wait()
+        
+        # Verify that the tensor was updated (not all zeros)
+        assert not torch.equal(x, torch.zeros_like(x)), "irecv failed to receive data"
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn processes to run the distributed test
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)

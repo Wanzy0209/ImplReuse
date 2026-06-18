@@ -1,0 +1,19 @@
+import torch
+
+# Test case for torch.fmax adapted from the addmm large tensor bug report.
+# The original bug involved incorrect results on MPS for large complex64 tensors.
+# We verify torch.fmax with similar large tensor dimensions and dtype.
+
+# Setup large tensors similar to the failing case in the bug report
+# Shape (64, 10000) corresponds to the large dimension 'K' in the original addmm failure
+a = torch.rand((64, 10000), dtype=torch.complex64, device="mps")
+b = torch.rand((64, 10000), dtype=torch.complex64, device="mps")
+
+# Compute on MPS
+out_mps = torch.fmax(a, b)
+
+# Compute on CPU for reference
+out_cpu = torch.fmax(a.cpu(), b.cpu())
+
+# Verify that MPS results match CPU results
+torch.testing.assert_close(out_mps.cpu(), out_cpu)

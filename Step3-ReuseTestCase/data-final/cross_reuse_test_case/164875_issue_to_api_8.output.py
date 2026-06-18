@@ -1,0 +1,49 @@
+import torch
+import tensorflow as tf
+
+def test_assert_none_equal_empty_tensors():
+    """
+    Test case for tf.debugging.assert_none_equal based on PyTorch Issue 164875.
+    
+    The original issue highlights a divergence between eager and compiled execution
+    when handling tensors with empty dimensions (specifically shape (20, 0)).
+    This test verifies that tf.debugging.assert_none_equal handles these edge cases
+    consistently in both eager and graph (tf.function) modes.
+    """
+    print("Testing tf.debugging.assert_none_equal with empty tensors (20, 0)...")
+
+    # Create tensors with shape (20, 0) similar to the PyTorch issue
+    # PyTorch: var_node_1 = arg_0 # size=(20, 0)
+    # PyTorch: var_node_2 = torch.nonzero(_x_nz) # size=(20, 0)
+    # We simulate these with TF tensors of int64 dtype to match the original context.
+    tensor_a = tf.zeros((20, 0), dtype=tf.int64)
+    tensor_b = tf.zeros((20, 0), dtype=tf.int64)
+
+    # 1. Test Eager Execution
+    print("\n--- Eager Execution ---")
+    try:
+        # Since both tensors are empty and equal, assert_none_equal should raise an error
+        tf.debugging.assert_none_equal(tensor_a, tensor_b)
+        print("Result: No assertion raised (Unexpected: tensors are equal)")
+    except tf.errors.InvalidArgumentError as e:
+        print(f"Result: Correctly raised InvalidArgumentError (tensors are equal).")
+
+    # 2. Test Compiled Execution (tf.function)
+    # We use jit_compile=True to strictly test the compilation path, similar to torch.compile
+    print("\n--- Compiled Execution (tf.function with jit_compile=True) ---")
+    
+    @tf.function(jit_compile=True)
+    def compiled_assert(a, b):
+        return tf.debugging.assert_none_equal(a, b)
+
+    try:
+        compiled_assert(tensor_a, tensor_b)
+        print("Result: No assertion raised (Unexpected: tensors are equal)")
+    except tf.errors.InvalidArgumentError as e:
+        print(f"Result: Correctly raised InvalidArgumentError (tensors are equal).")
+    except Exception as e:
+        # Catching any other unexpected errors that might indicate a divergence or crash
+        print(f"Result: Unexpected error (Potential divergence): {type(e).__name__}: {e}")
+
+if __name__ == "__main__":
+    test_assert_none_equal_empty_tensors()

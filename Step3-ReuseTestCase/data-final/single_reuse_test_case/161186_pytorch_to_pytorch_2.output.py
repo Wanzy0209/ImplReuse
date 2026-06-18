@@ -1,0 +1,56 @@
+import torch
+import torch.nn as nn
+import torch.nn.utils.prune as prune
+
+# Custom autograd function from the original bug report
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary
+        return None
+
+# A simple module to hold the parameter and use the custom op
+class SimpleModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(2**20, device="cuda"))
+
+    def forward(self, x):
+        # Use the custom op
+        out, _ = MyOp.apply(x)
+        return out * self.weight
+
+model = SimpleModel()
+dummy_input = torch.randn(2**20, device="cuda")
+
+# Adapted loop: instead of checkpointing, we prune repeatedly
+# to check for memory leaks with the similar API
+for i in range(100):
+    # Call the similar API: torch.nn.utils.prune.global_unstructured
+    prune.global_unstructured(
+        [(model, 'weight')],
+        pruning_method=prune.L1Unstructured,
+        amount=0.1
+    )
+
+    # Perform a forward and backward pass to engage the autograd graph
+    # similar to the original test case
+    output = model(dummy_input)
+    output.sum().backward()
+
+    # Clear gradients
+    model.weight.grad = None
+
+    # Monitor memory
+    print(i, torch.cuda.memory_allocated() / 1024**2, "MiB")

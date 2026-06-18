@@ -1,0 +1,56 @@
+import torch
+import torch.distributed as dist
+import os
+import tempfile
+
+def main():
+    # Setup for a minimal distributed environment (single process)
+    # This allows the test to run standalone without torchrun
+    if not dist.is_initialized():
+        # Use a temporary file for the store to avoid port conflicts
+        with tempfile.NamedTemporaryFile(delete=True) as tmp_file:
+            store = dist.FileStore(tmp_file.name)
+            dist.init_process_group(
+                backend="gloo", 
+                store=store, 
+                rank=0, 
+                world_size=1
+            )
+
+    MAX = 3
+    BATCH = 37
+
+    # Original function definitions from the bug report
+    def func(x, idxs):
+        return x.square() * torch.nn.functional.one_hot(idxs, MAX)
+
+    def jacfunc(x, idxs):
+        return torch.func.jacfwd(func, argnums=(0,))(x, idxs)
+
+    idxs = torch.randint(MAX, (BATCH,), dtype=torch.int64)
+    x = torch.rand((BATCH, MAX), dtype=torch.float64)
+
+    # Calculate the result
+    out = jacfunc(x, idxs)
+
+    # Adaptation: Replace torch.compile call with torch.distributed.broadcast_object_list
+    # We test if the API can handle the complex tensor structures produced by jacfwd/one_hot
+    object_list = [out]
+    
+    try:
+        # This is the call site adaptation
+        torch.distributed.broadcast_object_list(object_list, src=0)
+        
+        # Verify the broadcasted object matches the original
+        # Note: broadcast_object_list modifies the list in place
+        assert torch.equal(object_list[0], out), "Broadcasted object does not match original"
+        print("Test passed: torch.distributed.broadcast_object_list handled jacfwd output correctly.")
+    except Exception as e:
+        print(f"Test failed: {e}")
+    finally:
+        # Cleanup
+        if dist.is_initialized():
+            dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,47 @@
+import torch
+
+def test_neg_add_uint_tensor_compile():
+    """
+    Test case for Issue 161763: neg+add computation including uint tensor is incorrect under inductor.
+    
+    Verifies that torch.compile handles the negation of uint8 tensors correctly
+    (wrapping behavior) when followed by addition with a float tensor.
+    """
+    
+    def model(x):
+        # Create a uint8 tensor
+        c = torch.tensor(7, dtype=torch.uint8)
+        
+        # Operations:
+        # 1. Addition (uint + float)
+        # 2. Negation (uint) -> Should wrap around (7 -> 249)
+        # 3. Negation + Addition (uint + float)
+        return c + x, torch.neg(c), torch.neg(c) + x
+
+    # Initialize input
+    torch.manual_seed(0)
+    x = torch.randn(2, 2, dtype=torch.float32)
+    
+    # Get eager results
+    eager_results = model(x)
+    
+    # Get compiled results
+    compiled_model = torch.compile(model)
+    compiled_results = compiled_model(x)
+    
+    # Assert equality for all outputs
+    # Output 0: c + x
+    assert torch.allclose(eager_results[0], compiled_results[0]), \
+        f"Output 0 mismatch: Eager {eager_results[0]} vs Compiled {compiled_results[0]}"
+        
+    # Output 1: torch.neg(c)
+    assert torch.equal(eager_results[1], compiled_results[1]), \
+        f"Output 1 mismatch: Eager {eager_results[1]} vs Compiled {compiled_results[1]}"
+        
+    # Output 2: torch.neg(c) + x (The specific bug case)
+    assert torch.allclose(eager_results[2], compiled_results[2]), \
+        f"Output 2 mismatch: Eager {eager_results[2]} vs Compiled {compiled_results[2]}"
+
+if __name__ == "__main__":
+    test_neg_add_uint_tensor_compile()
+    print("Test passed.")

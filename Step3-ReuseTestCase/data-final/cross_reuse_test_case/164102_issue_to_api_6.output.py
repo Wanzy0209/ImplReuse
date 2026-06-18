@@ -1,0 +1,85 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Similar API implementation provided in the issue context
+# (mapped from tf.profiler.experimental.client.trace description)
+def trace(*args):
+  """Traces argument information at compilation time."""
+  print(*args)
+
+# Helper to replicate torch.rms_norm behavior
+def rms_norm(x, normalized_shape, epsilon=1e-8):
+    # Calculate mean of squares over the normalized_shape dimensions
+    # Input shape: (93, 62, 8), normalized_shape: (62, 8) -> axes (1, 2)
+    axes = list(range(len(x.shape) - len(normalized_shape), len(x.shape)))
+    square_mean = tf.reduce_mean(tf.square(x), axis=axes, keepdims=True)
+    # Normalize
+    return x * tf.math.rsqrt(square_mean + epsilon)
+
+# Replicating the logic from the bug report using TensorFlow
+@tf.function
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7):
+    # t0 = arg0 # size=(93, 62, 23)
+    t0 = arg0
+    t1 = arg1
+    t2 = arg2
+    t3 = arg3
+    t4 = arg4
+    
+    # t5 = torch.cat([t0, t1, t2, t3, t4], dim=2) # size=(93, 62, 127)
+    t5 = tf.concat([t0, t1, t2, t3, t4], axis=2)
+    
+    # t6 = t5.contiguous() # TF tensors are implicitly contiguous
+    t6 = t5
+    
+    t7 = arg5 # size=(93, 62, 8)
+    t8 = tf.exp(t7)
+    
+    # t9 = torch.rms_norm(t8, (62, 8)) # size=(93, 62, 8)
+    t9 = rms_norm(t8, (62, 8))
+    
+    # Leveraging the similar API: trace the output of rms_norm during graph tracing
+    trace("RMS Norm Output Shape:", tf.shape(t9))
+    
+    t10 = arg6 # size=(77, 8, 127)
+    t11 = tf.exp(t10)
+    
+    t12 = arg7 # size=(16, 8, 15)
+    # t13 = torch.nn.functional.interpolate(t12, size=(127,), mode='nearest')
+    # TF equivalent: resize the last dimension. 
+    # Reshape to (Batch, Height=1, Width, Channels) -> (16, 1, 15, 8)
+    t12_4d = tf.expand_dims(t12, axis=1) 
+    # Resize width to 127
+    t13_4d = tf.image.resize(t12_4d, size=[1, 127], method='nearest')
+    # Reshape back to (16, 8, 127)
+    t13 = tf.squeeze(t13_4d, axis=1)
+    
+    # t14 = torch.cat([t11, t13], dim=0) # size=(93, 8, 127)
+    t14 = tf.concat([t11, t13], axis=0)
+    
+    # t15 = torch.baddbmm(t6, t9, t14) # size=(93, 62, 127)
+    # baddbmm is batched matmul add: t6 + (t9 @ t14)
+    matmul_result = tf.matmul(t9, t14)
+    t15 = t6 + matmul_result
+    
+    return t15
+
+# Initialize inputs with bfloat16 as in the original bug report
+dtype = tf.bfloat16
+arg0 = tf.random.normal([93, 62, 23], dtype=dtype)
+arg1 = tf.random.normal([93, 62, 11], dtype=dtype)
+arg2 = tf.random.normal([93, 62, 10], dtype=dtype)
+arg3 = tf.random.normal([93, 62, 81], dtype=dtype)
+arg4 = tf.random.normal([93, 62, 2], dtype=dtype)
+arg5 = tf.random.normal([93, 62, 8], dtype=dtype)
+arg6 = tf.random.normal([77, 8, 127], dtype=dtype)
+arg7 = tf.random.normal([16, 8, 15], dtype=dtype)
+
+# Execute the function. 
+# The @tf.function decorator triggers the tracing phase, where the 'trace' API should execute.
+result = foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
+
+# Verify the output shape matches the expected result from the bug report
+assert result.shape == (93, 62, 127), f"Expected shape (93, 62, 127), got {result.shape}"
+print("Test passed. Trace executed successfully during compilation.")

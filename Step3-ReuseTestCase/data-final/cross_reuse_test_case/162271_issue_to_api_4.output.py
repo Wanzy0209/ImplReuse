@@ -1,0 +1,45 @@
+import torch
+import unittest
+
+class TestFillDiagonalDynamicShapes(unittest.TestCase):
+    """
+    Test case for Issue 162271: Tensor.fill_diagonal_ doesn't support dynamic shapes.
+    
+    This test verifies that the fill_diagonal_ method works correctly when used
+    within a function compiled with torch.compile(dynamic=True).
+    """
+
+    def test_fill_diagonal_dynamic_compile(self):
+        """
+        Reproduces the logic from the bug report to ensure the fix works.
+        The original bug raised a RuntimeError related to storage_offset() 
+        on symbolic tensors.
+        """
+        @torch.compile(dynamic=True)
+        def fill_diagonal_compiled(x):
+            x.fill_diagonal_(True)
+            return x
+
+        # Create the input tensor as described in the issue
+        x = torch.zeros(4, 4)
+        
+        # Execute the compiled function. 
+        # If the bug is present, this will raise a RuntimeError.
+        result = fill_diagonal_compiled(x)
+
+        # Verify the diagonal was filled correctly (True -> 1.0)
+        # and the rest remains 0.0
+        expected = torch.eye(4, dtype=torch.bool)
+        
+        # Check diagonal elements
+        for i in range(4):
+            self.assertTrue(result[i, i])
+        
+        # Check off-diagonal elements
+        for i in range(4):
+            for j in range(4):
+                if i != j:
+                    self.assertFalse(result[i, j])
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,64 @@
+import os
+import torch
+import torch.nn.functional as F
+
+# Ensure CUDA is available as the bug is specific to Triton/CUDA
+if not torch.cuda.is_available():
+    print("Skipping test: CUDA is not available.")
+else:
+    device = "cuda"
+    # Enable logging to inspect generated code if needed
+    os.environ["TORCH_LOGS"] = "output_code"
+
+    def f(x, y):
+        # Leverage the similar API: torch.nn.functional.rrelu_
+        # We apply it in-place. Note: rrelu_ requires floating point inputs.
+        F.rrelu_(x)
+        F.rrelu_(y)
+
+        # Original bug reproduction logic
+        # The logic involves slicing, unsqueezing (None), and concatenating
+        y2 = torch.cat(
+            [
+                x[:, 1:],
+                y[:, None] + 32 * 2048,
+            ],
+            dim=1,
+        )
+
+        x2 = x[:, 1:, None]
+        y3 = y2[:, -1:, None]
+
+        # Note: torch.arange creates int64 by default, so we cast to float32
+        # to match the input types modified by rrelu_.
+        return (
+            torch.cat([x2, y3], dim=1)
+            + torch.arange(-2048, 0, device=device, dtype=torch.float32)[None, None, :]
+        ).reshape(1, 32 * 2048)
+
+    # Initialize inputs as float32 to support rrelu_
+    x = torch.zeros(1, 32, dtype=torch.float32, device=device)
+    y = torch.zeros(1, dtype=torch.float32, device=device)
+
+    # Test 1: Eager execution (should succeed)
+    print("Running eager execution...")
+    try:
+        result_eager = f(x.clone(), y.clone())
+        print("Eager execution succeeded.")
+    except Exception as e:
+        print(f"Eager execution failed: {e}")
+
+    # Test 2: Compiled execution (this is where the bug manifests)
+    print("Running torch.compile execution...")
+    try:
+        compiled_f = torch.compile(f)
+        result_compiled = compiled_f(x.clone(), y.clone())
+        print("Compiled execution succeeded.")
+        
+        # Verify results match (rrelu on zeros is deterministic/zero)
+        assert torch.allclose(result_eager, result_compiled), "Outputs do not match"
+        print("Test passed: Compiled output matches eager output.")
+    except Exception as e:
+        print(f"Compiled execution failed with error: {e}")
+        # In a real test suite, we might re-raise or mark as failure
+        # raise

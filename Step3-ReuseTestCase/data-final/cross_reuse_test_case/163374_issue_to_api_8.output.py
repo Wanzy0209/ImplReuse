@@ -1,0 +1,59 @@
+import tensorflow as tf
+
+def test_grad_pass_through_inplace_clamp():
+    """
+    Test case for tf.grad_pass_through inspired by PyTorch DTensor issue #163374.
+    
+    The original bug involves an in-place operation (clamp_) on a distributed tensor
+    resulting in incorrect metadata (placement) and value.
+    
+    This test adapts the logic to TensorFlow:
+    1. Setup a variable with a value that requires clamping (analogous to the partial sum).
+    2. Use tf.grad_pass_through to wrap an in-place assignment (analogous to the inplace op).
+    3. Verify the output value and gradient flow (analogous to checking value and placement).
+    """
+    
+    # Setup: Initialize a variable with a value that mimics the 'partial_dt' sum result (144.0)
+    # In the bug report: tensor(12,12) of ones -> sum -> 144.
+    initial_value = 144.0
+    v = tf.Variable(initial_value, dtype=tf.float32)
+
+    # Logic: Perform an in-place modification wrapped in grad_pass_through
+    # Original Bug: out = partial_dt.clamp_(max=2)
+    # TF Adaptation: out = tf.grad_pass_through(v.assign)(tf.minimum(v, 2.0))
+    # We use tf.minimum to simulate the clamp(max=2) logic.
+    # We wrap v.assign (in-place) with grad_pass_through to ensure we test the wrapper's behavior
+    # on state-changing operations, similar to how the bug affects DTensor state.
+    
+    with tf.GradientTape() as tape:
+        # grad_pass_through preserves the forward behavior (the assignment)
+        # but replaces the backward graph with an identity.
+        # This structure mirrors the bug report's `out = obj.method_(args)` pattern.
+        out = tf.grad_pass_through(v.assign)(tf.minimum(v, 2.0))
+
+    # Assertions
+    
+    # 1. Check the output value.
+    # Bug Report Expected: tensor(2.)
+    # Here: The result of the assignment should be the clamped value.
+    assert out.numpy() == 2.0, f"Expected output value 2.0, got {out.numpy()}"
+
+    # 2. Check the variable state (in-place effect).
+    # The variable 'v' should have been updated to 2.0.
+    assert v.numpy() == 2.0, f"Expected variable state 2.0, got {v.numpy()}"
+
+    # 3. Check gradients (metadata check).
+    # Bug Report Expected: (Replicate(),) - correct metadata/placement.
+    # Here: grad_pass_through ensures gradients flow through the wrapped op as identity.
+    # The input to v.assign is tf.minimum(v, 2.0).
+    # Since v (144.0) > 2.0, the gradient of minimum w.r.t v is 0.0.
+    # grad_pass_through makes the backward of 'assign' an identity (gradient 1.0).
+    # Total gradient = 1.0 * 0.0 = 0.0.
+    grads = tape.gradient(out, v)
+    assert grads is not None, "Gradients should not be None"
+    assert grads.numpy() == 0.0, f"Expected gradient 0.0, got {grads.numpy()}"
+
+    print("Test passed: In-place op via grad_pass_through produced correct result and gradient.")
+
+if __name__ == '__main__':
+    test_grad_pass_through_inplace_clamp()

@@ -1,0 +1,82 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_custom_gradient_inline_single_context():
+    """
+    Test Case 1: Single context with inline custom gradient definition.
+    Mirrors the PyTorch pattern:
+        with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):
+            x1 = torch.randn(8, device="cuda")
+    
+    Here, we define the custom gradient function inline (temporary object)
+    inside the GradientTape context to check for lifetime/reference issues.
+    """
+    x = tf.constant(3.0)
+    
+    # Define the operation and its gradient inline (temporary object)
+    # This mimics torch.cuda.MemPool(pool1) being created inline
+    with tf.GradientTape() as tape:
+        # The custom_gradient decorator is applied to a lambda defined right here
+        # The resulting function is called immediately.
+        # This stresses the object lifetime similar to the MemPool bug.
+        y = (tf.custom_gradient(
+            lambda x: (
+                x ** 2, 
+                lambda dy: 2.0 * x * dy
+            )
+        ))(x)
+
+    grad = tape.gradient(y, x)
+    
+    # Assertions to verify correctness
+    assert y.numpy() == 9.0, "Forward pass failed"
+    assert grad.numpy() == 6.0, "Gradient calculation failed"
+    print("Test 1 Passed: Single context with inline custom gradient.")
+
+def test_custom_gradient_inline_nested_contexts():
+    """
+    Test Case 2: Nested contexts with inline custom gradient definitions.
+    Mirrors the PyTorch pattern:
+        with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1)):
+            with torch.cuda.use_mem_pool(torch.cuda.MemPool(pool2)):
+                ...
+    
+    We nest GradientTape contexts and define custom gradients inline
+    within them to ensure no resource conflicts or premature destructions occur.
+    """
+    x = tf.constant(2.0)
+    
+    with tf.GradientTape() as tape1:
+        # Inline custom gradient for outer scope
+        y = (tf.custom_gradient(
+            lambda x: (
+                x + 1.0,
+                lambda dy: dy
+            )
+        ))(x)
+        
+        with tf.GradientTape() as tape2:
+            # Inline custom gradient for inner scope
+            z = (tf.custom_gradient(
+                lambda x: (
+                    x * 3.0,
+                    lambda dy: dy * 3.0
+                )
+            ))(y)
+            
+    # Calculate gradients
+    # dz/dy = 3.0
+    grad_inner = tape2.gradient(z, y)
+    # dz/dx = dz/dy * dy/dx = 3.0 * 1.0 = 3.0
+    grad_outer = tape1.gradient(z, x)
+    
+    # Assertions
+    assert z.numpy() == 9.0, "Inner forward pass failed" # (2 + 1) * 3 = 9
+    assert grad_inner.numpy() == 3.0, "Inner gradient failed"
+    assert grad_outer.numpy() == 3.0, "Outer gradient failed"
+    print("Test 2 Passed: Nested contexts with inline custom gradients.")
+
+if __name__ == "__main__":
+    test_custom_gradient_inline_single_context()
+    test_custom_gradient_inline_nested_contexts()

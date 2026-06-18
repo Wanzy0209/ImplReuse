@@ -1,0 +1,56 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def fn(x, w, axes):
+    # Adapted to tf.nn.weighted_moments
+    # Returns a tuple of (mean, variance)
+    return tf.nn.weighted_moments(x, axes=axes, frequency_weights=w)
+
+# Generate sample inputs to mimic the op_db sampling in the original bug report
+# We create a few random tensors with different shapes to test robustness
+def get_sample_inputs():
+    inputs = []
+    
+    # Case 1: 4D tensor (e.g., batch of images), reducing over spatial dimensions
+    x1 = tf.random.normal((2, 5, 5, 3), dtype=tf.float32)
+    w1 = tf.random.uniform((2, 5, 5, 3), minval=0.1, maxval=1.0, dtype=tf.float32)
+    axes1 = [1, 2]
+    inputs.append((x1, w1, axes1))
+
+    # Case 2: 2D tensor, reducing over dimension 0
+    x2 = tf.random.normal((10, 20), dtype=tf.float32)
+    w2 = tf.random.uniform((10, 20), minval=0.1, maxval=1.0, dtype=tf.float32)
+    axes2 = [0]
+    inputs.append((x2, w2, axes2))
+
+    # Case 3: 3D tensor, reducing over dimension 1
+    x3 = tf.random.normal((4, 8, 16), dtype=tf.float32)
+    w3 = tf.random.uniform((4, 8, 16), minval=0.1, maxval=1.0, dtype=tf.float32)
+    axes3 = [1]
+    inputs.append((x3, w3, axes3))
+    
+    return inputs
+
+inputs = get_sample_inputs()
+
+for x, w, axes in inputs:
+    # Eager execution
+    mean_eager, var_eager = fn(x, w, axes)
+    
+    # Compiled execution (tf.function is analogous to torch.compile)
+    # Using autograph=False to strictly test the graph compilation similar to inductor
+    compiled_fn = tf.function(fn, autograph=False)
+    mean_compiled, var_compiled = compiled_fn(x, w, axes)
+    
+    # Verify results are close
+    # Using numpy assertions to check for numerical mismatches
+    try:
+        np.testing.assert_allclose(mean_eager.numpy(), mean_compiled.numpy(), rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(var_eager.numpy(), var_compiled.numpy(), rtol=1e-5, atol=1e-5)
+        print(f"Test passed for input shape {x.shape}, axes {axes}")
+    except AssertionError as e:
+        print(f"Test failed for input shape {x.shape}, axes {axes}")
+        print("Eager Mean:", mean_eager.numpy())
+        print("Compiled Mean:", mean_compiled.numpy())
+        raise e

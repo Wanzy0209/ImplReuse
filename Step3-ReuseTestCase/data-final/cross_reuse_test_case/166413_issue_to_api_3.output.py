@@ -1,0 +1,16 @@
+import torch
+# pyright: strict
+import tensorflow as tf
+
+# Create a typed layer to be wrapped
+layer = tf.keras.layers.Dense(10)
+
+# Wrap the layer using a concrete Wrapper subclass (TimeDistributed)
+# This mirrors the torch.no_grad() usage where a context/wrapper is applied
+# to an object, potentially obscuring its type if the wrapper is untyped.
+wrapped_layer = tf.keras.layers.TimeDistributed(layer)
+
+# Reveal the type to check if the wrapper obscures the type information
+# similar to the reported bug in torch.no_grad
+reveal_type(wrapped_layer)
+reveal_type(wrapped_layer.layer)

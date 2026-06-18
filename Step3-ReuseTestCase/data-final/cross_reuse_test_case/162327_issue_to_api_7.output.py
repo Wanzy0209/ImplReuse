@@ -1,0 +1,28 @@
+import tensorflow as tf
+import numpy as np
+
+print("TensorFlow Version:", tf.__version__)
+
+# Reproduce the input characteristics from the PyTorch bug report:
+# The original bug involved passing tensors with mismatched shapes and specific dtypes
+# (int8 and int32) which led to a heap-buffer-overflow.
+# We test if tf.keras.layers.Add handles these inputs robustly.
+
+# Input 1: Shape (5, 7, 4, 3, 7, 6), dtype int8
+input1 = tf.constant(np.empty((5, 7, 4, 3, 7, 6), dtype=np.int8))
+
+# Input 2: Shape (4, 9, 2), dtype int32
+input2 = tf.constant(np.empty((4, 9, 2), dtype=np.int32))
+
+# Initialize the Add layer
+add_layer = tf.keras.layers.Add()
+
+try:
+    # Attempt to add tensors with incompatible shapes and types
+    # In the PyTorch case, this caused a crash. Here we expect a clean error or safe handling.
+    output = add_layer([input1, input2])
+    print("Operation completed. Output shape:", output.shape)
+except Exception as e:
+    # We expect a ValueError or similar regarding shape mismatch, not a segmentation fault
+    print(f"Caught expected exception: {type(e).__name__}")
+    print(f"Details: {e}")

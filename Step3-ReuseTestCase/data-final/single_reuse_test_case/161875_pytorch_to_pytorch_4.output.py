@@ -1,0 +1,20 @@
+import torch
+
+# Adapt input for ConvTranspose2d (4D input: Batch, Channels, Height, Width)
+input_data = torch.randn(1, 3, 32, 32)
+
+# Instantiate LazyConvTranspose2d with the extreme padding value from the bug report
+lazy_conv_transpose2d = torch.nn.LazyConvTranspose2d(
+    out_channels=16,
+    kernel_size=3,
+    stride=1,
+    padding=9223372036854775803,
+    bias=True
+)
+
+# Move to device
+lazy_conv_transpose2d.to(device=torch.device('cpu'))
+
+# Attempt forward pass
+# Note: This may cause a segmentation fault or raise an error depending on the fix status
+output = lazy_conv_transpose2d(input_data)

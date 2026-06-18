@@ -1,0 +1,67 @@
+import torch
+import tensorflow as tf
+
+# Disable eager execution as range_input_producer is a v1 graph API
+tf.compat.v1.disable_eager_execution()
+
+def get_default_inputs():
+    """
+    Mimics the input generation from the PyTorch test case.
+    """
+    limit = 10
+    capacity = 32
+    return limit, capacity
+
+def main():
+    limit, capacity = get_default_inputs()
+    
+    print("--- Testing tf.compat.v1.train.range_input_producer ---")
+    
+    # Call the API similar to how torch.compile(model) is called
+    # In the PyTorch bug, the compiled model returns a tuple instead of a tensor.
+    # Here, range_input_producer returns a Queue object, not a Tensor.
+    queue = tf.compat.v1.train.range_input_producer(
+        limit=limit, 
+        num_epochs=None, 
+        shuffle=False, 
+        capacity=capacity, 
+        name="test_queue"
+    )
+    
+    print(f"API returned object type: {type(queue)}")
+    
+    # Attempt to access .shape directly on the returned object
+    # This reproduces the core logic of the bug: accessing .shape on a non-Tensor output.
+    try:
+        # This line mimics: print(f'Compile  shape: {output_compile.shape}')
+        shape = queue.shape
+        print(f"Shape accessible: {shape}")
+    except AttributeError as e:
+        print(f"AttributeError caught: {e}")
+        print("Behavior matches the bug report: The returned object does not have a 'shape' attribute.")
+
+    # To verify the API works as intended (similar to checking eager mode in PyTorch),
+    # we must dequeue to get the actual Tensor.
+    print("\n--- Verifying correct usage (Dequeueing) ---")
+    with tf.compat.v1.Session() as sess:
+        # Initialize local variables (required for num_epochs if set)
+        sess.run(tf.compat.v1.local_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        # Start queue runners
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+        # Get a tensor from the queue
+        tensor = queue.dequeue()
+        
+        # Run the session to get the value
+        val = sess.run(tensor)
+        print(f"Dequeued tensor value: {val}")
+        print(f"Dequeued tensor shape: {val.shape}")
+
+        coord.request_stop()
+        coord.join(threads)
+
+if __name__ == '__main__':
+    main()

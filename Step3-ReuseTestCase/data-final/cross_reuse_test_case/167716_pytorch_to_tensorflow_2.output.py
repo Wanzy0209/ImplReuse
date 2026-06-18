@@ -1,0 +1,63 @@
+import torch
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+
+def test_tf_exp_numpy_take_with_sparse_data():
+    """
+    Adapts the PyTorch sparse.mm bug reproduction test case to 
+    tf.experimental.numpy.take.
+    
+    Original Bug Logic:
+    1. Create Sparse Tensor A.
+    2. Create Sparse Tensor B.
+    3. Perform sparse.mm(A, B).
+    4. Convert result to dense (Crash).
+    
+    Adapted Logic for tf.experimental.numpy.take:
+    1. Create Sparse Tensor A (mimicking PyTorch A).
+    2. Create Sparse Tensor B (mimicking PyTorch B).
+    3. Convert A to dense (as take is a dense operation).
+    4. Use indices from B to perform take operation on A.
+    5. Verify result.
+    """
+    
+    # 1. Setup Sparse Tensor A (size 3x4)
+    # PyTorch: indices_A = torch.tensor([[0, 1, 2], [0, 2, 3]])
+    # TF SparseTensor expects indices as (N, 2), so we transpose the PyTorch definition
+    indices_A = tf.constant([[0, 1, 2], [0, 2, 3]], dtype=tf.int64)
+    values_A = tf.constant([1.0, 2.0, 3.0])
+    A_sparse = tf.SparseTensor(indices=tf.transpose(indices_A), values=values_A, dense_shape=(3, 4))
+
+    # 2. Setup Sparse Tensor B (size 4x2)
+    # PyTorch: indices_B = torch.tensor([[0, 1, 2, 3], [0, 1, 1, 2]])
+    indices_B = tf.constant([[0, 1, 2, 3], [0, 1, 1, 2]], dtype=tf.int64)
+    values_B = tf.constant([4.0, 5.0, 6.0, 7.0])
+    B_sparse = tf.SparseTensor(indices=tf.transpose(indices_B), values=values_B, dense_shape=(4, 2))
+
+    # 3. Adaptation: tf.experimental.numpy.take
+    # Since take is an indexing operation and not matrix multiplication, 
+    # we test the API's ability to handle the data structures involved.
+    # We convert A to dense (as tf.gather/take typically requires dense tensors)
+    # and use the indices from B to select elements.
+    
+    A_dense = tf.sparse.to_dense(A_sparse)
+    
+    # Flatten the indices of B to use as 1D selection indices for take
+    # This preserves the usage of data from both tensors A and B
+    take_indices = tf.reshape(indices_B, [-1])
+
+    # Perform the take operation
+    # Note: mode='clip' is the default in the provided implementation snippet
+    result = tnp.take(A_dense, take_indices, mode='clip')
+
+    # 4. Verification
+    print("Input A (Dense):\n", A_dense.numpy())
+    print("Indices used from B:\n", take_indices.numpy())
+    print("Result of tf.experimental.numpy.take:\n", result.numpy())
+
+    # Assert basic properties to ensure the operation ran without segmentation fault
+    assert result.shape == (8,), f"Expected shape (8,), got {result.shape}"
+    assert result.dtype == tf.float32, f"Expected dtype float32, got {result.dtype}"
+
+if __name__ == "__main__":
+    test_tf_exp_numpy_take_with_sparse_data()

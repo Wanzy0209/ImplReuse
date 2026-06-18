@@ -1,0 +1,22 @@
+import torch
+
+def test_asin_cpu_fallback():
+    # Assuming privateuse1 backend is registered and cpu_fallback is implemented
+    # as described in the bug report.
+    if not torch.has_privateuse1:
+        print("Skipping test: privateuse1 backend not available.")
+        return
+
+    # Create input tensor in valid range for asin [-1, 1]
+    # torch.rand generates values in [0, 1], so we scale to [-1, 1]
+    t = torch.rand(4, 4, device='privateuse1') * 2 - 1
+
+    # This operation is expected to fail with shape [0] due to the bug
+    # affecting CompositeExplicitAutograd operations.
+    result = torch.asin(t)
+
+    # Verify the shape is preserved and not empty
+    assert result.shape == torch.Size([4, 4]), f"Expected shape [4, 4], but got {result.shape}"
+
+if __name__ == "__main__":
+    test_asin_cpu_fallback()

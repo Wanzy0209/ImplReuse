@@ -1,0 +1,28 @@
+import torch
+
+# Replicate the setup from the original bug report
+if torch.cuda.is_available():
+    torch.set_default_device('cuda')
+else:
+    print("CUDA not available, running on CPU")
+
+# Generate inputs for division (requires two tensors)
+inp1 = torch.randn(8192)
+inp2 = torch.randn(8192)
+
+# Adapt the function to torch.div
+func = torch.div
+
+# 1. Eager execution (float32)
+out1 = func(inp1, inp2)
+
+# 2. Compiled execution (float32)
+out2 = torch.compile(func)(inp1, inp2)
+
+# 3. High precision reference (float64)
+out3_high = func(inp1.to(torch.float64), inp2.to(torch.float64))
+
+# Compare the maximum absolute difference against the high precision reference
+# This checks if the compiled version introduces significant numerical deviations
+print((out3_high - out1).abs().max())
+print((out3_high - out2).abs().max())

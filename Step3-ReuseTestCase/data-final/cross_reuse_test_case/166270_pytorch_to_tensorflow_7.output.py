@@ -1,0 +1,81 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_get_output_shapes_squeeze_logic():
+    """
+    Adapted test case for tf.compat.v1.data.get_output_shapes based on 
+    PyTorch issue #166270 (Eager/Compile divergence with squeeze/stack/reshape).
+    
+    This test verifies that the TensorFlow API correctly infers shapes
+    after a sequence of operations that reduce a tensor to a scalar (0-d)
+    and back to a 1-d tensor, similar to the PyTorch reproduction case.
+    """
+    
+    # Setup: Mimic the input tensor arg_0 (size=(4,), dtype=bool)
+    # We use a Dataset to utilize get_output_shapes
+    initial_data = tf.constant([True, False, True, False], dtype=tf.bool)
+    dataset = tf.data.Dataset.from_tensor_slices(initial_data)
+
+    # Mimic torch.chunk(var_node_4, 4, dim=0)[0] -> size (1,)
+    # Batching by 1 effectively chunks the data
+    dataset = dataset.batch(1)
+
+    # Define the transformation logic mirroring the PyTorch function
+    def transform_fn(tensor):
+        # tensor shape is (1,)
+        
+        # var_node_2 = torch.squeeze(var_node_3) -> size ()
+        # Reduces dimension, creating a scalar (0-d tensor)
+        tensor = tf.squeeze(tensor)
+        
+        # var_node_1 = torch.stack([var_node_2]) -> size (1,)
+        # Adds a dimension back
+        tensor = tf.stack([tensor])
+        
+        # var_node_0 = torch.reshape(var_node_1, [1]) -> size (1,)
+        # Explicit reshape
+        tensor = tf.reshape(tensor, [1])
+        
+        return tensor
+
+    # Apply the transformation
+    dataset = dataset.map(transform_fn)
+
+    # --- Test 1: Eager Mode ---
+    print("Testing Eager Mode...")
+    try:
+        # tf.compat.v1.data.get_output_shapes inspects the dataset structure
+        output_shapes_eager = tf.compat.v1.data.get_output_shapes(dataset)
+        print(f" eager success: {output_shapes_eager}")
+    except Exception as e:
+        print(f" eager failed: {e}")
+        raise
+
+    # --- Test 2: Compiled/Graph Mode ---
+    # Wrap the shape inspection in tf.function to simulate torch.compile behavior
+    print("Testing Graph Mode...")
+    @tf.function
+    def get_graph_shapes(ds):
+        return tf.compat.v1.data.get_output_shapes(ds)
+
+    try:
+        output_shapes_graph = get_graph_shapes(dataset)
+        print(f" compile success: {output_shapes_graph}")
+    except Exception as e:
+        print(f" compile failed: {e}")
+        raise
+
+    # --- Verification ---
+    # The expected final shape is (1,) matching the PyTorch output
+    expected_shape = tf.TensorShape([1])
+    
+    assert output_shapes_eager == expected_shape, \
+        f"Eager shape mismatch: {output_shapes_eager} != {expected_shape}"
+    assert output_shapes_graph == expected_shape, \
+        f"Graph shape mismatch: {output_shapes_graph} != {expected_shape}"
+    
+    print("All assertions passed.")
+
+if __name__ == "__main__":
+    test_tf_get_output_shapes_squeeze_logic()

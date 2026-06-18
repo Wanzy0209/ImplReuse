@@ -1,0 +1,13 @@
+import torch
+import torch.nn.functional as F
+
+
+def f(a):
+    print(a.layout)
+    return F.softshrink(a, 0.5)
+
+
+a = torch.sparse_coo_tensor(torch.tensor([[0, 1, 2], [1, 2, 0]]), [1.0, 1.0, 1.0])
+print(f(a))  # works fine
+
+vjp = torch.func.vjp(f, a)[1]  # fails

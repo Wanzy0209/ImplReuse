@@ -1,0 +1,36 @@
+import torch
+import torchvision
+import torch.nn.utils.prune as prune
+
+# Setup model and input as in the original bug report
+model = torchvision.models.mobilenet_v2(weights=None)
+x = torch.rand((1, 3, 224, 224))
+
+# Identify parameters to prune (Conv2d weights)
+parameters_to_prune = []
+for module in model.modules():
+    if isinstance(module, torch.nn.Conv2d):
+        parameters_to_prune.append((module, 'weight'))
+
+# Call the similar API: torch.nn.utils.prune.global_unstructured
+prune.global_unstructured(
+    parameters_to_prune,
+    pruning_method=prune.L1Unstructured,
+    amount=0.2
+)
+
+# Verify the API worked correctly on this model
+# 1. Ensure the model still runs
+output = model(x)
+assert output.shape == (1, 1000)
+
+# 2. Verify global sparsity is approximately the requested amount
+total_params = 0
+zero_params = 0
+for module, name in parameters_to_prune:
+    mask = getattr(module, name + '_mask')
+    total_params += mask.numel()
+    zero_params += (mask == 0).sum().item()
+
+global_sparsity = zero_params / total_params
+assert abs(global_sparsity - 0.2) < 0.01, f"Expected sparsity ~0.2, got {global_sparsity}"

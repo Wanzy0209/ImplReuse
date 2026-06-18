@@ -1,0 +1,55 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Use NCCL if CUDA is available, otherwise GLOO for CPU
+    backend = 'nccl' if torch.cuda.is_available() else 'gloo'
+    dist.init_process_group(backend, rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def worker(rank, world_size):
+    setup(rank, world_size)
+    
+    # Determine device based on availability, adhering to the bug report's context
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    if rank == 0:
+        # Replicate the tensor creation from the bug report
+        arg0 = torch.rand([5699097, 6, 1], dtype=torch.bfloat16, device=device)
+        arg1 = torch.rand([5699097, 6, 256], dtype=torch.bfloat16, device=device)
+        arg2 = torch.rand([5699097, 256, 1], dtype=torch.bfloat16, device=device)
+
+        # Adaptation: Instead of compiling the function, we send the objects
+        # using the similar API torch.distributed.send_object_list
+        dist.send_object_list([arg0, arg1, arg2], dst=1)
+        print(f"Rank {rank}: Sent objects successfully.")
+    else:
+        # Receive the objects on the other rank
+        obj_list = [None, None, None]
+        dist.recv_object_list(obj_list, src=0)
+        
+        # Basic validation to ensure data integrity
+        assert obj_list[0] is not None
+        assert obj_list[1] is not None
+        assert obj_list[2] is not None
+        
+        assert obj_list[0].shape == (5699097, 6, 1)
+        assert obj_list[1].shape == (5699097, 6, 256)
+        assert obj_list[2].shape == (5699097, 256, 1)
+        
+        print(f"Rank {rank}: Received and validated objects successfully.")
+
+    cleanup()
+
+if __name__ == '__main__':
+    world_size = 2
+    # Spawn 2 processes to simulate distributed environment
+    mp.spawn(worker, args=(world_size,), nprocs=world_size, join=True)

@@ -1,0 +1,63 @@
+import torch
+import torch.backends.opt_einsum
+
+def test_opt_einsum_redundant_access_pattern():
+    """
+    Test case generated based on Issue 165624.
+    
+    The original issue describes a merge mistake where a conditional block
+    executing a graph pass was duplicated, causing the pass to run twice.
+    
+    This test applies a similar control flow pattern to the similar API
+    `torch.backends.opt_einsum.get_opt_einsum`. It verifies that accessing
+    the backend configuration redundantly (simulating the merge mistake)
+    does not cause errors and maintains consistent state, particularly
+    in the context of torch.compile.
+    """
+    
+    # Setup: Check if opt_einsum is available (analogous to config.joint_custom_pre_pass)
+    backend = torch.backends.opt_einsum.get_opt_einsum()
+    count = 0
+
+    # --- First Block (Lines 581-584 in the bug report) ---
+    if backend is not None:
+        # In the bug: GraphTransformObserver(...).apply_graph_pass(...)
+        # Here: We access the backend to simulate the action.
+        _ = torch.backends.opt_einsum.get_opt_einsum()
+        count += 1
+
+    # --- Intermediate Block (Lines 586-591 in the bug report) ---
+    # In the bug: remove_noop_ops was called.
+    # Here: We define a simple operation to be compiled.
+    def simple_einsum(x, y):
+        return torch.einsum('ij,jk->ik', x, y)
+
+    x = torch.randn(5, 5)
+    y = torch.randn(5, 5)
+
+    # --- Second Block (Lines 593-597 in the bug report - The Duplicate) ---
+    if backend is not None:
+        # In the bug: GraphTransformObserver(...).apply_graph_pass(...) (Duplicate)
+        # Here: We access the backend again to verify safety of the duplicate pattern.
+        _ = torch.backends.opt_einsum.get_opt_einsum()
+        count += 1
+
+    # Verification
+    # We expect count to be 2 because we are reproducing the logic of the bug
+    # (executing the block twice) to test the API's resilience.
+    if backend is not None:
+        assert count == 2, "The logic block was executed twice as per the bug pattern"
+        
+        # Ensure the system is still functional after the redundant access
+        # by running torch.compile (Original API Under Test).
+        compiled_fn = torch.compile(simple_einsum)
+        res = compiled_fn(x, y)
+        expected = torch.matmul(x, y)
+        
+        assert torch.allclose(res, expected), "Result mismatch after redundant backend access"
+        print("Test passed: Redundant access handled gracefully.")
+    else:
+        print("opt_einsum not available, skipping backend-specific checks.")
+
+if __name__ == "__main__":
+    test_opt_einsum_redundant_access_pattern()

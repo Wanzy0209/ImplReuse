@@ -1,0 +1,50 @@
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from torch.nn.utils import prune
+
+# Setup from the original bug report
+tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-270m-it")
+model = AutoModelForCausalLM.from_pretrained("google/gemma-3-270m-it")
+
+messages = [
+    {"role": "user", "content": "Who are you?"},
+]
+
+inputs = tokenizer.apply_chat_template(
+    messages,
+    add_generation_prompt=True,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="pt",
+).to(model.device)
+
+# Identify parameters to prune (e.g., all Linear weights in the model)
+parameters_to_prune = []
+for module in model.modules():
+    if isinstance(module, torch.nn.Linear):
+        parameters_to_prune.append((module, 'weight'))
+
+# Adapted call site: Use torch.nn.utils.prune.global_unstructured
+# instead of torch.export.export
+try:
+    prune.global_unstructured(
+        parameters_to_prune,
+        pruning_method=prune.L1Unstructured,
+        amount=0.2
+    )
+except Exception as e:
+    print(f"Test failed with error: {e}")
+    raise
+
+# Assertions to verify the API behavior
+for module, name in parameters_to_prune:
+    # Check that the mask was created
+    assert hasattr(module, name + '_mask'), f"Mask not found for {name}"
+    # Check that the original parameter was stored
+    assert hasattr(module, name + '_orig'), f"Original parameter not found for {name}"
+    
+    # Verify that pruning actually occurred (mask is not all 1s)
+    mask = getattr(module, name + '_mask')
+    assert mask.sum() < mask.numel(), f"Pruning did not remove any weights in {name}"
+
+print("Test passed: torch.nn.utils.prune.global_unstructured executed successfully.")

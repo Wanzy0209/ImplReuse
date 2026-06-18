@@ -1,0 +1,37 @@
+import torch
+import torch.profiler.itt
+
+def test_uint_neg_add_inductor():
+    """
+    Test case for Issue 161763: neg+add computation including uint tensor is incorrect under inductor.
+    Leverages torch.profiler.itt.range_push to instrument the test execution.
+    """
+    torch.manual_seed(0)
+    x = torch.randn(2, 2, dtype=torch.float32)
+
+    def foo(x):
+        c = torch.tensor(7, dtype=torch.uint8)
+        return c+x, torch.neg(c), torch.neg(c)+x
+
+    # Instrument eager execution with the similar API
+    torch.profiler.itt.range_push("eager_run")
+    res = foo(x)
+    torch.profiler.itt.range_pop()
+
+    # Compile the function
+    cfoo = torch.compile(foo)
+
+    # Instrument compiled execution with the similar API
+    torch.profiler.itt.range_push("compiled_run")
+    cres = cfoo(x)
+    torch.profiler.itt.range_pop()
+
+    # Verify results match
+    # The bug manifests in res[2] vs cres[2] where uint8 negation wraps in eager mode
+    # but might be treated as float negation in inductor.
+    assert torch.allclose(res[0], cres[0]), "Mismatch in c+x"
+    assert res[1] == cres[1], "Mismatch in torch.neg(c)"
+    assert torch.allclose(res[2], cres[2]), "Mismatch in torch.neg(c)+x"
+
+if __name__ == "__main__":
+    test_uint_neg_add_inductor()

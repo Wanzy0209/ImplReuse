@@ -1,0 +1,26 @@
+import torch
+import torch.nn.functional as F
+
+def fn(x, weight):
+    # Reproduce the original bug logic: nested torch.no_grad with graph_breaks
+    torch._dynamo.graph_break()
+    with torch.no_grad():
+        with torch.no_grad():
+            # Leverage the similar API: torch.nn.functional.conv_transpose2d
+            # This tests if the Dynamo resume codegen bug affects this specific operation
+            # within the problematic nested context structure.
+            x = F.conv_transpose2d(x, weight, bias=None, stride=1, padding=1)
+            torch._dynamo.graph_break()
+    return x
+
+# Setup inputs for conv_transpose2d
+# Batch size 1, Input channels 3, Height 5, Width 5
+inp = torch.ones(1, 3, 5, 5)
+# Input channels 3, Output channels 3, Kernel 3x3
+weight = torch.ones(3, 3, 3, 3)
+
+# Compile with eager backend to trigger the specific codegen path
+opt_m = torch.compile(fn, backend="eager")
+
+# Run the test
+opt_m(inp, weight)

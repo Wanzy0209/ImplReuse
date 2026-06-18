@@ -1,0 +1,246 @@
+{
+  "title": "[torch.compile][FlexAttention] Inductor failure with custom score_mod (FlexibleLayout / NoValidChoicesError)",
+  "issue_id": "163300",
+  "bug_description": "### 🐛 Describe the bug\nCompiling a module that wraps `torch.nn.attention.flex_attention` with a custom `score_mod` fails under `torch.compile` (Inductor).  \n- Eager execution works correctly.  \n- With `torch.compile(dynamic=False)` I get:\n```\n\nBackendCompilerFailed: backend='inductor' raised:\nLoweringException: AssertionError: convert FlexibleLayout to FixedLayout first\n\n```\n- With `torch.compile(dynamic=False, mode=\"max-autotune-no-cudagraphs\")` I get:\n```\n\nBackendCompilerFailed: backend='inductor' raised:\nLoweringException: NoValidChoicesError\n\n````\n- Tried with both `bfloat16` (autocast) and `float16` — same errors.  \n\n### Minimal repro\n```python\nimport torch\nimport torch.nn as nn\nfrom torch.nn.attention.flex_attention import flex_attention\nfrom torch.nn.attention import SDPBackend\n\nclass FlexAttentionCPB(nn.Module):\n    def __init__(self, N: int, R: int, H: int = 6, hidden: int = 32):\n        super().__init__()\n        self.mlp = nn.Sequential(nn.Linear(2, hidden), nn.GELU(), nn.Linear(hidden, H, bias=False))\n        self.gamma = nn.Parameter(torch.zeros(H))\n        self.H = H\n        self.init_tables(N, R)\n        self.register_buffer(\"r_cutoff\", torch.tensor(R, dtype=torch.long), persistent=False)\n\n    def init_tables(self, N: int, R: int):\n        # continuous position bias –  SwinV2\n        P = N - R\n        S = int(P**0.5)\n        assert S * S == P\n        rng = torch.arange(-(S - 1), S, dtype=torch.float32)\n        dY, dX = torch.meshgrid(rng, rng, indexing=\"ij\")\n        rel = torch.stack([dY / max(S - 1, 1), dX / max(S - 1, 1)], dim=-1).reshape(-1, 2)\n        rel_table = torch.sign(rel) * torch.log1p(rel.abs())\n        self.register_buffer(\"rel_table\", rel_table, persistent=False)\n\n        yy, xx = torch.arange(S), torch.arange(S)\n        Y, X = torch.meshgrid(yy, xx, indexing=\"ij\")\n        flat = torch.stack([Y, X], 0).flatten(1)\n        d = flat[:, :, None] - flat[:, None, :]\n        d = d.permute(1, 2, 0).contiguous()\n        d[:, :, 0] += S - 1; d[:, :, 1] += S - 1\n        d[:, :, 0] *= 2 * S - 1\n        l_idx = d.sum(-1).to(torch.long)\n\n        idx = torch.full((N, N), 0, dtype=torch.long)\n        idx[R:, R:] = l_idx\n        self.register_buffer(\"idx_table\", idx, persistent=False)\n\n    def _score_mod(self, mu: torch.Tensor):\n        bt = self.mlp(self.rel_table)\n        idx = self.idx_table\n        mu_q, mu_k = mu.unbind(2)\n        gam_sig = torch.sigmoid(self.gamma)\n\n        def score_mod(score, b, h, q, kv):\n            has_bias = (q >= self.r_cutoff) & (kv >= self.r_cutoff)\n            l2 = idx[q, kv]\n            bias = bt[l2, h]\n            w_gate = gam_sig[h] * (mu_q[b, h, q] + mu_k[b, h, kv])\n            return score + has_bias.to(score.dtype) * w_gate * bias\n\n        return score_mod\n\n    def forward(self, q, k, v, mu):\n        return flex_attention(q, k, v, score_mod=self._score_mod(mu))\n\ndef main():\n    device = \"cuda\"\n    B, N, R, d, H = 2, 18, 2, 32, 4\n    mod = FlexAttentionCPB(N, R, H).to(device)\n    mod = torch.compile(mod, dynamic=False)  # also tested \"max-autotune-no-cudagraphs\"\n\n    q = torch.randn(B, H, N, d, device=device)\n    k = torch.randn_like(q)\n    v = torch.randn_like(q)\n    mu = torch.randn(B, H, 2, N, device=device)\n\n    with torch.nn.attention.sdpa_kernel(SDPBackend.FLASH_ATTENTION):\n        with torch.amp.autocast(\"cuda\", dtype=torch.bfloat16):\n            out = mod(q, k, v, mu)\n            out.norm().backward()\n    print(\"done\")\n\nif __name__ == \"__main__\":\n    main()\n````\n\n### Ablation\n\n* Eager (no `torch.compile`) → ✅ works\n* `torch.compile(dynamic=False)` → ❌ FlexibleLayout→FixedLayout assertion\n* `torch.compile(dynamic=False, mode=\"max-autotune-no-cudagraphs\")` → ❌ NoValidChoicesError\n* Backends: tested with `SDPBackend.FLASH_ATTENTION`.\n* Dtypes: bf16 autocast and fp16 both fail under compile.\n\n### Environment\n\n```\npython: 3.10.12 (GCC 11.4.0)\ncuda: 12.4\ncudnn: 90100\ntorch: 2.6.0+cu124\ntorchvision: 0.21.0+cu124\ntorchaudio: 2.6.0+cu124\ntriton: 3.2.0\nGPU: NVIDIA A100-SXM4-80GB ",
+  "apis": [
+    "torch.arange",
+    "torch.log1p",
+    "has_bias.to",
+    "self.register_buffer",
+    "torch.stack",
+    "torch.tensor"
+  ],
+  "best_code": "import torch\nimport torch.nn as nn\nfrom torch.nn.attention.flex_attention import flex_attention\nfrom torch.nn.attention import SDPBackend\n\nclass FlexAttentionCPB(nn.Module):\n    def __init__(self, N: int, R: int, H: int = 6, hidden: int = 32):\n        super().__init__()\n        self.mlp = nn.Sequential(nn.Linear(2, hidden), nn.GELU(), nn.Linear(hidden, H, bias=False))\n        self.gamma = nn.Parameter(torch.zeros(H))\n        self.H = H\n        self.init_tables(N, R)\n        self.register_buffer(\"r_cutoff\", torch.tensor(R, dtype=torch.long), persistent=False)\n\n    def init_tables(self, N: int, R: int):\n        # continuous position bias –  SwinV2\n        P = N - R\n        S = int(P**0.5)\n        assert S * S == P\n        rng = torch.arange(-(S - 1), S, dtype=torch.float32)\n        dY, dX = torch.meshgrid(rng, rng, indexing=\"ij\")\n        rel = torch.stack([dY / max(S - 1, 1), dX / max(S - 1, 1)], dim=-1).reshape(-1, 2)\n        rel_table = torch.sign(rel) * torch.log1p(rel.abs())\n        self.register_buffer(\"rel_table\", rel_table, persistent=False)\n\n        yy, xx = torch.arange(S), torch.arange(S)\n        Y, X = torch.meshgrid(yy, xx, indexing=\"ij\")\n        flat = torch.stack([Y, X], 0).flatten(1)\n        d = flat[:, :, None] - flat[:, None, :]\n        d = d.permute(1, 2, 0).contiguous()\n        d[:, :, 0] += S - 1; d[:, :, 1] += S - 1\n        d[:, :, 0] *= 2 * S - 1\n        l_idx = d.sum(-1).to(torch.long)\n\n        idx = torch.full((N, N), 0, dtype=torch.long)\n        idx[R:, R:] = l_idx\n        self.register_buffer(\"idx_table\", idx, persistent=False)\n\n    def _score_mod(self, mu: torch.Tensor):\n        bt = self.mlp(self.rel_table)\n        idx = self.idx_table\n        mu_q, mu_k = mu.unbind(2)\n        gam_sig = torch.sigmoid(self.gamma)\n\n        def score_mod(score, b, h, q, kv):\n            has_bias = (q >= self.r_cutoff) & (kv >= self.r_cutoff)\n            l2 = idx[q, kv]\n            bias = bt[l2, h]\n            w_gate = gam_sig[h] * (mu_q[b, h, q] + mu_k[b, h, kv])\n            return score + has_bias.to(score.dtype) * w_gate * bias\n\n        return score_mod\n\n    def forward(self, q, k, v, mu):\n        return flex_attention(q, k, v, score_mod=self._score_mod(mu))\n\ndef main():\n    device = \"cuda\"\n    B, N, R, d, H = 2, 18, 2, 32, 4\n    mod = FlexAttentionCPB(N, R, H).to(device)\n    mod = torch.compile(mod, dynamic=False)  # also tested \"max-autotune-no-cudagraphs\"\n\n    q = torch.randn(B, H, N, d, device=device)\n    k = torch.randn_like(q)\n    v = torch.randn_like(q)\n    mu = torch.randn(B, H, 2, N, device=device)\n\n    with torch.nn.attention.sdpa_kernel(SDPBackend.FLASH_ATTENTION):\n        with torch.amp.autocast(\"cuda\", dtype=torch.bfloat16):\n            out = mod(q, k, v, mu)\n            out.norm().backward()\n    print(\"done\")\n\nif __name__ == \"__main__\":\n    main()",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/163434"
+  ],
+  "_meta": {
+    "file": "163300_issue_ori_data.json",
+    "generated_at": "2026-04-21 02:52:18",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\163300_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\163300_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "Compiling a module that wraps `torch.nn.attention.flex_attention` with a custom `score_mod` fails under `torch.compile` (Inductor). Eager execution works correctly. With `torch.compile(dynamic=False)` I get: `BackendCompilerFailed: backend='inductor' raised: LoweringException: AssertionError: convert FlexibleLayout to FixedLayout first`. With `torch.compile(dynamic=False, mode=\"max-autotune-no-cudagraphs\")` I get: `BackendCompilerFailed: backend='inductor' raised: LoweringException: NoValidChoicesError`. Tried with both `bfloat16` (autocast) and `float16` — same errors.",
+  "repro_code": "import torch\nimport torch.nn as nn\nfrom torch.nn.attention.flex_attention import flex_attention\nfrom torch.nn.attention import SDPBackend\n\nclass FlexAttentionCPB(nn.Module):\n    def __init__(self, N: int, R: int, H: int = 6, hidden: int = 32):\n        super().__init__()\n        self.mlp = nn.Sequential(nn.Linear(2, hidden), nn.GELU(), nn.Linear(hidden, H, bias=False))\n        self.gamma = nn.Parameter(torch.zeros(H))\n        self.H = H\n        self.init_tables(N, R)\n        self.register_buffer(\"r_cutoff\", torch.tensor(R, dtype=torch.long), persistent=False)\n\n    def init_tables(self, N: int, R: int):\n        # continuous position bias –  SwinV2\n        P = N - R\n        S = int(P**0.5)\n        assert S * S == P\n        rng = torch.arange(-(S - 1), S, dtype=torch.float32)\n        dY, dX = torch.meshgrid(rng, rng, indexing=\"ij\")\n        rel = torch.stack([dY / max(S - 1, 1), dX / max(S - 1, 1)], dim=-1).reshape(-1, 2)\n        rel_table = torch.sign(rel) * torch.log1p(rel.abs())\n        self.register_buffer(\"rel_table\", rel_table, persistent=False)\n\n        yy, xx = torch.arange(S), torch.arange(S)\n        Y, X = torch.meshgrid(yy, xx, indexing=\"ij\")\n        flat = torch.stack([Y, X], 0).flatten(1)\n        d = flat[:, :, None] - flat[:, None, :]\n        d = d.permute(1, 2, 0).contiguous()\n        d[:, :, 0] += S - 1; d[:, :, 1] += S - 1\n        d[:, :, 0] *= 2 * S - 1\n        l_idx = d.sum(-1).to(torch.long)\n\n        idx = torch.full((N, N), 0, dtype=torch.long)\n        idx[R:, R:] = l_idx\n        self.register_buffer(\"idx_table\", idx, persistent=False)\n\n    def _score_mod(self, mu: torch.Tensor):\n        bt = self.mlp(self.rel_table)\n        idx = self.idx_table\n        mu_q, mu_k = mu.unbind(2)\n        gam_sig = torch.sigmoid(self.gamma)\n\n        def score_mod(score, b, h, q, kv):\n            has_bias = (q >= self.r_cutoff) & (kv >= self.r_cutoff)\n            l2 = idx[q, kv]\n            bias = bt[l2, h]\n            w_gate = gam_sig[h] * (mu_q[b, h, q] + mu_k[b, h, kv])\n            return score + has_bias.to(score.dtype) * w_gate * bias\n\n        return score_mod\n\n    def forward(self, q, k, v, mu):\n        return flex_attention(q, k, v, score_mod=self._score_mod(mu))\n\ndef main():\n    device = \"cuda\"\n    B, N, R, d, H = 2, 18, 2, 32, 4\n    mod = FlexAttentionCPB(N, R, H).to(device)\n    mod = torch.compile(mod, dynamic=False)  # also tested \"max-autotune-no-cudagraphs\"\n\n    q = torch.randn(B, H, N, d, device=device)\n    k = torch.randn_like(q)\n    v = torch.randn_like(q)\n    mu = torch.randn(B, H, 2, N, device=device)\n\n    with torch.nn.attention.sdpa_kernel(SDPBackend.FLASH_ATTENTION):\n        with torch.amp.autocast(\"cuda\", dtype=torch.bfloat16):\n            out = mod(q, k, v, mu)\n            out.norm().backward()\n    print(\"done\")\n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "[torch.compile][FlexAttention] Inductor failure with custom score_mod (FlexibleLayout / NoValidChoicesError)",
+  "affected_api": "torch.nn.attention.flex_attention",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "bfloat16 (autocast) and float16",
+    "input_shape": "B=2, N=18, R=2, d=32, H=4",
+    "other_conditions": "torch.compile(dynamic=False) or torch.compile(dynamic=False, mode=\"max-autotune-no-cudagraphs\"), using SDPBackend.FLASH_ATTENTION"
+  },
+  "environment": {
+    "pytorch_version": "2.6.0+cu124",
+    "python_version": "3.10.12",
+    "os": "unknown",
+    "hardware": "NVIDIA A100-SXM4-80GB"
+  },
+  "labels": [],
+  "add_fix_code": [
+    "from torch.nn.attention import SDPBackend",
+    "    @supported_platform",
+    "    @skip_on_cpu",
+    "    def test_custom_score_mod_layout_freeze(self, device):",
+    "        torch.manual_seed(0)",
+    "",
+    "        class FlexAttentionCPB(nn.Module):",
+    "            def __init__(self, N: int, R: int, H: int = 4, hidden: int = 32):",
+    "                super().__init__()",
+    "                self.mlp = nn.Sequential(",
+    "                    nn.Linear(2, hidden),",
+    "                    nn.GELU(),",
+    "                    nn.Linear(hidden, H, bias=False),",
+    "                )",
+    "                self.gamma = nn.Parameter(torch.zeros(H))",
+    "                self.H = H",
+    "                self._init_tables(N, R)",
+    "                self.register_buffer(",
+    "                    \"r_cutoff\", torch.tensor(R, dtype=torch.long), persistent=False",
+    "                )",
+    "",
+    "            def _init_tables(self, N: int, R: int) -> None:",
+    "                P = N - R",
+    "                S = int(P**0.5)",
+    "                assert S * S == P",
+    "                rng = torch.arange(-(S - 1), S, dtype=torch.float32)",
+    "                dY, dX = torch.meshgrid(rng, rng, indexing=\"ij\")",
+    "                rel = torch.stack(",
+    "                    [dY / max(S - 1, 1), dX / max(S - 1, 1)], dim=-1",
+    "                ).reshape(-1, 2)",
+    "                rel_table = torch.sign(rel) * torch.log1p(rel.abs())",
+    "                self.register_buffer(\"rel_table\", rel_table, persistent=False)",
+    "",
+    "                yy, xx = torch.arange(S), torch.arange(S)",
+    "                Y, X = torch.meshgrid(yy, xx, indexing=\"ij\")",
+    "                flat = torch.stack([Y, X], 0).flatten(1)",
+    "                d = flat[:, :, None] - flat[:, None, :]",
+    "                d = d.permute(1, 2, 0).contiguous()",
+    "                d[:, :, 0] += S - 1",
+    "                d[:, :, 1] += S - 1",
+    "                d[:, :, 0] *= 2 * S - 1",
+    "                l_idx = d.sum(-1).to(torch.long)",
+    "                idx = torch.full((N, N), 0, dtype=torch.long)",
+    "                idx[R:, R:] = l_idx",
+    "                self.register_buffer(\"idx_table\", idx, persistent=False)",
+    "",
+    "            def _score_mod(self, mu: torch.Tensor):",
+    "                bt = self.mlp(self.rel_table)",
+    "                idx = self.idx_table",
+    "                mu_q, mu_k = mu.unbind(2)",
+    "                gam_sig = torch.sigmoid(self.gamma)",
+    "",
+    "                def score_mod(score, b, h, q, kv):",
+    "                    has_bias = (q >= self.r_cutoff) & (kv >= self.r_cutoff)",
+    "                    l2 = idx[q, kv]",
+    "                    bias = bt[l2, h]",
+    "                    w_gate = gam_sig[h] * (mu_q[b, h, q] + mu_k[b, h, kv])",
+    "                    return score + has_bias.to(score.dtype) * w_gate * bias",
+    "",
+    "                return score_mod",
+    "",
+    "            def forward(self, q, k, v, mu):",
+    "                return flex_attention(q, k, v, score_mod=self._score_mod(mu))",
+    "",
+    "        dtype = torch.bfloat16 if PLATFORM_SUPPORTS_BF16 else torch.float16",
+    "        device_obj = torch.device(device)",
+    "        module = FlexAttentionCPB(N=18, R=2).to(device_obj)",
+    "        compiled_module = torch.compile(module, backend=\"inductor\", dynamic=False)",
+    "",
+    "        q = torch.randn(2, 4, 18, 32, device=device_obj, dtype=dtype)",
+    "        k = torch.randn_like(q)",
+    "        v = torch.randn_like(q)",
+    "        mu = torch.randn(2, 4, 2, 18, device=device_obj)",
+    "",
+    "        with torch.no_grad():",
+    "            with torch.nn.attention.sdpa_kernel(SDPBackend.FLASH_ATTENTION):",
+    "                eager_out = module(q, k, v, mu)",
+    "                compiled_out = compiled_module(q, k, v, mu)",
+    "",
+    "        self.assertEqual(compiled_out.shape, eager_out.shape)",
+    "        torch.testing.assert_close(",
+    "            compiled_out.float(), eager_out.float(), atol=2e-2, rtol=2e-2",
+    "        )",
+    "",
+    "from torch.utils._pytree import tree_map, tree_map_only",
+    "def freeze_irnodes(tree: Any) -> Any:",
+    "    \"\"\"Freeze layouts for every IRNode contained in a pytree.\"\"\"",
+    "",
+    "    if tree is None:",
+    "        return None",
+    "",
+    "    def _freeze(node: IRNode) -> IRNode:",
+    "        try:",
+    "            node.freeze_layout()",
+    "        except NotImplementedError:",
+    "            pass",
+    "        return node",
+    "",
+    "    return tree_map_only(IRNode, _freeze, tree)",
+    "",
+    "",
+    "    freeze_irnodes,",
+    "    freeze_irnodes(subgraph_buffer)",
+    "    freeze_irnodes(mask_graph_buffer)",
+    "    freeze_irnodes(score_mod_other_buffers)",
+    "    freeze_irnodes(mask_mod_other_buffers)",
+    "",
+    "    freeze_irnodes(fw_subgraph_buffer)",
+    "    freeze_irnodes(all_joint_outputs)",
+    "    freeze_irnodes(mask_graph_buffer)",
+    "    freeze_irnodes,",
+    "    freeze_irnodes(score_mod_other_buffers)",
+    "    freeze_irnodes(mask_mod_other_buffers)",
+    ""
+  ],
+  "sub_fix_code": [
+    "from torch.utils._pytree import tree_map",
+    "",
+    "    mask_graph_buffer = mask_graph_buffer"
+  ],
+  "core_api": "torch.nn.attention.flex_attention",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [],
+    "issue_to_api": [
+      {
+        "api_name": "torch.backends.mkldnn.is_available",
+        "api_type": "issue",
+        "similarity": 0.9688899517059326
+      },
+      {
+        "api_name": "tf.compat.v1.Summary.Value",
+        "api_type": "issue",
+        "similarity": 0.9678452014923096
+      },
+      {
+        "api_name": "torch.backends.nnpack.is_available",
+        "api_type": "issue",
+        "similarity": 0.9668828248977661
+      },
+      {
+        "api_name": "tf.keras.backend",
+        "api_type": "issue",
+        "similarity": 0.96626216173172
+      },
+      {
+        "api_name": "tf.keras.backend.backend",
+        "api_type": "issue",
+        "similarity": 0.96626216173172
+      },
+      {
+        "api_name": "tf.compat.v1.user_ops.my_fact",
+        "api_type": "issue",
+        "similarity": 0.9659908413887024
+      },
+      {
+        "api_name": "tf.compat.v1.tpu.PaddingSpec",
+        "api_type": "issue",
+        "similarity": 0.9654124975204468
+      },
+      {
+        "api_name": "torch.distributed.get_world_size",
+        "api_type": "issue",
+        "similarity": 0.9648157954216003
+      },
+      {
+        "api_name": "tf.keras.backend.epsilon",
+        "api_type": "issue",
+        "similarity": 0.9642231464385986
+      },
+      {
+        "api_name": "torch.backends.cuda.is_built",
+        "api_type": "issue",
+        "similarity": 0.9637723565101624
+      },
+      {
+        "api_name": "tf.io.VarLenFeature",
+        "api_type": "issue",
+        "similarity": 0.9627846479415894
+      }
+    ],
+    "pytorch_to_pytorch": []
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "issue_to_api",
+      "test_cases": [
+        "163300_issue_to_api_1.output.py",
+        "163300_issue_to_api_10.output.py",
+        "163300_issue_to_api_2.output.py",
+        "163300_issue_to_api_3.output.py",
+        "163300_issue_to_api_4.output.py",
+        "163300_issue_to_api_5.output.py",
+        "163300_issue_to_api_6.output.py",
+        "163300_issue_to_api_7.output.py",
+        "163300_issue_to_api_8.output.py",
+        "163300_issue_to_api_9.output.py"
+      ]
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": []
+    }
+  }
+}

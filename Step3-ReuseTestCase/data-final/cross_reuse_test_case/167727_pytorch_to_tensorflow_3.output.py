@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Adapted from PyTorch Issue 167727: mm/addmm returns incorrect results for large tensors
+# Original API: torch.addmm
+# Target API: tf.stop_gradient
+# 
+# Note: While torch.addmm is a linear algebra operation and tf.stop_gradient is an 
+# autograd operation, this test adapts the tensor characteristics (large shapes, 
+# complex64 dtype) from the original bug report to verify the robustness of 
+# tf.stop_gradient with similar data.
+
+def test_stop_gradient_large_complex_tensors():
+    # Setup tensors with shapes and dtypes matching the failing case in the bug report
+    # Shapes: (64, 300), (64, 10000), (10000, 300)
+    a = tf.random.normal((64, 300), dtype=tf.complex64)
+    b = tf.random.normal((64, 10000), dtype=tf.complex64)
+    c = tf.random.normal((10000, 300), dtype=tf.complex64)
+
+    # Apply tf.stop_gradient to tensor 'a'
+    # We verify that the operation handles the large complex tensor correctly
+    a_stopped = tf.stop_gradient(a)
+
+    # 1. Verify Forward Pass: Output should match input exactly
+    # This checks for numerical corruption similar to the original bug report
+    tf.debugging.assert_near(a, a_stopped, message="Forward pass mismatch: tf.stop_gradient altered values")
+
+    # 2. Verify Backward Pass: Gradients should be zero
+    with tf.GradientTape() as tape:
+        tape.watch(a)
+        # Create a simple loss using the stopped tensor
+        loss = tf.reduce_sum(tf.math.real(a_stopped))
+
+    grad = tape.gradient(loss, a)
+
+    # The gradient of the input w.r.t. the output of stop_gradient should be zero
+    if grad is not None:
+        tf.debugging.assert_near(grad, tf.zeros_like(grad), message="Gradient mismatch: tf.stop_gradient did not stop gradient")
+    else:
+        # If grad is None, the connection was severed, which is also correct behavior
+        pass
+
+    print("Test passed: tf.stop_gradient behaves correctly with large complex tensors.")
+
+if __name__ == "__main__":
+    test_stop_gradient_large_complex_tensors()

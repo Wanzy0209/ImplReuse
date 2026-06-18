@@ -1,0 +1,46 @@
+import tensorflow as tf
+import time
+
+# Set seed for reproducibility
+tf.random.set_seed(0)
+
+# Adapted shapes: lu_matrix_inverse requires square matrices.
+# The original bug report included (1, 12, 10, 10) which is square.
+# We also include (1, 12, 64, 64) to cover the dimensions present in the other original shape.
+shapes = [
+    (1, 12, 10, 10),
+    (1, 12, 64, 64),
+]
+
+def benchmark_lu_inv(shape, dtype=tf.float16, repeat=500):
+    # Create a random matrix X
+    # Note: For performance benchmarking (similar to the original bug), 
+    # we generate random data. In practice, random matrices might be singular,
+    # but for timing the kernel execution, this is acceptable.
+    X = tf.random.uniform(shape, minval=-1, maxval=1, dtype=dtype)
+
+    # Compute LU decomposition to get inputs for lu_matrix_inverse
+    lu, p = tf.linalg.lu(X)
+
+    # Warm up
+    for _ in range(5000):
+        _ = tf.linalg.lu_matrix_inverse(lu, p)
+
+    # Run benchmark
+    times = []
+    for i in range(repeat):
+        start = time.time()
+        _ = tf.linalg.lu_matrix_inverse(lu, p)
+        end = time.time()
+        if i > 100:
+            times.append(round((end - start) * 1000 * 1000))
+    
+    times.sort()
+    print(times)
+    avg_time_us = sum(times) / len(times)
+    return avg_time_us
+
+if __name__ == "__main__":
+    for shape in shapes:
+        t = benchmark_lu_inv(shape)
+        print(f"Shape {shape} -> {t:.3f} us")

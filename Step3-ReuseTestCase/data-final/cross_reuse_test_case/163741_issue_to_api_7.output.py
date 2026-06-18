@@ -1,0 +1,57 @@
+import tensorflow as tf
+import os
+import tempfile
+import time
+import gc
+
+def worker(file_pattern):
+    """
+    Mimics the worker function from the original bug report.
+    Original Logic: Init Process Group -> Work -> Destroy Process Group -> Sleep.
+    Adapted Logic: Create Dataset -> Iterate -> Delete Dataset -> Sleep.
+    """
+    # Init: Create the dataset resource
+    # Corresponds to: dist.init_process_group
+    patterns_tensor = tf.constant([file_pattern], dtype=tf.string)
+    dataset = tf.raw_ops.MatchingFilesDataset(patterns=patterns_tensor)
+
+    # Work: Consume the dataset
+    # Corresponds to: dist.barrier() / work
+    files = list(dataset.as_numpy_iterator())
+    print(f"Found {len(files)} files: {files}")
+
+    # Destroy: Cleanup the resource
+    # Corresponds to: dist.destroy_process_group
+    # We explicitly delete and collect garbage to test resource release
+    del dataset
+    gc.collect()
+
+    # Observation: Sleep to allow checking for resource leaks (e.g., file handles)
+    # Corresponds to: time.sleep(100)
+    print("Sleeping to observe resource state...")
+    time.sleep(1)
+
+def test_matching_files_dataset_resource_lifecycle():
+    """
+    Test case to verify the resource lifecycle of tf.raw_ops.MatchingFilesDataset.
+    This test is adapted from the PyTorch distributed destroy_process_group bug report.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Setup: Create dummy files to match
+        for i in range(5):
+            filepath = os.path.join(tmpdir, f"file_{i}.txt")
+            with open(filepath, "w") as f:
+                f.write(f"content {i}")
+
+        pattern = os.path.join(tmpdir, "*.txt")
+        
+        # Execute the worker logic
+        worker(pattern)
+
+        # Assertion: Verify that the operation completed successfully
+        # (In the original bug, the issue was memory persistence, which is hard to assert here,
+        # but we ensure no crash occurs during the lifecycle).
+        print("Test completed successfully.")
+
+if __name__ == '__main__':
+    test_matching_files_dataset_resource_lifecycle()

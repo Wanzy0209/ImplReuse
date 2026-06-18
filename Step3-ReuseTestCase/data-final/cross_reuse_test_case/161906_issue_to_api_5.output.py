@@ -1,0 +1,40 @@
+import torch
+import torch.nn as nn
+
+class M(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Introduce parameter for broadcasting / stride ops similar to the original bug
+        self.p = nn.Parameter(torch.tensor(2.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Perform an operation involving the parameter to potentially affect strides
+        y = x / self.p
+        # Use the similar API: torch.diagflat
+        # This replaces torch.complex(R, I) from the original issue
+        Z = torch.diagflat(y)
+        return Z
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(0)
+
+    # Create a random input tensor
+    x = torch.randn(1, 10, device=device)
+    m = M().to(device)
+
+    # Eager: works fine
+    z_eager = m(x)
+    print("eager mode OK:", z_eager.shape)
+
+    # Compile: check for runtime stride assertion or correctness issues
+    m_c = torch.compile(m)
+    z_compiled = m_c(x)
+    print("compiled mode OK:", z_compiled.shape)
+
+    # Verify consistency between eager and compiled results
+    assert torch.allclose(z_eager, z_compiled)
+    print("Test passed: Eager and Compiled outputs match.")
+
+if __name__ == "__main__":
+    main()

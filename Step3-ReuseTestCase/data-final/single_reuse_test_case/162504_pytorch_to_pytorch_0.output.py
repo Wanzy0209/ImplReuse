@@ -1,0 +1,57 @@
+import torch
+import sys
+
+def test_checkpoint_cuda_graph():
+    """
+    Test that torch.utils.checkpoint.checkpoint works correctly
+    when captured inside a CUDA graph.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        sys.exit(0)
+
+    torch.cuda.manual_seed(42)
+
+    def fn(x):
+        # Introduce non-determinism (controlled by seed) to verify state preservation
+        return x * torch.sigmoid(torch.randn(1, device="cuda"))
+
+    # Initialize device state (warmup)
+    fn(torch.ones(1, device="cuda"))
+
+    # --- Eager Execution ---
+    torch.cuda.manual_seed(42)
+    eager_in = torch.ones(1, device="cuda", requires_grad=True)
+    eager_out = torch.utils.checkpoint.checkpoint(
+        fn, eager_in,
+        use_reentrant=False,
+        preserve_rng_state=True,
+    )
+    eager_in_grad, = torch.autograd.grad(eager_out, eager_in)
+
+    # --- CUDA Graph Capture ---
+    g = torch.cuda.CUDAGraph()
+    # Inputs for graph capture must be static
+    graph_in = torch.ones(1, device="cuda", requires_grad=True)
+    
+    with torch.cuda.graph(g):
+        graph_out = torch.utils.checkpoint.checkpoint(
+            fn, graph_in,
+            use_reentrant=False,
+            preserve_rng_state=True,
+        )
+        graph_in_grad, = torch.autograd.grad(graph_out, graph_in)
+
+    # --- Replay Graph ---
+    # Reset seed to match the state during eager execution
+    torch.cuda.manual_seed(42)
+    g.replay()
+
+    # --- Verification ---
+    assert torch.allclose(eager_in_grad, graph_in_grad, rtol=0.0, atol=0.0), \
+        f"Mismatch in gradient outputs:\nEager: {eager_in_grad}\nGraph: {graph_in_grad}"
+    
+    print("Test passed successfully.")
+
+if __name__ == "__main__":
+    test_checkpoint_cuda_graph()

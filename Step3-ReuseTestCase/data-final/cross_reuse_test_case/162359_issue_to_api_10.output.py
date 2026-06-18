@@ -1,0 +1,56 @@
+import torch
+from torch import optim
+
+def test_sequential_lr_with_tensor_view():
+    """
+    Test that SequentialLR does not corrupt initial_lr when using a Tensor learning rate.
+    This test leverages torch.Tensor.view to create the learning rate, ensuring that
+    in-place modifications to the lr are visible via the view, while verifying that
+    initial_lr remains distinct and uncorrupted.
+    """
+    # 1. Create a base tensor and a view of it to use as the learning rate.
+    # This leverages torch.Tensor.view to create an alias for the underlying data.
+    # If the scheduler modifies the lr in-place, the base_lr should reflect this change.
+    base_lr = torch.tensor([1.0])
+    lr_view = base_lr.view(-1)
+
+    # Use a meta tensor for the parameter as it doesn't affect the LR logic
+    x = torch.tensor(0.0, device='meta')
+    opt = optim.AdamW([x], lr=lr_view)
+
+    # 2. Initialize our chained schedulers.
+    milestone, total_steps = 40, 100
+    start_factor, end_factor = 0.2, 1.0
+    warmup = optim.lr_scheduler.LinearLR(opt, start_factor, end_factor, total_iters=milestone)
+    decay = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=total_steps-milestone)
+
+    # 3. Initialize our SequentialLR.
+    # The bug: SequentialLR.__init__ aliases group["lr"] and group["initial_lr"].
+    # The initial step of LinearLR modifies lr in-place.
+    # If the bug exists, initial_lr (and decay.base_lrs) are also modified.
+    scheduler = optim.lr_scheduler.SequentialLR(opt, schedulers=[warmup, decay], milestones=[milestone])
+
+    # 4. Verify the fix.
+    # Because lr_view is a view of base_lr, and the scheduler updates lr in-place,
+    # base_lr should now equal the scaled learning rate.
+    assert base_lr.item() == start_factor, \
+        f"Base LR (via view) should be updated to {start_factor}, got {base_lr.item()}"
+
+    # However, initial_lr should NOT be modified by the scheduler's in-place update.
+    # It should remain the original value (1.0).
+    assert opt.param_groups[0]['initial_lr'].item() == 1.0, \
+        f"initial_lr should not be corrupted, expected 1.0, got {opt.param_groups[0]['initial_lr'].item()}"
+
+    # Consequently, the base_lrs of the chained scheduler (decay) should also be correct.
+    assert decay.base_lrs[0].item() == 1.0, \
+        f"Chained scheduler base_lrs should not be corrupted, expected 1.0, got {decay.base_lrs[0].item()}"
+
+    # Verify that lr and initial_lr are not aliased (different data pointers).
+    # The fix ensures they are distinct tensors to prevent the corruption.
+    assert opt.param_groups[0]['lr'].data_ptr() != opt.param_groups[0]['initial_lr'].data_ptr(), \
+        "lr and initial_lr should not be aliased to prevent corruption."
+
+    print("Test passed: SequentialLR correctly handles Tensor learning rates without corrupting initial_lr.")
+
+if __name__ == "__main__":
+    test_sequential_lr_with_tensor_view()

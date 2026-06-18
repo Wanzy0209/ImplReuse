@@ -1,0 +1,35 @@
+import torch
+import tensorflow as tf
+
+def test_tf_keras_ops_relu_global_state_isolation():
+    """
+    Test that tf.keras.ops.relu does not modify global Keras backend settings.
+    
+    This test is derived from a PyTorch issue (ID: 167064) where calling 
+    torch.compile (even redundantly) modified global distribution settings 
+    (torch.distributions.Distribution.set_default_validate_args). 
+    
+    This test verifies that the similar API, tf.keras.ops.relu, does not 
+    exhibit similar unintended global side effects (e.g., changing floatx).
+    """
+    # Capture initial global state
+    # We use floatx as a representative global setting in Keras, 
+    # analogous to distribution validation args in PyTorch.
+    initial_floatx = tf.keras.backend.floatx()
+    
+    # Reproduce the pattern: Call the API
+    # In the original bug, the result of the compilation was unused (_compiled_create_block_mask),
+    # but the call itself triggered the side effect.
+    input_tensor = tf.constant([-1.0, 0.0, 1.0])
+    _ = tf.keras.ops.relu(input_tensor)
+    
+    # Assert that the global state remains unchanged
+    current_floatx = tf.keras.backend.floatx()
+    assert current_floatx == initial_floatx, (
+        f"tf.keras.ops.relu modified the global floatx setting from "
+        f"{initial_floatx} to {current_floatx}."
+    )
+
+if __name__ == "__main__":
+    test_tf_keras_ops_relu_global_state_isolation()
+    print("Test passed: No global side effects detected.")

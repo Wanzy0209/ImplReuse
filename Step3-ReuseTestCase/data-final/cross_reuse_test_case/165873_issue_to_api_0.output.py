@@ -1,0 +1,46 @@
+import tensorflow as tf
+import sys
+from io import StringIO
+
+# Adapted from the bug report's SimpleModule
+class SimpleModule(tf.Module):
+    def __init__(self, threshold_value):
+        super().__init__()
+        # Mimic nn.Parameter initialization
+        self.threshold = tf.Variable(threshold_value, dtype=tf.float32)
+
+    @tf.function
+    def __call__(self, x):
+        # Leverage the similar API: tf.autograph.trace
+        # We incorporate the loop pattern from the similar API example
+        # to inspect the parameter, similar to the bug report's assertion logic
+        for i in tf.range(3):
+            tf.autograph.trace(f"Step {i}, Threshold value: {self.threshold.value()}")
+        return x
+
+def test_trace_parameter_inspection():
+    # Setup from the bug report
+    # Note: In TensorFlow, assigning a mismatched shape (e.g., 32000 to scalar)
+    # raises an error immediately, unlike the silent failure in the PyTorch bug.
+    # Here we test the inspection capability using the similar API.
+    module = SimpleModule(0.0)
+    
+    # Capture stdout to verify the trace output
+    captured_output = StringIO()
+    sys.stdout = captured_output
+    
+    # Execute the module
+    input_tensor = tf.constant([1.0, 2.0, 3.0])
+    _ = module(input_tensor)
+    
+    sys.stdout = sys.__stdout__
+    
+    # Assertions to verify the trace executed and captured the expected value
+    output = captured_output.getvalue()
+    assert "Step 0, Threshold value: 0.0" in output
+    assert "Step 1, Threshold value: 0.0" in output
+    assert "Step 2, Threshold value: 0.0" in output
+
+if __name__ == "__main__":
+    test_trace_parameter_inspection()
+    print("Test passed.")

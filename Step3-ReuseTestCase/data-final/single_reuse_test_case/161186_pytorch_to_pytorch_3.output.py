@@ -1,0 +1,54 @@
+import torch
+import torch.utils.checkpoint
+from torch.library import define, impl, register_autograd
+
+# Define a custom op using torch.library (the similar API)
+define("_test_ns::leaky_op", "(Tensor x) -> (Tensor, Tensor)")
+
+# Implement the forward pass
+@impl("_test_ns::leaky_op", "Autograd")
+def leaky_op_forward(x):
+    out_0 = torch.zeros(2**20, device=x.device, dtype=torch.float32)
+    out_1 = torch.zeros(2**20, device=x.device, dtype=torch.float32)
+    return out_0, out_1
+
+# Define setup_context to save tensors for backward
+# This mimics the behavior of the original bug where saving outputs causes issues
+def setup_context(ctx, inputs, output):
+    inp, = inputs
+    out_0, out_1 = output
+    ctx.save_for_backward(inp, out_0, out_1)
+
+# Define the backward pass
+def backward(ctx, dA, dB):
+    _ = ctx.saved_tensors
+    return None
+
+# Register the backward formula using torch.library.register_autograd
+register_autograd("_test_ns::leaky_op", backward, setup_context=setup_context)
+
+def op_fn(inp):
+    # Call the custom op defined via torch.library
+    return torch.ops._test_ns.leaky_op(inp)[0]
+
+if torch.cuda.is_available():
+    dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+    print("Starting memory leak test with torch.library.register_autograd...")
+    
+    for i in range(1000):
+        # The bug is triggered by use_reentrant=False with a custom op saving outputs
+        full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+        full_out.sum().backward()
+        dummy_input.grad = None  # free gradient memory
+        
+        mem_usage = torch.cuda.memory_allocated() / 1024**2
+        print(f"Iter {i}: {mem_usage:.2f} MiB")
+        
+        # Assertion to detect significant memory growth (leak)
+        # We expect memory to stabilize, but with the bug it will grow linearly.
+        # A threshold of 500MB growth is used as a heuristic for the leak.
+        if i > 10 and mem_usage > 500: 
+            print("Memory usage exceeded 500 MiB, potential leak detected.")
+            # break # Uncomment to stop early if leak is confirmed
+else:
+    print("CUDA not available, skipping test.")

@@ -1,0 +1,24 @@
+import torch
+import torch.nn.functional as F
+
+def test_pdist(device):
+    # pdist requires a 2D tensor. Using [2, 3] to match the original input shape.
+    x = torch.ones([2, 3], device=device)
+    try:
+        output = F.pdist(x, p=2)
+        print(f"pdist test succeeds for device: {device}. output shape: {output.shape}")
+        return output
+    except Exception as e:
+        print(f"pdist test fails for device: {device}: {e}")
+        return None
+
+# Test on CPU
+cpu_output = test_pdist(device="cpu")
+
+# Test on MPS
+mps_output = test_pdist(device="mps")
+
+# Verify consistency if both succeeded
+if cpu_output is not None and mps_output is not None:
+    assert torch.allclose(cpu_output, mps_output), "CPU and MPS outputs differ"
+    print("Consistency check passed.")

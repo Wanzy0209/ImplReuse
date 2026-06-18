@@ -1,0 +1,74 @@
+import torch
+import torch.onnx
+import math
+import io
+import sys
+
+class TruncModel(torch.nn.Module):
+    """
+    Minimal model reproducing the bug where math.trunc fails during ONNX export.
+    """
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # The bug report indicates the failure happens at math.trunc
+        return math.trunc(x)
+
+class LogdetModel(torch.nn.Module):
+    """
+    Model using the similar API (torch.logdet) which has a defined symbolic path.
+    This serves as a reference for a successful export of a math function.
+    """
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.logdet(x)
+
+def test_onnx_export_math_functions():
+    """
+    Test case to verify ONNX export behavior for math.trunc vs torch.logdet.
+    This preserves the bug reproduction logic for math.trunc while leveraging
+    the similar API (torch.logdet) as a structural reference for the test.
+    """
+    device = torch.device("cpu")
+    
+    # 1. Setup inputs
+    # math.trunc works on general tensors
+    input_trunc = torch.randn(2, 4, device=device)
+    # torch.logdet requires square matrices
+    input_logdet = torch.randn(2, 4, 4, device=device)
+
+    # 2. Test math.trunc (The Bug)
+    print("Testing math.trunc export...")
+    model_trunc = TruncModel().to(device).eval()
+    try:
+        with io.BytesIO() as buffer:
+            torch.onnx.export(
+                model_trunc,
+                input_trunc,
+                buffer,
+                opset_version=11,
+                input_names=['input'],
+                output_names=['output']
+            )
+        print("SUCCESS: math.trunc exported successfully.")
+    except Exception as e:
+        print(f"FAILED: math.trunc export raised {type(e).__name__}: {e}")
+        # In a regression test for the bug, we might assert this happens.
+        # For a fix verification, we assert it does not happen.
+
+    # 3. Test torch.logdet (The Similar API)
+    print("\nTesting torch.logdet export...")
+    model_logdet = LogdetModel().to(device).eval()
+    try:
+        with io.BytesIO() as buffer:
+            torch.onnx.export(
+                model_logdet,
+                input_logdet,
+                buffer,
+                opset_version=11,
+                input_names=['input'],
+                output_names=['output']
+            )
+        print("SUCCESS: torch.logdet exported successfully.")
+    except Exception as e:
+        print(f"FAILED: torch.logdet export raised {type(e).__name__}: {e}")
+
+if __name__ == "__main__":
+    test_onnx_export_math_functions()

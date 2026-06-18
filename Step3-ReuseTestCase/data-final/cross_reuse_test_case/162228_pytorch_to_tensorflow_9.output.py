@@ -1,0 +1,80 @@
+import torch
+import tensorflow as tf
+
+# Use tf.function to mimic the compilation/graph behavior of torch.compile
+@tf.function
+def test(x, y):
+    B = tf.shape(x)[0]
+    L = tf.shape(x)[1]
+    
+    # Use tf.name_scope as the target API
+    with tf.name_scope("flex_attention_sim"):
+        # Materialize a bias matrix
+        # PyTorch: bias_mat = y[b, q_idx] + y[b, kv_idx]
+        # In TensorFlow, we can achieve the same (B, L, L) broadcasting result
+        # by expanding dimensions of y directly.
+        # y is (B, L)
+        # y[:, :, None] is (B, L, 1)
+        # y[:, None, :] is (B, 1, L)
+        # Sum results in (B, L, L) where element [i, j, k] = y[i, j] + y[i, k]
+        bias_mat = y[:, :, tf.newaxis] + y[:, tf.newaxis, :]
+
+        # Prepare inputs for attention
+        # PyTorch: x_ = x[:, :, None].repeat(1, 1, 16, 1) -> (B, L, 16, D)
+        x_ = tf.expand_dims(x, axis=2)  # (B, L, 1, D)
+        x_ = tf.repeat(x_, repeats=16, axis=2)  # (B, L, 16, D)
+        
+        # Transpose to (B, 16, L, D) for standard batch matmul
+        x_t = tf.transpose(x_, perm=[0, 2, 1, 3])
+        
+        # Q, K, V are the same for this dummy test
+        q = x_t
+        k = x_t
+        v = x_t
+        
+        # Calculate attention scores
+        # (B, 16, L, D) @ (B, 16, D, L) -> (B, 16, L, L)
+        scores = tf.matmul(q, k, transpose_b=True)
+        
+        # Apply the score modification (adding bias)
+        # bias_mat is (B, L, L), scores is (B, 16, L, L)
+        # Expand bias_mat to (B, 1, L, L) to broadcast across heads
+        bias_expanded = tf.expand_dims(bias_mat, axis=1)
+        scores = scores + bias_expanded
+        
+        # Softmax attention weights
+        attn_weights = tf.nn.softmax(scores, axis=-1)
+        
+        # Apply attention weights to values
+        # (B, 16, L, L) @ (B, 16, L, D) -> (B, 16, L, D)
+        output = tf.matmul(attn_weights, v)
+        
+        # Merge heads back
+        output = tf.transpose(output, perm=[0, 2, 1, 3]) # (B, L, 16, D)
+        output = tf.reshape(output, (B, L, -1))
+        
+        return output
+
+# Configuration
+B, L, D = 2, 16, 64
+
+# Initialize inputs
+x = tf.random.normal((B, L, D))
+y = tf.random.normal((B, L))
+
+# Compute gradients using GradientTape
+with tf.GradientTape() as tape:
+    tape.watch(x)
+    tape.watch(y)
+    out = test(x, y)
+    loss = tf.reduce_mean(out)
+
+grads = tape.gradient(loss, [x, y])
+
+# Verify results
+print(f"TensorFlow Version: {tf.__version__}")
+print(f"x: {(grads[0] is not None) and (tf.norm(grads[0]) > 0)}, y: {(grads[1] is not None) and (tf.norm(grads[1]) > 0)}")
+
+# Assertions to check if backpropagation works correctly for both inputs
+assert grads[0] is not None and tf.norm(grads[0]) > 0, "Gradient for x is missing or zero"
+assert grads[1] is not None and tf.norm(grads[1]) > 0, "Gradient for y is missing or zero"

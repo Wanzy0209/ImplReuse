@@ -1,0 +1,38 @@
+import torch
+
+def test_logdet_empty_input():
+    """
+    Test case for torch.logdet with empty input, adapted from the 
+    torch.nanmedian empty input bug report (Issue 162798).
+    
+    The original bug highlighted a discrepancy where MPS returned 0 instead of NaN
+    for an empty tensor. This test checks if torch.logdet handles empty matrices
+    consistently across CPU, CUDA, and MPS backends.
+    
+    For a 0x0 matrix, the determinant is 1, so the log determinant should be 0.
+    """
+    # Create an empty square matrix (0x0)
+    # logdet requires a square matrix, unlike nanmedian which takes a vector
+    x = torch.empty((0, 0), dtype=torch.float32)
+    print("Input tensor:", x)
+
+    # logdet on CPU
+    cpu_result = torch.logdet(x)
+    print("CPU result:", cpu_result)
+    # Mathematically, det([]) = 1, so logdet([]) = 0
+    assert torch.allclose(cpu_result, torch.tensor(0.0)), "CPU logdet of empty matrix should be 0"
+
+    # logdet on CUDA
+    if torch.cuda.is_available():
+        cuda_x = x.to('cuda')
+        cuda_result = torch.logdet(cuda_x)
+        print("CUDA result:", cuda_result)
+        assert torch.allclose(cuda_result, torch.tensor(0.0)), "CUDA logdet of empty matrix should be 0"
+        assert torch.allclose(cpu_result, cuda_result.cpu()), "CUDA and CPU results should match"
+
+    # logdet on MPS
+    if torch.backends.mps.is_available():
+        mps_x = x.to('mps')
+        mps_result = torch.logdet(mps_x)
+        print("MPS result:", m
+    assert x

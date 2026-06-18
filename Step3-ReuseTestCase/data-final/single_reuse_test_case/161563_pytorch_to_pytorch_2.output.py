@@ -1,0 +1,38 @@
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# Setup from the original bug report
+tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-270m-it")
+model = AutoModelForCausalLM.from_pretrained("google/gemma-3-270m-it")
+
+messages = [
+    {"role": "user", "content": "Who are you?"},
+]
+
+inputs = tokenizer.apply_chat_template(
+    messages,
+    add_generation_prompt=True,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="pt",
+).to(model.device)
+
+# Adaptation for torch.library.opcheck
+# The original API torch.export.export takes a module and inputs.
+# The similar API torch.library.opcheck takes an operator (OpOverload) and inputs.
+# To adapt the test case, we select a standard operator (torch.ops.aten.add.Tensor)
+# and use the inputs generated from the model to verify the opcheck functionality.
+# This verifies that the operator is correctly registered for various modes (e.g., meta, autograd).
+
+op_to_test = torch.ops.aten.add.Tensor
+args = (inputs["input_ids"], inputs["attention_mask"])
+
+# Run opcheck
+# This will test the operator against the provided arguments in different modes.
+# It returns a dictionary of test names to error messages. An empty dict means success.
+result = torch.library.opcheck(op_to_test, args)
+
+# Assert that no errors were found during the check
+assert not result, f"opcheck failed with errors: {result}"
+
+print("torch.library.opcheck test passed successfully.")

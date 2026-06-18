@@ -1,0 +1,44 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run(rank, world_size):
+    setup(rank, world_size)
+
+    # Adapted from original test case: define a function and compile it
+    @torch.compile(backend="eager")
+    def fn(obj):
+        # Using the similar API: torch.distributed.gather_object
+        # This replaces the 'inner' function calls from the original example
+        output_list = [None] * world_size if rank == 0 else None
+        dist.gather_object(obj, output_list, dst=0)
+        return output_list
+
+    # Input data
+    input_obj = f"Object from rank {rank}"
+    
+    # Execute the compiled function
+    result = fn(input_obj)
+
+    # Verification
+    if rank == 0:
+        print(f"Gathered result: {result}")
+        expected = ["Object from rank 0", "Object from rank 1"]
+        assert result == expected, f"Expected {expected}, got {result}"
+    
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn 2 processes to simulate a distributed environment
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)

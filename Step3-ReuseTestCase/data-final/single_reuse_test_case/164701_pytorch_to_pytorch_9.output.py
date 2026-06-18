@@ -1,0 +1,56 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use gloo backend for CPU compatibility. For CUDA, nccl is preferred.
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_broadcast_inplace_update(rank, world_size):
+    setup(rank, world_size)
+
+    # Create a list of tensors to act as the 'state'
+    # This mimics the state tensor in the original bug report
+    state_list = [torch.zeros([4, 2048, 1024]), torch.zeros([4, 2050, 1024])]
+
+    if rank == 0:
+        # Mimic the logic from slide_to_the_left2
+        # We perform an in-place update on the tensors inside the list
+        new_events = torch.arange(start=1, end=3)[None, :, None].expand(4, 2, 1024).contiguous()
+        
+        concatenated = torch.cat([state_list[0], new_events], dim=1)
+        
+        # In-place update: The core operation from the original bug
+        state_list[0][:, :, :] = concatenated[:, -2048:, :]
+        state_list[1][:, :, :] = concatenated[:, :, :]
+
+    # Broadcast the list containing the modified tensors from rank 0 to all others
+    dist.broadcast_object_list(state_list, src=0)
+
+    # Verification logic
+    if rank != 0:
+        # Verify that the state tensor was updated correctly
+        # Only the last 2 rows should be non-zero
+        assert (state_list[0][:, :-2, :] == 0).all(), f"Rank {rank}: Old data in state tensor is not zero"
+        assert (state_list[0][:, -2:, :] != 0).any(), f"Rank {rank}: New data not found in state tensor"
+        
+        # Verify the dev_null equivalent tensor
+        assert (state_list[1] != 0).any(), f"Rank {rank}: dev_null tensor is empty"
+        
+        print(f"Rank {rank}: Test passed. State updated correctly via broadcast.")
+    else:
+        print(f"Rank {rank}: Data prepared and broadcasted.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn 2 processes to simulate a distributed environment
+    mp.spawn(test_broadcast_inplace_update, args=(world_size,), nprocs=world_size, join=True)

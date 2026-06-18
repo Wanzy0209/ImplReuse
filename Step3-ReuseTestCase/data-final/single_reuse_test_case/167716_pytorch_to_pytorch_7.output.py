@@ -1,0 +1,23 @@
+import torch
+import torch.nn.functional as F
+
+# Setup from the bug report
+torch.manual_seed(42)
+
+indices_A = torch.tensor([[0, 1, 2], [0, 2, 3]])
+values_A = torch.tensor([1.0, 2.0, 3.0])
+A = torch.sparse_coo_tensor(indices_A, values_A, size=(3, 4))
+
+indices_B = torch.tensor([[0, 1, 2, 3], [0, 1, 1, 2]])
+values_B = torch.tensor([4.0, 5.0, 6.0, 7.0])
+B = torch.sparse_coo_tensor(indices_B, values_B, size=(4, 2))
+
+# Adaptation: Replace torch.sparse.mm with torch.nn.functional.softshrink
+# Testing the similar API on the sparse tensor A
+C = F.softshrink(A, lambd=0.5)
+
+# The original bug crashed on to_dense(), so we verify this works for the similar API
+C_dense = C.to_dense()
+
+# Verify the output shape is correct
+assert C_dense.shape == A.shape

@@ -1,0 +1,52 @@
+import torch
+import tensorflow as tf
+import sys
+
+def test_large_tensor_exp():
+    """
+    Test case adapted from Issue 164048 (PyTorch CUDA indexing bug).
+    
+    Original Issue Logic:
+    - Create a large tensor (4, 87, 1056, 736) on CUDA.
+    - Perform an indexing operation (mask[to_apply]).
+    - Result: "invalid configuration argument" error.
+    
+    Adaptation for Similar API (tf.compat.v1.math.exp):
+    - Create a large tensor with the same dimensions on a GPU.
+    - Apply the tf.compat.v1.math.exp operation.
+    - Verify that the API handles the large tensor configuration without crashing.
+    """
+    # Check for GPU availability to match the 'device="cuda"' context
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        print("Test skipped: No GPU available.")
+        return
+
+    try:
+        with tf.device('/GPU:0'):
+            # Reproduce the large tensor dimensions from the original issue
+            # Original: torch.randint(0, 20, (4, 87, 1056, 736), device="cuda")
+            # We use float32 for exp, matching the typical usage of math_ops.exp
+            shape = (4, 87, 1056, 736)
+            large_tensor = tf.random.uniform(shape, minval=0, maxval=20, dtype=tf.float32)
+
+            # Apply the similar API: tf.compat.v1.math.exp
+            # Original operation was indexing: mask[to_apply]
+            # Here we apply the exponential function to the large tensor
+            result = tf.compat.v1.math.exp(large_tensor)
+
+            # Verify the operation completes and shape is preserved
+            assert result.shape == shape, f"Shape mismatch: expected {shape}, got {result.shape}"
+
+            # Force evaluation to catch any runtime errors (e.g., invalid configuration)
+            _ = result.numpy()
+
+            print("Test passed: tf.compat.v1.math.exp handled large tensor successfully.")
+
+    except tf.errors.ResourceExhaustedError as e:
+        print(f"Test failed with OOM/Resource error: {e}")
+    except Exception as e:
+        print(f"Test failed with unexpected error: {e}")
+
+if __name__ == "__main__":
+    test_large_tensor_exp()

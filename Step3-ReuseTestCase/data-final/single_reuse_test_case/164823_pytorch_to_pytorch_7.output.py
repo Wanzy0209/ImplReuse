@@ -1,0 +1,53 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_send_sparse_tensor(rank, world_size):
+    """
+    Test case to verify if torch.distributed.send_object_list can handle
+    sparse tensors, which were the source of the bug in torch.compile.
+    """
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Use 'gloo' backend for CPU-based testing
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Replicate the data creation from the original bug report
+    x = torch.randn(10, 10)
+    x_sparse = x.to_sparse()
+    
+    # Perform the operation mentioned in the bug
+    result = x_sparse * 2
+
+    if rank == 0:
+        # Adaptation: Replace torch.compile with torch.distributed.send_object_list
+        # We attempt to send the sparse tensor object.
+        try:
+            dist.send_object_list([result], dst=1)
+            print("Rank 0: Sparse tensor sent successfully.")
+        except Exception as e:
+            print(f"Rank 0: Failed to send sparse tensor. Error: {e}")
+
+    elif rank == 1:
+        # Receive the object list
+        recv_list = [None]
+        try:
+            dist.recv_object_list(recv_list, src=0)
+            received_tensor = recv_list[0]
+            
+            # Verify the received tensor matches the expected result
+            # We convert to dense for comparison as sparse equality checks can be strict about layout
+            assert torch.equal(received_tensor.to_dense(), result.to_dense()), "Received tensor does not match sent tensor"
+            print("Rank 1: Sparse tensor received and verified successfully.")
+        except Exception as e:
+            print(f"Rank 1: Failed to receive or verify sparse tensor. Error: {e}")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Start multiprocessing for distributed simulation
+    mp.spawn(test_send_sparse_tensor, args=(world_size,), nprocs=world_size, join=True)

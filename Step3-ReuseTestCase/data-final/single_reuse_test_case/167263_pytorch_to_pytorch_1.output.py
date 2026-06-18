@@ -1,0 +1,30 @@
+import torch
+
+# Setup dimensions
+B, N = 2, 4
+
+# Create a symmetric matrix input
+# torch.symeig requires the input to be symmetric (or Hermitian)
+x = torch.randn(B, N, N, requires_grad=True)
+x = (x + x.transpose(-2, -1)) / 2
+
+# Create a view to mimic the original scenario where stride issues might occur
+# Original: (B, H, W, C) -> (B, H*W, C)
+# Here: (B, N, N) -> (B*N, N)
+x_view = x.view(B * N, N)
+
+def log_grad(name):
+    def hook(grad):
+        print(f"{name} hook - shape: {grad.shape}, stride: {grad.stride()}")
+        return grad
+    return hook
+
+print("forward strides", x_view.shape, x_view.stride())
+x_view.register_hook(log_grad("x_view"))
+
+# Call torch.symeig
+# Returns eigenvalues and eigenvectors. We use eigenvalues for the backward pass.
+eigenvalues, _ = torch.symeig(x_view, eigenvectors=True)
+
+# Backward pass
+eigenvalues.backward(torch.ones_like(eigenvalues))

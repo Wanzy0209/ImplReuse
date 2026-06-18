@@ -1,0 +1,68 @@
+import tensorflow as tf
+import numpy as np
+
+# Importing the specific API mentioned in the prompt.
+# Note: with_space_to_batch is located in tensorflow.python.ops.nn_ops
+try:
+    from tensorflow.python.ops.nn_ops import with_space_to_batch
+except ImportError:
+    # Fallback for environments where internal paths might differ, 
+    # assuming the API is available via tf.nn or similar in the target context.
+    with_space_to_batch = tf.nn.with_space_to_batch
+
+def test_with_space_to_batch_large_tensor_bfloat16():
+    """
+    Test case adapted from PyTorch Issue 165297.
+    Verifies that tf.nn.with_space_to_batch handles large bfloat16 tensors
+    (NHWC format) without producing NaNs, similar to the MaxPool2d channels_last bug.
+    """
+    # Dimensions from the original bug report
+    # PyTorch: N, C, H, W = 84, 64, 512, 960
+    # TensorFlow (NHWC): N, H, W, C
+    N, H, W, C = 84, 512, 960, 64
+    
+    # Use bfloat16 as in the original bug
+    # We use a fixed seed for reproducibility
+    tf.random.set_seed(42)
+    x = tf.random.normal((N, H, W, C), dtype=tf.bfloat16)
+
+    # Define the pooling operation to be wrapped by with_space_to_batch
+    # The signature expected by with_space_to_batch for 'op' is:
+    # (input, num_spatial_dims, padding)
+    def max_pool_op(input_tensor, num_spatial_dims, padding):
+        # Using 'SAME' padding to approximate the padding=1 behavior 
+        # from the PyTorch MaxPool2d(kernel_size=3, stride=2, padding=1)
+        return tf.nn.max_pool2d(
+            input_tensor,
+            ksize=3,
+            strides=2,
+            padding=padding
+        )
+
+    # Apply with_space_to_batch
+    # dilation_rate=[1, 1] implies standard behavior (no atrous dilation)
+    # This tests the stability of the op when wrapped in space-to-batch transformations
+    # which manipulate memory layout, analogous to the channels_last issue.
+    output = with_space_to_batch(
+        input=x,
+        dilation_rate=[1, 1],
+        padding='SAME',
+        op=max_pool_op,
+        spatial_dims=[1, 2] # Height and Width dimensions
+    )
+
+    # Check for NaNs and Infs
+    has_nan = tf.reduce_any(tf.math.is_nan(output))
+    has_inf = tf.reduce_any(tf.math.is_inf(output))
+
+    print(f"Input shape: {x.shape}, dtype: {x.dtype}")
+    print(f"Output shape: {output.shape}")
+    print(f"Output contains NaN? {has_nan.numpy()}")
+    print(f"Output contains Inf? {has_inf.numpy()}")
+
+    # Assertions to ensure numerical stability
+    assert not has_nan, "Detected NaNs in with_space_to_batch output"
+    assert not has_inf, "Detected Infs in with_space_to_batch output"
+
+if __name__ == "__main__":
+    test_with_space_to_batch_large_tensor_bfloat16()

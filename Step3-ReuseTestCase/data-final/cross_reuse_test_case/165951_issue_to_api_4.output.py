@@ -1,0 +1,75 @@
+import torch
+import torch.nn as nn
+from torch._dynamo.functional_export import _dynamo_graph_capture_for_export
+from torch._functorch.aot_autograd import aot_export_joint_with_descriptors
+from torch._guards import tracing, TracingContext
+from contextlib import ExitStack
+
+# Adapted from the similar API pattern (tf.compat.v1.feature_column.linear_model)
+# which handles multiple arguments and default values (e.g., units=1, sparse_combiner='sum').
+# We adapt the test model to reflect this complexity in kwargs handling.
+class ModuleWithComplexKwargs(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(3, 2)
+
+    def forward(self, x, scale=1.0, bias=True):
+        # Logic that uses both positional and keyword arguments
+        out = self.linear(x) * scale
+        if not bias:
+            out = out - 1.0
+        return out
+
+def test_aot_export_joint_with_descriptors_kwargs():
+    """
+    Test case to verify that aot_export_joint_with_descriptors works correctly
+    with models that accept keyword arguments, similar to how 
+    tf.compat.v1.feature_column.linear_model handles various configuration args.
+    """
+    model = ModuleWithComplexKwargs()
+    
+    # Setup inputs and kwargs
+    inputs = (torch.randn(4, 3),)
+    # Passing kwargs that override defaults
+    kwargs = {"scale": torch.randn(1), "bias": False}
+
+    # Helper function to wrap the graph capture and export logic
+    def run_export(model, inputs, kwargs):
+        if kwargs is None:
+            kwargs = {}
+        
+        with torch._dynamo.config.patch(install_free_tensors=True):
+            # Capture the graph using dynamo
+            gm = _dynamo_graph_capture_for_export(model)(*inputs, **kwargs)
+            fake_mode = gm.meta.get("fake_mode", None)
+
+        with ExitStack() as stack:
+            with tracing(TracingContext(fake_mode)):
+                # The core API under test: aot_export_joint_with_descriptors
+                # This call was failing in the original issue when kwargs were provided
+                joint_with_descriptors = aot_export_joint_with_descriptors(
+                    stack,
+                    gm,
+                    inputs,
+                    kwargs=kwargs,
+                )
+                return joint_with_descriptors.graph_module
+
+    # Execute the export
+    exported_gm = run_export(model, inputs, kwargs)
+
+    # Assertions to verify correctness
+    assert exported_gm is not None, "Exported graph module should not be None"
+    
+    # Verify that the exported graph produces the same output as the original model
+    with torch.no_grad():
+        expected_output = model(*inputs, **kwargs)
+        actual_output = exported_gm(*inputs, **kwargs)
+        
+        assert torch.allclose(actual_output, expected_output), \
+            f"Output mismatch. Expected: {expected_output}, Got: {actual_output}"
+
+    print("Test passed: aot_export_joint_with_descriptors works with kwargs.")
+
+if __name__ == "__main__":
+    test_aot_export_joint_with_descriptors_kwargs()

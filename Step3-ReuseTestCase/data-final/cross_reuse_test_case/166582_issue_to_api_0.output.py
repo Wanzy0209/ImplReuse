@@ -1,0 +1,95 @@
+import torch
+import torch._dynamo
+from torch._dynamo import register_backend
+from torch._inductor.compile_fx import compile_fx
+
+# --- Helper to mimic tf.keras.backend pattern for API compatibility ---
+def get_backend():
+    """
+    Mimics tf.keras.backend() to verify the active backend context.
+    Returns the name of the custom backend registered for this test.
+    """
+    return "test_custom_backend"
+
+# --- Mock Hardware Logic (Simulating the ASIC) ---
+def custom_matmul(dut, a: torch.Tensor, b: torch.Tensor, bias=None):
+    """
+    Simulates the custom ASIC matmul operation described in the bug report.
+    Includes the quantization logic that was causing the graph break.
+    """
+    # Simulate the quantization lowering mentioned in the bug
+    # The bug occurs during the transition/clamping of types
+    a_q = a.clamp(-128, 127).to(torch.int8)
+    b_q = b.clamp(-128, 127).to(torch.int8)
+
+    # Simulate the hardware operation (using standard torch ops for reproducibility)
+    # Note: Real hardware would return int16/int32, here we cast back to float 
+    # to allow the rest of the graph to run in this test environment.
+    c = torch.nn.functional.linear(a_q.to(torch.float32), b_q.to(torch.float32), bias)
+    
+    return c
+
+# --- Backend Registration ---
+@register_backend(name=get_backend())
+def custom_backend(gm: torch.fx.GraphModule, example_inputs):
+    """
+    Custom backend that replaces torch.ops.aten.linear.default with the custom matmul.
+    This logic is directly derived from the bug report's reproduction steps.
+    """
+    print(f"=== Compiling with backend: {get_backend()} ===")
+    
+    # Graph manipulation: Replace Linear nodes
+    for node in list(gm.graph.nodes):
+        if node.target == torch.ops.aten.linear.default:
+            x, weight, bias = node.args
+            with gm.graph.inserting_before(node):
+                # Insert the custom matmul call
+                new_node = gm.graph.call_function(
+                    custom_matmul,
+                    args=("mock_dut", x, weight, bias),
+                )
+            node.replace_all_uses_with(new_node)
+            gm.graph.erase_node(node)
+
+    gm.recompile()
+    
+    # Use Inductor to compile the modified graph
+    return compile_fx(gm, example_inputs)
+
+# --- Test Case ---
+def test_backend_compiler_graph_break():
+    """
+    Test case to reproduce the Backend Compiler Graph Break issue.
+    Verifies that a custom backend can replace Linear layers with 
+    quantized operations without breaking the graph.
+    """
+    
+    class SimpleModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(10, 5)
+        
+        def forward(self, x):
+            return self.linear(x)
+
+    model = SimpleModel()
+    input_tensor = torch.randn(2, 10)
+    
+    # Compile the model using the registered custom backend
+    # The bug manifests if the graph breaks during the lowering process
+    try:
+        compiled_model = torch.compile(model, backend=get_backend())
+        output = compiled_model(input_tensor)
+        
+        # Basic sanity checks
+        assert output is not None, "Output is None"
+        assert output.shape == (2, 5), f"Expected shape (2, 5), got {output.shape}"
+        
+        print("Test Passed: Custom backend executed successfully without graph break.")
+        
+    except Exception as e:
+        print(f"Test Failed: Graph break or compilation error occurred: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_backend_compiler_graph_break()

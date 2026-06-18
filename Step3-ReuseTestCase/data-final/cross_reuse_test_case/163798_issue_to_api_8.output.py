@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+
+def test_control_dependencies_with_scalar_extraction():
+    """
+    Test case for tf.control_dependencies mirroring the PyTorch tolist() issue.
+    
+    The original issue involves tolist() (a Python method) being graphed/decomposed
+    inside torch.compile, leading to potential re-tracing issues with scalar outputs.
+    
+    In TensorFlow, tf.py_function is used to incorporate Python code (like tolist())
+    into the graph. tf.control_dependencies is used to ensure execution order,
+    similar to how the PyTorch issue deals with graph execution and side effects.
+    """
+    
+    # Define a Python function that mimics the behavior of tolist()
+    # extracting values from the tensor context.
+    def py_tolist_extraction(x):
+        # Simulate a.tolist() which returns a Python list
+        return x.numpy().tolist()
+
+    @tf.function(input_signature=[tf.TensorSpec([2], tf.int64)])
+    def func(a):
+        # Use tf.py_function to graph the Python extraction, similar to how
+        # PyTorch might graph tolist() decomposition.
+        # We wrap it in control_dependencies to ensure it executes before the math.
+        with tf.control_dependencies([tf.py_function(py_tolist_extraction, [a], tf.int64)]):
+            # In the PyTorch issue, u0, u1 are extracted and used in math.
+            # Here we use tf.unstack to mimic the unpacking of the list into tensors.
+            u0, u1 = tf.unstack(a)
+            
+            # Perform the computation: return a*u0*u1
+            return a * u0 * u1
+
+    # Execute the function
+    input_tensor = tf.constant([1, 2])
+    result = func(input_tensor)
+    
+    # Expected result: [1, 2] * 1 * 2 = [2, 4]
+    expected = tf.constant([2, 4])
+    
+    # Assert the result is correct
+    assert tf.reduce_all(result == expected).numpy(), f"Expected {expected}, but got {result}"
+
+if __name__ == "__main__":
+    test_control_dependencies_with_scalar_extraction()
+    print("Test passed.")

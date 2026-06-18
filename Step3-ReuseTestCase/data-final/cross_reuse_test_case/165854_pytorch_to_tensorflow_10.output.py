@@ -1,0 +1,63 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def run_with_limit(sess, limit_ph, dequeue_op, limit_val):
+    """
+    Run range_input_producer with a specific limit, creating a queue sized by limit_val.
+    This mimics the run_with_head_count function from the PyTorch issue.
+    """
+    print(f"  Running with limit={limit_val}")
+
+    # Re-initialize local variables because num_epochs creates a counter
+    # that needs to be reset to run the producer again, similar to creating a new buffer.
+    sess.run(tf.compat.v1.local_variables_initializer())
+
+    # Run the dequeue operation
+    # We expect to get numbers from 0 to limit_val - 1
+    outputs = sess.run(dequeue_op, feed_dict={limit_ph: limit_val})
+
+    # Verify the output matches the expected range
+    expected = np.arange(limit_val)
+    assert np.array_equal(outputs, expected), f"Expected {expected}, got {outputs}"
+    print(f"   Completed run with limit={limit_val}")
+
+
+def main():
+    # Disable eager execution to simulate graph mode (similar to torch.compile)
+    tf.compat.v1.disable_eager_execution()
+
+    # Define a placeholder for the dynamic limit
+    # This mimics the dynamic 'H' dimension in the PyTorch test
+    limit_ph = tf.compat.v1.placeholder(tf.int32, shape=[])
+
+    # Create the range input producer
+    # num_epochs=1 ensures it runs once per initialization, similar to the loop iterations
+    # shuffle=False to make verification deterministic
+    # capacity=32 sets the buffer size
+    producer = tf.compat.v1.train.range_input_producer(
+        limit_ph, num_epochs=1, shuffle=False, capacity=32
+    )
+
+    # Dequeue all elements to verify
+    # Note: We use limit_ph here as well to dequeue exactly the amount we produced
+    batch = producer.dequeue_many(limit_ph)
+
+    # Test with different limits - this makes the limit a dynamic dimension
+    # and the internal queue buffer changes size with limit
+    limits = [4, 8, 4, 16, 4]
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize global variables
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        print(f"Running range_input_producer with dynamic limits")
+        print(f"Testing limits: {limits}\n")
+
+        for iteration, limit_val in enumerate(limits, start=1):
+            print(f"Iteration {iteration}:")
+            run_with_limit(sess, limit_ph, batch, limit_val)
+
+
+if __name__ == "__main__":
+    main()

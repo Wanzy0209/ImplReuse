@@ -1,0 +1,74 @@
+import torch
+import torch.utils.checkpoint
+import gc
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        # Create tensors to consume memory
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        
+        # Saving tensors for backward is necessary to trigger the leak scenario
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors
+        return None
+
+def op_fn(inp):
+    # Apply the custom autograd function
+    return MyOp.apply(inp)[0]
+
+def test_checkpoint_memory_leak():
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # Initialize input parameter
+    dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+    
+    # Warmup to stabilize memory allocation
+    for _ in range(5):
+        full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+        full_out.sum().backward()
+        dummy_input.grad = None
+
+    # Force garbage collection and cache clearing to get a clean baseline
+    torch.cuda.empty_cache()
+    gc.collect()
+    start_mem = torch.cuda.memory_allocated()
+
+    # Run the loop multiple times to observe memory growth
+    iterations = 100
+    for i in range(iterations):
+        # The bug occurs with use_reentrant=False when a custom autograd Function
+        # is the last operation and saves tensors for backward.
+        full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+        full_out.sum().backward()
+        dummy_input.grad = None  # Free gradient memory
+        
+        if i % 10 == 0:
+            print(f"Iteration {i}: {torch.cuda.memory_allocated() / 1024**2:.2f} MiB")
+
+    # Clean up again before final check
+    torch.cuda.empty_cache()
+    gc.collect()
+    end_mem = torch.cuda.memory_allocated()
+
+    print(f"\nStart Memory: {start_mem / 1024**2:.2f} MiB")
+    print(f"End Memory:   {end_mem / 1024**2:.2f} MiB")
+    print(f"Leaked:       {(end_mem - start_mem) / 1024**2:.2f} MiB")
+
+    # Assertion to verify the fix (memory should not grow significantly)
+    # We allow a small buffer (e.g., 10MB) for fragmentation/overhead
+    assert (end_mem - start_mem) < 10 * 1024**2, "Memory leak detected in checkpoint with custom autograd Function!"
+
+if __name__ == "__main__":
+    test_checkpoint_memory_leak()

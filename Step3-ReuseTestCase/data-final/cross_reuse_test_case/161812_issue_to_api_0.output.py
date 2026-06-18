@@ -1,0 +1,40 @@
+import torch as th
+
+def test_logdet_on_jagged_tensor():
+    """
+    Test case adapted from Issue 161812 (Crash in jagged tensor stack/cat).
+    This test checks if torch.logdet handles jagged nested tensors correctly,
+    similar to how torch.cat was reported to fail.
+    """
+    # Adapt the input data for logdet:
+    # logdet requires square matrices. The original bug used (3, 2, 3) and (4, 2, 3).
+    # We use (3, 3, 3) and (4, 3, 3) to satisfy logdet's square matrix requirement.
+    # We use identity matrices (eye) to ensure non-zero determinants (logdet(eye) = 0).
+    t1 = th.eye(3).unsqueeze(0).expand(3, 3, 3)
+    t2 = th.eye(3).unsqueeze(0).expand(4, 3, 3)
+    
+    x = th.nested.nested_tensor([t1, t2], layout=th.jagged)
+
+    # Attempt to call the similar API (torch.logdet) on the jagged tensor.
+    # The original issue reported a ValueError regarding argument counts for cat.
+    # We check if logdet triggers a similar dispatch/schema error.
+    try:
+        result = th.logdet(x)
+        print("Operation succeeded. Result:", result)
+        # If supported, we might assert the result structure, but the primary
+        # goal is to check for the crash/dispatch bug.
+    except ValueError as e:
+        # Check for the specific schema error mentioned in the original bug
+        if "expected at least" in str(e) and "arguments" in str(e):
+            print(f"FAILURE: Reproduced the schema error - {e}")
+        else:
+            print(f"FAILURE: Different ValueError - {e}")
+    except (NotImplementedError, RuntimeError) as e:
+        # These are acceptable outcomes if the operation isn't supported yet,
+        # as long as it's not the specific argument count crash.
+        print(f"Operation not supported or runtime error (expected): {type(e).__name__}")
+    except Exception as e:
+        print(f"Unexpected error: {type(e).__name__}: {e}")
+
+if __name__ == "__main__":
+    test_logdet_on_jagged_tensor()

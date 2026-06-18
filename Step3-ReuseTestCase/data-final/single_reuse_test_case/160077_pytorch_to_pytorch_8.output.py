@@ -1,0 +1,21 @@
+import torch
+import torch.nn.functional as F
+
+def f(xs):
+    # Adapted from xs.split(1, dim=0) to torch.nn.functional.avg_pool2d
+    return F.avg_pool2d(xs, kernel_size=2)
+
+def backend(gm, inps):
+    gm.print_readable()
+    return gm
+
+# The bug is specific to the torch.device context manager
+with torch.device("cuda"):
+    # Adjusted tensor shape for avg_pool2d (Batch, Channel, Height, Width)
+    xs = torch.randn(1, 2, 2, 2, device="cuda")
+
+    # Eager execution
+    f(xs)
+
+    # Compiled execution - checking for similar attribute errors
+    torch.compile(f, backend=backend)(xs)

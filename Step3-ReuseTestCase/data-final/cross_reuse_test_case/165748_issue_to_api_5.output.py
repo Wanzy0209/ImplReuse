@@ -1,0 +1,78 @@
+import torch
+import onnx
+import os
+
+# Helper function to retrieve the dimension parameter name from the ONNX graph.
+# This mirrors the pattern of the similar API (tf.compat.v1.get_default_session)
+# which retrieves a default context/state from a stack. Here, we retrieve the
+# specific state (dimension name) from the graph context.
+def get_dim_param_from_graph(graph, io_name, dim_index):
+    """
+    Retrieves the dimension parameter name for a specific input/output and dimension index.
+    """
+    # Check inputs
+    for input_tensor in graph.input:
+        if input_tensor.name == io_name:
+            return input_tensor.type.tensor_type.shape.dim[dim_index].dim_param
+    
+    # Check outputs
+    for output_tensor in graph.output:
+        if output_tensor.name == io_name:
+            return output_tensor.type.tensor_type.shape.dim[dim_index].dim_param
+            
+    raise ValueError(f"Tensor {io_name} not found in graph.")
+
+class SumModule(torch.nn.Module):
+    def forward(self, x):
+        return torch.sum(x, dim=1)
+
+def test_dynamic_axes_preservation():
+    """
+    Test that torch.onnx.export preserves custom dynamic axis names.
+    Bug report indicates that custom names were replaced by serial numbers (e.g., 's77').
+    """
+    model = SumModule()
+    dummy_input = torch.ones(2, 2)
+    export_path = "onnx.pb"
+    
+    # The custom name we expect to see in the exported ONNX graph
+    expected_custom_axis_name = "my_custom_axis_name"
+
+    # Export the model with dynamic_axes
+    torch.onnx.export(
+        model,
+        (dummy_input,),
+        export_path,
+        input_names=["x"],
+        output_names=["sum"],
+        dynamic_axes={
+            "x": {0: expected_custom_axis_name},
+            "sum": [0], # Using list format for output (auto-generated name expected)
+        },
+    )
+
+    # Load the model to inspect its internal state (graph)
+    onnx_model = onnx.load(export_path)
+    
+    # Verify the input 'x' has the custom dynamic axis name
+    # This acts as the assertion for the "default context" of the input tensor
+    actual_input_dim_name = get_dim_param_from_graph(onnx_model.graph, "x", 0)
+    
+    assert actual_input_dim_name == expected_custom_axis_name, (
+        f"Bug reproduced: Expected dynamic axis name '{expected_custom_axis_name}', "
+        f"but got '{actual_input_dim_name}'."
+    )
+
+    # Verify the output 'sum' is dynamic (name might be auto-generated, but shouldn't be static)
+    # In the bug report, names became 's77'. We just ensure it's not a fixed integer string if possible,
+    # or simply that the export succeeded without crashing. 
+    # However, the primary bug is the *overwriting* of custom names.
+    
+    # Clean up
+    if os.path.exists(export_path):
+        os.remove(export_path)
+
+    print("Test passed: Dynamic axis names preserved correctly.")
+
+if __name__ == "__main__":
+    test_dynamic_axes_preservation()

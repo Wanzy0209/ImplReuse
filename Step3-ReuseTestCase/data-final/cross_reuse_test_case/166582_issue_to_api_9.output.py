@@ -1,0 +1,58 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch._dynamo as dynamo
+
+def test_flash_sdp_backend_stability():
+    """
+    Test case to verify that enabling a specific hardware backend (Flash SDP)
+    via torch.backends.cuda.flash_sdp_enabled does not cause graph breaks
+    during torch.compile, addressing the stability concerns raised in the
+    'Backend Compiler Graph Break' issue.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # Leverage the similar API to check the backend status.
+    # This mirrors the user's need to verify their custom backend is active.
+    is_flash_enabled = torch.backends.cuda.flash_sdp_enabled()
+    
+    # If Flash SDP is not supported/enabled, we can't test the specific backend path.
+    # However, we can still verify that the compilation handles the fallback gracefully.
+    print(f"Flash SDP Enabled: {is_flash_enabled}")
+
+    # Define a model that utilizes the backend (Scaled Dot Product Attention)
+    class AttentionModel(nn.Module):
+        def forward(self, x):
+            # This op may trigger the Flash SDP backend if enabled
+            return F.scaled_dot_product_attention(x, x, x)
+
+    model = AttentionModel().cuda()
+    
+    # Create dummy inputs compatible with SDP (float16 is often required for flash attention)
+    inputs = (torch.randn(1, 2, 8, 8, device='cuda', dtype=torch.float16),)
+
+    # The original bug report describes a "Graph Break" when using a custom backend.
+    # We use torch._dynamo.explain to analyze the graph for breaks.
+    explanation = dynamo.explain(model)(*inputs)
+
+    # Assert that the graph compiles cleanly (0 graph breaks).
+    # A graph break here would indicate a similar issue to the reported bug
+    # but with the standard CUDA backend.
+    assert explanation.graph_break_count == 0, (
+        f"Graph break detected! Breaks: {explanation.graph_break_count}. "
+        "This indicates a backend integration issue similar to the reported bug."
+    )
+
+    # Verify execution
+    compiled_model = torch.compile(model)
+    output = compiled_model(*inputs)
+    
+    assert output is not None, "Model output is None"
+    assert output.shape == inputs[0].shape, "Output shape mismatch"
+    
+    print("Test passed: Backend integration is stable with no graph breaks.")
+
+if __name__ == "__main__":
+    test_flash_sdp_backend_stability()

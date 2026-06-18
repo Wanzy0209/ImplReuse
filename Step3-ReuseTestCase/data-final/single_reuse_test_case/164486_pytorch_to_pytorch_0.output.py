@@ -1,0 +1,76 @@
+import torch
+import sys
+
+# Configuration from the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch.manual_seed(238)
+
+def test_torch_div_int16():
+    """
+    Test case for torch.div with int16 scalar inputs.
+    Verifies that eager and compiled modes produce the same result.
+    """
+    # Create inputs: 0-d int16 tensors (scalars)
+    # Replicating the specific setup from the bug report to trigger the edge case
+    arg_0 = torch.as_strided(torch.randn(1).to(torch.int16), (), ())
+    
+    # a = 1 + arg_0 (int16 scalar)
+    a = torch.add(torch.full((), 1, dtype=torch.int16), arg_0)
+    
+    # b = 3 (int16 scalar, created via squeeze)
+    b = torch.squeeze(torch.full((1,), 3, dtype=torch.int16))
+
+    # Sentinel for gradient tracking (float)
+    # This ensures the graph includes backward pass logic if needed
+    sentinel = torch.tensor(1.0, requires_grad=True)
+
+    def func(a, b, sentinel):
+        # The API under test: torch.div
+        div_res = torch.div(a, b)
+        # Multiply by sentinel to enable backward pass flow
+        return div_res * sentinel
+
+    # 1. Eager Execution
+    try:
+        out_eager = func(a, b, sentinel)
+        out_eager.sum().backward()
+        print(f"Eager output: {out_eager}")
+    except Exception as e:
+        print(f" Eager execution failed: {e}")
+        return False
+
+    # 2. Compiled Execution
+    try:
+        compiled_func = torch.compile(func, fullgraph=True, dynamic=True)
+        out_compiled = compiled_func(a, b, sentinel)
+        out_compiled.sum().backward()
+        print(f"Compiled output: {out_compiled}")
+    except Exception as e:
+        print(f" Compiled execution failed: {e}")
+        # This is likely the InductorError mentioned in the bug report
+        import traceback
+        traceback.print_exc()
+        return False
+
+    # 3. Verification
+    # Check for divergence in outputs
+    if not torch.allclose(out_eager, out_compiled):
+        diff = (out_eager - out_compiled).abs()
+        print(f" Divergence detected!")
+        print(f"Eager: {out_eager}")
+        print(f"Compiled: {out_compiled}")
+        print(f"Diff: {diff}")
+        return False
+
+    print(" Test Passed: torch.div with int16 scalars matches between Eager and Compiled.")
+    return True
+
+if __name__ == "__main__":
+    try:
+        success = test_torch_div_int16()
+        sys.exit(0 if success else 1)
+    except Exception as e:
+        print(f" Test suite failed with exception: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

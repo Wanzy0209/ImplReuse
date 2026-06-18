@@ -1,0 +1,66 @@
+import torch
+import onnx
+import os
+
+def test_torch_onnx_dynamic_axes_preservation():
+    """
+    Test case for Issue 165748: dynamic_axes in torch.onnx.export seems broken.
+    
+    This test verifies that custom dynamic axis names provided via the 
+    'dynamic_axes' argument are preserved in the exported ONNX graph, 
+    rather than being replaced by auto-generated serial numbers (e.g., 's77').
+    
+    The semantic approach mirrors verifying static build information (like 
+    tf.sysconfig.get_build_info) by ensuring the output metadata strictly 
+    matches the expected configuration.
+    """
+    
+    # Define the model from the bug report
+    class SumModule(torch.nn.Module):
+        def forward(self, x):
+            return torch.sum(x, dim=1)
+
+    model = SumModule()
+    dummy_input = torch.ones(2, 2)
+    export_path = "onnx.pb"
+    
+    # The specific configuration that was failing in 2.9.0
+    expected_axis_name = "my_custom_axis_name"
+    dynamic_axes_config = {
+        "x": {0: expected_axis_name},
+        "sum": [0],
+    }
+
+    # Export the model
+    torch.onnx.export(
+        model,
+        (dummy_input,),
+        export_path,
+        input_names=["x"],
+        output_names=["sum"],
+        dynamic_axes=dynamic_axes_config,
+    )
+
+    # Load the exported ONNX model to inspect its graph structure
+    onnx_model = onnx.load(export_path)
+    
+    # Extract the dynamic axis name from the graph input
+    # The bug report indicated this was returning 's77' instead of 'my_custom_axis_name'
+    graph_input = onnx_model.graph.input[0]
+    actual_axis_name = graph_input.type.tensor_type.shape.dim[0].dim_param
+
+    # Assert that the custom name is preserved
+    assert actual_axis_name == expected_axis_name, (
+        f"Dynamic axis name mismatch. Expected '{expected_axis_name}', "
+        f"but got '{actual_axis_name}'. The bug where custom names are "
+        f"replaced by serial numbers (e.g., 's77') is likely present."
+    )
+
+    # Cleanup
+    if os.path.exists(export_path):
+        os.remove(export_path)
+
+    print("Test passed: Dynamic axis names are correctly preserved.")
+
+if __name__ == "__main__":
+    test_torch_onnx_dynamic_axes_preservation()

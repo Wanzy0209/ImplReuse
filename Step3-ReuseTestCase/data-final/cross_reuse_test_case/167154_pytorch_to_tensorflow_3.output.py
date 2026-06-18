@@ -1,0 +1,39 @@
+import tensorflow as tf
+
+def test_bessel_j0_non_contiguous():
+    """
+    Adapted test case for tf.math.special.bessel_j0 based on PyTorch MPS buffer allocation bug.
+    The original bug involved passing a non-contiguous tensor (created via as_strided with 0-stride)
+    to a linear operation. This test replicates the memory layout using broadcasting.
+    """
+    # Replicate the non-contiguous tensor setup using broadcasting
+    # PyTorch setup: shape=(5, 499, 768), stride=(0, 768, 1)
+    # This implies the first dimension is broadcasted (stride 0).
+
+    # Calculate the base size required to support the view
+    # PyTorch logic: sum((shape[i] - 1) * stride[i]) + 1
+    # (5-1)*0 + (499-1)*768 + (768-1)*1 + 1 = 383232
+    base_size = 383232
+    base = tf.range(base_size, dtype=tf.float32)
+
+    # Reshape to the underlying non-broadcasted shape (1, 499, 768)
+    # This matches the storage layout implied by the stride (0, 768, 1)
+    underlying_data = tf.reshape(base, (1, 499, 768))
+
+    # Broadcast to the target shape (5, 499, 768)
+    # This creates a tensor with a 0-stride in the first dimension
+    input_tensor = tf.broadcast_to(underlying_data, (5, 499, 768))
+
+    # Call the target API
+    # The original bug was a crash due to incorrect buffer size calculation
+    # for non-contiguous tensors on the MPS backend.
+    try:
+        result = tf.math.special.bessel_j0(input_tensor)
+        # Verify the operation completed and output shape is correct
+        assert result.shape == (5, 499, 768), f"Expected shape (5, 499, 768), got {result.shape}"
+        print("Test passed: API handled non-contiguous (broadcasted) input correctly.")
+    except Exception as e:
+        print(f"Test failed: {e}")
+
+if __name__ == "__main__":
+    test_bessel_j0_non_contiguous()

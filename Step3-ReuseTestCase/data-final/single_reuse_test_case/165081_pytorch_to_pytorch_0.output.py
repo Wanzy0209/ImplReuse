@@ -1,0 +1,36 @@
+import torch
+
+# Reproduce the specific configuration from the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def test_nonzero_dynamo():
+    # The bug report involves CUDA operations
+    if not torch.cuda.is_available():
+        print("Test skipped: CUDA not available")
+        return
+
+    # Setup inputs similar to the fuzzer (float64, CUDA)
+    # The error "Ne(u0, 9)" suggests a dimension of 9 might be involved in the guard.
+    # We use a tensor with dimension 9 to be safe.
+    x = torch.randn(9, 9, 9, dtype=torch.float64, device="cuda")
+    # Ensure we have a mix of zeros and non-zeros to trigger dynamic shape logic
+    x[x < 0] = 0
+
+    def fn(x):
+        # The API under test
+        return torch.nonzero(x)
+
+    # Compile the function
+    compiled_fn = torch.compile(fn)
+
+    # Run eager and compiled
+    expected = fn(x)
+    actual = compiled_fn(x)
+
+    # Verify results
+    assert torch.equal(expected, actual), f"Eager and compiled results differ.\nEager:\n{expected}\nCompiled:\n{actual}"
+    print("Test passed: torch.nonzero works with torch.compile and dynamic shape ops.")
+
+if __name__ == "__main__":
+    test_nonzero_dynamo()

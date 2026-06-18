@@ -1,0 +1,63 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# API Under Test: tf.compat.v1.enable_eager_execution
+# This enables eager execution, which is the TensorFlow equivalent of running 
+# without graph compilation (or explicitly managing the execution mode).
+# In the context of the PyTorch bug, we are verifying if the execution mode 
+# configuration interacts correctly with distributed training and custom gradients.
+tf.compat.v1.enable_eager_execution()
+
+# Define a custom gradient function equivalent to SimplistDoubleFn
+@tf.custom_gradient
+def simplest_double_fn(x):
+    def grad(dy):
+        # PyTorch backward: return grad_out * 2
+        return dy * 2
+    # PyTorch forward: return x * 2
+    return x * 2, grad
+
+# Define a Keras Layer equivalent to DoubleLayer
+class DoubleLayer(tf.keras.layers.Layer):
+    def call(self, x):
+        return simplest_double_fn(x)
+
+def main():
+    # Distributed setup equivalent to DDP
+    # MirroredStrategy is the standard TF approach for single-node multi-GPU training
+    strategy = tf.distribute.MirroredStrategy()
+    print(f'Number of devices: {strategy.num_replicas_in_sync}')
+
+    with strategy.scope():
+        # Model definition equivalent to nn.Sequential
+        # Note: input_shape is specified for Keras to build layers correctly
+        model = tf.keras.Sequential([
+            tf.keras.layers.Conv2D(3, 3, padding='same', input_shape=(256, 256, 3)),
+            DoubleLayer()
+        ])
+
+        optimizer = tf.keras.optimizers.SGD(learning_rate=1e-4)
+        loss_fn = tf.keras.losses.MeanSquaredError()
+
+        # Training loop
+        for it in range(3):
+            # Generate random input data equivalent to torch.rand
+            # Using global batch size 2
+            x = tf.random.normal((2, 256, 256, 3))
+
+            with tf.GradientTape() as tape:
+                # Forward pass
+                out = model(x)
+                # Loss calculation equivalent to F.mse_loss(out, x)
+                loss = loss_fn(out, x)
+
+            # Backward pass and optimization
+            # PyTorch: loss.backward(); opt.step()
+            grads = tape.gradient(loss, model.trainable_variables)
+            optimizer.apply_gradients(zip(grads, model.trainable_variables))
+
+            print(f"iter={it+1} loss={loss.numpy():.6f}")
+
+if __name__ == "__main__":
+    main()

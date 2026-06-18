@@ -1,0 +1,81 @@
+import torch
+import tensorflow as tf
+
+def test_tensorarray_sequential_custom_ops():
+    """
+    Test case adapted from PyTorch MPS segfault issue (ID: 163721).
+    
+    Original Issue Logic:
+    1. Check device availability (MPS).
+    2. Define a custom operation (mps_softshrink).
+    3. Construct a Sequential model chaining Linear layers and the custom op.
+    4. Execute the model.
+    
+    Adapted Logic for tf.TensorArray:
+    1. Check device availability (GPU).
+    2. Define a custom operation (soft shrink logic).
+    3. Use tf.TensorArray within a loop (analogous to Sequential) to chain operations.
+    4. Execute and verify results.
+    """
+
+    # 1. Check for GPU availability (mirroring torch.backends.mps.is_available())
+    gpus = tf.config.list_physical_devices('GPU')
+    # Note: We proceed regardless, but this mirrors the original check structure.
+    device_name = "/GPU:0" if gpus else "/CPU:0"
+
+    with tf.device(device_name):
+        # 2. Define the custom operation (simulating compiled_lib.mps_softshrink)
+        def custom_softshrink(x, lambd=0.5):
+            # f(x) = x - lambd if x > lambd, x + lambd if x < -lambd, else 0
+            return tf.where(tf.abs(x) > lambd, x - tf.sign(x) * lambd, tf.zeros_like(x))
+
+        # Input data
+        input_tensor = tf.constant([[1.0, -1.0, 0.5], [2.0, -2.0, 0.1]])
+
+        # 3. Construct a sequential processing flow using TensorArray
+        # The original bug involved a chain: Linear -> Softshrink -> Linear -> Softshrink
+        # We simulate this chain using a loop and TensorArray to hold intermediate states.
+        
+        num_layers = 3
+        
+        # Initialize TensorArray (analogous to device buffer allocation)
+        ta = tf.TensorArray(dtype=tf.float32, size=num_layers, element_shape=input_tensor.shape)
+        
+        # Loop variables
+        i = tf.constant(0)
+        current_x = input_tensor
+
+        # Condition for the loop
+        def cond(i, ta, x):
+            return i < num_layers
+
+        # Body of the loop (mimicking one step in nn.Sequential)
+        def body(i, ta, x):
+            # Simulate Linear layer (simple scaling)
+            x = x * 1.5 
+            # Apply custom operation (the extension)
+            x = custom_softshrink(x, lambd=0.5)
+            # Write result to TensorArray
+            ta = ta.write(i, x)
+            return i + 1, ta, x
+
+        # Execute the sequential model
+        _, final_ta, output = tf.while_loop(cond, body, [i, ta, current_x])
+
+        # 4. Assertions to verify execution
+        result_stack = final_ta.stack()
+        
+        # Check shape
+        assert result_stack.shape == (num_layers, 2, 3), f"Expected shape (3, 2, 3), got {result_stack.shape}"
+        
+        # Check specific values to ensure the custom op and sequence ran correctly
+        # Layer 0: Input [1, -1, 0.5] -> *1.5 -> [1.5, -1.5, 0.75] -> shrink(0.5) -> [1.0, -1.0, 0.0]
+        expected_layer_0 = tf.constant([[1.0, -1.0, 0.0], [2.5, -2.5, 0.0]])
+        
+        # Verify the first layer output matches expectations
+        assert tf.reduce_all(tf.equal(result_stack[0], expected_layer_0)), "Layer 0 output mismatch"
+
+        print("Test passed: TensorArray sequential custom ops executed successfully.")
+
+if __name__ == "__main__":
+    test_tensorarray_sequential_custom_ops()

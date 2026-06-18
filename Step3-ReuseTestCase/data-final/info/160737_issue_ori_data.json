@@ -1,0 +1,311 @@
+{
+  "title": "MPS index_select cannot handle scalar index tensor",
+  "issue_id": "160737",
+  "bug_description": "### 🕵️‍♂️ Detected with [FACTO](https://github.com/meta-pytorch/FACTO)\n\n### 🐛 Describe the bug\n\nThe CPU index_select operator can consume a scalar tensor (zero-dimensional) as the index. MPS throws error:\n\n```python\nimport torch\n\ndef test_index_select(device):\n    x = torch.ones([2, 3], device=device)\n    index = torch.tensor(1, device=device)  # zero-dimensional index tensor\n    try:\n        output = torch.index_select(x, dim=0, index=index)\n        print(f\"index_select test succeeds for device: {device}. output shape: {output.shape}\")\n    except Exception as e:\n        print(f\"index_select test fails for device: {device}: {e}\")\n\ntest_index_select(device = \"cpu\")\ntest_index_select(device = \"mps\")\n```\n\nterminal output:\n```\nindex_select test succeeds for device: cpu. output shape: torch.Size([1, 3])\nindex_select test fails for device: mps: Dimension specified as -1 but tensor has no dimensions\n```\n\n### Versions\n\nnightly\n\ncc @kulinseth @albanD @malfet @DenisVieriu97 @jhavukainen",
+  "apis": [
+    "torch.index_select",
+    "torch.ones",
+    "torch.tensor",
+    "torch.Size",
+    "torch"
+  ],
+  "best_code": "import torch\n\ndef test_index_select(device):\n    x = torch.ones([2, 3], device=device)\n    index = torch.tensor(1, device=device)  # zero-dimensional index tensor\n    try:\n        output = torch.index_select(x, dim=0, index=index)\n        print(f\"index_select test succeeds for device: {device}. output shape: {output.shape}\")\n    except Exception as e:\n        print(f\"index_select test fails for device: {device}: {e}\")\n\ntest_index_select(device = \"cpu\")\ntest_index_select(device = \"mps\")",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/161206",
+    "https://github.com/pytorch/pytorch/pull/161267"
+  ],
+  "_meta": {
+    "file": "160737_issue_ori_data.json",
+    "generated_at": "2026-04-20 22:09:01",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\160737_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\160737_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "The CPU index_select operator can consume a scalar tensor (zero-dimensional) as the index. MPS throws error",
+  "repro_code": "import torch\n\ndef test_index_select(device):\n    x = torch.ones([2, 3], device=device)\n    index = torch.tensor(1, device=device)  # zero-dimensional index tensor\n    try:\n        output = torch.index_select(x, dim=0, index=index)\n        print(f\"index_select test succeeds for device: {device}. output shape: {output.shape}\")\n    except Exception as e:\n        print(f\"index_select test fails for device: {device}: {e}\")\n\ntest_index_select(device = \"cpu\")\ntest_index_select(device = \"mps\")",
+  "repro_output": "MPS index_select cannot handle scalar index tensor",
+  "affected_api": "torch.index_select",
+  "trigger_conditions": {
+    "backend": "MPS",
+    "dtype": "",
+    "input_shape": "[2, 3] for x, scalar (zero-dimensional) for index",
+    "other_conditions": "zero-dimensional index tensor"
+  },
+  "environment": {
+    "pytorch_version": "nightly",
+    "python_version": "",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": [],
+  "add_fix_code": [
+    "  Tensor result = at::empty({0}, self.options());",
+    "  auto output_size = self.sizes().vec();",
+    "  if (self.dim() > 0) {",
+    "    output_size[dim] = num_indices;",
+    "  at::native::resize_output(output, output_size);",
+    "    all_mps_types_and,",
+    "    @dtypesIfMPS(*all_mps_types_and(torch.bool, torch.cfloat))",
+    "    result.copy_(source.squeeze());",
+    "  const auto source_size_dim = source.dim() > 0 ? source.size(dim) : 1;",
+    "  TORCH_CHECK(index.numel() == source_size_dim,",
+    "              source_size_dim,",
+    "    @dtypesIfMPS(*all_mps_types_and(torch.bool, torch.cfloat))"
+  ],
+  "sub_fix_code": [
+    "  IntArrayRef input_shape = self.sizes();",
+    "  auto num_input_dims = input_shape.size();",
+    "",
+    "  auto num_indices = index.numel();",
+    "  TORCH_CHECK_INDEX(index.dim() <= 1, \"index_select(): Index is supposed to be a vector\");",
+    "",
+    "  dim = maybe_wrap_dim(dim, self.dim());",
+    "  std::vector<int64_t> shape_data(num_input_dims);",
+    "",
+    "  // Calculate new shape",
+    "  for (const auto i : c10::irange(num_input_dims)) {",
+    "    if (i == static_cast<decltype(i)>(dim)) {",
+    "      shape_data[i] = num_indices;",
+    "    } else {",
+    "      shape_data[i] = input_shape[i];",
+    "    }",
+    "  }",
+    "",
+    "  IntArrayRef output_shape = IntArrayRef(shape_data.data(), num_input_dims);",
+    "",
+    "  Tensor result = at::empty(output_shape, self.scalar_type(), std::nullopt, kMPS, std::nullopt, std::nullopt);",
+    "",
+    "  TORCH_CHECK(output.dim() == 0 || index.size(-1) == output.size(dim),",
+    "              \"index_select(): index and output must have the same size at `dim`th dimension, but got \",",
+    "              index.size(-1),",
+    "              \" and \",",
+    "              output.size(dim),",
+    "              \".\");",
+    "",
+    "  for (const auto i : irange(self.dim())) {",
+    "    if (i == dim)",
+    "      continue;",
+    "    TORCH_CHECK(self.size(i) == output.size(i),",
+    "                \"index_select(): self and output must have the same dimensions except for `dim`th dimension, but got \",",
+    "                self.size(i),",
+    "                \" and \",",
+    "                output.size(i),",
+    "                \" at dimension \",",
+    "                i,",
+    "                \".\");",
+    "    @expectedFailureMPS  # See https://github.com/pytorch/pytorch/issues/160737",
+    "    result.copy_(source);",
+    "  TORCH_CHECK(source.size(dim) == index.numel(),",
+    "              source.size(dim),",
+    "    @expectedFailureMPS  # See https://github.com/pytorch/pytorch/issues/160737"
+  ],
+  "core_api": "torch.index_select",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [
+      {
+        "api_name": "tf.experimental.numpy.triu",
+        "api_type": "tensorflow",
+        "similarity": 0.9959405660629272
+      },
+      {
+        "api_name": "tf.keras.ops.triu",
+        "api_type": "tensorflow",
+        "similarity": 0.9959405660629272
+      },
+      {
+        "api_name": "tf.experimental.numpy.tril",
+        "api_type": "tensorflow",
+        "similarity": 0.9957901239395142
+      },
+      {
+        "api_name": "tf.keras.ops.tril",
+        "api_type": "tensorflow",
+        "similarity": 0.9957901239395142
+      },
+      {
+        "api_name": "tf.experimental.numpy.vdot",
+        "api_type": "tensorflow",
+        "similarity": 0.9950172901153564
+      },
+      {
+        "api_name": "tf.keras.ops.vdot",
+        "api_type": "tensorflow",
+        "similarity": 0.9950172901153564
+      },
+      {
+        "api_name": "tf.compat.v1.nn.dropout",
+        "api_type": "tensorflow",
+        "similarity": 0.9948444962501526
+      },
+      {
+        "api_name": "tf.keras.backend.dropout",
+        "api_type": "tensorflow",
+        "similarity": 0.9948444962501526
+      },
+      {
+        "api_name": "tf.keras.random.dropout",
+        "api_type": "tensorflow",
+        "similarity": 0.9948444962501526
+      },
+      {
+        "api_name": "tf.nn.dropout",
+        "api_type": "tensorflow",
+        "similarity": 0.9948444962501526
+      },
+      {
+        "api_name": "tf.keras.optimizers.RMSprop",
+        "api_type": "tensorflow",
+        "similarity": 0.9947824478149414
+      }
+    ],
+    "issue_to_api": [
+      {
+        "api_name": "tf.linalg.LinearOperatorScaledIdentity",
+        "api_type": "issue",
+        "similarity": 0.9860225915908813
+      },
+      {
+        "api_name": "tf.compat.v1.global_variables_initializer",
+        "api_type": "issue",
+        "similarity": 0.9858890771865845
+      },
+      {
+        "api_name": "tf.compat.v1.local_variables_initializer",
+        "api_type": "issue",
+        "similarity": 0.9857872724533081
+      },
+      {
+        "api_name": "tf.compat.v1.math.exp",
+        "api_type": "issue",
+        "similarity": 0.9857845306396484
+      },
+      {
+        "api_name": "tf.experimental.numpy.exp",
+        "api_type": "issue",
+        "similarity": 0.9857845306396484
+      },
+      {
+        "api_name": "tf.keras.backend.exp",
+        "api_type": "issue",
+        "similarity": 0.9857845306396484
+      },
+      {
+        "api_name": "tf.keras.ops.exp",
+        "api_type": "issue",
+        "similarity": 0.9857845306396484
+      },
+      {
+        "api_name": "tf.math.exp",
+        "api_type": "issue",
+        "similarity": 0.9857845306396484
+      },
+      {
+        "api_name": "tf.custom_gradient",
+        "api_type": "issue",
+        "similarity": 0.9852292537689209
+      },
+      {
+        "api_name": "tf.keras.ops.custom_gradient",
+        "api_type": "issue",
+        "similarity": 0.9852292537689209
+      },
+      {
+        "api_name": "tf.control_dependencies",
+        "api_type": "issue",
+        "similarity": 0.9850995540618896
+      }
+    ],
+    "pytorch_to_pytorch": [
+      {
+        "api_name": "torch.index_select",
+        "api_type": "pytorch",
+        "similarity": 0.9999998807907104
+      },
+      {
+        "api_name": "torch.nn.functional.pdist",
+        "api_type": "pytorch",
+        "similarity": 0.9980154037475586
+      },
+      {
+        "api_name": "torch.cumsum",
+        "api_type": "pytorch",
+        "similarity": 0.9971259832382202
+      },
+      {
+        "api_name": "torch.cumprod",
+        "api_type": "pytorch",
+        "similarity": 0.9970640540122986
+      },
+      {
+        "api_name": "torch.cummin",
+        "api_type": "pytorch",
+        "similarity": 0.9965834617614746
+      },
+      {
+        "api_name": "torch.cummax",
+        "api_type": "pytorch",
+        "similarity": 0.9965593814849854
+      },
+      {
+        "api_name": "torch.logcumsumexp",
+        "api_type": "pytorch",
+        "similarity": 0.9960650205612183
+      },
+      {
+        "api_name": "torch.stack",
+        "api_type": "pytorch",
+        "similarity": 0.9960609078407288
+      },
+      {
+        "api_name": "torch.empty_strided",
+        "api_type": "pytorch",
+        "similarity": 0.9958728551864624
+      },
+      {
+        "api_name": "torch.nn.LazyLinear",
+        "api_type": "pytorch",
+        "similarity": 0.9958161115646362
+      },
+      {
+        "api_name": "torch.cholesky_solve",
+        "api_type": "pytorch",
+        "similarity": 0.9957988262176514
+      }
+    ]
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "issue_to_api",
+      "test_cases": [
+        "160737_issue_to_api_0.output.py",
+        "160737_issue_to_api_1.output.py",
+        "160737_issue_to_api_10.output.py",
+        "160737_issue_to_api_2.output.py",
+        "160737_issue_to_api_3.output.py",
+        "160737_issue_to_api_4.output.py",
+        "160737_issue_to_api_5.output.py",
+        "160737_issue_to_api_6.output.py",
+        "160737_issue_to_api_7.output.py",
+        "160737_issue_to_api_8.output.py",
+        "160737_issue_to_api_9.output.py"
+      ]
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": [
+        "160737_pytorch_to_pytorch_0.output.py",
+        "160737_pytorch_to_pytorch_1.output.py",
+        "160737_pytorch_to_pytorch_10.output.py",
+        "160737_pytorch_to_pytorch_2.output.py",
+        "160737_pytorch_to_pytorch_3.output.py",
+        "160737_pytorch_to_pytorch_4.output.py",
+        "160737_pytorch_to_pytorch_5.output.py",
+        "160737_pytorch_to_pytorch_6.output.py",
+        "160737_pytorch_to_pytorch_7.output.py",
+        "160737_pytorch_to_pytorch_8.output.py",
+        "160737_pytorch_to_pytorch_9.output.py"
+      ]
+    }
+  }
+}

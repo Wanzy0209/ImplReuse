@@ -1,0 +1,66 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Test case generated based on Issue 167924 and the similar API tf.keras.ops.custom_gradient.
+# 
+# Context:
+# The original bug report describes a crash in PyTorch (MPS backend) when using 
+# `repeat_interleave` with a sliced tensor (`counts[1:3]`).
+#
+# Relationship:
+# This test adapts the reproduction logic to TensorFlow. It defines a custom operation
+# using `tf.keras.ops.custom_gradient` (the similar API) that mimics `repeat_interleave`.
+# It then verifies that this custom gradient function handles the specific slicing 
+# pattern (`counts[1:3]`) without crashing, preserving the original bug's input structure.
+
+@tf.keras.ops.custom_gradient
+def custom_repeat_interleave(data, counts):
+    """
+    A custom gradient implementation of a repeat operation.
+    This mirrors the usage of torch.repeat_interleave in the original bug report.
+    """
+    # Forward pass: Perform the repeat operation
+    # Equivalent to torch.repeat_interleave(data, counts, dim=0)
+    def forward():
+        return tf.repeat(data, counts, axis=0)
+
+    # Gradient function
+    def grad(upstream):
+        # Simplified gradient logic for the purpose of this test.
+        # The primary goal is to ensure the graph construction handles the sliced
+        # 'counts' tensor correctly within the custom_gradient scope.
+        # We return zeros with the correct shapes to satisfy the gradient contract.
+        return tf.zeros_like(data), tf.zeros_like(counts)
+
+    return forward(), grad
+
+def test_custom_gradient_with_sliced_input():
+    # Reproduce the setup from the bug report
+    # Original: counts = torch.tensor([0, 1, 0], device="mps")
+    counts = tf.constant([0, 1, 0], dtype=tf.int32)
+    
+    # Original: data = torch.arange(2, device="mps")
+    data = tf.range(2, dtype=tf.float32)
+
+    # The critical step from the bug report: slicing the tensor to a non-prefix
+    # Original: counts[1:3]
+    sliced_counts = counts[1:3]
+
+    # Execute the operation using the custom gradient API
+    # Original: data.repeat_interleave(counts[1:3], dim=0)
+    # Note: We expect data=[0, 1] and counts=[1, 0] -> result=[0]
+    result = custom_repeat_interleave(data, sliced_counts)
+
+    # Assertion to verify correct behavior
+    # data[0] is repeated 1 time, data[1] is repeated 0 times.
+    expected = tf.constant([0.0], dtype=tf.float32)
+    
+    # Check if the result matches the expectation
+    assert tf.reduce_all(tf.equal(result, expected)).numpy(), \
+        f"Test failed: Expected {expected.numpy()}, but got {result.numpy()}"
+
+    print("Test passed: custom_gradient handled sliced tensor input correctly.")
+
+if __name__ == "__main__":
+    test_custom_gradient_with_sliced_input()

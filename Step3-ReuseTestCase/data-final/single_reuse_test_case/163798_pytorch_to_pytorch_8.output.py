@@ -1,0 +1,49 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use gloo backend for CPU compatibility in this test
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run(rank, world_size):
+    setup(rank, world_size)
+
+    if rank == 0:
+        # Sender process
+        # Mimics the data source: torch.tensor([1,2])
+        data = [1, 2]
+        dist.send_object_list(data, dst=1)
+    elif rank == 1:
+        # Receiver process
+        # Adapted test case using torch.distributed.recv_object_list
+        @torch.compile(fullgraph=False, backend="eager")
+        def func_recv(obj_list):
+            # Adapted from: u0, u1 = a.tolist()
+            # recv_object_list populates the list in-place
+            torch.distributed.recv_object_list(obj_list)
+            
+            # Adapted from: return a*u0*u1
+            # We return the list to verify the graph capture and execution
+            return obj_list
+
+        # Call the compiled function
+        # Original call: func(torch.tensor([1,2]))
+        my_list = [None, None]
+        result = func_recv(my_list)
+        
+        # Assertion to verify the behavior
+        assert result == [1, 2], f"Expected [1, 2], got {result}"
+        print(f"Rank {rank} test passed. Received: {result}")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)

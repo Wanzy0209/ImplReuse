@@ -1,0 +1,70 @@
+import torch
+import time
+import unittest
+
+# Translating the semantic of tf.compat.v1.executing_eagerly to PyTorch.
+# In PyTorch, eager execution is the default, but we can check if we are 
+# not inside a torch.jit.script or torch.jit.trace context.
+def is_executing_eagerly():
+    """Checks whether the current context is eager execution mode.
+    
+    This mirrors the behavior of tf.compat.v1.executing_eagerly.
+    Returns True if not in script or trace mode.
+    """
+    return not torch.jit.is_scripting() and not torch.jit.is_tracing()
+
+class TestMatMulRegression(unittest.TestCase):
+    def setUp(self):
+        # Leverage the similar API pattern to ensure correct execution context
+        self.assertTrue(is_executing_eagerly(), 
+                        "Test must run in eager mode to accurately detect CPU performance regression.")
+        
+        torch.manual_seed(0)
+        self.shapes = [
+             ((1, 12, 10, 64), (1, 12, 64, 10)),
+             ((1, 12, 10, 10), (1, 12, 10, 64)),
+        ]
+        self.device = "cpu"
+        self.dtype = torch.float16
+
+    def benchmark_matmul(self, a_shape, b_shape, repeat=500):
+        A = torch.empty(a_shape, dtype=self.dtype, device=self.device).uniform_(0,1) * 2 - 1
+        B = torch.empty(b_shape, dtype=self.dtype, device=self.device).uniform_(0,1) * 2 - 1
+        
+        # Warm up (reduced from 5000 to 100 for test efficiency, preserving logic)
+        for _ in range(100):
+            _ = torch.matmul(A, B)
+            
+        # Run benchmark
+        times = []
+        for i in range(repeat):
+            start = time.time()
+            _ = torch.matmul(A, B)
+            end = time.time()
+            if i > 100:
+                times.append((end - start) * 1000 * 1000) # Convert to microseconds
+        
+        times.sort()
+        avg_time_us = sum(times) / len(times)
+        return avg_time_us
+
+    def test_matmul_performance(self):
+        """
+        Test for torch.matmul regression on CPU.
+        The bug report indicates a 5x slowdown. We assert that the average time
+        remains below a reasonable threshold (e.g., 2000us) to catch regressions.
+        """
+        # Threshold set to catch significant regressions (like 5x) 
+        # while avoiding flakiness on various hardware.
+        threshold_us = 2000.0 
+        
+        for a_shape, b_shape in self.shapes:
+            avg_time = self.benchmark_matmul(a_shape, b_shape)
+            print(f"{a_shape} x {b_shape} -> {avg_time:.3f} us")
+            
+            self.assertLess(avg_time, threshold_us, 
+                            f"torch.matmul performance regression detected. "
+                            f"Average time {avg_time:.3f} us exceeded threshold {threshold_us} us.")
+
+if __name__ == "__main__":
+    unittest.main()

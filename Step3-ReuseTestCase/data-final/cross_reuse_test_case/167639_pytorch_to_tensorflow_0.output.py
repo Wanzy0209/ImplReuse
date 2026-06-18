@@ -1,0 +1,87 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use tf.compat.v1 APIs
+tf.compat.v1.disable_eager_execution()
+
+def get_default_computation():
+    """
+    Defines a computation function equivalent to the PyTorch TestModel.
+    Uses tf.compat.v1.get_variable to create layers.
+    """
+    def model(x):
+        # fc1: Linear(10, 20)
+        w1 = tf.compat.v1.get_variable("w1", shape=[10, 20], initializer=tf.random.normal_initializer())
+        b1 = tf.compat.v1.get_variable("b1", shape=[20], initializer=tf.zeros_initializer())
+        x = tf.nn.relu(tf.matmul(x, w1) + b1)
+        
+        # fc2: Linear(20, 1)
+        w2 = tf.compat.v1.get_variable("w2", shape=[20, 1], initializer=tf.random.normal_initializer())
+        b2 = tf.compat.v1.get_variable("b2", shape=[1], initializer=tf.zeros_initializer())
+        x = tf.matmul(x, w2) + b2
+        return x
+    return model
+
+def get_sample_inputs():
+    """
+    Returns a placeholder for the input, equivalent to the tensor input in PyTorch.
+    """
+    return tf.compat.v1.placeholder(tf.float32, shape=[4, 10], name="input")
+
+def main():
+    # Check for TPU availability
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        print("TPU system initialized")
+    except (ValueError, tf.errors.NotFoundError) as e:
+        print(f"TPU not available or error initializing TPU: {e}")
+        print("Skipping TPU specific test.")
+        return
+
+    computation = get_default_computation()
+    inputs = get_sample_inputs()
+
+    # In PyTorch, the bug occurs when torch.compile is called inside torch.cuda.graph.
+    # In TensorFlow, tf.compat.v1.tpu.rewrite is the mechanism to compile/rewrite 
+    # the computation for the TPU hardware (similar to graph capture/compilation).
+    # We call rewrite to compile the computation.
+    
+    # Note: tf.compat.v1.tpu.rewrite returns a list of tensors.
+    # We wrap the execution in a Session.
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables
+        sess.run(tf.compat.v1.global_variables_initializer())
+        
+        # Generate sample input data (equivalent to torch.randn)
+        # Using numpy to generate data outside the graph to feed in
+        input_data = np.random.randn(4, 10).astype(np.float32)
+        
+        # Original execution (on CPU/Host) to get baseline
+        # We need to fetch the variables initialized on TPU to run on CPU? 
+        # In V1 TPU, variables are often mirrored. For simplicity in this test case,
+        # we focus on the 'rewrite' (compilation) aspect which is the core of the issue.
+        # We will run the rewritten computation.
+        
+        print("Attempting to capture/rewrite computation for TPU...")
+        
+        # This is the equivalent of the 'capture' block in PyTorch.
+        # tf.compat.v1.tpu.rewrite compiles the function.
+        # The bug in PyTorch was accessing RNG state during this phase.
+        # TensorFlow's XLA compilation (used by rewrite) handles state strictly.
+        tpu_outputs = tf.compat.v1.tpu.rewrite(computation, [inputs])
+        
+        # Run the compiled graph
+        # The result is a list of tensors
+        result = sess.run(tpu_outputs, feed_dict={inputs: input_data})
+        
+        print('Captured TPU output shape:', result[0].shape)
+        
+        # Verify output shape matches expectations
+        assert result[0].shape == (4, 1), f"Expected shape (4, 1), got {result[0].shape}"
+        print("Test passed.")
+
+if __name__ == "__main__":
+    main()

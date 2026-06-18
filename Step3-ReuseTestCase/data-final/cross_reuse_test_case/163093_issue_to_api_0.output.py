@@ -1,0 +1,52 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+def test_reduce_lr_on_plateau_preserves_tensor_lr():
+    """
+    Test that ReduceLROnPlateau preserves the tensor type of the learning rate.
+    
+    This test addresses the issue where _reduce_lr sets param_group["lr"] to a float,
+    triggering recompilation if the optimizer uses a tensor LR. The test verifies
+    that the type of the learning rate is preserved (Tensor -> Tensor) after the
+    scheduler reduces the learning rate, similar to how type-aware conversion logic
+    (like in NumpyIterator) handles different input types.
+    """
+    # Setup model and optimizer with a Tensor learning rate
+    model = nn.Linear(1, 1)
+    lr_tensor = torch.tensor(0.1)
+    optimizer = optim.Adam(model.parameters(), lr=lr_tensor)
+    
+    # Verify initial LR is a Tensor
+    assert isinstance(optimizer.param_groups[0]['lr'], torch.Tensor), \
+        "Initial learning rate should be a tensor"
+
+    # Setup scheduler with patience=0 to trigger reduction immediately
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 
+        factor=0.5, 
+        patience=0, 
+        min_lr=0.001
+    )
+
+    # Step 1: Baseline
+    optimizer.step()
+    scheduler.step(1.0)
+
+    # Step 2: Metric worsens, triggering LR reduction
+    optimizer.step()
+    scheduler.step(0.5)
+
+    # Verify the LR is still a Tensor after reduction
+    current_lr = optimizer.param_groups[0]['lr']
+    assert isinstance(current_lr, torch.Tensor), \
+        f"Learning rate should remain a tensor after reduction, but got {type(current_lr)}"
+
+    # Verify the value is correct (0.1 * 0.5 = 0.05)
+    expected_lr = torch.tensor(0.05)
+    assert torch.allclose(current_lr, expected_lr), \
+        f"Learning rate value incorrect. Expected {expected_lr}, got {current_lr}"
+
+if __name__ == "__main__":
+    test_reduce_lr_on_plateau_preserves_tensor_lr()
+    print("Test passed successfully.")

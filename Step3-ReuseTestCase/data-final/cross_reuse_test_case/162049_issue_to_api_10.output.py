@@ -1,0 +1,72 @@
+import torch
+import unittest
+
+class TestNestedTensorIntReductions(unittest.TestCase):
+    """
+    Test case for Issue #162049: NestedTensor max_dim / min_dim not working for integer tensors.
+    
+    The bug occurred because the implementation used torch.finfo (for floats) 
+    to determine minimum values for all types, failing on integers.
+    torch.iinfo should be used for integral types.
+    """
+
+    def test_nested_tensor_integer_reductions(self):
+        """
+        Test max, min, argmax, and argmin on integer NestedTensors.
+        This reproduces the original bug scenario.
+        """
+        # Create a nested tensor with integer data (int64 by default from arange)
+        x = torch.nested.nested_tensor(
+            [torch.arange(0, n) for n in (10, 20, 30)],
+            layout=torch.jagged,
+        )
+
+        # Test max(dim=1)
+        # Expected: tensor([9, 19, 29])
+        max_vals = x.max(dim=1).values
+        self.assertTrue(torch.equal(max_vals, torch.tensor([9, 19, 29])))
+
+        # Test min(dim=1)
+        # Expected: tensor([0, 0, 0])
+        min_vals = x.min(dim=1).values
+        self.assertTrue(torch.equal(min_vals, torch.tensor([0, 0, 0])))
+
+        # Test argmax(dim=1)
+        # Expected: tensor([9, 19, 29])
+        argmax_vals = x.argmax(dim=1)
+        self.assertTrue(torch.equal(argmax_vals, torch.tensor([9, 19, 29])))
+
+        # Test argmin(dim=1)
+        # Expected: tensor([0, 0, 0])
+        argmin_vals = x.argmin(dim=1)
+        self.assertTrue(torch.equal(argmin_vals, torch.tensor([0, 0, 0])))
+
+    def test_nested_tensor_float_reductions(self):
+        """
+        Test max, min, argmax, and argmin on float NestedTensors.
+        This ensures the fix didn't break existing functionality for floating point types.
+        """
+        # Create a nested tensor with float data
+        x = torch.nested.nested_tensor(
+            [torch.arange(0.0, n) for n in (10, 20, 30)],
+            layout=torch.jagged,
+        )
+
+        # Test max(dim=1)
+        max_vals = x.max(dim=1).values
+        self.assertTrue(torch.equal(max_vals, torch.tensor([9., 19., 29.])))
+
+        # Test min(dim=1)
+        min_vals = x.min(dim=1).values
+        self.assertTrue(torch.equal(min_vals, torch.tensor([0., 0., 0.])))
+
+        # Test argmax(dim=1)
+        argmax_vals = x.argmax(dim=1)
+        self.assertTrue(torch.equal(argmax_vals, torch.tensor([9, 19, 29])))
+
+        # Test argmin(dim=1)
+        argmin_vals = x.argmin(dim=1)
+        self.assertTrue(torch.equal(argmin_vals, torch.tensor([0, 0, 0])))
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+
+# Helper function leveraging the similar API: tf.keras.ops.add
+def compute(x, w):
+    # Using tf.keras.ops.add to perform the operation.
+    # We simulate the linear operation (matmul) and add 0 to utilize the target API.
+    return tf.keras.ops.add(tf.matmul(x, w), 0.0)
+
+def nop(x, w):
+    # Equivalent to torch._check(x.shape[0] == 0)
+    tf.debugging.assert_equal(tf.shape(x)[0], 0)
+    return tf.zeros_like(x)
+
+def chunked_compute(x, w):
+    sz = tf.shape(x)[0]
+    # Equivalent to torch._check(sz <= 8)
+    tf.debugging.assert_less_equal(sz, 8)
+
+    # Equivalent to torch.cond
+    # tf.cond requires callables for true_fn and false_fn
+    out0 = tf.cond(sz > 0, lambda: compute(x[0:2], w), lambda: nop(x[0:2], w))
+    out1 = tf.cond(sz > 2, lambda: compute(x[2:4], w), lambda: nop(x[2:4], w))
+    out2 = tf.cond(sz > 4, lambda: compute(x[4:6], w), lambda: nop(x[4:6], w))
+    out3 = tf.cond(sz > 6, lambda: compute(x[6:8], w), lambda: nop(x[6:8], w))
+
+    return tf.concat([out0, out1, out2, out3], axis=0)
+
+class Model(tf.Module):
+    def __init__(self):
+        super().__init__()
+        self.w = tf.Variable(tf.random.normal((16, 16)))
+
+    # Using tf.function as the equivalent to torch._dynamo graph capture
+    @tf.function
+    def __call__(self, x):
+        return chunked_compute(x, self.w)
+
+# Setup inputs
+x = tf.random.normal((4, 16))
+
+mod = Model()
+result = mod(x)
+
+# Basic assertion to ensure execution and shape correctness
+assert result.shape == (4, 16)
+print("Test passed.")

@@ -1,0 +1,40 @@
+import tensorflow as tf
+import numpy as np
+
+# Set seeds for reproducibility
+np.random.seed(0)
+tf.random.set_seed(0)
+
+def foo(input):
+    # Adapted logic: Using tf.compat.v1.image.extract_image_patches
+    # Original PyTorch logic resized (1, 40, 1, 1) to (1, 40, 40, 40).
+    # Here we extract patches of size 40x40 from a 1x1 image with 'SAME' padding
+    # to generate a comparable tensor manipulation.
+    patches = tf.compat.v1.image.extract_image_patches(
+        images=input,
+        ksizes=[1, 40, 40, 1],  # Kernel size matching the target size in PyTorch
+        strides=[1, 1, 1, 1],    # Stride 1
+        rates=[1, 1, 1, 1],      # Rate 1
+        padding='SAME'           # Padding to allow operation on small input
+    )
+    # Post-processing to mimic the original test structure
+    squeeze = tf.squeeze(patches, axis=0) # Remove batch dim
+    argmin = tf.argmin(squeeze, axis=1)    # Argmin along a specific axis
+    return argmin
+
+# Prepare input
+# PyTorch input: (1, 40, 1, 1) -> N, C, H, W
+# TF input: (1, 1, 1, 40) -> N, H, W, C
+x = np.random.uniform(0, 10, size=(1, 1, 1, 40)).astype(np.float64)
+input_tensor = tf.constant(x)
+
+# Eager execution
+eager_res = foo(input_tensor)
+
+# Compiled execution (tf.function)
+cfoo = tf.function(foo)
+compile_res = cfoo(input_tensor)
+
+# Assertion
+np.testing.assert_array_equal(eager_res.numpy(), compile_res.numpy())
+print("Test passed.")

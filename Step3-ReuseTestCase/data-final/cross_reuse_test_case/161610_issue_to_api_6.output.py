@@ -1,0 +1,72 @@
+import torch
+import unittest
+from typing import NamedTuple
+
+# Define the NamedTuple structure as per the bug report
+class MyNamedTuple(NamedTuple):
+    first: torch.Tensor
+    second: torch.Tensor
+
+# Subclassing to allow for potential dynamic attribute behavior
+# Note: In standard Python, NamedTuples are frozen. This test assumes
+# an environment or subclass definition that permits __setattr__ 
+# (e.g., via __slots__ modification) as implied by the bug report's 
+# success in eager mode.
+class MyNamedTupleSubclass(MyNamedTuple):
+    pass
+
+def fn(tup: MyNamedTuple) -> torch.Tensor:
+    """
+    Function that adds dynamic metadata to the tuple.
+    This mirrors the behavior of tf.data.experimental.pad_to_cardinality
+    which adds a 'mask_key' to dictionary elements.
+    """
+    extra_info = torch.tensor(4.0)
+    # Attempting to set a dynamic attribute
+    tup.extra_info = extra_info
+    return tup
+
+class TestNamedTupleDynamicAttributes(unittest.TestCase):
+    def test_named_tuple_dynamic_attribute_persistence(self):
+        """
+        Test that dynamic attributes added to NamedTuple subclasses
+        persist through both eager execution and torch.compile.
+        """
+        # Create the input object
+        extended_tup = MyNamedTupleSubclass(
+            first=torch.tensor([2.0]), 
+            second=torch.tensor(1.0)
+        )
+
+        # 1. Test Eager Mode
+        print("\nTesting NamedTuple with __setattr__ (Eager):")
+        try:
+            eager_result = fn(extended_tup)
+            # Verify the attribute exists in eager mode
+            self.assertTrue(hasattr(eager_result, 'extra_info'), 
+                            "Eager mode failed to persist dynamic attribute")
+            self.assertEqual(eager_result.extra_info.item(), 4.0)
+            print(f"NamedTuple __setattr__ result: {eager_result.extra_info}")
+        except AttributeError as e:
+            self.skipTest(f"Eager mode does not support dynamic attributes in this environment: {e}")
+
+        # 2. Test Compiled Mode (eager backend)
+        print("\nTesting NamedTuple with __setattr__ (Compiled):")
+        # Reset object for clean run
+        extended_tup_compiled = MyNamedTupleSubclass(
+            first=torch.tensor([2.0]), 
+            second=torch.tensor(1.0)
+        )
+        
+        compiled_fn = torch.compile(fn, backend="eager")
+        compiled_result = compiled_fn(extended_tup_compiled)
+        
+        # Verify the attribute exists in compiled mode
+        # This assertion will fail with the bug (AttributeError)
+        self.assertTrue(hasattr(compiled_result, 'extra_info'), 
+                        "Compiled mode failed to persist dynamic attribute (Bug #161610)")
+        self.assertEqual(compiled_result.extra_info.item(), 4.0)
+        print(f"NamedTuple __setattr__ result: {compiled_result.extra_info}")
+
+if __name__ == "__main__":
+    unittest.main()

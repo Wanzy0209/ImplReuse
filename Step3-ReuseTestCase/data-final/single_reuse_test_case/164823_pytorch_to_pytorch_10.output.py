@@ -1,0 +1,33 @@
+import torch
+import torch.distributed as dist
+import os
+
+def test_gather_sparse():
+    # Setup minimal distributed environment (single process)
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+    # Replicate the tensor logic from the original bug report
+    x = torch.randn(10, 10)
+    x_sparse = x.to_sparse()
+    result = x_sparse * 2
+
+    # Prepare the list for gathering (required on dst rank)
+    gather_list = [None]
+
+    # Call the similar API: torch.distributed.gather_object
+    # We verify if it can handle the sparse tensor object (which requires pickling)
+    dist.gather_object(result, object_gather_list=gather_list, dst=0)
+
+    # Verify the gathered object
+    gathered_obj = gather_list[0]
+    assert gathered_obj.is_sparse, "Gathered object should be a sparse tensor"
+    assert torch.allclose(gathered_obj.to_dense(), result.to_dense()), "Gathered tensor values mismatch"
+    
+    print("Test passed: torch.distributed.gather_object handled sparse tensor correctly.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    test_gather_sparse()

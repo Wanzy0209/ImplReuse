@@ -1,0 +1,33 @@
+import torch
+
+def test_slogdet_redundant_dtype_conversion():
+    """
+    Test case adapted from Issue 161611.
+    Verifies that calling .to(dtype) on the result of torch.slogdet
+    is redundant if the result already has that dtype and the return
+    value is not assigned.
+    """
+    # Setup: Create a tensor with a specific dtype
+    input_tensor = torch.randn(3, 3, dtype=torch.float32)
+
+    # Original API call: torch.slogdet
+    # The 'sign' output matches the input dtype
+    sign, logabsdet = torch.slogdet(input_tensor)
+
+    # Adapted Bug Pattern:
+    # Redundant conversion: 'sign' is already input_tensor.dtype
+    # The result of .to() is not assigned, making it ineffective.
+    sign.to(input_tensor.dtype)
+
+    # Assertion: Verify the dtype remains unchanged (proving redundancy)
+    assert sign.dtype == input_tensor.dtype
+    assert sign.dtype == torch.float32
+
+    # Additional check: Verify that assigning the result is also redundant
+    # (though effective in execution, it's unnecessary)
+    sign_assigned = sign.to(input_tensor.dtype)
+    assert torch.equal(sign, sign_assigned)
+
+if __name__ == "__main__":
+    test_slogdet_redundant_dtype_conversion()
+    print("Test passed.")

@@ -1,0 +1,63 @@
+import torch
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+
+def run_with_size(compiled_copy, H, device, dtype):
+    """Run copy_to_mesh with a specific size, creating a buffer sized by H."""
+    
+    # Create captured buffer that depends on dynamic H
+    # Mimics: head_scale = torch.randn(H, ...)
+    buffer = tf.random.normal([H], dtype=dtype)
+    
+    # Define layout. 
+    # Layout must match rank of buffer (rank 1 here).
+    # We use a replicated layout to ensure the buffer is copied to all mesh devices.
+    layout = dtensor.Layout([dtensor.UNSHARDED], mesh)
+
+    print(f"  Running with H={H}, buffer.shape={buffer.shape}")
+
+    # Run multiple iterations with the same buffer
+    for i in range(5):
+        # In the original PyTorch code, q, k, v are created inside the loop.
+        # Here, we simulate the operation using the captured buffer.
+        # The core logic being tested is the compiled function's ability
+        # to handle the buffer of the current size H.
+        
+        result = compiled_copy(buffer, layout)
+        
+        # Verify the output shape matches the input buffer shape
+        assert result.shape == buffer.shape, f"Shape mismatch: {result.shape} vs {buffer.shape}"
+
+    print(f"   Completed {i+1} iterations")
+
+
+def main():
+    # Setup a simple mesh for the test
+    # Using CPU to ensure it runs everywhere without GPU requirements
+    global mesh
+    mesh = dtensor.create_mesh([("x", 1)], devices=["CPU:0"])
+
+    device = "CPU"
+    dtype = tf.float16
+    
+    # Test with different head counts - this makes H a dynamic dimension
+    # and the captured buffer (buffer) changes size with H
+    head_counts = [4, 8, 4, 16, 4]
+
+    # The compiled function mimicking torch.compile(flex_attention)
+    # We use jit_compile=True to stress the graph compilation with dynamic shapes
+    @tf.function(jit_compile=True)
+    def compiled_copy_to_mesh(tensor, layout):
+        return dtensor.copy_to_mesh(tensor, layout)
+
+    print(f"Running copy_to_mesh with dynamic buffer sizes on {device}, dtype={dtype}")
+    print(f"Testing sizes: {head_counts}\n")
+
+    for iteration, H in enumerate(head_counts, start=1):
+        print(f"Iteration {iteration}:")
+        run_with_size(compiled_copy_to_mesh, H, device, dtype)
+
+
+if __name__ == "__main__":
+    main()

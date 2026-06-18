@@ -1,0 +1,46 @@
+import torch
+import torch.distributed as dist
+import os
+
+def setup():
+    # Initialize a single-process distributed environment for testing
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    # Use 'gloo' backend for CPU compatibility in this minimal test
+    dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def f(x, max_val):
+    # Adaptation: Use the similar API (torch.distributed.broadcast_object_list)
+    # inside the function to be compiled. This tests if the Inductor backend
+    # can handle distributed calls or if it triggers similar errors.
+    dist.broadcast_object_list([x, max_val], src=0)
+    
+    # Retain the original logic involving .item() which caused the NameError
+    y = torch.clamp(x, 0, max_val.item())
+    return y
+
+if __name__ == "__main__":
+    setup()
+    try:
+        # Attempt to compile the function containing the distributed call
+        compiled_func = torch.compile(f, backend='inductor', fullgraph=True)
+        
+        # Create inputs (using CPU for 'gloo' backend compatibility)
+        x = torch.randn(10, 20, 30)
+        max_val = torch.tensor(5.0)
+        
+        # Execute the compiled function
+        result = compiled_func(x, max_val)
+        
+        # Verify the result
+        expected = torch.clamp(x, 0, 5.0)
+        assert torch.allclose(result, expected), "Output mismatch"
+        print("Test Passed: Function compiled and executed successfully with broadcast_object_list.")
+        
+    except Exception as e:
+        print(f"Test Failed with error: {e}")
+    finally:
+        cleanup()

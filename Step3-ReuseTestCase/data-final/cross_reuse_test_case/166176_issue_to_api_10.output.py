@@ -1,0 +1,37 @@
+import torch
+import torch.nn.functional as F
+
+# Define inputs suitable for conv_transpose1d
+# Input shape: (Batch, Channels, Length)
+inp = torch.randn(1, 3, 10)
+# Weight shape: (in_channels, out_channels, kernel_size)
+weight = torch.randn(3, 6, 3)
+
+def fn(x, w):
+    # Reproduce the structure from the bug report:
+    # 1. Initial graph break
+    torch._dynamo.graph_break()
+
+    # 2. Nested torch.no_grad() contexts
+    with torch.no_grad():
+        with torch.no_grad():
+            # 3. Second graph break inside nested context
+            torch._dynamo.graph_break()
+
+            # 4. Call the similar API (conv_transpose1d)
+            return F.conv_transpose1d(x, w)
+
+# Compile the function using the backend specified in the bug report
+opt_m = torch.compile(fn, backend="eager")
+
+# Execute the compiled function
+# The original bug resulted in a KeyError during this execution
+try:
+    result = opt_m(inp, weight)
+    print("Test passed: No KeyError encountered.")
+    # Verify output shape is correct
+    # Output length calculation: (L - 1) * stride - 2*padding + dilation*(kernel_size-1) + output_padding + 1
+    # (10 - 1)*1 - 0 + 1*(3-1) + 0 + 1 = 12
+    assert result.shape == (1, 6, 12)
+except KeyError as e:
+    print(f"Test failed with KeyError: {e}")

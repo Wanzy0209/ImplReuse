@@ -1,0 +1,112 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class VAE(nn.Module):
+    def __init__(self, input_dim, hidden_dim, latent_dim):
+        super(VAE, self).__init__()
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim), 
+            nn.ReLU(), 
+            nn.Linear(hidden_dim, hidden_dim), 
+            nn.ReLU()
+        )
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_var = nn.Linear(hidden_dim, latent_dim)
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim), 
+            nn.ReLU(), 
+            nn.Linear(hidden_dim, hidden_dim), 
+            nn.ReLU(), 
+            nn.Linear(hidden_dim, input_dim), 
+            nn.Sigmoid()
+        )
+
+    def encode(self, x):
+        h = self.encoder(x)
+        mu = self.fc_mu(h)
+        log_var = self.fc_var(h)
+        return (mu, log_var)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def decode(self, z):
+        return self.decoder(z)
+
+    def forward(self, x):
+        x = x.view(-1, self.input_dim)
+        (mu, log_var) = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        reconstruction = self.decode(z)
+        return (reconstruction, mu, log_var)
+
+def get_default_model():
+    input_dim = 784
+    hidden_dim = 400
+    latent_dim = 20
+    model = VAE(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim)
+    return model
+
+def get_sample_inputs():
+    batch_size = 32
+    input_dim = 784
+    x = torch.randn(batch_size, input_dim)
+    return (x,)
+
+def test_torch_compile_tuple_return():
+    """
+    Test that torch.compile correctly handles models returning tuples.
+    Verifies that the output structure is preserved and elements are accessible.
+    """
+    torch.manual_seed(42) # For reproducibility
+    
+    model = get_default_model()
+    model.eval()
+    inputs = get_sample_inputs()
+
+    # 1. Eager Execution
+    with torch.no_grad():
+        eager_output = model(*inputs)
+    
+    # Verify eager output structure
+    assert isinstance(eager_output, tuple), "Eager output should be a tuple"
+    assert len(eager_output) == 3, "Eager output should contain 3 elements"
+    
+    rec_eager, mu_eager, log_var_eager = eager_output
+    print(f"Eager Mode - Reconstruction shape: {rec_eager.shape}, Mu shape: {mu_eager.shape}")
+
+    # 2. Compiled Execution
+    compiled_model = torch.compile(model)
+    with torch.no_grad():
+        compiled_output = compiled_model(*inputs)
+
+    # Verify compiled output structure
+    # The bug report indicated an issue where accessing .shape on the tuple itself failed.
+    # We verify that the output is indeed a tuple and must be unpacked to access shapes.
+    assert isinstance(compiled_output, tuple), "Compiled output should be a tuple"
+    assert len(compiled_output) == 3, "Compiled output should contain 3 elements"
+    
+    # Unpack the tuple to access individual tensor attributes
+    rec_compiled, mu_compiled, log_var_compiled = compiled_output
+    
+    print(f"Compiled Mode - Reconstruction shape: {rec_compiled.shape}, Mu shape: {mu_compiled.shape}")
+
+    # 3. Verify Consistency
+    assert rec_eager.shape == rec_compiled.shape, "Reconstruction shapes mismatch"
+    assert mu_eager.shape == mu_compiled.shape, "Mu shapes mismatch"
+    assert log_var_eager.shape == log_var_compiled.shape, "Log_var shapes mismatch"
+    
+    # Check values are close (reparameterization involves randomness, but with seed it should match)
+    torch.testing.assert_close(rec_eager, rec_compiled, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(mu_eager, mu_compiled, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(log_var_eager, log_var_compiled, rtol=1e-3, atol=1e-3)
+
+    print("Test Passed: torch.compile preserves tuple output structure correctly.")
+
+if __name__ == '__main__':
+    test_torch_compile_tuple_return()

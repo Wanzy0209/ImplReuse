@@ -1,0 +1,18 @@
+import torch
+import tensorflow as tf
+
+# Check for GPU availability to match the original bug's context
+if tf.config.list_physical_devices('GPU'):
+    # Explicitly place operations on the GPU
+    with tf.device('/GPU:0'):
+        # Create a tensor of ones on GPU (mimicking torch.ones(1, device="cuda"))
+        input_tensor = tf.ones([1])
+        
+        # Apply the similar API: tf.experimental.numpy.negative
+        # This adapts the logic to the target API while maintaining the GPU context
+        result = tf.experimental.numpy.negative(input_tensor)
+        
+        # Print the result (equivalent to .item())
+        print(result.numpy()[0])
+else:
+    print("Test skipped: GPU not available.")

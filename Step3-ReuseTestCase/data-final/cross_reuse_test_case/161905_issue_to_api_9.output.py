@@ -1,0 +1,76 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision.models import resnet18
+
+def test_torch_compile_resnet_backward():
+    """
+    Test case to reproduce Issue 161905: torch.compile fails on MPS during backward pass.
+    
+    This test leverages the pattern from tf.distribute.experimental_set_strategy,
+    where the execution context (strategy/device) is set before the function call,
+    rather than inside it.
+    """
+    BATCH_SIZE = 4
+    NUM_CLASSES = 10
+    LEARNING_RATE = 0.01
+
+    # Define the devices (strategies) to test. 
+    # The bug report highlights a discrepancy between CPU and MPS.
+    devices = ['cpu']
+    if torch.backends.mps.is_available():
+        devices.append('mps')
+
+    for device in devices:
+        print(f"Testing on device: {device}")
+
+        # Initialize model and move to device (Setting the "strategy")
+        model = resnet18(num_classes=NUM_CLASSES)
+        model = model.to(device)
+        model.train()
+
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+
+        # Define the compiled function
+        # Note: We keep the logic minimal. Data movement is handled outside 
+        # to mimic the 'set_strategy -> run' pattern of the similar API.
+        @torch.compile
+        def train_step(images, labels):
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward() # This is where the bug occurs on MPS
+            optimizer.step()
+            return loss
+
+        # Prepare data and move to device (Context setting)
+        images = torch.randn(BATCH_SIZE, 3, 224, 224).to(device)
+        labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,)).to(device)
+
+        try:
+            # Execute the training step
+            loss = train_step(images, labels)
+            
+            # Assertions to verify the backward pass completed successfully
+            assert loss is not None, "Loss should not be None"
+            assert torch.isfinite(loss), "Loss should be finite"
+            
+            # Verify gradients were computed (checking the first layer)
+            assert model.conv1.weight.grad is not None, "Gradients should be computed for conv1"
+            assert model.conv1.weight.grad.abs().sum() > 0, "Gradients should not be all zeros"
+            
+            print(f"Test passed for device: {device}")
+
+        except RuntimeError as e:
+            if device == 'mps':
+                # This block catches the specific bug described in Issue 161905
+                print(f"RuntimeError on MPS (Bug Reproduced): {e}")
+                # Re-raise to signal test failure
+                raise AssertionError(f"torch.compile failed on MPS backend during backward pass: {e}")
+            else:
+                # Unexpected failure on CPU
+                raise
+
+if __name__ == "__main__":
+    test_torch_compile_resnet_backward()

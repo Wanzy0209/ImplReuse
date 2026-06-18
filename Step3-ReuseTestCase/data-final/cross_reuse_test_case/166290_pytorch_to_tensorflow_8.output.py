@@ -1,0 +1,61 @@
+import torch
+import tensorflow as tf
+
+# Set seed for reproducibility, matching the original report's intent
+tf.random.set_seed(974450504)
+
+def fuzzed_program_tf(arg_0, arg_1):
+    # Reproduce tensor shapes from the PyTorch bug report
+    # arg_0: size=(17, 30, 17, 3), dtype=bool (mapped to float32 for optimizer compatibility)
+    # arg_1: size=(15,), dtype=int64
+    
+    # Mimic the logic to get the specific shape (15, 30, 17, 1) that was involved in the squeeze operation
+    # PyTorch: torch.chunk(var_node_3, 3, dim=3)[0]
+    var_node_2 = tf.split(arg_0, 3, axis=3)[0] # size=(17, 30, 17, 1)
+
+    # PyTorch: torch.index_select(var_node_2, 0, _index_var_node_1)
+    # We use arg_1 as the indices
+    var_node_1 = tf.gather(var_node_2, arg_1, axis=0) # size=(15, 30, 17, 1)
+
+    # The original bug occurred at torch.squeeze(var_node_1).
+    # Since we are testing tf.keras.optimizers.RMSprop, we will use this tensor
+    # as a weight variable to verify the optimizer handles these specific shapes/strides correctly.
+
+    # Initialize the target API: RMSprop
+    optimizer = tf.keras.optimizers.RMSprop(learning_rate=0.001)
+
+    # Create a variable with the problematic shape
+    weights = tf.Variable(var_node_1, name='weights')
+    # Create a dummy gradient
+    gradients = tf.ones_like(weights)
+
+    def optimization_step(opt, w, g):
+        opt.apply_gradients([(g, w)])
+        return w
+
+    # Test Eager Mode
+    print("Testing Eager Mode...")
+    try:
+        optimization_step(optimizer, weights, gradients)
+        print(" eager success")
+    except Exception as e:
+        print(f" eager failed: {e}")
+
+    # Test Graph Mode (equivalent to torch.compile)
+    print("Testing Graph Mode (tf.function)...")
+    compiled_step = tf.function(optimization_step)
+    try:
+        compiled_step(optimizer, weights, gradients)
+        print(" compile success")
+    except Exception as e:
+        print(f" compile failed: {e}")
+
+    # Verify the weights shape is preserved
+    assert weights.shape == (15, 30, 17, 1)
+
+# Generate inputs matching the shapes and types from the PyTorch report
+# Note: RMSprop requires float inputs, so we cast the boolean-like data to float32
+arg_0 = tf.cast(tf.random.uniform((17, 30, 17, 3), minval=0, maxval=2, dtype=tf.int32), tf.float32)
+arg_1 = tf.random.uniform((15,), minval=0, maxval=17, dtype=tf.int32)
+
+fuzzed_program_tf(arg_0, arg_1)

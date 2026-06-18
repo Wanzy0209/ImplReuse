@@ -1,0 +1,72 @@
+import torch
+from torch.export import Dim, export
+
+def test_reshape_copy_unbacked_semantics():
+    """
+    Test case to verify unbacked semantics for torch.ops.aten._reshape_copy.
+    This test preserves the logic of the original bug report (Issue 162110) 
+    where _reshape_copy was used in a decomposition for torch.export.
+    
+    The structure mirrors the usage pattern of similar decomposition APIs
+    (like tf.linalg.lu_matrix_inverse) where a specific operator is called
+    within a transformation pipeline.
+    """
+    
+    # Define a simple module that uses `view`, which we will decompose
+    class ReshapeModel(torch.nn.Module):
+        def forward(self, x):
+            # Reshape (batch, seq, hidden) -> (batch, seq * hidden)
+            # This uses aten::view
+            return x.view(x.size(0), -1)
+
+    # Define the decomposition function that maps view to _reshape_copy
+    # This mimics the pattern of defining a specific operation implementation
+    # similar to how tf.linalg.lu_matrix_inverse is defined as a specific op.
+    def view_decomposition(x: torch.Tensor, size: torch.Size) -> torch.Tensor:
+        return torch.ops.aten._reshape_copy.default(x, size)
+
+    # Setup dynamic shapes to trigger unbacked symbols
+    batch_dim = Dim("batch", min=1, max=8)
+    seq_dim = Dim("seq", min=1, max=128)
+    
+    model = ReshapeModel()
+    
+    # Static input for export definition, shapes will be dynamic
+    example_input = torch.randn(2, 10, 64)
+    
+    dynamic_shapes = ({0: batch_dim, 1: seq_dim},)
+
+    # Export the model with dynamic shapes
+    # strict=False is used in the original bug report
+    try:
+        ep = export(
+            model,
+            args=(example_input,),
+            dynamic_shapes=dynamic_shapes,
+            strict=False
+        )
+        
+        # Create a decomposition table
+        decomp_table = export.default_decompositions()
+        
+        # Register our custom decomposition
+        # This replaces the standard view op with _reshape_copy
+        decomp_table[torch.ops.aten.view.default] = view_decomposition
+        
+        # Run decompositions
+        # The bug manifests here if _reshape_copy doesn't support unbacked semantics
+        after_decomp = ep.run_decompositions(decomp_table=decomp_table)
+        
+        # Verify the graph contains the expected operator
+        graph_str = str(after_decomp.graph)
+        assert "aten::_reshape_copy" in graph_str, \
+            "Expected aten::_reshape_copy in the decomposed graph"
+            
+        print("Test Passed: _reshape_copy handles unbacked semantics correctly.")
+        
+    except Exception as e:
+        print(f"Test Failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_reshape_copy_unbacked_semantics()

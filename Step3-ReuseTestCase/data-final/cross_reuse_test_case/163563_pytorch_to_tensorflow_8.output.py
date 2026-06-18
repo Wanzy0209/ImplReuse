@@ -1,0 +1,62 @@
+import torch
+import tensorflow as tf
+
+# Check for GPU availability to match the original 'cuda' requirement
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print(f"Running on GPU: {gpus[0].name}")
+    except RuntimeError as e:
+        print(e)
+else:
+    print("Warning: No GPU found. This test is intended for CUDA execution.")
+
+def foo(arg0, arg1, arg2):
+    # t0 = arg0 # size=(5699097, 6, 1), dtype=bfloat16
+    t1 = tf.nn.sigmoid(arg0) # size=(5699097, 6, 1), dtype=bfloat16
+    
+    # t2 = arg1 # size=(5699097, 6, 256), dtype=bfloat16
+    t3 = tf.nn.sigmoid(arg1) # size=(5699097, 6, 256), dtype=bfloat16
+    
+    # t4 = arg2 # size=(5699097, 256, 1), dtype=bfloat16
+    t5 = tf.math.exp(arg2) # size=(5699097, 256, 1), dtype=bfloat16
+    
+    # torch.baddbmm(t1, t3, t5) -> t1 + batch_matmul(t3, t5)
+    # t3 (B, 6, 256) @ t5 (B, 256, 1) -> (B, 6, 1)
+    # t1 (B, 6, 1) + result -> (B, 6, 1)
+    t6 = t1 + tf.linalg.matmul(t3, t5) # size=(5699097, 6, 1), dtype=bfloat16
+    
+    t7 = tf.reshape(t6, (193, 386, 459)) # size=(193, 386, 459), dtype=bfloat16
+    output = t7
+    return output
+
+# Initialize inputs with bfloat16 to match the original bug report
+arg0 = tf.random.uniform([5699097, 6, 1], dtype=tf.bfloat16)
+arg1 = tf.random.uniform([5699097, 6, 256], dtype=tf.bfloat16)
+arg2 = tf.random.uniform([5699097, 256, 1], dtype=tf.bfloat16)
+
+if __name__ == '__main__':
+    # 1. Eager Execution
+    print("Running Eager Execution...")
+    with tf.GradientTape() as tape:
+        out_eager = foo(arg0, arg1, arg2)
+        loss = tf.reduce_sum(out_eager)
+    grads = tape.gradient(loss, [arg0, arg1, arg2])
+    print('Eager Success! ')
+
+    # 2. Compiled Execution (Graph Mode)
+    # Using tf.keras.name_scope as the requested similar API context
+    print("Running Compiled Execution (tf.function) with name_scope...")
+    
+    with tf.keras.name_scope("pt2_divergence_test"):
+        # tf.function is the TensorFlow equivalent to torch.compile
+        compiled_foo = tf.function(foo)
+        
+        with tf.GradientTape() as tape:
+            out_compiled = compiled_foo(arg0, arg1, arg2)
+            loss = tf.reduce_sum(out_compiled)
+        grads = tape.gradient(loss, [arg0, arg1, arg2])
+        
+    print('Compile Success! ')

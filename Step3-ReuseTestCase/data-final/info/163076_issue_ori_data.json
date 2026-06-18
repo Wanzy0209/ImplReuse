@@ -1,0 +1,64 @@
+{
+  "title": "Export Qwen3 Model with past_key_values",
+  "issue_id": "163076",
+  "bug_description": "### 🐛 Describe the bug\n\nI am trying to export **\"Qwen/Qwen3-0.6B\"** model with past_key_values but I have blocked with the error attached below\n\nCode to Reproduce:-\n\n```import torch\nfrom torch.nn import Module\nfrom transformers import AutoModelForCausalLM, AutoTokenizer\nfrom transformers.modeling_outputs import CausalLMOutputWithPast\n\nMODEL_NAME = \"Qwen/Qwen3-0.6B\"\nONNX_PATH = \"qwen3_kv_cache.onnx\"\nOPSET = 18  \n\ntokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)\nmodel = AutoModelForCausalLM.from_pretrained(\n    MODEL_NAME,\n    torch_dtype=torch.float16\n).eval().cuda()\n\ndevice = model.device\n\ninput_ids = tokenizer.encode(\"Hello World\", return_tensors=\"pt\").to(device)\n\nclass QwenTorchModule(Module):\n    def __init__(self, model):\n        super().__init__()\n        self.model = model\n\n    def forward(self, input_ids, past_key_values=None, **kwargs):\n        outputs: CausalLMOutputWithPast = self.model(\n            input_ids=input_ids,\n            past_key_values=past_key_values,\n            use_cache=True,\n            **kwargs\n        )\n        return (outputs.logits, outputs.past_key_values)\n\nqwen_module = QwenTorchModule(model)\n\nwith torch.inference_mode():\n    outputs = qwen_module(input_ids)\n    past_key_values = outputs[1]\n\nold_forward = qwen_module.forward\ndef _export_forward(input_ids, past_key_values):\n    return old_forward(input_ids=input_ids, past_key_values=past_key_values)\n\nqwen_module.forward = _export_forward\n\nexport_inputs = (input_ids, past_key_values)\n\ntorch.onnx.export(\n    qwen_module,\n    export_inputs,\n    ONNX_PATH,\n    opset_version=OPSET,\n    do_constant_folding=True,\n    input_names=[\"input_ids\", \"past_key_values\"],\n    output_names=[\"logits\", \"present_key_values\"],\n    dynamic_axes={\n        \"input_ids\": {0: \"batch\", 1: \"sequence\"},\n        \"logits\": {0: \"batch\", 1: \"sequence\"},\n    },\n)\n```\n\n\nError Which I'm facing :-\n\n```Traceback (most recent call last):\n  File \"/data/users/logesh/KV_Cache_Backup.py\", line 48, in <module>\n    torch.onnx.export(\n  File \"/data/users/logesh/qwen_venv/lib/python3.10/site-packages/torch/onnx/utils.py\", line 551, in export\n    _export(\n  File \"/data/users/logesh/qwen_venv/lib/python3.10/site-packages/torch/onnx/utils.py\", line 1648, in _export\n    graph, params_dict, torch_out = _model_to_graph(\n  File \"/data/users/logesh/qwen_venv/lib/python3.10/site-packages/torch/onnx/utils.py\", line 1170, in _model_to_graph\n    graph, params, torch_out, module = _create_jit_graph(model, args)\n  File \"/data/users/logesh/qwen_venv/lib/python3.10/site-packages/torch/onnx/utils.py\", line 1046, in _create_jit_graph\n    graph, torch_out = _trace_and_get_graph_from_model(model, args)\n  File \"/data/users/logesh/qwen_venv/lib/python3.10/site-packages/torch/onnx/utils.py\", line 950, in _trace_and_get_graph_from_model\n    trace_graph, torch_out, inputs_states = torch.jit._get_trace_graph(\n  File \"/data/users/logesh/qwen_venv/lib/python3.10/site-packages/torch/jit/_trace.py\", line 1497, in _get_trace_graph\n    outs = ONNXTracedModule(\n  File \"/data/users/logesh/qwen_venv/lib/python3.10/site-packages/torch/nn/modules/module.py\", line 1553, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n  File \"/data/users/logesh/qwen_venv/lib/python3.10/site-packages/torch/nn/modules/module.py\", line 1562, in _call_impl\n    return forward_call(*args, **kwargs)\n  File \"/data/users/logesh/qwen_venv/lib/python3.10/site-packages/torch/jit/_trace.py\", line 108, in forward\n    in_vars, in_desc = _flatten(args)\nRuntimeError: Only tuples, lists and Variables are supported as JIT inputs/outputs. Dictionaries and strings are also accepted, but their usage is not recommended. Here, received an input of unsupported type: DynamicCache\n```\n\n\nI tried passing past_key_values both as a DynamicCache object and as a list/tuple, but neither worked — I ended up getting errors in both cases.\nAre there any alternative ways to provide past_key_values or to handle KV cache in the Qwen3 model?\n\n\n### Versions\n\nCollectin",
+  "apis": [
+    "AutoTokenizer.from_pretrained",
+    "tokenizer.encode",
+    "u003etorch.onnx.export",
+    "numpy",
+    "torch.jit._get_trace_graph",
+    "torch.onnx.export"
+  ],
+  "best_code": "from torch.nn import Module\nfrom transformers import AutoModelForCausalLM, AutoTokenizer\nfrom transformers.modeling_outputs import CausalLMOutputWithPast\n\nMODEL_NAME = \"Qwen/Qwen3-0.6B\"\nONNX_PATH = \"qwen3_kv_cache.onnx\"\nOPSET = 18  \n\ntokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)\nmodel = AutoModelForCausalLM.from_pretrained(\n    MODEL_NAME,\n    torch_dtype=torch.float16\n).eval().cuda()\n\ndevice = model.device\n\ninput_ids = tokenizer.encode(\"Hello World\", return_tensors=\"pt\").to(device)\n\nclass QwenTorchModule(Module):\n    def __init__(self, model):\n        super().__init__()\n        self.model = model\n\n    def forward(self, input_ids, past_key_values=None, **kwargs):\n        outputs: CausalLMOutputWithPast = self.model(\n            input_ids=input_ids,\n            past_key_values=past_key_values,\n            use_cache=True,\n            **kwargs\n        )\n        return (outputs.logits, outputs.past_key_values)\n\nqwen_module = QwenTorchModule(model)\n\nwith torch.inference_mode():\n    outputs = qwen_module(input_ids)\n    past_key_values = outputs[1]\n\nold_forward = qwen_module.forward\ndef _export_forward(input_ids, past_key_values):\n    return old_forward(input_ids=input_ids, past_key_values=past_key_values)\n\nqwen_module.forward = _export_forward\n\nexport_inputs = (input_ids, past_key_values)\n\ntorch.onnx.export(\n    qwen_module,\n    export_inputs,\n    ONNX_PATH,\n    opset_version=OPSET,\n    do_constant_folding=True,\n    input_names=[\"input_ids\", \"past_key_values\"],\n    output_names=[\"logits\", \"present_key_values\"],\n    dynamic_axes={\n        \"input_ids\": {0: \"batch\", 1: \"sequence\"},\n        \"logits\": {0: \"batch\", 1: \"sequence\"},\n    },\n)",
+  "pull_urls": [],
+  "_meta": {
+    "file": "163076_issue_ori_data.json",
+    "generated_at": "2026-04-21 02:36:12",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\163076_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\163076_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "I am trying to export \"Qwen/Qwen3-0.6B\" model with past_key_values but I have blocked with the error attached below. I tried passing past_key_values both as a DynamicCache object and as a list/tuple, but neither worked — I ended up getting errors in both cases.",
+  "repro_code": "import torch\nfrom torch.nn import Module\nfrom transformers import AutoModelForCausalLM, AutoTokenizer\nfrom transformers.modeling_outputs import CausalLMOutputWithPast\n\nMODEL_NAME = \"Qwen/Qwen3-0.6B\"\nONNX_PATH = \"qwen3_kv_cache.onnx\"\nOPSET = 18  \n\ntokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)\nmodel = AutoModelForCausalLM.from_pretrained(\n    MODEL_NAME,\n    torch_dtype=torch.float16\n).eval().cuda()\n\ndevice = model.device\n\ninput_ids = tokenizer.encode(\"Hello World\", return_tensors=\"pt\").to(device)\n\nclass QwenTorchModule(Module):\n    def __init__(self, model):\n        super().__init__()\n        self.model = model\n\n    def forward(self, input_ids, past_key_values=None, **kwargs):\n        outputs: CausalLMOutputWithPast = self.model(\n            input_ids=input_ids,\n            past_key_values=past_key_values,\n            use_cache=True,\n            **kwargs\n        )\n        return (outputs.logits, outputs.past_key_values)\n\nqwen_module = QwenTorchModule(model)\n\nwith torch.inference_mode():\n    outputs = qwen_module(input_ids)\n    past_key_values = outputs[1]\n\nold_forward = qwen_module.forward\ndef _export_forward(input_ids, past_key_values):\n    return old_forward(input_ids=input_ids, past_key_values=past_key_values)\n\nqwen_module.forward = _export_forward\n\nexport_inputs = (input_ids, past_key_values)\n\ntorch.onnx.export(\n    qwen_module,\n    export_inputs,\n    ONNX_PATH,\n    opset_version=OPSET,\n    do_constant_folding=True,\n    input_names=[\"input_ids\", \"past_key_values\"],\n    output_names=[\"logits\", \"present_key_values\"],\n    dynamic_axes={\n        \"input_ids\": {0: \"batch\", 1: \"sequence\"},\n        \"logits\": {0: \"batch\", 1: \"sequence\"},\n    },\n)",
+  "repro_output": "Export Qwen3 Model with past_key_values",
+  "affected_api": "torch.onnx.export",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.float16",
+    "input_shape": "",
+    "other_conditions": "Using torch.onnx.export with past_key_values, opset_version=18"
+  },
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "3.10",
+    "os": "unknown",
+    "hardware": "CUDA"
+  },
+  "labels": [
+    "onnx",
+    "export",
+    "qwen",
+    "past_key_values",
+    "dynamic_cache"
+  ],
+  "add_fix_code": [],
+  "sub_fix_code": [],
+  "core_api": "torch.onnx.export",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [],
+    "issue_to_api": [],
+    "pytorch_to_pytorch": []
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "",
+      "test_cases": []
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": []
+    }
+  }
+}

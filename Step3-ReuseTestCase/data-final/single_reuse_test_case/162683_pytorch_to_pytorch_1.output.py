@@ -1,0 +1,45 @@
+import torch
+import time
+
+torch.manual_seed(0)
+# Adapted shapes for istft: (input_shape, n_fft)
+# Original shapes were (1, 12, 10, 64) and (1, 12, 64, 10).
+# We adapt these to (Batch, Freq, Time) for istft.
+# Assuming onesided=True, Freq dim = n_fft // 2 + 1.
+# If Freq=12, n_fft=22.
+configs = [
+     ((1, 12, 64), 22),
+     ((1, 12, 10), 22),
+]
+
+
+def benchmark_istft(input_shape, n_fft, dtype=torch.complex64, device="cpu", repeat=500):
+    # Generate complex input similar to the random generation in the original test
+    real = torch.empty(input_shape, dtype=torch.float32, device=device).uniform_(0,1) * 2 - 1
+    imag = torch.empty(input_shape, dtype=torch.float32, device=device).uniform_(0,1) * 2 - 1
+    X = torch.complex(real, imag)
+    
+    # warm up
+    for _ in range(5000):
+        _ = torch.istft(X, n_fft)
+    # run
+    times = []
+    for i in range(repeat):
+        start = time.time()
+        out = torch.istft(X, n_fft)
+        end = time.time()
+        
+        # Assertion to verify output validity
+        assert out.shape[0] == input_shape[0]
+        
+        if i > 100:
+            times.append(round((end - start) * 1000 * 1000))
+    times.sort()
+    print(times)
+    avg_time_us = sum(times) / len(times)
+    return avg_time_us
+
+if __name__ == "__main__":
+    for input_shape, n_fft in configs:
+        t = benchmark_istft(input_shape, n_fft)
+        print(f"istft({input_shape}, n_fft={n_fft})  ->  {t:.3f} us")

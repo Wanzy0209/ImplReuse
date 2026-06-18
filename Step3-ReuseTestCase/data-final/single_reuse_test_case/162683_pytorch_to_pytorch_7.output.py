@@ -1,0 +1,42 @@
+import torch
+import time
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+# Adapted shapes from the original matmul test case.
+# We use the first tensor shape as the input for prelu.
+shapes = [
+    (1, 12, 10, 64),
+    (1, 12, 10, 10),
+]
+
+def benchmark_prelu(input_shape, dtype=torch.float16, device="cpu", repeat=500):
+    # Create input tensor
+    A = torch.empty(input_shape, dtype=dtype, device=device).uniform_(0,1) * 2 - 1
+    
+    # Create weight tensor for prelu.
+    # Weight must be a scalar or 1D tensor with size equal to the number of channels (dim 1).
+    channel_size = input_shape[1]
+    weight = torch.empty((channel_size,), dtype=dtype, device=device).uniform_(0,1) * 2 - 1
+
+    # warm up
+    for _ in range(5000):
+        _ = F.prelu(A, weight)
+    
+    # run
+    times = []
+    for i in range(repeat):
+        start = time.time()
+        _ = F.prelu(A, weight)
+        end = time.time()
+        if i > 100:
+            times.append(round((end - start) * 1000 * 1000))
+    times.sort()
+    print(times)
+    avg_time_ms = sum(times) / len(times)
+    return avg_time_ms
+
+if __name__ == "__main__":
+    for shape in shapes:
+        t = benchmark_prelu(shape)
+        print(f"Input shape: {shape} -> {t:.3f} us")

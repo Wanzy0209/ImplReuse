@@ -1,0 +1,48 @@
+import tensorflow as tf
+
+# Mocking the stablehlo module to ensure the test is runnable 
+# without specific compiler dependencies, based on the provided snippet.
+class MockStableHLO:
+    @staticmethod
+    def get_minimum_version():
+        return "v1.0"
+
+    @staticmethod
+    def serialize_portable_artifact_str(module_str, target):
+        # Simulate serialization by returning a tensor of the string bytes
+        return tf.constant(module_str.encode('utf-8'))
+
+stablehlo = MockStableHLO()
+
+# The similar API function extracted from the snippet
+def serialize(module_str: str):
+    target = stablehlo.get_minimum_version()
+    byte_str = stablehlo.serialize_portable_artifact_str(module_str, target)
+    return byte_str
+
+class Config:
+    def __repr__(self):
+        return "Config()"
+
+@tf.function
+def forward(x, config):
+    # Reproducing the bug logic: calling repr() on a non-constant user object
+    # and passing the result to the serialize function (similar API)
+    # This tests if the tracing engine handles repr() correctly in this context.
+    serialized_bytes = serialize(repr(config))
+    
+    # Perform a computation using the result to ensure it is part of the graph
+    # Using string length as a proxy for the 'len(repr(config))' in the original bug
+    return x + tf.cast(tf.strings.length(serialized_bytes), tf.float32)
+
+# Test execution
+config = Config()
+x = tf.constant([1.0, 2.0])
+
+try:
+    result = forward(x, config)
+    print("Test Passed. Result:", result)
+    # Assert that the result is as expected (x + len("Config()") = x + 8)
+    assert tf.reduce_all(result == tf.constant([9.0, 10.0])).numpy()
+except Exception as e:
+    print(f"Test Failed with error: {e}")

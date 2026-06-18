@@ -1,0 +1,237 @@
+{
+  "title": "torch.topkspeed regression",
+  "issue_id": "167462",
+  "bug_description": "the speed of `torch.topk` is slower since torch>2.5, here is my test script (Nvidia L20, SM89):\n\n- torch: 2.4.1, topk latency: 11.30ms\n- torch: 2.7.1, topk latency: 17.32ms (-51%)\n\n```python\nimport time\nimport torch\n\nif __name__ == \"__main__\":\n    BS, VOCAB, K = 128, 8000000, 1000\n    x = torch.randn((BS, VOCAB), device=\"cuda\", dtype=torch.float16)\n    walltime = []\n    for _ in range(100):\n        s = time.time()\n        _ = x.topk(k=K, dim=-1)\n        torch.cuda.synchronize()\n        e = time.time()\n        walltime.append(e-s)\n    walltime = walltime[10:]\n    walltime = sum(walltime) / len(walltime)\n    print(f\"torch: {torch.__version__}, topk latency: {1000 * walltime}ms\")\n\n# torch: 2.4.1+cu126, topk latency: 11.30892170800103ms\n# torch: 2.7.1+cu126, topk latency: 17.325512568155922ms\n```\n\ncc @jerryzh168 @ptrblck @msaroufim @eqy",
+  "apis": [
+    "x.topk",
+    "torch.randn",
+    "walltime.append",
+    "torch.cuda.synchronize",
+    "time.time",
+    "torch"
+  ],
+  "best_code": "import time\nimport torch\n\nif __name__ == \"__main__\":\n    BS, VOCAB, K = 128, 8000000, 1000\n    x = torch.randn((BS, VOCAB), device=\"cuda\", dtype=torch.float16)\n    walltime = []\n    for _ in range(100):\n        s = time.time()\n        _ = x.topk(k=K, dim=-1)\n        torch.cuda.synchronize()\n        e = time.time()\n        walltime.append(e-s)\n    walltime = walltime[10:]\n    walltime = sum(walltime) / len(walltime)\n    print(f\"torch: {torch.__version__}, topk latency: {1000 * walltime}ms\")\n\n# torch: 2.4.1+cu126, topk latency: 11.30892170800103ms\n# torch: 2.7.1+cu126, topk latency: 17.325512568155922ms",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/164459"
+  ],
+  "_meta": {
+    "file": "167462_issue_ori_data.json",
+    "generated_at": "2026-04-21 05:59:52",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\167462_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\167462_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "the speed of `torch.topk` is slower since torch>2.5, here is my test script (Nvidia L20, SM89):",
+  "repro_code": "import time\nimport torch\n\nif __name__ == \"__main__\":\n    BS, VOCAB, K = 128, 8000000, 1000\n    x = torch.randn((BS, VOCAB), device=\"cuda\", dtype=torch.float16)\n    walltime = []\n    for _ in range(100):\n        s = time.time()\n        _ = x.topk(k=K, dim=-1)\n        torch.cuda.synchronize()\n        e = time.time()\n        walltime.append(e-s)\n    walltime = walltime[10:]\n    walltime = sum(walltime) / len(walltime)\n    print(f\"torch: {torch.__version__}, topk latency: {1000 * walltime}ms\")",
+  "repro_output": "torch.topkspeed regression",
+  "affected_api": "torch.topk",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.float16",
+    "input_shape": "(128, 8000000)",
+    "other_conditions": "k=1000, dim=-1"
+  },
+  "environment": {
+    "pytorch_version": "2.4.1, 2.7.1",
+    "python_version": "",
+    "os": "",
+    "hardware": "Nvidia L20, SM89"
+  },
+  "labels": [],
+  "add_fix_code": [
+    "static_assert(RADIX_DIGITS <= BLOCK_THREADS, \"RADIX_DIGITS must be <= BLOCK_THREADS\");",
+    "// compute local histogram for each block",
+    "__global__ void computeBlockDigitCounts(",
+    "// compute global histogram and cumsum for each row",
+    "__global__ void computeDigitCumSum(",
+    "  short* counts, ",
+    "  uint32_t* digit_cum_sum,",
+    "  uint32_t blocks_per_slice) {",
+    "  int tidx = threadIdx.x + blockIdx.x * blockDim.x;",
+    "  int digit_idx = threadIdx.x;",
+    "  uint32_t slice_idx = blockIdx.x;",
+    "  ",
+    "  typedef cub::BlockScan<uint32_t, RADIX_DIGITS> BlockScan;",
+    "  __shared__ typename BlockScan::TempStorage scan_storage;",
+    "  // accumulates counters from multiple blocks",
+    "  uint32_t digit_count = 0;",
+    "  if (threadIdx.x < RADIX_DIGITS) {",
+    "    constexpr int HISTO_ACCUM_TILE = 4;",
+    "    uint32_t rounds = blocks_per_slice / HISTO_ACCUM_TILE;",
+    "    for (int iter = 0; iter < rounds; iter++)  {",
+    "      int base = HISTO_ACCUM_TILE * iter;",
+    "      #pragma unroll",
+    "      for (int j = 0; j < HISTO_ACCUM_TILE; j++) {",
+    "        int blk = base + j;",
+    "        digit_count += counts[(slice_idx * blocks_per_slice + blk) * RADIX_DIGITS + digit_idx];",
+    "      }",
+    "    }",
+    "    for (int blk = HISTO_ACCUM_TILE * rounds; blk < blocks_per_slice; blk++)  {",
+    "      digit_count += counts[(slice_idx * blocks_per_slice + blk) * RADIX_DIGITS + digit_idx];",
+    "    }",
+    "",
+    "  }",
+    "  // compute the block-wide inclusive prefix sum",
+    "  uint32_t digit_count_cumsum;",
+    "  BlockScan(scan_storage).InclusiveSum(digit_count, digit_count_cumsum);",
+    "  __syncthreads();",
+    "  if (threadIdx.x < RADIX_DIGITS) {",
+    "    digit_cum_sum[tidx] = digit_count_cumsum;",
+    "  }",
+    "}",
+    "",
+    "  uint32_t* digit_cum_sum,",
+    "  // This kernel should be launched with the same number of blocks as the `computeBlockDigitCounts` kernel.",
+    "    uint32_t position = slice_idx*RADIX_DIGITS + tidx;",
+    "    uint32_t digit_count_cumsum = digit_cum_sum[position];",
+    "    uint32_t digit_count_cumsum_left = (tidx == 0) ? 0 : digit_cum_sum[position - 1];",
+    "  #ifdef USE_ROCM",
+    "  uint32_t num_blocks,         // the number of blocks used by `computeBlockDigitCounts` kernel",
+    "",
+    "  auto digit_cum_sum_buffer = allocator.allocate(numInputSlices * RADIX_DIGITS * sizeof(uint32_t));",
+    "  uint32_t* digit_cum_sum = reinterpret_cast<uint32_t*>(digit_cum_sum_buffer.get());",
+    "  AT_CUDA_CHECK(cudaMemsetAsync(digit_cum_sum, 0, numInputSlices * RADIX_DIGITS * sizeof(uint32_t), stream));",
+    "",
+    "    computeBlockDigitCounts<T, IndexType, Bitwise, Dim><<<grid, block, 0, stream>>>(",
+    "    ",
+    "    computeDigitCumSum<<<numInputSlices, RADIX_DIGITS, 0, stream>>>(counts, digit_cum_sum, blocks_per_slice);",
+    "    C10_CUDA_KERNEL_LAUNCH_CHECK();",
+    "    ",
+    "      desired_in, counts, digit_cum_sum, ks_to_find_in, blocks_per_slice, current_bit, largest, withinKCounts, kthValues, ks_to_find_out, desired_out, num_blocks);",
+    "  short* counts,",
+    "",
+    "",
+    "",
+    "#ifdef USE_ROCM",
+    "    uint32_t position = slice_idx * RADIX_DIGITS + tidx;"
+  ],
+  "sub_fix_code": [
+    "static_assert(RADIX_DIGITS <= BLOCK_THREADS, \"radixFindKthValues kernel requires RADIX_DIGITS <= BLOCK_THREADS\");",
+    "// find the kth smallest value,",
+    "// for largest topk, k_to_find = slice_size - k + 1",
+    "__global__ void radixFindKthValues(",
+    "  // This kernel should be launched with the same number of blocks as the `radixFindKthValues` kernel.",
+    "  typedef cub::BlockScan<uint32_t, BLOCK_THREADS> BlockScan;",
+    "  union __align__(16) TempStorage {",
+    "    uint32_t digit_count_cumsum[RADIX_DIGITS]; // only used if this it the last block for this slice",
+    "    typename BlockScan::TempStorage scan_storage;",
+    "  };",
+    "  __shared__ TempStorage temp_storage;",
+    "",
+    "  // accumulates counters from multiple blocks",
+    "  uint32_t digit_count = 0;",
+    "  if (tidx < RADIX_DIGITS) {",
+    "    for (int blk = 0; blk < blocks_per_slice; ++blk) {",
+    "      digit_count += counts[(slice_idx * blocks_per_slice + blk) * RADIX_DIGITS + tidx];",
+    "    }",
+    "  }",
+    "  // compute the block-wide inclusive prefix sum",
+    "  uint32_t digit_count_cumsum;",
+    "  BlockScan(temp_storage.scan_storage).InclusiveSum(digit_count, digit_count_cumsum);",
+    "  __syncthreads();",
+    "  // every thread also need the perfix_sum of it's left value for comparison, so save a copy in shared mem",
+    "  if (tidx < RADIX_DIGITS) {",
+    "    temp_storage.digit_count_cumsum[tidx] = digit_count_cumsum;",
+    "  }",
+    "  __syncthreads();",
+    "    uint32_t digit_count_cumsum_left = (tidx == 0) ? 0 : temp_storage.digit_count_cumsum[tidx - 1];",
+    "#ifdef USE_ROCM",
+    "  uint32_t num_blocks,         // the number of blocks used by `radixFindKthValues` kernel",
+    "  auto semaphores_buffer = allocator.allocate(numInputSlices * sizeof(uint32_t));",
+    "  uint32_t* semaphores = reinterpret_cast<uint32_t*>(semaphores_buffer.get());",
+    "  AT_CUDA_CHECK(cudaMemsetAsync(semaphores, 0, numInputSlices * sizeof(uint32_t), stream));",
+    "    radixFindKthValues<T, IndexType, Bitwise, Dim><<<grid, block, 0, stream>>>(",
+    "      desired_in, counts, ks_to_find_in, blocks_per_slice, current_bit, largest, withinKCounts, kthValues, ks_to_find_out, desired_out, num_blocks);",
+    "  short* counts, ",
+    "  ",
+    "    ",
+    "    ",
+    "  #ifdef USE_ROCM",
+    "    uint32_t position = slice_idx*RADIX_DIGITS + tidx;"
+  ],
+  "core_api": "torch.topktorch.topk",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [],
+    "issue_to_api": [
+      {
+        "api_name": "tf.linalg.LinearOperatorAdjoint",
+        "api_type": "issue",
+        "similarity": 0.9888082146644592
+      },
+      {
+        "api_name": "tf.compat.v1.distributions.Categorical",
+        "api_type": "issue",
+        "similarity": 0.9887250661849976
+      },
+      {
+        "api_name": "tf.compat.v1.enable_v2_behavior",
+        "api_type": "issue",
+        "similarity": 0.988629937171936
+      },
+      {
+        "api_name": "tf.compat.v1.nn.ctc_beam_search_decoder",
+        "api_type": "issue",
+        "similarity": 0.9884601831436157
+      },
+      {
+        "api_name": "tf.nn.ctc_beam_search_decoder",
+        "api_type": "issue",
+        "similarity": 0.9884601831436157
+      },
+      {
+        "api_name": "tf.custom_gradient",
+        "api_type": "issue",
+        "similarity": 0.9883434772491455
+      },
+      {
+        "api_name": "tf.keras.ops.custom_gradient",
+        "api_type": "issue",
+        "similarity": 0.9883434772491455
+      },
+      {
+        "api_name": "tf.linalg.lu_solve",
+        "api_type": "issue",
+        "similarity": 0.9881849884986877
+      },
+      {
+        "api_name": "torch.backends.cusparselt.version",
+        "api_type": "issue",
+        "similarity": 0.9880021810531616
+      },
+      {
+        "api_name": "torch.backends.cudnn.version",
+        "api_type": "issue",
+        "similarity": 0.9878939390182495
+      },
+      {
+        "api_name": "tf.distribute.get_replica_context",
+        "api_type": "issue",
+        "similarity": 0.9877231121063232
+      }
+    ],
+    "pytorch_to_pytorch": []
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "issue_to_api",
+      "test_cases": [
+        "167462_issue_to_api_0.output.py",
+        "167462_issue_to_api_1.output.py",
+        "167462_issue_to_api_10.output.py",
+        "167462_issue_to_api_2.output.py",
+        "167462_issue_to_api_3.output.py",
+        "167462_issue_to_api_4.output.py",
+        "167462_issue_to_api_5.output.py",
+        "167462_issue_to_api_6.output.py",
+        "167462_issue_to_api_7.output.py",
+        "167462_issue_to_api_8.output.py",
+        "167462_issue_to_api_9.output.py"
+      ]
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": []
+    }
+  }
+}

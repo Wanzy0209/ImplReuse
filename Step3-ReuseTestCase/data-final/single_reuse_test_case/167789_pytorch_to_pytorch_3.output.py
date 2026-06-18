@@ -1,0 +1,40 @@
+import sys
+import torch
+from torch.library import Library, impl_abstract
+
+# Define a custom library and operator to test the API
+lib = Library("test_recursion_lib", "DEF")
+lib.define("recursive_op(Tensor x, int n) -> Tensor")
+
+# Define a recursive abstract implementation using the target API
+def recursive_meta(x, n):
+    if n == 0:
+        return x
+    return recursive_meta(x, n - 1)
+
+# Register the abstract implementation
+impl_abstract("test_recursion_lib::recursive_op", recursive_meta)
+
+# Define a concrete implementation for execution
+def recursive_impl(x, n):
+    if n == 0:
+        return x
+    return recursive_impl(x, n - 1)
+
+lib.impl("recursive_op", recursive_impl)
+
+# Set recursion limit high as per the bug report context
+sys.setrecursionlimit(10000000)
+
+# Compile a function that calls the custom operator recursively
+@torch.compile(backend="eager")
+def outer(x):
+    return torch.ops.test_recursion_lib.recursive_op(x, 1000)
+
+# Execute the test
+try:
+    result = outer(torch.ones(3))
+    assert result.shape == (3,)
+    print("Test Passed: Recursion limit respected with torch.library.impl_abstract")
+except RecursionError as e:
+    print(f"Test Failed: RecursionError hit - {e}")

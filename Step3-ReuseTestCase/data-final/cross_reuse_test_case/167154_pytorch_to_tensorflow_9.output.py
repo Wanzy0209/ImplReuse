@@ -1,0 +1,41 @@
+import tensorflow as tf
+
+def test_l1l2_with_broadcasted_tensor():
+    """
+    Adapts the PyTorch MPS buffer allocation regression test to TensorFlow.
+    
+    The original bug involved a tensor with shape (5, 499, 768) and stride (0, 768, 1).
+    A stride of 0 in the first dimension implies broadcasting (non-contiguous memory).
+    We simulate this in TensorFlow using tf.broadcast_to and verify that 
+    tf.keras.regularizers.L1L2 handles the input without crashing.
+    """
+    
+    # Create a base tensor of shape (499, 768)
+    # Equivalent to the 'base' tensor in the PyTorch reproduction
+    base = tf.random.uniform((499, 768), minval=0, maxval=1, dtype=tf.float32)
+
+    # Broadcast to shape (5, 499, 768) to mimic the stride (0, 768, 1) behavior
+    # This creates a non-contiguous view of the data
+    input_tensor = tf.broadcast_to(base, (5, 499, 768))
+
+    # Initialize the L1L2 regularizer
+    # Corresponds to the operation being tested on the non-contiguous input
+    regularizer = tf.keras.regularizers.L1L2(l1=0.01, l2=0.01)
+
+    # Apply the regularizer
+    # In the PyTorch bug, this triggered an MPS buffer allocation error.
+    # Here we verify the TF API computes the loss correctly.
+    loss = regularizer(input_tensor)
+
+    # Assertions to verify correct behavior
+    # The loss should be a scalar (0-rank tensor)
+    assert loss.shape == (), f"Expected scalar loss, got shape {loss.shape}"
+    
+    # The loss should be non-negative (sum of absolute values and squares)
+    assert loss.numpy() >= 0, "Loss should be non-negative"
+
+    print("Test passed. L1L2 handled the broadcasted (non-contiguous) tensor correctly.")
+    print(f"Computed loss: {loss.numpy()}")
+
+if __name__ == "__main__":
+    test_l1l2_with_broadcasted_tensor()

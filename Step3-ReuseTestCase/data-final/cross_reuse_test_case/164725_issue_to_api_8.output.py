@@ -1,0 +1,69 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Enable numpy behavior for tf.experimental.numpy
+tf.experimental.numpy.enable_numpy_behavior()
+
+def fuzzed_program(sentinel):
+    # Replicate the tensor creation logic from the PyTorch issue
+    # var_node_4 = torch.full((6,), True, dtype=torch.bool)
+    var_node_4 = tf.fill([6], True)
+    var_node_4 = tf.cast(var_node_4, tf.bool)
+    
+    # var_node_3 = torch.reshape(var_node_4, [2, 3])
+    var_node_3 = tf.reshape(var_node_4, [2, 3])
+
+    # _x_ms = torch.arange(max(1, 1), device=var_node_3.device).to(var_node_3.dtype)
+    # max(1, 1) is 1. torch.arange(1) is [0].
+    _x_ms = tf.range(1)
+    _x_ms = tf.cast(_x_ms, dtype=var_node_3.dtype)
+
+    # _mask_ms = torch.zeros_like(_x_ms, dtype=torch.bool)
+    _mask_ms = tf.zeros_like(_x_ms, dtype=tf.bool)
+    
+    # _mask_ms[:1] = True
+    # TF tensors are immutable, so we use scatter_nd_update to modify the mask
+    _mask_ms = tf.tensor_scatter_nd_update(_mask_ms, [[0]], [True])
+
+    # var_node_2 = torch.masked_select(_x_ms, _mask_ms)
+    var_node_2 = tf.boolean_mask(_x_ms, _mask_ms)
+
+    # var_node_1 = torch.squeeze(var_node_2)
+    var_node_1 = tf.squeeze(var_node_2)
+
+    # Original: var_node_0 = var_node_1.item()
+    # Adaptation: Use the similar API tf.experimental.numpy.exp
+    # Note: exp requires float input, so we cast the boolean result to float
+    var_node_0 = tf.experimental.numpy.exp(tf.cast(var_node_1, tf.float32))
+
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+    return result
+
+# Sentinel variable to ensure gradient computation (requires_grad=True equivalent)
+sentinel = tf.Variable(1.0)
+
+# Test Eager Execution
+try:
+    result_eager = fuzzed_program(sentinel)
+    print(f' eager success: {result_eager.numpy()}')
+except Exception as e:
+    print(f' eager failed: {e}')
+    raise
+
+# Test Compiled Execution (tf.function)
+try:
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(sentinel)
+    print(f' compile success: {result_compiled.numpy()}')
+except Exception as e:
+    print(f' compile failed: {e}')
+    raise
+
+# Check for divergence
+if np.allclose(result_eager.numpy(), result_compiled.numpy()):
+    print(' No divergence detected between eager and compiled modes.')
+else:
+    print(f' Divergence detected! Eager: {result_eager.numpy()}, Compiled: {result_compiled.numpy()}')
+    raise AssertionError("Divergence between eager and compiled execution")

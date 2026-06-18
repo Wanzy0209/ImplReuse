@@ -1,0 +1,58 @@
+import tensorflow as tf
+from tensorflow.python.eager import context
+
+# This test case translates the PyTorch issue (changing stream in backward)
+# to TensorFlow semantics (changing execution context/device in backward).
+# It leverages the pattern from tf.compat.v1.global_variables_initializer
+# (checking execution context) to handle the logic, mirroring the code similarity.
+
+def test_backward_context_switch():
+    """
+    Tests attempting to switch execution context during the backward pass,
+    mimicking the PyTorch issue of changing CUDA streams.
+    It reuses the context checking pattern from global_variables_initializer.
+    """
+    
+    # Create a variable to simulate state that might need initialization/context
+    var = tf.Variable(0.0, name="test_var")
+
+    @tf.custom_gradient
+    def backward_context_op(x):
+        # Forward pass: Save the initializer op (mimicking ctx.stream = stream)
+        # We use the similar API pattern: getting an op that depends on context
+        init_op = tf.compat.v1.global_variables_initializer()
+
+        def grad(upstream):
+            # Backward pass: Attempt to switch context/run initializer
+            # Reuse the pattern from global_variables_initializer:
+            # Check if we are executing eagerly to decide behavior
+            if context.executing_eagerly():
+                # In eager mode, variables are initialized immediately.
+                # This mimics the PyTorch bug where set_stream might be a no-op 
+                # or behave differently in the graph context.
+                # We return the gradient directly.
+                return upstream
+            else:
+                # In graph mode, we add a control dependency to the initializer.
+                # This attempts to "switch context" by ensuring initialization runs.
+                with tf.control_dependencies([init_op]):
+                    return upstream
+
+        return x, grad
+
+    # Test execution
+    x = tf.constant(1.0)
+    
+    with tf.GradientTape() as tape:
+        tape.watch(x)
+        y = backward_context_op(x)
+
+    grads = tape.gradient(y, x)
+    
+    # Assertions
+    assert grads is not None
+    assert grads.numpy() == 1.0
+    print("Test passed: Gradient computed with context check logic.")
+
+if __name__ == "__main__":
+    test_backward_context_switch()

@@ -1,0 +1,69 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_argmax_bfloat16_reduction():
+    """
+    Test case derived from Issue 164063 logic.
+    
+    Original Issue: TypeError('unexpected type fp32') in torch.var with bfloat16 
+    during eager/compile divergence.
+    
+    Adaptation: Using tf.keras.ops.argmax (the similar API) on bfloat16 data
+    to verify type safety and consistency between eager and compiled execution.
+    """
+    
+    # Setup: Replicate the bfloat16 tensor context from the original bug
+    # Original shape: (28, 24, 3, 127) after reshape
+    np_data = np.random.rand(28, 24, 3, 127).astype(np.float32)
+    
+    # Use bfloat16 to match the precision context of the original bug
+    input_tensor = tf.constant(np_data, dtype=tf.bfloat16)
+
+    # Define the computation logic using the similar API
+    def compute_op(x):
+        # Reshape logic preserved from the original bug report
+        x_reshaped = tf.reshape(x, (28, 24, 3, 127))
+        
+        # Replace torch.var(dim=2) with tf.keras.ops.argmax(axis=2)
+        # Both are reduction operations along the same dimension.
+        # We check if the backend handles the type (bfloat16 -> int64) correctly.
+        reduced_tensor = tf.keras.ops.argmax(x_reshaped, axis=2)
+        return reduced_tensor
+
+    # 1. Eager Execution
+    try:
+        result_eager = compute_op(input_tensor)
+        print(f"Eager execution successful. Output dtype: {result_eager.dtype}")
+    except Exception as e:
+        print(f"Eager execution failed: {e}")
+        raise
+
+    # 2. Compiled Execution (mimicking torch.compile)
+    # Using tf.function with jit_compile to trigger the XLA/compiler path
+    compiled_op = tf.function(compute_op, jit_compile=True)
+    
+    try:
+        result_compiled = compiled_op(input_tensor)
+        print(f"Compiled execution successful. Output dtype: {result_compiled.dtype}")
+    except Exception as e:
+        print(f"Compiled execution failed: {e}")
+        raise
+
+    # 3. Assertions
+    
+    # Check output type (Argmax should return int64, ensuring no unexpected fp32 type error)
+    assert result_eager.dtype == tf.int64, \
+        f"Expected output dtype int64 in eager mode, got {result_eager.dtype}"
+    assert result_compiled.dtype == tf.int64, \
+        f"Expected output dtype int64 in compiled mode, got {result_compiled.dtype}"
+
+    # Check for Eager/Compile Divergence
+    # The original bug reported a divergence/error between these two modes.
+    assert tf.reduce_all(tf.equal(result_eager, result_compiled)), \
+        "Divergence detected between eager and compiled results."
+
+    print("Test Passed: tf.keras.ops.argmax handles bfloat16 reduction correctly without type errors.")
+
+if __name__ == "__main__":
+    test_argmax_bfloat16_reduction()

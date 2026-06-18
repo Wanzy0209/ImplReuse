@@ -1,0 +1,96 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def run_with_head_count(compiled_fa, H, dtype):
+    """Run flex attention with a specific head count, creating a captured buffer sized by H."""
+    B, S, D = 2, 256, 64
+
+    # Create captured buffer that depends on dynamic H
+    # In TensorFlow, we create a tensor that will be passed to the compiled function
+    head_scale = tf.random.normal([H], dtype=dtype)
+
+    print(f"  Running with H={H}, head_scale.shape={head_scale.shape}")
+
+    # Run multiple iterations with the same head_scale
+    for i in range(5):
+        # Create inputs
+        q = tf.random.normal([B, H, S, D], dtype=dtype)
+        k = tf.random.normal([B, H, S, D], dtype=dtype)
+        v = tf.random.normal([B, H, S, D], dtype=dtype)
+
+        # Use GradientTape to mimic the backward pass
+        with tf.GradientTape() as tape:
+            tape.watch([q, k, v, head_scale])
+            
+            # Call the compiled function
+            # We pass head_scale explicitly to simulate the closure capture in PyTorch
+            outputs = compiled_fa(q, k, v, head_scale)
+            loss = tf.reduce_sum(outputs)
+
+        # Calculate gradients
+        grads = tape.gradient(loss, [q, k, v, head_scale])
+        
+        # Verify gradients are computed (mimicking loss.backward())
+        assert grads[0] is not None, "Gradient for q is None"
+        assert grads[3] is not None, "Gradient for head_scale is None"
+
+    print(f"   Completed {i+1} iterations")
+
+
+# The TensorFlow equivalent of the compiled flex_attention function
+# We use @tf.function to mimic torch.compile
+# experimental_relax_shapes=True mimics dynamic=True
+@tf.function(experimental_relax_shapes=True)
+def flex_attention_tf(q, k, v, head_scale):
+    """
+    Simplified attention mechanism using tf.compat.v1.name_scope.
+    This mimics the structure of the PyTorch flex_attention call.
+    """
+    # Use the target API: tf.compat.v1.name_scope
+    # This provides a context for naming operations, similar to how torch.compile
+    # manages the graph context.
+    with tf.compat.v1.name_scope("flex_attention"):
+        # Transpose k for matmul: (B, H, S, D) -> (B, H, D, S)
+        kt = tf.transpose(k, [0, 1, 3, 2])
+        
+        # Calculate scores: (B, H, S, D) @ (B, H, D, S) -> (B, H, S, S)
+        scores = tf.matmul(q, kt)
+
+        # Apply the score_mod logic using the dynamic buffer (head_scale)
+        # head_scale shape is (H,), scores shape is (B, H, S, S)
+        # We need to broadcast head_scale to match scores
+        with tf.compat.v1.name_scope("score_mod"):
+            # Reshape head_scale to (1, H, 1, 1) for broadcasting
+            # Using tf.shape allows dynamic shape handling
+            scale = tf.reshape(head_scale, [1, tf.shape(head_scale)[0], 1, 1])
+            scores = scores * scale
+
+        # Softmax over the last dimension
+        attn_weights = tf.nn.softmax(scores, axis=-1)
+
+        # Calculate output: (B, H, S, S) @ (B, H, S, D) -> (B, H, S, D)
+        output = tf.matmul(attn_weights, v)
+        
+        return output
+
+
+def main():
+    # TensorFlow handles devices implicitly, but we ensure float32 for stability in this mock
+    dtype = tf.float32
+    tf.random.set_seed(0)
+
+    # Test with different head counts - this makes H a dynamic dimension
+    # and the captured buffer (head_scale) changes size with H
+    head_counts = [4, 8, 4, 16, 4]
+
+    print(f"Running flex-attention with dynamic head counts, dtype={dtype}")
+    print(f"Testing head counts: {head_counts}\n")
+
+    for iteration, H in enumerate(head_counts, start=1):
+        print(f"Iteration {iteration}:")
+        run_with_head_count(flex_attention_tf, H, dtype)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,60 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_send_object_list_no_distribution_side_effect(rank, world_size):
+    """
+    Test that torch.distributed.send_object_list does not inadvertently
+    change the global torch.distributions validation state, similar to the
+    reported issue with torch.compile in context parallel.
+    """
+    # Setup for distributed communication
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    
+    # Initialize the process group
+    dist.init_process_group(
+        backend='gloo', # Using gloo for CPU-based testing
+        rank=rank,
+        world_size=world_size
+    )
+
+    # 1. Set distribution validation to True explicitly
+    torch.distributions.Distribution.set_default_validate_args(True)
+    initial_state = torch.distributions.Distribution._validate_args
+    assert initial_state is True, "Failed to set initial validation state to True"
+
+    # 2. Perform the distributed operation
+    if rank == 0:
+        tensor_list = [torch.tensor([1, 2, 3]), torch.tensor([4, 5, 6])]
+        # Send objects to rank 1
+        dist.send_object_list(tensor_list, dst=1)
+    elif rank == 1:
+        recv_list = [None, None]
+        # Receive objects from rank 0
+        dist.recv_object_list(recv_list, src=0)
+        
+        # Verify data integrity
+        assert recv_list[0].equal(torch.tensor([1, 2, 3]))
+        assert recv_list[1].equal(torch.tensor([4, 5, 6]))
+
+    # Synchronize processes
+    dist.barrier()
+
+    # 3. Verify that the global distribution state has not changed
+    # The bug report indicates that torch.compile calls set_default_validate_args(False).
+    # We check if send_object_list has a similar side effect.
+    current_state = torch.distributions.Distribution._validate_args
+    assert current_state is True, (
+        f"torch.distributed.send_object_list changed global distribution "
+        f"validation state from True to {current_state}. "
+        f"This matches the side effect reported in Issue #167064."
+    )
+
+    # Cleanup
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_send_object_list_no_distribution_side_effect, args=(world_size,), nprocs=world_size, join=True)

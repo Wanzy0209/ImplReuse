@@ -1,0 +1,103 @@
+import unittest
+import torch
+import torch.onnx
+from torchvision.models import resnet50, ResNet50_Weights
+import onnx
+import os
+
+# Reusing the pattern of the similar API (tf.keras.backend.backend)
+# to provide a clear accessor for the export mode being tested.
+def get_export_backend_name(use_dynamo):
+    """
+    Returns the name of the export backend being used.
+    Mimics the simple accessor pattern of tf.keras.backend.backend.
+    """
+    return "dynamo" if use_dynamo else "classical"
+
+
+class TestResNet50DynamoExport(unittest.TestCase):
+    def setUp(self):
+        """Setup the model and dummy input."""
+        self.model = resnet50(weights=ResNet50_Weights.DEFAULT)
+        self.model.eval()
+        self.dummy_input = torch.randn(1, 3, 224, 224)
+        self.onnx_path = "resnet50_test.onnx"
+
+    def tearDown(self):
+        """Clean up the generated ONNX file."""
+        if os.path.exists(self.onnx_path):
+            os.remove(self.onnx_path)
+
+    def _check_bias_shapes(self, onnx_model):
+        """
+        Helper to verify that bias tensors in Conv layers have the correct shape.
+        PyTorch Conv2d biases are expected to be 1D (out_channels).
+        """
+        graph = onnx_model.graph
+        initializer_map = {init.name: init for init in graph.initializer}
+
+        for node in graph.node:
+            if node.op_type == 'Conv':
+                # A Conv node has inputs: [input, weight, bias]
+                # Bias is optional, so check length > 2
+                if len(node.input) > 2:
+                    bias_name = node.input[2]
+                    if bias_name in initializer_map:
+                        bias_tensor = initializer_map[bias_name]
+                        # The bug report indicates incorrect shapes (e.g., 4D instead of 1D).
+                        # We assert that the bias is 1D.
+                        self.assertEqual(
+                            len(bias_tensor.dims), 
+                            1, 
+                            f"Node {node.name} (Conv) has bias '{bias_name}' with incorrect rank {len(bias_tensor.dims)}. Expected 1D."
+                        )
+
+    def test_dynamo_export_bias_shape_correctness(self):
+        """
+        Test that exporting ResNet50 with dynamo=True produces correct bias shapes.
+        This addresses the issue where dynamo export produced incorrect ONNX (Issue 166797).
+        """
+        backend_name = get_export_backend_name(use_dynamo=True)
+        print(f"Testing export with backend: {backend_name}")
+
+        # Export with dynamo enabled
+        torch.onnx.export(
+            self.model,
+            self.dummy_input,
+            self.onnx_path,
+            opset_version=17,
+            dynamo=True,
+            input_names=['input'],
+            output_names=['output']
+        )
+
+        # Load and verify
+        onnx_model = onnx.load(self.onnx_path)
+        self._check_bias_shapes(onnx_model)
+
+    def test_classical_export_bias_shape_correctness(self):
+        """
+        Test that exporting ResNet50 with dynamo=False (classical) produces correct bias shapes.
+        This serves as a baseline to ensure the test logic is valid.
+        """
+        backend_name = get_export_backend_name(use_dynamo=False)
+        print(f"Testing export with backend: {backend_name}")
+
+        # Export with dynamo disabled (classical path)
+        torch.onnx.export(
+            self.model,
+            self.dummy_input,
+            self.onnx_path,
+            opset_version=17,
+            dynamo=False,
+            input_names=['input'],
+            output_names=['output']
+        )
+
+        # Load and verify
+        onnx_model = onnx.load(self.onnx_path)
+        self._check_bias_shapes(onnx_model)
+
+
+if __name__ == '__main__':
+    unittest.main()

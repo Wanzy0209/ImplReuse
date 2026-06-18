@@ -1,0 +1,60 @@
+import torch
+import tensorflow as tf
+from typing import NamedTuple
+
+# Define a NamedTuple structure similar to the bug report to hold inputs
+class LookupInputs(NamedTuple):
+    weights: list
+    ids: tf.SparseTensor
+
+# Subclass to test dynamic attribute behavior
+class LookupInputsSubclass(LookupInputs):
+    pass
+
+# Function using the Similar API (tf.nn.safe_embedding_lookup_sparse)
+# This mimics the structure of the original bug's 'fn' which wraps the core logic
+def fn(inputs: LookupInputs):
+    # Attempt to add a dynamic attribute (Bug Logic)
+    inputs.extra_info = "dynamic_data"
+    
+    # Call the Similar API
+    result = tf.nn.safe_embedding_lookup_sparse(
+        inputs.weights,
+        inputs.ids
+    )
+    return result, inputs
+
+# Setup dummy data for the API
+# safe_embedding_lookup_sparse expects a list of variables for weights
+weights = [tf.Variable([[1.0, 2.0]]), tf.Variable([[3.0, 4.0]])]
+sp_ids = tf.SparseTensor(indices=[[0, 0]], values=[0], dense_shape=[1, 1])
+
+# Test Eager
+print("\nTesting LookupInputs with __setattr__ (Eager):")
+inputs_eager = LookupInputsSubclass(weights=weights, ids=sp_ids)
+res_eager, out_eager = fn(inputs_eager)
+try:
+    print(f"Eager extra_info: {out_eager.extra_info}")
+except AttributeError as e:
+    print(f"Eager AttributeError: {e}")
+
+# Test Compiled (tf.function equivalent to torch.compile)
+print("\nTesting LookupInputs with __setattr__ (Compiled):")
+inputs_comp = LookupInputsSubclass(weights=weights, ids=sp_ids)
+compiled_fn = tf.function(fn)
+res_comp, out_comp = compiled_fn(inputs_comp)
+try:
+    print(f"Compiled extra_info: {out_comp.extra_info}")
+except AttributeError as e:
+    print(f"Compiled AttributeError: {e}")
+
+# Assertions to verify behavior
+# Note: In TensorFlow, objects are often immutable or treated as such in graphs.
+# This test checks if the dynamic attribute persistence bug from PyTorch 
+# manifests similarly in TensorFlow when using the similar API.
+try:
+    assert out_eager.extra_info == "dynamic_data", "Eager mode failed to persist attribute"
+    assert out_comp.extra_info == "dynamic_data", "Compiled mode failed to persist attribute"
+    print("\nTest Passed: Dynamic attributes persisted in both modes.")
+except AssertionError as e:
+    print(f"\nTest Failed: {e}")

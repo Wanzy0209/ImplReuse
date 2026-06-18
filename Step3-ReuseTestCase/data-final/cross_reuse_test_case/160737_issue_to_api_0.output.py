@@ -1,0 +1,46 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_linear_operator_scaled_identity_scalar_tensor():
+    """
+    Adapted from PyTorch Issue #160737.
+    
+    Original Bug: torch.index_select on MPS failed when provided a 0-dimensional 
+    (scalar) tensor as the index, throwing "Dimension specified as -1 but tensor has no dimensions".
+    
+    This test verifies that tf.linalg.LinearOperatorScaledIdentity correctly handles
+    a 0-dimensional tensor when used for the 'multiplier' argument, ensuring it does
+    not raise dimension errors similar to the original PyTorch bug.
+    """
+    # Create a 0-dimensional tensor (scalar tensor)
+    # Mirrors: index = torch.tensor(1, device=device)
+    scalar_multiplier = tf.constant(3.0)
+
+    try:
+        # Initialize the operator with the 0-d tensor
+        # Mirrors the usage of a scalar tensor in a tensor operation
+        op = tf.linalg.LinearOperatorScaledIdentity(
+            num_rows=2, 
+            multiplier=scalar_multiplier
+        )
+        
+        # Perform an operation to verify the tensor is handled correctly
+        # Mirrors: output = torch.index_select(...)
+        dense_matrix = op.to_dense()
+        
+        # Verify the result
+        # Expected: 3 * Identity matrix
+        expected = np.array([[3.0, 0.0], [0.0, 3.0]])
+        
+        assert np.allclose(dense_matrix.numpy(), expected), \
+            f"Expected {expected}, but got {dense_matrix.numpy()}"
+            
+        print("LinearOperatorScaledIdentity test succeeds with 0-d multiplier tensor. "
+              f"Output shape: {dense_matrix.shape}")
+              
+    except Exception as e:
+        print(f"LinearOperatorScaledIdentity test fails with 0-d multiplier tensor: {e}")
+
+if __name__ == "__main__":
+    test_linear_operator_scaled_identity_scalar_tensor()

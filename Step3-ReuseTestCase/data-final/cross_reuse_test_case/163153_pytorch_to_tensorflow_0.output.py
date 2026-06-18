@@ -1,0 +1,61 @@
+import torch
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+def verify_min_device_count(min_devices: int = 2) -> bool:
+    """Verification that we have at least 2 devices to run dist examples."""
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        return len(gpus) >= min_devices
+    # Fallback to CPU for testing purposes if GPUs are not available
+    cpus = tf.config.list_physical_devices('CPU')
+    return len(cpus) >= min_devices
+
+def main():
+    _min_device_count = 2
+    if not verify_min_device_count(min_devices=_min_device_count):
+        print(f"Unable to locate sufficient {_min_device_count} devices to run this example. Exiting.")
+        return
+
+    # Determine device type and list local devices
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        device_type = 'GPU'
+        local_devices = [f'/GPU:{i}' for i in range(len(gpus))]
+    else:
+        device_type = 'CPU'
+        cpus = tf.config.list_physical_devices('CPU')
+        local_devices = [f'/CPU:{i}' for i in range(len(cpus))]
+
+    print(f"Running on devices: {local_devices}")
+
+    # Original API: torch.distributed.init_process_group(backend=backend, device_id=device)
+    # Similar API: tf.experimental.dtensor.create_distributed_mesh(...)
+    
+    # Define mesh dimensions. In the PyTorch FSDP example, this corresponds to the data parallel group.
+    # We create a 1D mesh for data parallelism.
+    mesh_dims = [('data', len(local_devices))]
+
+    try:
+        # Create the distributed mesh
+        mesh = dtensor.create_distributed_mesh(
+            mesh_dims=mesh_dims,
+            device_type=device_type,
+            local_devices=local_devices
+        )
+        
+        print(f"Successfully created mesh: {mesh}")
+
+        # Verify the mesh properties
+        assert mesh is not None, "Mesh creation failed"
+        assert mesh.dim_names == ['data'], "Mesh dimension names mismatch"
+        assert mesh.size('data') == len(local_devices), "Mesh size does not match device count"
+        
+        print("Test passed: Distributed mesh created successfully.")
+
+    except Exception as e:
+        print(f"Error during mesh creation: {e}")
+        raise
+
+if __name__ == "__main__":
+    main()

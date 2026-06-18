@@ -1,0 +1,79 @@
+import torch
+import threading
+import time
+import sys
+
+def torch_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+@torch.compile
+def torch_compile_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+def check_gil_released(func, x, y, name):
+    """
+    Helper to check if GIL is released during the execution of func.
+    It spawns a thread that sets a flag. If the flag is set while func is running,
+    GIL was released.
+    """
+    print(f"Testing {name}...")
+    
+    # Warmup
+    for _ in range(10):
+        func(x, y)
+    torch.cuda.synchronize()
+
+    other_thread_ran = False
+
+    def worker():
+        nonlocal other_thread_ran
+        other_thread_ran = True
+        # Sleep slightly to ensure we hold the GIL for a moment if we get it
+        time.sleep(0.01)
+
+    t = threading.Thread(target=worker)
+    t.start()
+
+    # Run the function multiple times to increase the window of opportunity
+    # for the thread to acquire the GIL if it is released.
+    # We avoid torch.cuda.synchronize() inside the loop to test the "calling" phase
+    # specifically, as kernel launches are async but the CPU overhead is where GIL matters.
+    iterations = 1000
+    start = time.time()
+    for _ in range(iterations):
+        func(x, y)
+    end = time.time()
+    
+    t.join(timeout=1.0)
+    
+    duration = end - start
+    print(f"  {name} took {duration:.4f}s for {iterations} iterations.")
+    print(f"  Background thread ran: {other_thread_ran}")
+    
+    return other_thread_ran
+
+def main():
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        sys.exit(0)
+
+    x = torch.randn(4096, 4096, device='cuda')
+    y = torch.randn(4096, 4096, device='cuda')
+
+    # Test standard eager execution (Expected to release GIL)
+    eager_released = check_gil_released(torch_add, x, y, "torch_add (eager)")
+    
+    # Test torch.compile execution (Bug report says GIL is held)
+    compile_released = check_gil_released(torch_compile_add, x, y, "torch.compile")
+
+    # Assertions
+    # Eager execution should release GIL
+    assert eager_released, "Standard PyTorch eager execution did not release GIL (unexpected)."
+    
+    # torch.compile should also release GIL (This assertion will fail if the bug exists)
+    assert compile_released, "torch.compile did not release GIL (Bug reproduced)."
+
+    print("\nTest Passed: GIL is released for both eager and torch.compile execution.")
+
+if __name__ == "__main__":
+    main()

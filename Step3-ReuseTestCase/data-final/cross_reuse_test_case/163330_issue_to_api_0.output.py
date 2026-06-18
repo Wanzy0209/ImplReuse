@@ -1,0 +1,66 @@
+import torch
+import torch.distributed as dist
+from torch.distributed.device_mesh import init_device_mesh, _mesh_resources
+
+def test_get_root_mesh_state_isolation():
+    """
+    Regression test for Issue #163330.
+    
+    Verifies that _mesh_resources.get_root_mesh returns the correct parent mesh
+    for a sub-mesh, even after subsequent meshes are initialized.
+    
+    The bug manifested when creating a second mesh (mesh2) caused get_root_mesh
+    to return mesh2 when queried with a sub-mesh of mesh1 (mesh1_c).
+    """
+    # Initialize process group
+    if not dist.is_initialized():
+        dist.init_process_group("nccl")
+
+    rank = dist.get_rank()
+
+    # --- Step 1: Initialize first mesh ---
+    mesh1 = init_device_mesh(
+        "cuda", (1, 4, 2), mesh_dim_names=("a", "b", "c")
+    )
+    mesh1_c = mesh1["c"]
+
+    # Verify initial state
+    root1_initial = _mesh_resources.get_root_mesh(mesh1_c)
+    if rank == 0:
+        print(f"[Step 1] Root of mesh1_c: {root1_initial.shape}")
+        assert root1_initial is mesh1, "Root of mesh1_c should be mesh1"
+        assert root1_initial.shape == (1, 4, 2)
+
+    # --- Step 2: Initialize second mesh ---
+    # This step triggered the bug in the original issue by overwriting internal state
+    mesh2 = init_device_mesh(
+        "cuda", (2, 2, 2), mesh_dim_names=("a", "b", "c")
+    )
+    mesh2_c = mesh2["c"]
+
+    # Verify mesh2 state
+    root2 = _mesh_resources.get_root_mesh(mesh2_c)
+    if rank == 0:
+        print(f"[Step 2] Root of mesh2_c: {root2.shape}")
+        assert root2 is mesh2, "Root of mesh2_c should be mesh2"
+        assert root2.shape == (2, 2, 2)
+
+    # --- Step 3: Verify mesh1 state is preserved ---
+    # This is the critical assertion. The bug caused this to return mesh2.
+    root1_final = _mesh_resources.get_root_mesh(mesh1_c)
+    
+    if rank == 0:
+        print(f"[Step 3] Root of mesh1_c (after mesh2 init): {root1_final.shape}")
+        
+        # The core assertion from the bug report
+        assert root1_final is mesh1, \
+            f"Bug detected: get_root_mesh(mesh1_c) returned {root1_final.shape} instead of mesh1"
+        
+        assert root1_final.shape == (1, 4, 2), \
+            f"Bug detected: Shape mismatch for mesh1 root. Expected (1, 4, 2), got {root1_final.shape}"
+        
+        print("Test Passed: get_root_mesh correctly preserves parent references.")
+
+if __name__ == "__main__":
+    # Usage: torchrun --nproc_per_node=8 test_get_root_mesh.py
+    test_get_root_mesh_state_isolation()

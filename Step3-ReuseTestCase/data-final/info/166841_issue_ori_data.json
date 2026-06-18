@@ -1,0 +1,182 @@
+{
+  "title": "aoti_compile_and_package incorrectly generates CUDA kernel call for CPU scatter_add_ in multi-device models",
+  "issue_id": "166841",
+  "bug_description": "### 🐛 Describe the bug\n\nWhen using `torch._inductor.aoti_compile_and_package` on a model that contains both CPU and CUDA operations, the compiler incorrectly generates a call to the CUDA-specific kernel (`aoti_torch_cuda_scatter_reduce_two_out`) for a `scatter_add_` operation that is running entirely on CPU tensors.\nThis bug is only triggered when the exported graph contains both CPU and CUDA device types. If the model is CPU-only, the correct CPU kernel is generated.\nThis leads to a runtime exception when the compiled model is loaded and run, as the CUDA-specific kernel is (correctly) called with CPU tensors, causing a `CUDAGuardImpl initialized with non-CUDA DeviceType: cpu` error.\n\n## Minimal Reproduction Script\nThis script defines a model with a `scatter_add_` on CPU tensors and a matmul on CUDA tensors. It exports, compiles, and then attempts to run the model, which triggers the runtime exception.\n\n```python\nimport torch\nimport torch.export\nimport torch._inductor\nimport os\nimport shutil\n\n# --- 1. Minimal Model Definition ---\nclass MyModel(torch.nn.Module):\n    def __init__(self):\n        super().__init__()\n        # Buffers are on CPU\n        self.register_buffer(\n            \"index\",\n            torch.tensor([1, 4, 1, 7], device='cpu', dtype=torch.int64)\n        )\n        self.register_buffer(\n            \"src\",\n            torch.ones(4, device='cpu', dtype=torch.int64)\n        )\n\n    def forward(self, matrix, vector):\n        # Inputs are on CUDA\n\n        # 1. Operation on CPU tensors\n        z = torch.zeros((vector.shape[0],), device='cpu', dtype=torch.int64)\n        scatter_result = z.scatter_add(0, self.index, self.src)\n\n        # 2. Move result to CUDA and continue on CUDA\n        v = vector + scatter_result.to(vector.dtype).to('cuda')\n        return torch.matmul(matrix, v)\n\n# --- 2. Setup and Compile ---\nmodel = MyModel().eval().to('cpu')\nmatrix = torch.randn(10, 10, device='cuda')\nvector = torch.randn(10, device='cuda')\nexample_args = (matrix, vector)\n\nprint(\"Exporting model...\")\nep = torch.export.export(model, example_args)\n\noutput_dir = \"/tmp/my_aoti_model\"\nif os.path.exists(output_dir):\n    shutil.rmtree(output_dir)\nos.makedirs(output_dir, exist_ok=True)\npackage = os.path.join(output_dir, \"model_package.pt2\")\n\nprint(\"Starting AOTInductor compilation...\")\ntorch._inductor.aoti_compile_and_package(\n    ep,\n    package_path=package,\n)\nprint(f\"Compiled package at: {package}\")\n\n# --- 3. Load and Run (This is where it fails) ---\nprint(\"\\nAttempting to load and run compiled model...\")\nloaded = torch._inductor.aoti_load_package(package)\nprint(\"\\nModel package loaded successfully.\")\n\nloaded(*example_args)\nprint(\"Model ran successfully with the loaded package.\")\n```\n\n## Expected Behavior\nInductor should inspect the device of the tensors involved in the `scatter_add_` operation (which are all 'cpu') and generate a call to the CPU-equivalent kernel (e.g., `aoti_torch_cpu_scatter_reduce_two_out`). The model should run without errors.\n\n## Actual Behavior\nThe generated C++ code contains a hardcoded call to the CUDA kernel `aoti_torch_cuda_scatter_reduce_two_out` for the CPU `scatter_add_` operation.\nWhen the compiled model is run, this function is called with CPU tensors, triggering a CUDAGuard error.\n\nRuntime Error Log:\n```\n[E1103 04:13:34.730912069 c_shim_cuda.cpp:1551] Exception in aoti_torch: CUDAGuardImpl initialized with non-CUDA DeviceType: cpu\nException raised from CUDAGuardImpl at /pytorch/c10/cuda/impl/CUDAGuardImpl.h:28 (most recent call first):\nframe #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7efd83d7cb80 in /opt/conda/lib/python3.11/site-packages/torch/lib/libc10.so)\nframe #1: c10::detail::torchCheckFail(char const*, char const*, unsigned int, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) + 0x65 (0x7efd83d0efbf in /opt/conda/lib/python3.11/site-packages/torch/lib/libc10.so)\nframe #2:",
+  "apis": [
+    "ntorch._inductor.aoti_compile_and_package",
+    "shutil.rmtree",
+    "self.register_buffer",
+    "torch.tensor",
+    "torch.matmul",
+    "numpy"
+  ],
+  "best_code": "import torch\nimport torch.export\nimport torch._inductor\nimport os\nimport shutil\n\n# --- 1. Minimal Model Definition ---\nclass MyModel(torch.nn.Module):\n    def __init__(self):\n        super().__init__()\n        # Buffers are on CPU\n        self.register_buffer(\n            \"index\",\n            torch.tensor([1, 4, 1, 7], device='cpu', dtype=torch.int64)\n        )\n        self.register_buffer(\n            \"src\",\n            torch.ones(4, device='cpu', dtype=torch.int64)\n        )\n\n    def forward(self, matrix, vector):\n        # Inputs are on CUDA\n\n        # 1. Operation on CPU tensors\n        z = torch.zeros((vector.shape[0],), device='cpu', dtype=torch.int64)\n        scatter_result = z.scatter_add(0, self.index, self.src)\n\n        # 2. Move result to CUDA and continue on CUDA\n        v = vector + scatter_result.to(vector.dtype).to('cuda')\n        return torch.matmul(matrix, v)\n\n# --- 2. Setup and Compile ---\nmodel = MyModel().eval().to('cpu')\nmatrix = torch.randn(10, 10, device='cuda')\nvector = torch.randn(10, device='cuda')\nexample_args = (matrix, vector)\n\nprint(\"Exporting model...\")\nep = torch.export.export(model, example_args)\n\noutput_dir = \"/tmp/my_aoti_model\"\nif os.path.exists(output_dir):\n    shutil.rmtree(output_dir)\nos.makedirs(output_dir, exist_ok=True)\npackage = os.path.join(output_dir, \"model_package.pt2\")\n\nprint(\"Starting AOTInductor compilation...\")\ntorch._inductor.aoti_compile_and_package(\n    ep,\n    package_path=package,\n)\nprint(f\"Compiled package at: {package}\")\n\n# --- 3. Load and Run (This is where it fails) ---\nprint(\"\\nAttempting to load and run compiled model...\")\nloaded = torch._inductor.aoti_load_package(package)\nprint(\"\\nModel package loaded successfully.\")\n\nloaded(*example_args)\nprint(\"Model ran successfully with the loaded package.\")",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/167341"
+  ],
+  "_meta": {
+    "file": "166841_issue_ori_data.json",
+    "generated_at": "2026-04-21 05:43:42",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\166841_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\166841_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "When using `torch._inductor.aoti_compile_and_package` on a model that contains both CPU and CUDA operations, the compiler incorrectly generates a call to the CUDA-specific kernel (`aoti_torch_cuda_scatter_reduce_two_out`) for a `scatter_add_` operation that is running entirely on CPU tensors. This bug is only triggered when the exported graph contains both CPU and CUDA device types. If the model is CPU-only, the correct CPU kernel is generated. This leads to a runtime exception when the compiled model is loaded and run, as the CUDA-specific kernel is (correctly) called with CPU tensors, causing a `CUDAGuardImpl initialized with non-CUDA DeviceType: cpu` error.",
+  "repro_code": "import torch\nimport torch.export\nimport torch._inductor\nimport os\nimport shutil\n\n# --- 1. Minimal Model Definition ---\nclass MyModel(torch.nn.Module):\n    def __init__(self):\n        super().__init__()\n        # Buffers are on CPU\n        self.register_buffer(\n            \"index\",\n            torch.tensor([1, 4, 1, 7], device='cpu', dtype=torch.int64)\n        )\n        self.register_buffer(\n            \"src\",\n            torch.ones(4, device='cpu', dtype=torch.int64)\n        )\n\n    def forward(self, matrix, vector):\n        # Inputs are on CUDA\n\n        # 1. Operation on CPU tensors\n        z = torch.zeros((vector.shape[0],), device='cpu', dtype=torch.int64)\n        scatter_result = z.scatter_add(0, self.index, self.src)\n\n        # 2. Move result to CUDA and continue on CUDA\n        v = vector + scatter_result.to(vector.dtype).to('cuda')\n        return torch.matmul(matrix, v)\n\n# --- 2. Setup and Compile ---\nmodel = MyModel().eval().to('cpu')\nmatrix = torch.randn(10, 10, device='cuda')\nvector = torch.randn(10, device='cuda')\nexample_args = (matrix, vector)\n\nprint(\"Exporting model...\")\nep = torch.export.export(model, example_args)\n\noutput_dir = \"/tmp/my_aoti_model\"\nif os.path.exists(output_dir):\n    shutil.rmtree(output_dir)\nos.makedirs(output_dir, exist_ok=True)\npackage = os.path.join(output_dir, \"model_package.pt2\")\n\nprint(\"Starting AOTInductor compilation...\")\ntorch._inductor.aoti_compile_and_package(\n    ep,\n    package_path=package,\n)\nprint(f\"Compiled package at: {package}\")\n\n# --- 3. Load and Run (This is where it fails) ---\nprint(\"\\nAttempting to load and run compiled model...\")\nloaded = torch._inductor.aoti_load_package(package)\nprint(\"\\nModel package loaded successfully.\")\n\nloaded(*example_args)\nprint(\"Model ran successfully with the loaded package.\")",
+  "repro_output": "aoti_compile_and_package incorrectly generates CUDA kernel call for CPU scatter_add_ in multi-device models",
+  "affected_api": "torch._inductor.aoti_compile_and_package, scatter_add_",
+  "trigger_conditions": {
+    "backend": "CUDA and CPU mixed",
+    "dtype": "int64",
+    "input_shape": "",
+    "other_conditions": "The bug is only triggered when the exported graph contains both CPU and CUDA device types. If the model is CPU-only, the correct CPU kernel is generated."
+  },
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "unknown"
+  },
+  "labels": [],
+  "add_fix_code": [
+    "    @requires_gpu",
+    "    def test_mixed_device_1(self):",
+    "        if self.device != GPU_TYPE:",
+    "            raise unittest.SkipTest(\"Mixed-device test requires GPU\")",
+    "",
+    "        class Model(torch.nn.Module):",
+    "            def __init__(self):",
+    "                super().__init__()",
+    "                # Buffers are on CPU",
+    "                self.register_buffer(",
+    "                    \"index\", torch.tensor([1, 4, 1, 7], device=\"cpu\", dtype=torch.int64)",
+    "                )",
+    "                self.register_buffer(",
+    "                    \"src\", torch.ones(4, device=\"cpu\", dtype=torch.int64)",
+    "                )",
+    "",
+    "            def forward(self, matrix, vector):",
+    "                # Inputs are on CUDA",
+    "                # 1. Operation on CPU tensors",
+    "                z = torch.zeros((vector.shape[0],), device=\"cpu\", dtype=torch.int64)",
+    "                scatter_result = z.scatter_add(0, self.index, self.src)",
+    "",
+    "                # 2. Move result to CUDA and continue on CUDA",
+    "                v = vector + scatter_result.to(vector.dtype).to(GPU_TYPE)",
+    "                return torch.matmul(matrix, v)",
+    "",
+    "        example_inputs = (",
+    "            torch.randn(10, 10, device=self.device),",
+    "            torch.randn(10, device=self.device),",
+    "        )",
+    "        self.check_model(Model(), example_inputs, move_model_to_device=False)",
+    "",
+    "    move_model_to_device=True,",
+    "        if not isinstance(model, types.FunctionType) and move_model_to_device:",
+    "        for device in V.graph.device_types:",
+    "            self.add_device_include(device)",
+    "        device,",
+    "        self.add_device_include(device)",
+    "        cpp_kernel_name = self.get_c_shim_func_name(cpp_kernel_name, device)",
+    "        device,",
+    "        self.add_device_include(device)",
+    "        cpp_kernel_name = self.get_c_shim_func_name(cpp_kernel_name, device)",
+    "",
+    "        device = d.type if (d := node.get_device()) else V.graph.device_type",
+    "            device,",
+    "        device,",
+    "            if device != \"meta\":",
+    "                self.add_device_include(device)"
+  ],
+  "sub_fix_code": [
+    "        if not isinstance(model, types.FunctionType):",
+    "        self.add_device_include(self.device)",
+    "        cpp_kernel_name = self.get_c_shim_func_name(cpp_kernel_name, self.device)",
+    "        cpp_kernel_name = self.get_c_shim_func_name(cpp_kernel_name, self.device)",
+    "            self.add_device_include(device)"
+  ],
+  "core_api": "torch._inductor.aoti_compile_and_package",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [],
+    "issue_to_api": [
+      {
+        "api_name": "tf.types.experimental.distributed.Mirrored",
+        "api_type": "issue",
+        "similarity": 0.979083240032196
+      },
+      {
+        "api_name": "tf.compat.v1.math.add",
+        "api_type": "issue",
+        "similarity": 0.9786529541015625
+      },
+      {
+        "api_name": "tf.experimental.numpy.add",
+        "api_type": "issue",
+        "similarity": 0.9786529541015625
+      },
+      {
+        "api_name": "tf.keras.layers.add",
+        "api_type": "issue",
+        "similarity": 0.9786529541015625
+      },
+      {
+        "api_name": "tf.keras.ops.add",
+        "api_type": "issue",
+        "similarity": 0.9786529541015625
+      },
+      {
+        "api_name": "tf.math.add",
+        "api_type": "issue",
+        "similarity": 0.9786529541015625
+      },
+      {
+        "api_name": "tf.sparse.add",
+        "api_type": "issue",
+        "similarity": 0.9786529541015625
+      },
+      {
+        "api_name": "tf.keras.activations.relu",
+        "api_type": "issue",
+        "similarity": 0.9786248803138733
+      },
+      {
+        "api_name": "tf.keras.backend.relu",
+        "api_type": "issue",
+        "similarity": 0.9786248803138733
+      },
+      {
+        "api_name": "tf.keras.ops.relu",
+        "api_type": "issue",
+        "similarity": 0.9786248803138733
+      },
+      {
+        "api_name": "tf.nn.relu",
+        "api_type": "issue",
+        "similarity": 0.9786248207092285
+      }
+    ],
+    "pytorch_to_pytorch": []
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "issue_to_api",
+      "test_cases": [
+        "166841_issue_to_api_0.output.py",
+        "166841_issue_to_api_1.output.py",
+        "166841_issue_to_api_10.output.py",
+        "166841_issue_to_api_2.output.py",
+        "166841_issue_to_api_3.output.py",
+        "166841_issue_to_api_4.output.py",
+        "166841_issue_to_api_5.output.py",
+        "166841_issue_to_api_6.output.py",
+        "166841_issue_to_api_7.output.py",
+        "166841_issue_to_api_8.output.py"
+      ]
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": []
+    }
+  }
+}

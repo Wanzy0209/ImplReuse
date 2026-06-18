@@ -1,0 +1,291 @@
+{
+  "title": "Memory leak when custom autograd Function is used with AC due to early-stopping",
+  "issue_id": "161186",
+  "bug_description": "### 🐛 Describe the bug\n\nOriginally reported by Alex Nichol in slack channel\n\n```python\nimport torch\nimport torch.utils.checkpoint\n\nclass MyOp(torch.autograd.Function):\n    @staticmethod\n    def forward(ctx, inp: torch.Tensor):\n        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)\n        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)\n        ctx.save_for_backward(\n            inp,\n            out_0,\n            out_1,\n        )\n        return out_0, out_1\n\n    @staticmethod\n    def backward(ctx, dA, dB):\n        _ = ctx.saved_tensors  # this is necessary\n        return None\n\n\ndef op_fn(inp):\n    return MyOp.apply(inp)[0]\n\n\ndummy_input = torch.nn.Parameter(torch.randn(2**20, device=\"cuda\"))\nfor i in range(1000):\n    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)\n    full_out.sum().backward()\n    dummy_input.grad = None  # free gradient memory\n    print(i, torch.cuda.memory_allocated() / 1024**2, \"MiB\")\n```\n\nThis leak happens when a custom autograd Function is the last operation in a checkpointed region (and the autograd Function saves an output for backward). It happens because AC raises an exception to exit the forward early prior to the proper clean up custom autograd Function needs to do when it saves tensors. \n\n### Versions\n\nmain\n\ncc @ezyang @gchanan @zou3519 @kadeng @msaroufim @albanD @gqchen @nikitaved @Varal7 @xmfan",
+  "apis": [
+    "torch.nn.Parameter",
+    "torch.randn",
+    "torch.cuda.memory_allocated",
+    "ctx.save_for_backward",
+    "torch.utils.checkpoint.checkpoint",
+    "MyOp.apply"
+  ],
+  "best_code": "import torch\nimport torch.utils.checkpoint\n\nclass MyOp(torch.autograd.Function):\n    @staticmethod\n    def forward(ctx, inp: torch.Tensor):\n        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)\n        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)\n        ctx.save_for_backward(\n            inp,\n            out_0,\n            out_1,\n        )\n        return out_0, out_1\n\n    @staticmethod\n    def backward(ctx, dA, dB):\n        _ = ctx.saved_tensors  # this is necessary\n        return None\n\n\ndef op_fn(inp):\n    return MyOp.apply(inp)[0]\n\n\ndummy_input = torch.nn.Parameter(torch.randn(2**20, device=\"cuda\"))\nfor i in range(1000):\n    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)\n    full_out.sum().backward()\n    dummy_input.grad = None  # free gradient memory\n    print(i, torch.cuda.memory_allocated() / 1024**2, \"MiB\")",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/161171"
+  ],
+  "_meta": {
+    "file": "161186_issue_ori_data.json",
+    "generated_at": "2026-04-20 23:06:12",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\161186_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\161186_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "This leak happens when a custom autograd Function is the last operation in a checkpointed region (and the autograd Function saves an output for backward). It happens because AC raises an exception to exit the forward early prior to the proper clean up custom autograd Function needs to do when it saves tensors.",
+  "repro_code": "import torch\nimport torch.utils.checkpoint\n\nclass MyOp(torch.autograd.Function):\n    @staticmethod\n    def forward(ctx, inp: torch.Tensor):\n        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)\n        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)\n        ctx.save_for_backward(\n            inp,\n            out_0,\n            out_1,\n        )\n        return out_0, out_1\n\n    @staticmethod\n    def backward(ctx, dA, dB):\n        _ = ctx.saved_tensors  # this is necessary\n        return None\n\n\ndef op_fn(inp):\n    return MyOp.apply(inp)[0]\n\n\ndummy_input = torch.nn.Parameter(torch.randn(2**20, device=\"cuda\"))\nfor i in range(1000):\n    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)\n    full_out.sum().backward()\n    dummy_input.grad = None  # free gradient memory\n    print(i, torch.cuda.memory_allocated() / 1024**2, \"MiB\")",
+  "repro_output": "Memory leak when custom autograd Function is used with AC due to early-stopping",
+  "affected_api": "torch.utils.checkpoint.checkpoint",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "float32",
+    "input_shape": "2^20 elements",
+    "other_conditions": "Custom autograd Function is the last operation in a checkpointed region, and the autograd Function saves an output for backward"
+  },
+  "environment": {
+    "pytorch_version": "main",
+    "python_version": "",
+    "os": "",
+    "hardware": "CUDA"
+  },
+  "labels": [],
+  "add_fix_code": [
+    "    def test_custom_autograd_ac_early_stop(self):",
+    "        refs = []",
+    "",
+    "        class Test(torch.autograd.Function):",
+    "            @staticmethod",
+    "            def forward(ctx, x):",
+    "                y = x.clone()",
+    "                ctx.save_for_backward(y)",
+    "                refs.append(weakref.ref(y))",
+    "                return y",
+    "",
+    "            @staticmethod",
+    "            def backward(ctx, *args):",
+    "                # We actually have to unpack?",
+    "                _ = ctx.saved_tensors  # this is necessary",
+    "                return None",
+    "",
+    "        def fn(inp):",
+    "            return Test.apply(inp)",
+    "",
+    "        inp = torch.randn(5, 5, requires_grad=True)",
+    "",
+    "        def scope():",
+    "            # Early-stop is true by default in non-reentrant torch.utils.checkpoint",
+    "            out = torch.utils.checkpoint.checkpoint(fn, inp, use_reentrant=False)",
+    "            out.sum().backward()",
+    "",
+    "        with disable_gc():",
+    "            scope()",
+    "",
+    "            for ref in refs:",
+    "                self.assertIsNone(ref())",
+    "",
+    "    Py_CLEAR(self->to_save);",
+    "  if (tensors_to_save.size() == 0)"
+  ],
+  "sub_fix_code": [
+    "  if (!self->to_save)",
+    "  // Free .to_save",
+    "  Py_CLEAR(self->to_save);"
+  ],
+  "core_api": "torch.utils.checkpoint.checkpoint",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [
+      {
+        "api_name": "tf.data.experimental.parallel_interleave",
+        "api_type": "tensorflow",
+        "similarity": 0.9951928853988647
+      },
+      {
+        "api_name": "tf.compat.v1.while_loop",
+        "api_type": "tensorflow",
+        "similarity": 0.9949305057525635
+      },
+      {
+        "api_name": "tf.keras.ops.while_loop",
+        "api_type": "tensorflow",
+        "similarity": 0.9949305057525635
+      },
+      {
+        "api_name": "tf.while_loop",
+        "api_type": "tensorflow",
+        "similarity": 0.9949305057525635
+      },
+      {
+        "api_name": "tf.compat.v1.train.QueueRunner",
+        "api_type": "tensorflow",
+        "similarity": 0.9945989847183228
+      },
+      {
+        "api_name": "tf.nn.atrous_conv2d",
+        "api_type": "tensorflow",
+        "similarity": 0.9945926666259766
+      },
+      {
+        "api_name": "tf.compat.v1.distributions.ReparameterizationType",
+        "api_type": "tensorflow",
+        "similarity": 0.9945694208145142
+      },
+      {
+        "api_name": "tf.compat.v1.distribute",
+        "api_type": "tensorflow",
+        "similarity": 0.9943893551826477
+      },
+      {
+        "api_name": "tf.data.experimental.service.distribute",
+        "api_type": "tensorflow",
+        "similarity": 0.9943893551826477
+      },
+      {
+        "api_name": "tf.distribute",
+        "api_type": "tensorflow",
+        "similarity": 0.9943893551826477
+      },
+      {
+        "api_name": "tf.compat.v1.nn.ctc_loss",
+        "api_type": "tensorflow",
+        "similarity": 0.9943550825119019
+      }
+    ],
+    "issue_to_api": [
+      {
+        "api_name": "tf.compat.v1.user_ops.my_fact",
+        "api_type": "issue",
+        "similarity": 0.9703974723815918
+      },
+      {
+        "api_name": "torch.profiler.itt.range_pop",
+        "api_type": "issue",
+        "similarity": 0.9703830480575562
+      },
+      {
+        "api_name": "torch.backends.cusparselt.is_available",
+        "api_type": "issue",
+        "similarity": 0.9693848490715027
+      },
+      {
+        "api_name": "torch.backends.nnpack.set_flags",
+        "api_type": "issue",
+        "similarity": 0.9670305252075195
+      },
+      {
+        "api_name": "tf.experimental.enable_strict_mode",
+        "api_type": "issue",
+        "similarity": 0.9670094847679138
+      },
+      {
+        "api_name": "torch.backends.nnpack.is_available",
+        "api_type": "issue",
+        "similarity": 0.96659916639328
+      },
+      {
+        "api_name": "tf.compat.v1.no_regularizer",
+        "api_type": "issue",
+        "similarity": 0.9665262699127197
+      },
+      {
+        "api_name": "torch.backends.mps.is_built",
+        "api_type": "issue",
+        "similarity": 0.9664300680160522
+      },
+      {
+        "api_name": "torch.backends.cuda.math_sdp_enabled",
+        "api_type": "issue",
+        "similarity": 0.9663753509521484
+      },
+      {
+        "api_name": "tf.VariableAggregation",
+        "api_type": "issue",
+        "similarity": 0.9663448333740234
+      },
+      {
+        "api_name": "tf.compat.v1.VariableAggregation",
+        "api_type": "issue",
+        "similarity": 0.9663448333740234
+      }
+    ],
+    "pytorch_to_pytorch": [
+      {
+        "api_name": "torch.utils.checkpoint.checkpoint",
+        "api_type": "pytorch",
+        "similarity": 1.0
+      },
+      {
+        "api_name": "torch.utils.checkpoint.checkpoint_sequential",
+        "api_type": "pytorch",
+        "similarity": 0.9968668818473816
+      },
+      {
+        "api_name": "torch.nn.utils.prune.global_unstructured",
+        "api_type": "pytorch",
+        "similarity": 0.995094358921051
+      },
+      {
+        "api_name": "torch.library.register_autograd",
+        "api_type": "pytorch",
+        "similarity": 0.9943790435791016
+      },
+      {
+        "api_name": "torch.distributed.new_group",
+        "api_type": "pytorch",
+        "similarity": 0.9941294193267822
+      },
+      {
+        "api_name": "torch.nn.functional.upsample",
+        "api_type": "pytorch",
+        "similarity": 0.9940985441207886
+      },
+      {
+        "api_name": "torch.export.export",
+        "api_type": "pytorch",
+        "similarity": 0.9940975308418274
+      },
+      {
+        "api_name": "torch.distributed.gather_object",
+        "api_type": "pytorch",
+        "similarity": 0.9937363862991333
+      },
+      {
+        "api_name": "torch.nn.DataParallel",
+        "api_type": "pytorch",
+        "similarity": 0.9936701059341431
+      },
+      {
+        "api_name": "torch.hub.list",
+        "api_type": "pytorch",
+        "similarity": 0.9935387372970581
+      },
+      {
+        "api_name": "torch.hub.help",
+        "api_type": "pytorch",
+        "similarity": 0.9935280084609985
+      }
+    ]
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "issue_to_api",
+      "test_cases": [
+        "161186_issue_to_api_0.output.py",
+        "161186_issue_to_api_1.output.py",
+        "161186_issue_to_api_10.output.py",
+        "161186_issue_to_api_3.output.py",
+        "161186_issue_to_api_4.output.py",
+        "161186_issue_to_api_5.output.py",
+        "161186_issue_to_api_6.output.py",
+        "161186_issue_to_api_7.output.py",
+        "161186_issue_to_api_8.output.py",
+        "161186_issue_to_api_9.output.py"
+      ]
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": [
+        "161186_pytorch_to_pytorch_0.output.py",
+        "161186_pytorch_to_pytorch_1.output.py",
+        "161186_pytorch_to_pytorch_10.output.py",
+        "161186_pytorch_to_pytorch_2.output.py",
+        "161186_pytorch_to_pytorch_3.output.py",
+        "161186_pytorch_to_pytorch_4.output.py",
+        "161186_pytorch_to_pytorch_5.output.py",
+        "161186_pytorch_to_pytorch_6.output.py",
+        "161186_pytorch_to_pytorch_7.output.py",
+        "161186_pytorch_to_pytorch_8.output.py",
+        "161186_pytorch_to_pytorch_9.output.py"
+      ]
+    }
+  }
+}

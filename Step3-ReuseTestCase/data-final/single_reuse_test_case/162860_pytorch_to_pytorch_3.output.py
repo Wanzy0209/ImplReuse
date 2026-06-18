@@ -1,0 +1,34 @@
+import torch
+from torch.library import Library, impl_abstract
+
+# Define a custom library and operator to test the abstract implementation
+lib = Library("test_debug_lib", "DEF")
+lib.define("custom_op(Tensor x) -> Tensor")
+
+# Use the similar API: torch.library.impl_abstract
+# This registers the FakeTensor (abstract) implementation, which is used
+# by torch.compile (Dynamo) during tracing.
+@impl_abstract("test_debug_lib::custom_op")
+def custom_op_abstract(x):
+    # The abstract implementation defines the shape and dtype of the output
+    # without performing the actual computation.
+    return x
+
+# Register a concrete implementation so the code can actually run
+@lib.impl("custom_op", "CPU")
+def custom_op_impl(x):
+    return x + 1
+
+# Adapted test case: Use the custom operator inside a compiled function
+@torch.compile(backend="eager")
+def fn(x):
+    # Replaces the original 'inner' function call with the custom op
+    return torch.ops.test_debug_lib.custom_op(x)
+
+# Execute the test
+input_tensor = torch.ones(3)
+result = fn(input_tensor)
+
+# Verify the result
+expected = torch.ones(3) + 1
+assert torch.equal(result, expected), f"Expected {expected}, but got {result}"

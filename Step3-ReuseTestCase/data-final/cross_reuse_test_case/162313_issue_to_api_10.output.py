@@ -1,0 +1,39 @@
+import tensorflow as tf
+
+# Reproduce the structure of the original bug: a flag controlling flow
+flag = True
+
+@tf.function
+def calculate_loss(x, y):
+    # Initial operation
+    x = x + 1
+
+    # Conditional logic similar to the original bug's if/else block
+    # Here we use the similar API: tf.keras.losses.Reduction
+    if flag:
+        reduction = tf.keras.losses.Reduction.SUM
+    else:
+        reduction = tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE
+
+    # Apply the API configuration
+    loss_fn = tf.keras.losses.MeanSquaredError(reduction=reduction)
+    return loss_fn(x, y)
+
+# Inputs
+x = tf.ones((3,))
+y = tf.zeros((3,))
+
+# First call
+result_1 = calculate_loss(x, y)
+
+# Change state (triggering the other branch)
+flag = False
+
+# Second call
+result_2 = calculate_loss(x, y)
+
+# Verify results
+# With SUM: (1^2 + 1^2 + 1^2) = 3
+# With SUM_OVER_BATCH_SIZE: 3 / 3 = 1.0
+assert result_1.numpy() == 3.0
+assert result_2.numpy() == 1.0

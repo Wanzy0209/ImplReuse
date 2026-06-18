@@ -1,0 +1,168 @@
+{
+  "title": "torch.cond causes segmentation fault.",
+  "issue_id": "166918",
+  "bug_description": "```python\nimport os\nimport torch\nimport torch.nn as nn\nimport torch.distributed as dist\nimport sys\nimport time\nfrom torch.distributed._functional_collectives import broadcast\nfrom torch.distributed._tensor import DTensor, Replicate, DeviceMesh\ntorch._dynamo.config.capture_scalar_outputs = True\n# Hard-coded master information\nMASTER_ADDR = \"127.0.0.1\"\nMASTER_PORT = \"29500\"\n\ndef init_process():\n    # Rank and World Size are still read from environment variables\n    rank = int(os.environ['RANK'])\n    world_size = int(os.environ['WORLD_SIZE'])\n\n    # Use the hard-coded values for initialization\n    dist.init_process_group(\n        backend='nccl',\n        init_method=f'tcp://{MASTER_ADDR}:{MASTER_PORT}',\n        rank=rank,\n        world_size=world_size\n    )\n\n\n    torch.cuda.set_device(rank)\n    print(f\"Initialized process group on rank {dist.get_rank()}, device {torch.cuda.current_device()}\")\n\n@torch.compile(dynamic=True)\ndef example_compile_with_cond(rank):\n    \"\"\"\n    torch.cond version - most compile-friendly approach\n    Replaces if-else with torch.cond for better compilation\n    \"\"\"\n    rank = rank.item()\n    # Using torch.cond for compile-friendly conditional execution\n    # torch.cond requires a tensor predicate\n    pred = torch.tensor(rank == 0)\n\n    # NOTE: Cannot use requires_grad=True inside torch.cond lambdas\n    tensor = torch.cond(\n        pred,\n        lambda: torch.tensor([1, 2, 3, 4, 5], dtype=torch.float32 ,device=\"cuda\"),\n        lambda: torch.zeros(5, dtype=torch.float32, device=\"cuda\")\n    )\n    return broadcast(tensor, src=0, group=dist.group.WORLD)\n\n\nif __name__ == \"__main__\":\n    try:\n        init_process()\n        rank = dist.get_rank()\n        # Option 3: Functional collectives with torch.cond (most compile-friendly)\n        tensor = example_compile_with_cond(torch.tensor([rank]))\n\n\n    finally:\n        # Clean up the process group to avoid resource leaks\n        if dist.is_initialized():\n            dist.destroy_process_group()\n```\ntlp torchrun --nproc_per_node=2 example1.py \n\nResult\n```\n\n\nInitialized process group on rank 0, device 0\nInitialized process group on rank 1, device 1\nW1103 16:46:42.764000 760050 /home/lsakka/pytorch10/pytorch/torch/distributed/elastic/multiprocessing/api.py:1004] Sending process 760231 closing signal SIGTERM\nE1103 16:46:42.979000 760050 /home/lsakka/pytorch10/pytorch/torch/distributed/elastic/multiprocessing/api.py:978] failed (exitcode: -11) local_rank: 0 (pid: 760230) of binary: /home/lsakka/.conda/envs/test-env/bin/python\nTraceback (most recent call last):\n  File \"/home/lsakka/.conda/envs/test-env/bin/torchrun\", line 7, in <module>\n    sys.exit(main())\n  File \"/home/lsakka/pytorch10/pytorch/torch/distributed/elastic/multiprocessing/errors/__init__.py\", line 362, in wrapper\n    return f(*args, **kwargs)\n  File \"/home/lsakka/pytorch10/pytorch/torch/distributed/run.py\", line 977, in main\n    run(args)\n  File \"/home/lsakka/pytorch10/pytorch/torch/distributed/run.py\", line 968, in run\n    elastic_launch(\n  File \"/home/lsakka/pytorch10/pytorch/torch/distributed/launcher/api.py\", line 165, in __call__\n    return launch_agent(self._config, self._entrypoint, list(args))\n  File \"/home/lsakka/pytorch10/pytorch/torch/distributed/launcher/api.py\", line 313, in launch_agent\n    raise ChildFailedError(\ntorch.distributed.elastic.multiprocessing.errors.ChildFailedError: \n========================================================\nexample1.py FAILED\n--------------------------------------------------------\nFailures:\n[1]:\n  time      : 2025-11-03_16:46:42\n  host      : devgpu009.cco5.facebook.com\n  rank      : 1 (local_rank: 1)\n  exitcode  : -15 (pid: 760231)\n  error_file: <N/A>\n  traceback : Signal 15 (SIGTERM) received by PID 760231\n--------------------------------------------------------\nRoot Cause (first observed failure):\n[0]:\n  time      : 2025-11-03_16:46:42\n  host      : devgpu009.cco5.facebook.com\n  rank      : 0 (local_rank: 0)\n  exitcode  : -11 (pid: 760230)\n  error_file: <N/A>\n  tra",
+  "apis": [
+    "async_compile.cpp_pybinding",
+    "dist.init_process_group",
+    "torch.tensor",
+    "dist.is_initialized",
+    "new_callables.append",
+    "buf1.item"
+  ],
+  "best_code": "import os\nimport torch\nimport torch.nn as nn\nimport torch.distributed as dist\nimport sys\nimport time\nfrom torch.distributed._functional_collectives import broadcast\nfrom torch.distributed._tensor import DTensor, Replicate, DeviceMesh\ntorch._dynamo.config.capture_scalar_outputs = True\n# Hard-coded master information\nMASTER_ADDR = \"127.0.0.1\"\nMASTER_PORT = \"29500\"\n\ndef init_process():\n    # Rank and World Size are still read from environment variables\n    rank = int(os.environ['RANK'])\n    world_size = int(os.environ['WORLD_SIZE'])\n\n    # Use the hard-coded values for initialization\n    dist.init_process_group(\n        backend='nccl',\n        init_method=f'tcp://{MASTER_ADDR}:{MASTER_PORT}',\n        rank=rank,\n        world_size=world_size\n    )\n\n\n    torch.cuda.set_device(rank)\n    print(f\"Initialized process group on rank {dist.get_rank()}, device {torch.cuda.current_device()}\")\n\n@torch.compile(dynamic=True)\ndef example_compile_with_cond(rank):\n    \"\"\"\n    torch.cond version - most compile-friendly approach\n    Replaces if-else with torch.cond for better compilation\n    \"\"\"\n    rank = rank.item()\n    # Using torch.cond for compile-friendly conditional execution\n    # torch.cond requires a tensor predicate\n    pred = torch.tensor(rank == 0)\n\n    # NOTE: Cannot use requires_grad=True inside torch.cond lambdas\n    tensor = torch.cond(\n        pred,\n        lambda: torch.tensor([1, 2, 3, 4, 5], dtype=torch.float32 ,device=\"cuda\"),\n        lambda: torch.zeros(5, dtype=torch.float32, device=\"cuda\")\n    )\n    return broadcast(tensor, src=0, group=dist.group.WORLD)\n\n\nif __name__ == \"__main__\":\n    try:\n        init_process()\n        rank = dist.get_rank()\n        # Option 3: Functional collectives with torch.cond (most compile-friendly)\n        tensor = example_compile_with_cond(torch.tensor([rank]))\n\n\n    finally:\n        # Clean up the process group to avoid resource leaks\n        if dist.is_initialized():\n            dist.destroy_process_group()",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/167354"
+  ],
+  "_meta": {
+    "file": "166918_issue_ori_data.json",
+    "generated_at": "2026-04-21 05:47:12",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\166918_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\166918_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "Running a distributed script with torchrun and nproc_per_node=2 causes a segmentation fault (exitcode -11) on rank 0. The script uses torch.compile(dynamic=True) and torch.cond within a function that performs a broadcast. Rank 1 exits with SIGTERM.",
+  "repro_code": "import os\nimport torch\nimport torch.nn as nn\nimport torch.distributed as dist\nimport sys\nimport time\nfrom torch.distributed._functional_collectives import broadcast\nfrom torch.distributed._tensor import DTensor, Replicate, DeviceMesh\ntorch._dynamo.config.capture_scalar_outputs = True\n# Hard-coded master information\nMASTER_ADDR = \"127.0.0.1\"\nMASTER_PORT = \"29500\"\n\ndef init_process():\n    # Rank and World Size are still read from environment variables\n    rank = int(os.environ['RANK'])\n    world_size = int(os.environ['WORLD_SIZE'])\n\n    # Use the hard-coded values for initialization\n    dist.init_process_group(\n        backend='nccl',\n        init_method=f'tcp://{MASTER_ADDR}:{MASTER_PORT}',\n        rank=rank,\n        world_size=world_size\n    )\n\n\n    torch.cuda.set_device(rank)\n    print(f\"Initialized process group on rank {dist.get_rank()}, device {torch.cuda.current_device()}\")\n\n@torch.compile(dynamic=True)\ndef example_compile_with_cond(rank):\n    \"\"\"\n    torch.cond version - most compile-friendly approach\n    Replaces if-else with torch.cond for better compilation\n    \"\"\"\n    rank = rank.item()\n    # Using torch.cond for compile-friendly conditional execution\n    # torch.cond requires a tensor predicate\n    pred = torch.tensor(rank == 0)\n\n    # NOTE: Cannot use requires_grad=True inside torch.cond lambdas\n    tensor = torch.cond(\n        pred,\n        lambda: torch.tensor([1, 2, 3, 4, 5], dtype=torch.float32 ,device=\"cuda\"),\n        lambda: torch.zeros(5, dtype=torch.float32, device=\"cuda\")\n    )\n    return broadcast(tensor, src=0, group=dist.group.WORLD)\n\n\nif __name__ == \"__main__\":\n    try:\n        init_process()\n        rank = dist.get_rank()\n        # Option 3: Functional collectives with torch.cond (most compile-friendly)\n        tensor = example_compile_with_cond(torch.tensor([rank]))\n\n\n    finally:\n        # Clean up the process group to avoid resource leaks\n        if dist.is_initialized():\n            dist.destroy_process_group()",
+  "repro_output": "torch.cond causes segmentation fault.",
+  "affected_api": "torch.cond",
+  "trigger_conditions": {
+    "backend": "nccl",
+    "dtype": "torch.float32",
+    "input_shape": "5",
+    "other_conditions": "torch.compile(dynamic=True), torch._dynamo.config.capture_scalar_outputs = True, torchrun --nproc_per_node=2, torch.cond, broadcast"
+  },
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "unknown",
+    "hardware": "cuda"
+  },
+  "labels": [],
+  "add_fix_code": [
+    "def _prepend_product_of_values(inputs, possible_values, num_to_prepend=1, device=None):",
+    "    if len(inputs) != 0:",
+    "        device = inputs[0].device",
+    "    assert device",
+    "def prepend_predicates(inputs, num_predicates=1, device=None):",
+    "    return _prepend_product_of_values(inputs, [False, True], num_predicates, device)",
+    "            for inputs_with_predicates in prepend_predicates(",
+    "                inputs, num_predicates, device=device",
+    "            ):",
+    "    @requires_gpu",
+    "    def test_output_on_different_device(self):",
+    "        class FactoryBranches(torch.nn.Module):",
+    "            def forward(self, pred):",
+    "                tensor = torch.cond(",
+    "                    pred,",
+    "                    lambda: torch.tensor([1, 2, 3, 4, 5], dtype=torch.float32).to(",
+    "                        GPU_TYPE",
+    "                    ),",
+    "                    lambda: torch.zeros(5, dtype=torch.float32).to(GPU_TYPE),",
+    "                )",
+    "                return tensor + 1",
+    "",
+    "        self._run_test(",
+    "            model=FactoryBranches(),",
+    "            inputs=(),",
+    "            device=\"cpu\",  # device for predicate",
+    "            dynamic=True,",
+    "        )",
+    "",
+    "                    device=output.get_device()",
+    "                    if output.get_device() is not None",
+    "                    else device,  # type: ignore[arg-type]"
+  ],
+  "sub_fix_code": [
+    "def _prepend_product_of_values(inputs, possible_values, num_to_prepend=1):",
+    "    device = inputs[0].device",
+    "def prepend_predicates(inputs, num_predicates=1):",
+    "    return _prepend_product_of_values(inputs, [False, True], num_predicates)",
+    "            for inputs_with_predicates in prepend_predicates(inputs, num_predicates):",
+    "                    device=device,"
+  ],
+  "core_api": "torch.cond",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [],
+    "issue_to_api": [
+      {
+        "api_name": "tf.types.experimental.distributed.Mirrored",
+        "api_type": "issue",
+        "similarity": 0.9805256128311157
+      },
+      {
+        "api_name": "tf.compat.v1.math.add",
+        "api_type": "issue",
+        "similarity": 0.9795557260513306
+      },
+      {
+        "api_name": "tf.experimental.numpy.add",
+        "api_type": "issue",
+        "similarity": 0.9795557260513306
+      },
+      {
+        "api_name": "tf.keras.layers.add",
+        "api_type": "issue",
+        "similarity": 0.9795557260513306
+      },
+      {
+        "api_name": "tf.keras.ops.add",
+        "api_type": "issue",
+        "similarity": 0.9795557260513306
+      },
+      {
+        "api_name": "tf.math.add",
+        "api_type": "issue",
+        "similarity": 0.9795557260513306
+      },
+      {
+        "api_name": "tf.sparse.add",
+        "api_type": "issue",
+        "similarity": 0.9795557260513306
+      },
+      {
+        "api_name": "tf.compat.v1.math.log1p",
+        "api_type": "issue",
+        "similarity": 0.9791370630264282
+      },
+      {
+        "api_name": "tf.experimental.numpy.log1p",
+        "api_type": "issue",
+        "similarity": 0.9791370630264282
+      },
+      {
+        "api_name": "tf.keras.ops.log1p",
+        "api_type": "issue",
+        "similarity": 0.9791370630264282
+      },
+      {
+        "api_name": "tf.math.log1p",
+        "api_type": "issue",
+        "similarity": 0.9791370630264282
+      }
+    ],
+    "pytorch_to_pytorch": []
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "issue_to_api",
+      "test_cases": [
+        "166918_issue_to_api_0.output.py",
+        "166918_issue_to_api_1.output.py",
+        "166918_issue_to_api_10.output.py",
+        "166918_issue_to_api_2.output.py",
+        "166918_issue_to_api_3.output.py",
+        "166918_issue_to_api_4.output.py",
+        "166918_issue_to_api_5.output.py",
+        "166918_issue_to_api_6.output.py",
+        "166918_issue_to_api_7.output.py",
+        "166918_issue_to_api_8.output.py",
+        "166918_issue_to_api_9.output.py"
+      ]
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": []
+    }
+  }
+}

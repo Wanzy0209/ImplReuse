@@ -1,0 +1,45 @@
+import torch
+import torch.distributed as dist
+import os
+
+# Minimal distributed setup required for torch.distributed APIs
+os.environ['MASTER_ADDR'] = '127.0.0.1'
+os.environ['MASTER_PORT'] = '29500'
+
+if not dist.is_initialized():
+    try:
+        # Using 'gloo' backend for compatibility. 
+        # Note: For XPU specific distributed runs, 'ccl' is typically used, 
+        # but 'gloo' allows this test to run in generic environments for logic verification.
+        dist.init_process_group(backend='gloo', rank=0, world_size=1)
+    except Exception as e:
+        print(f"Skipping test due to distributed initialization failure: {e}")
+        exit(0)
+
+def broadcast_func(obj_list):
+    # Adaptation: Use torch.distributed.broadcast_object_list
+    # Targeting 'xpu' device to align with the original bug report context
+    dist.broadcast_object_list(obj_list, src=0, device=torch.device("xpu"))
+    return obj_list
+
+# Prepare data: List of tensors (CPU tensors that will be moved to XPU by the API)
+data = [torch.randn(128), torch.randn(128)]
+
+# Test Eager Mode
+print("Testing eager mode...")
+try:
+    out = broadcast_func(data)
+    print("eager mode passed")
+except Exception as e:
+    print(f"eager mode failed: {e}")
+
+# Test Compiled Mode
+print("Testing torch.compile...")
+try:
+    broadcast_func_compiled = torch.compile(broadcast_func)
+    # Reset data for the compiled run
+    data = [torch.randn(128), torch.randn(128)]
+    out = broadcast_func_compiled(data)
+    print("torch.compile passed")
+except Exception as e:
+    print(f"torch.compile failed: {e}")

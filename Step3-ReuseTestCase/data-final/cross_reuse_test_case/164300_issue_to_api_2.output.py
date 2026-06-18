@@ -1,0 +1,42 @@
+import torch
+import functools
+from torch.utils.checkpoint import CheckpointPolicy, create_selective_checkpoint_contexts
+
+# Leverage the similar API: torch.backends.nnpack.is_available
+import torch.backends.nnpack
+
+class CustomPolicy:
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, ctx, out, func, *args, **kwargs):
+        # Reuse the similar API inside the policy logic
+        # This integrates the similar API into the context creation flow
+        torch.backends.nnpack.is_available()
+        return CheckpointPolicy.MUST_SAVE
+
+def f(x, y):
+    return torch.sigmoid(torch.matmul(torch.matmul(x, y), y)) * y
+
+# The core of the bug: using functools.partial for context_fn
+context_fn1 = functools.partial(create_selective_checkpoint_contexts, CustomPolicy())
+
+@torch.compile(backend="aot_eager_decomp_partition", fullgraph=True)
+def g(x, y):
+    return torch.utils.checkpoint.checkpoint(
+        f, x, y,
+        use_reentrant=False,
+        context_fn=context_fn1,
+    )
+
+if __name__ == "__main__":
+    a = torch.randn(4, 4, requires_grad=True, device="cpu")
+    b = torch.randn(4, 4, requires_grad=True, device="cpu")
+    
+    # Run the test case
+    try:
+        result = g(a, b)
+        result.sum().backward()
+        print("Test executed successfully.")
+    except Exception as e:
+        print(f"Test failed with error: {e}")

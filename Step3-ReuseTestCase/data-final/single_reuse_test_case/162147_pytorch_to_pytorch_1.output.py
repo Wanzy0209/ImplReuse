@@ -1,0 +1,56 @@
+import torch
+import torch.nn.functional as F
+import math
+
+def test_pdist_functionality():
+    """
+    Test case for torch.nn.functional.pdist, adapted from the context of 
+    FastLearnedCellX3 (Issue 162147) which involves complex tensor manipulations 
+    and performance concerns.
+    
+    This test verifies the correctness of pdist, which internally uses 
+    index_select, ensuring it handles the tensor dimensions and operations 
+    relevant to the original issue.
+    """
+    # Setup dimensions similar to the original FastLearnedCellX3 module
+    # d_addr = 64, Batch size N = 16
+    N = 16
+    d_addr = 64
+    x = torch.randn(N, d_addr)
+
+    # Test p=2 (Euclidean distance)
+    # This path uses the efficient matrix multiplication implementation
+    # followed by index_select to extract the upper triangle.
+    dists_p2 = F.pdist(x, p=2)
+    expected_len = N * (N - 1) // 2
+    
+    assert dists_p2.shape == (expected_len,), \
+        f"Expected shape ({expected_len},), got {dists_p2.shape}"
+    assert (dists_p2 >= 0).all(), "Distances must be non-negative"
+
+    # Test p=1 (Manhattan distance)
+    # This path uses the general linalg.vector_norm implementation.
+    dists_p1 = F.pdist(x, p=1)
+    assert dists_p1.shape == (expected_len,), \
+        f"Expected shape ({expected_len},), got {dists_p1.shape}"
+    assert (dists_p1 >= 0).all(), "Distances must be non-negative"
+
+    # Verify correctness against a naive implementation for a small sample
+    # to ensure the internal index_select logic is correct.
+    x_small = torch.randn(4, 3)
+    dists_small = F.pdist(x_small, p=2)
+    
+    # Manual calculation of pairwise distances
+    manual_dists = []
+    for i in range(4):
+        for j in range(i + 1, 4):
+            manual_dists.append(torch.norm(x_small[i] - x_small[j], p=2))
+    
+    manual_dists = torch.stack(manual_dists)
+    assert torch.allclose(dists_small, manual_dists), \
+        "pdist output does not match manual calculation"
+
+    print("Test passed: torch.nn.functional.pdist works correctly.")
+
+if __name__ == "__main__":
+    test_pdist_functionality()

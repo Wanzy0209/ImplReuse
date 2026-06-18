@@ -1,0 +1,35 @@
+import tensorflow as tf
+from tensorflow.keras.applications import ResNet50
+import tensorflow.keras.backend as K
+
+def test_resnet50_conv_bias_shapes():
+    """
+    Test to verify that the bias shapes of Conv2D layers in ResNet50 are correct.
+    This mirrors the logic of the original bug report (checking ONNX export correctness)
+    by verifying the underlying model structure using the Keras backend API.
+    """
+    # Verify the backend using the similar API (tf.keras.backend)
+    assert K.backend() == 'tensorflow', "Backend is not TensorFlow"
+
+    # Load ResNet50 model (equivalent to create_resnet50_model in the original script)
+    model = ResNet50(weights='imagenet')
+    print(f"Loaded ResNet50 with pretrained ImageNet weights.")
+
+    # Iterate through layers to check Conv2D bias shapes
+    # This corresponds to checking the 'node_Conv_649' issue in the bug report
+    for layer in model.layers:
+        if isinstance(layer, tf.keras.layers.Conv2D):
+            if layer.use_bias:
+                # Use Keras backend to get the shape of the bias tensor
+                bias_shape = K.int_shape(layer.bias)
+                expected_shape = (layer.filters,)
+                
+                # Assertion to catch incorrect bias shapes
+                assert bias_shape == expected_shape, \
+                    f"Layer {layer.name} has incorrect bias shape: {bias_shape}. Expected: {expected_shape}"
+                
+                print(f"Layer {layer.name}: Bias shape {bias_shape} is correct.")
+
+if __name__ == "__main__":
+    test_resnet50_conv_bias_shapes()
+    print("Test passed successfully.")

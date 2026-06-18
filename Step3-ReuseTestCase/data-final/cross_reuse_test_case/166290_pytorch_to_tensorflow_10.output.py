@@ -1,0 +1,72 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Set seeds for reproducibility
+tf.random.set_seed(974450504)
+np.random.seed(974450504)
+
+# The similar API is a decorator, so we apply it to the function containing the logic.
+@tf.autograph.experimental.do_not_convert
+def fuzzed_program(arg_0, arg_1, sentinel):
+    # var_node_3 = arg_0 # size=(17, 30, 17, 3), dtype=bool
+    var_node_3 = tf.cast(arg_0, tf.bool)
+
+    # var_node_2 = torch.chunk(var_node_3, 3, dim=3)[0]
+    # tf.split returns a list of tensors. We take the first one.
+    split_tensors = tf.split(var_node_3, 3, axis=3)
+    var_node_2 = split_tensors[0] # size=(17, 30, 17, 1)
+
+    # var_node_5 = torch.full((17,), 3, dtype=torch.int64)
+    var_node_5 = tf.fill([17], tf.constant(3, dtype=tf.int64))
+
+    # var_node_6 = arg_1 # size=(15,), dtype=int64
+    var_node_6 = tf.cast(arg_1, tf.int64)
+
+    # _input_size_var_node_4 = var_node_5.size(0)
+    _input_size_var_node_4 = tf.shape(var_node_5)[0]
+
+    # _index_var_node_4 = torch.randint(0, _input_size_var_node_4, (15,), ...)
+    # Note: tf.random.uniform maxval is exclusive, similar to torch.randint
+    _index_var_node_4 = tf.random.uniform((15,), minval=0, maxval=_input_size_var_node_4, dtype=tf.int64)
+
+    # var_node_4 = torch.gather(var_node_5, 0, _index_var_node_4)
+    var_node_4 = tf.gather(var_node_5, _index_var_node_4, axis=0)
+
+    # _input_size_var_node_1 = var_node_2.size(0)
+    _input_size_var_node_1 = tf.shape(var_node_2)[0]
+
+    # _index_var_node_1 = torch.randint(0, _input_size_var_node_1, (15,), ...)
+    _index_var_node_1 = tf.random.uniform((15,), minval=0, maxval=_input_size_var_node_1, dtype=tf.int64)
+
+    # var_node_1 = torch.index_select(var_node_2, 0, _index_var_node_1)
+    # tf.gather is the equivalent of index_select for 1D indices
+    var_node_1 = tf.gather(var_node_2, _index_var_node_1, axis=0)
+
+    # var_node_0 = torch.squeeze(var_node_1)
+    var_node_0 = tf.squeeze(var_node_1)
+
+    # result = var_node_0 * sentinel
+    result = var_node_0 * sentinel
+    
+    return result
+
+# Prepare inputs
+# arg_0: size=(17, 30, 17, 3), dtype=bool
+# Using random uniform to generate boolean mask
+arg_0 = tf.cast(tf.random.uniform((17, 30, 17, 3)) > 0.5, tf.bool)
+
+# arg_1: size=(15,), dtype=int64
+# Random integers between 5 and 29
+arg_1 = tf.random.uniform((15,), minval=5, maxval=30, dtype=tf.int64)
+
+# Sentinel tensor
+sentinel = tf.constant(1.0)
+
+# Execute the test
+try:
+    result = fuzzed_program(arg_0, arg_1, sentinel)
+    print(' Test passed: Function executed successfully with do_not_convert.')
+    print(f'Result shape: {result.shape}')
+except Exception as e:
+    print(f' Test failed: {e}')

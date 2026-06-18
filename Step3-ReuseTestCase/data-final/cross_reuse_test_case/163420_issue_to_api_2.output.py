@@ -1,0 +1,34 @@
+import torch
+
+# Preserving the config from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(arg0, arg1):
+    # arg0: size=(1, 1), dtype=float32, device=cuda
+    # arg1: size=(), dtype=float32, device=cuda
+    
+    # Leveraging torch.median as the similar API.
+    # We combine arg0 and arg1 to utilize both inputs, similar to how the original
+    # bug used arg1.item() to modify arg0.
+    # Note: torch.median is not differentiable, so backward pass is omitted.
+    t2 = torch.median(arg0 + arg1)
+    
+    return t2
+
+# Setup inputs matching the bug report
+arg0 = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True)
+arg1 = torch.empty([], dtype=torch.float32, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0, arg1)
+    print('Eager Success! ')
+
+    # Compiled execution
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    print('Compile Success! ')
+
+    # Verify results match
+    assert torch.allclose(out_eager, out_compiled), "Eager and Compiled outputs differ"
+    print('Test Passed! ')

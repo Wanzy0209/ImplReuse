@@ -1,0 +1,75 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_banded_solve_scalar_interaction():
+    """
+    Test case adapted from PyTorch Issue 163798.
+    
+    Original Issue Logic:
+    - Use torch.compile (graph mode).
+    - Call tolist() or item() to extract scalars.
+    - Use scalars in arithmetic with the tensor.
+    - Issue: tolist() was graphed unexpectedly vs item().
+
+    Adapted Logic for tf.linalg.banded_triangular_solve:
+    - Use tf.function (graph mode).
+    - Call banded_triangular_solve.
+    - Extract a scalar value from the result (mimicking tolist/item).
+    - Use the scalar in arithmetic.
+    """
+    
+    # Setup inputs for banded_triangular_solve
+    # We define a 3x3 lower triangular banded matrix.
+    # Matrix A:
+    # [ 2.0,  0.0,  0.0]
+    # [ 1.0,  2.0,  0.0]
+    # [ 0.0,  1.0,  2.0]
+    # Bands representation (K=2, M=3):
+    # Row 0 (Main diagonal): [2.0, 2.0, 2.0]
+    # Row 1 (First subdiagonal): [1.0, 1.0, 0.0] (padded)
+    bands = tf.constant([
+        [2.0, 2.0, 2.0],
+        [1.0, 1.0, 0.0]
+    ])
+    
+    # Right-hand side tensor
+    rhs = tf.constant([[1.0], [1.0], [1.0]])
+
+    @tf.function
+    def solve_and_scale(bands, rhs):
+        # Call the similar API: tf.linalg.banded_triangular_solve
+        x = tf.linalg.banded_triangular_solve(bands, rhs, lower=True)
+        
+        # Mimic the logic from the bug report:
+        # PyTorch: u0, u1 = a.tolist()
+        # TF: Extract a scalar value from the result tensor.
+        # In TF graph mode, direct indexing returns a Tensor, not a Python scalar,
+        # which is analogous to the graphing behavior discussed in the issue.
+        scalar_val = x[0, 0]
+        
+        # PyTorch: return a * u0 * u1
+        # TF: Use the extracted scalar in an operation with the result
+        return x * scalar_val
+
+    # Execute the function
+    result = solve_and_scale(bands, rhs)
+    
+    # Expected calculation:
+    # Solve Ax = rhs -> x = A_inv * rhs
+    # A = [[2,0,0],[1,2,0],[0,1,2]]
+    # inv(A) = [[0.5, 0, 0], [-0.25, 0.5, 0], [0.125, -0.25, 0.5]]
+    # x = inv(A) * [1,1,1]^T = [0.5, 0.25, 0.375]
+    # scalar_val = x[0,0] = 0.5
+    # result = x * 0.5 = [0.25, 0.125, 0.1875]
+    
+    expected_result = tf.constant([[0.25], [0.125], [0.1875]])
+    
+    # Assert the output is correct
+    assert np.allclose(result.numpy(), expected_result.numpy()), \
+        f"Expected {expected_result.numpy()}, but got {result.numpy()}"
+    
+    print("Test passed: banded_triangular_solve interacts correctly with scalar extraction in graph mode.")
+
+if __name__ == "__main__":
+    test_banded_solve_scalar_interaction()

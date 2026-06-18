@@ -1,0 +1,43 @@
+import torch
+import torch.library
+
+# Define a custom operator using the similar API: torch.library.define
+# This replaces the complex model loading from the original bug report
+# with a minimal custom operator definition.
+def custom_op_meta(x):
+    return torch.empty_like(x)
+
+def custom_op_impl(x):
+    return x + 1
+
+# Define the operator schema
+torch.library.define("test_ns::custom_op", "(Tensor x) -> Tensor")
+
+# Register implementations for different backends/modes
+# Registering a Meta implementation is often crucial for torch.export
+# to avoid "Current active mode not registered" errors.
+torch.library.impl("test_ns::custom_op", custom_op_meta, "Meta")
+torch.library.impl("test_ns::custom_op", custom_op_impl, "CPU")
+
+# Create a simple model using the custom operator
+class SimpleModel(torch.nn.Module):
+    def forward(self, x):
+        return torch.ops.test_ns.custom_op(x)
+
+model = SimpleModel()
+example_inputs = (torch.randn(2, 2),)
+
+# Adapt the original call site to verify the interaction between
+# torch.library.define and torch.export.export
+try:
+    ep = torch.export.export(model, example_inputs)
+    # If export succeeds, the custom operator was correctly defined and registered
+    # for the modes required by export.
+    print("Export successful with custom operator defined via torch.library.define")
+except AssertionError as e:
+    # This would catch the specific error mentioned in the bug report if it occurs
+    print(f"AssertionError during export: {e}")
+    raise
+except Exception as e:
+    print(f"Unexpected error during export: {e}")
+    raise

@@ -1,0 +1,78 @@
+import collections
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import unittest
+from torchvision.models.resnet import resnet18
+
+# Pattern reused from tf.keras.backend.get_uid
+# Used here to track the execution context of the compiled function
+_PER_FUNCTION_UIDS = {}
+
+def get_function_uid(func, prefix=''):
+    """
+    Associates a string prefix with an integer counter for a specific function.
+    Adapted from tf.keras.backend.get_uid to track execution flow.
+    """
+    if func not in _PER_FUNCTION_UIDS:
+        _PER_FUNCTION_UIDS[func] = collections.defaultdict(int)
+    uids = _PER_FUNCTION_UIDS[func]
+    uids[prefix] += 1
+    return uids[prefix]
+
+class TestMPSCompileBackward(unittest.TestCase):
+    def test_resnet18_mps_compile_backward(self):
+        # Skip if MPS is not available
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS backend is not available on this system.")
+
+        BATCH_SIZE = 4
+        NUM_CLASSES = 10
+        LEARNING_RATE = 0.01
+        device = 'mps'
+
+        # Setup Model
+        model = resnet18(num_classes=NUM_CLASSES)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+
+        model = model.to(device)
+        model.train()
+
+        # Define the compiled training step
+        @torch.compile
+        def train_step(images, labels):
+            images = images.to(device)
+            labels = labels.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            return loss
+
+        # Generate dummy data
+        images = torch.randn(BATCH_SIZE, 3, 224, 224)
+        labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,))
+
+        # Track execution using the reused pattern
+        # This ensures we are entering the function context
+        call_id = get_function_uid(train_step, 'train_call')
+        
+        # Run the step (This is where the bug occurs: loss.backward() on MPS)
+        loss = train_step(images, labels)
+
+        # Assertions
+        self.assertEqual(call_id, 1, "First call ID should be 1")
+        self.assertTrue(torch.isfinite(loss), "Loss should be finite")
+        
+        # Run a second time to ensure stability and UID increment
+        call_id = get_function_uid(train_step, 'train_call')
+        loss = train_step(images, labels)
+        
+        self.assertEqual(call_id, 2, "Second call ID should be 2")
+        self.assertTrue(torch.isfinite(loss), "Loss should remain finite")
+
+if __name__ == '__main__':
+    unittest.main()

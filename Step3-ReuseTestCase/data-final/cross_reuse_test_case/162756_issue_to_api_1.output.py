@@ -1,0 +1,44 @@
+import torch
+import unittest
+
+class TestCompileWithBackendConfigs(unittest.TestCase):
+    def test_cumsum_combo_kernels_with_sdp_query(self):
+        """
+        Test that torch.compile works with combo_kernels enabled (which requires
+        Triton helper functions for operations like cumsum) while interacting
+        with other backend configurations like mem_efficient_sdp_enabled.
+        """
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is not available")
+
+        # Enable the configuration that triggers the original bug
+        torch._inductor.config.combo_kernels = True
+
+        # Leverage the similar API: Check the state of memory efficient SDP.
+        # This ensures the test interacts with the backend configuration layer,
+        # similar to how the bug report interacts with inductor config.
+        sdp_enabled = torch.backends.cuda.mem_efficient_sdp_enabled()
+
+        @torch.compile
+        def fn(x, y, z):
+            # cumsum triggers the need for _triton_helper_fn_add0
+            return x.sum(1), y.mean(1), z.cumsum(1)
+
+        inps = (
+            torch.rand(16, 128, device="cuda"),
+            torch.rand(32, 128, device="cuda"),
+            torch.rand(32, 256, device="cuda"),
+        )
+
+        # Run the compiled function. 
+        # If the bug is present, this will raise NameError for the helper function.
+        res_sum, res_mean, res_cumsum = fn(*inps)
+
+        # Verify correctness against eager execution
+        x, y, z = inps
+        self.assertTrue(torch.allclose(res_sum, x.sum(1)))
+        self.assertTrue(torch.allclose(res_mean, y.mean(1)))
+        self.assertTrue(torch.allclose(res_cumsum, z.cumsum(1)))
+
+if __name__ == "__main__":
+    unittest.main()

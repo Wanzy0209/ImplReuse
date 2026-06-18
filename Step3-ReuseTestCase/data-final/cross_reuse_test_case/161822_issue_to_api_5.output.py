@@ -1,0 +1,32 @@
+import tensorflow as tf
+import time
+
+# Ensure we are in eager execution mode (TF2 default) to match the context
+# where global_variables_initializer is often a no-op.
+if not tf.executing_eagerly():
+    tf.compat.v1.enable_eager_execution()
+
+# Setup: Create a variable to be initialized.
+# Using bfloat16 to match the dtype in the original bug report.
+a = tf.Variable(tf.zeros((512, 512), dtype=tf.bfloat16))
+
+warmup = 128
+iters = 16384
+
+# Warmup loop to mitigate cold start effects
+for _ in range(warmup):
+    tf.compat.v1.global_variables_initializer()
+
+# Benchmark loop to measure CPU overhead
+t0 = time.perf_counter()
+for _ in range(iters):
+    tf.compat.v1.global_variables_initializer()
+t1 = time.perf_counter()
+
+avg_time_us = 1e6 * (t1 - t0) / iters
+print(f"Average time per iteration (us): {avg_time_us}")
+
+# Assertion: In eager mode, global_variables_initializer returns a no_op.
+# It should execute very quickly. If the average time is high, it indicates
+# a CPU overhead regression similar to the reported issue.
+assert avg_time_us < 10.0, f"Detected measurable CPU overhead: {avg_time_us} us"

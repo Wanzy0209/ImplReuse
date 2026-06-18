@@ -1,0 +1,74 @@
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch._dynamo as dynamo
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+# Replicate the configuration from the original bug report
+dynamo.config.optimize_ddp = True
+
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+if dist.is_available():
+    dist.init_process_group(backend="nccl" if dist.is_nccl_available() else "gloo")
+
+class LobpcgLayer(nn.Module):
+    """
+    A custom layer that uses torch.lobpcg to find the smallest eigenvalue 
+    of a symmetric positive definite matrix constructed from the input.
+    """
+    def forward(self, x):
+        # x shape: [Batch, N, N]
+        # We take the first item in the batch to simplify the lobpcg call
+        A = x[0]
+        
+        # Ensure the matrix is symmetric
+        A = (A + A.T) / 2
+        
+        # Ensure the matrix is positive definite by adding the identity matrix
+        A = A + torch.eye(A.size(0), device=A.device)
+        
+        # Call torch.lobpcg to find the smallest eigenvalue
+        # k=1 specifies we want only one eigenvalue
+        e, _ = torch.lobpcg(A, k=1, largest=False)
+        
+        return e
+
+def main():
+    device = torch.device(f"cuda:{LOCAL_RANK}" if torch.cuda.is_available() else "cpu")
+    
+    # Define the model using the LobpcgLayer
+    # This replaces the DoubleLayer from the original test
+    model = LobpcgLayer().to(device)
+    
+    # Apply torch.compile
+    model = torch.compile(model)
+    
+    # Wrap with DDP
+    model = DDP(model, device_ids=[LOCAL_RANK] if torch.cuda.is_available() else None, find_unused_parameters=True)
+    
+    # Optimizer (Note: LobpcgLayer has no learnable parameters, but we keep the optimizer setup for consistency)
+    opt = torch.optim.SGD(model.parameters(), lr=1e-4)
+
+    for it in range(3):
+        # Generate random symmetric matrices as input
+        # Shape: [Batch=2, N=10, N=10]
+        x = torch.rand(2, 10, 10, device=device)
+        
+        out = model(x)
+        
+        # Compute loss against a target of zero
+        loss = F.mse_loss(out, torch.zeros_like(out))
+        
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        opt.step()
+        
+        print(f"[rank{LOCAL_RANK}] iter={it+1} loss={loss.item():.6f}")
+
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

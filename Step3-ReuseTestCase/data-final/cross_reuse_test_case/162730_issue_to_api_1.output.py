@@ -1,0 +1,73 @@
+import torch
+import unittest
+
+class TestMPSLinearNonContiguous(unittest.TestCase):
+    """
+    Test case for Issue #162730: MPS F.Linear producing inconsistent results 
+    between contiguous and non-contiguous tensors.
+    
+    This test leverages the concept of 'repacking' found in the similar API 
+    (tf.raw_ops.NcclAllReduce), where tensors are repacked for efficiency. 
+    Here, we simulate repacking by creating a non-contiguous weight tensor 
+    via rearranging dimensions and verify that the linear operation handles 
+    it correctly on MPS, consistent with CPU behavior.
+    """
+
+    def setUp(self):
+        self.device = 'mps' if torch.backends.mps.is_available() else 'cpu'
+        if self.device != 'mps':
+            self.skipTest("MPS device not available, skipping MPS-specific test")
+
+    def test_linear_with_repacked_noncontiguous_weight(self):
+        # Dimensions from the original bug report
+        h, d, m = 12, 64, 768
+        batch, seq, dim = 1, 3, 768
+
+        # Create test tensors on MPS
+        W = torch.randn(h, d, m, device=self.device)
+        x = torch.randn(batch, seq, dim, device=self.device)
+        bias = torch.randn(m, device=self.device)
+
+        # Create non-contiguous weight via rearrange (simulating repacking)
+        # Original logic: einops.rearrange(W, "h d m -> m (h d)")
+        # We use standard torch operations to avoid external dependencies
+        w_noncontig = W.permute(2, 0, 1).reshape(m, -1)
+        w_contig = w_noncontig.contiguous()
+
+        # Verify contiguity state
+        self.assertFalse(w_noncontig.is_contiguous(), "Setup failed: Weight should be non-contiguous")
+        self.assertTrue(w_contig.is_contiguous(), "Setup failed: Weight should be contiguous")
+
+        # --- Execute on MPS ---
+        result_mps_non = torch.nn.functional.linear(x, w_noncontig, bias)
+        result_mps_con = torch.nn.functional.linear(x, w_contig, bias)
+
+        # --- Execute on CPU (Ground Truth) ---
+        # CPU handles non-contiguous tensors correctly in the original report
+        result_cpu_non = torch.nn.functional.linear(x.cpu(), w_noncontig.cpu(), bias.cpu())
+        result_cpu_con = torch.nn.functional.linear(x.cpu(), w_contig.cpu(), bias.cpu())
+
+        # --- Assertions ---
+
+        # 1. Verify CPU consistency (Sanity check)
+        self.assertTrue(
+            torch.allclose(result_cpu_non, result_cpu_con, atol=1e-5),
+            "CPU Linear: Results should match for contiguous and non-contiguous weights"
+        )
+
+        # 2. Verify MPS consistency (The Bug Check)
+        # The bug manifests as a mismatch here on MPS
+        self.assertTrue(
+            torch.allclose(result_mps_non, result_mps_con, atol=1e-5),
+            "MPS Linear: Results differ between contiguous and non-contiguous weights. "
+            "This indicates the backend is not handling repacked (non-contiguous) tensors correctly."
+        )
+
+        # 3. Verify MPS matches CPU (Correctness Check)
+        self.assertTrue(
+            torch.allclose(result_mps_non, result_cpu_non, atol=1e-5),
+            "MPS result should match CPU result for non-contiguous weights"
+        )
+
+if __name__ == '__main__':
+    unittest.main()

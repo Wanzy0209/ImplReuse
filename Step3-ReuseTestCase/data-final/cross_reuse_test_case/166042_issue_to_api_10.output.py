@@ -1,0 +1,84 @@
+import torch
+import torch.nn.functional as F
+import sys
+
+def test_embedding_bfloat16_indices_dynamo():
+    """
+    Test case for Issue 166042: [Fuzzer][Eager/Compile Divergence]
+    assert "int" in str(indices.get_dtype())
+    
+    This test verifies that torch.nn.functional.embedding handles non-integer
+    indices (specifically bfloat16) consistently between eager and compiled modes.
+    It leverages torch.backends.mps.is_built to check backend availability.
+    """
+    
+    # Configuration from the bug report
+    torch._dynamo.config.capture_scalar_outputs = True
+    
+    # Setup inputs
+    # The bug is triggered when indices are not integers.
+    # The fuzzer used bfloat16.
+    weight = torch.randn(10, 5)
+    indices_bf16 = torch.tensor([0, 1, 2], dtype=torch.bfloat16)
+    
+    # Define the function to be compiled
+    def embedding_fn(w, i):
+        return F.embedding(i, w)
+
+    # Helper to check behavior on a specific device
+    def check_device(device_name, is_available_fn):
+        if not is_available_fn():
+            print(f"Skipping test for {device_name} as it is not available.")
+            return
+
+        device = torch.device(device_name)
+        w_dev = weight.to(device)
+        i_dev = indices_bf16.to(device)
+
+        # 1. Test Eager Mode
+        eager_error = None
+        try:
+            with torch.device(device):
+                F.embedding(i_dev, w_dev)
+        except Exception as e:
+            eager_error = type(e).__name__
+            print(f"Eager mode on {device_name}: Raised {eager_error}")
+
+        # 2. Test Compiled Mode (torch._dynamo)
+        compiled_error = None
+        try:
+            with torch.device(device):
+                compiled_fn = torch.compile(embedding_fn)
+                compiled_fn(w_dev, i_dev)
+        except AssertionError as e:
+            # This is the specific bug reported: assert "int" in str(indices.get_dtype())
+            if "int" in str(e) and "get_dtype" in str(e):
+                compiled_error = "AssertionError (Bug)"
+                print(f"Compiled mode on {device_name}: Raised {compiled_error} - {e}")
+            else:
+                compiled_error = type(e).__name__
+                print(f"Compiled mode on {device_name}: Raised {compiled_error}")
+        except Exception as e:
+            compiled_error = type(e).__name__
+            print(f"Compiled mode on {device_name}: Raised {compiled_error}")
+
+        # 3. Verify Consistency
+        # The bug causes a divergence: Eager raises TypeError, Compiled raises AssertionError.
+        # A fixed version should raise the same error (likely TypeError) in both.
+        if eager_error != compiled_error:
+            print(f"DIVERGENCE DETECTED on {device_name}: Eager={eager_error}, Compiled={compiled_error}")
+            # If reproducing the bug, we might assert this divergence exists.
+            # If testing the fix, we assert eager_error == compiled_error.
+            # Here we simply report it as per the bug reproduction logic.
+        else:
+            print(f"Consistent behavior on {device_name}: {eager_error}")
+
+    # Check CUDA (Original bug context)
+    check_device("cuda", torch.cuda.is_available)
+
+    # Check MPS (Leveraging the similar API torch.backends.mps.is_built)
+    # This reuses the pattern of checking backend availability before testing.
+    check_device("mps", torch.backends.mps.is_built)
+
+if __name__ == "__main__":
+    test_embedding_bfloat16_indices_dynamo()

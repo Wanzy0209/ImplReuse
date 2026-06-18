@@ -1,0 +1,54 @@
+import torch
+
+# Enable scalar output capture as per the bug report configuration
+torch._dynamo.config.capture_scalar_outputs = True
+
+def test_dropout_pattern_fill_diagonal(x, rate_tensor):
+    """
+    Test case combining the logic of tf.keras.random.dropout
+    with the failing operation from the bug report (fill_diagonal_).
+    
+    The tf.keras.random.dropout logic involves calculating a scale factor
+    based on a rate (scalar), and then applying it to the input tensor.
+    Here we apply that calculated scalar to the fill_diagonal_ operation.
+    """
+    # Logic from tf.keras.random.dropout:
+    # keep_prob = 1 - rate
+    # scale = 1 / keep_prob
+    
+    # Extract scalar value (preserving the bug trigger pattern t1.item())
+    rate = rate_tensor.item()
+    
+    keep_prob = 1.0 - rate
+    scale = 1.0 / keep_prob
+
+    # The failing operation from the bug report
+    # Using the calculated scalar 'scale' instead of a raw input
+    x_clone = x.clone()
+    x_clone.fill_diagonal_(scale)
+    
+    return x_clone
+
+if __name__ == '__main__':
+    # Setup inputs
+    # Using a 1x1 matrix as in the original bug report
+    x = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True)
+    
+    # Using a 0-d tensor for the rate, similar to t1 in the bug report
+    # Initializing with 0.5 to ensure valid arithmetic (1 / (1 - 0.5) = 2.0)
+    rate = torch.tensor(0.5, dtype=torch.float32, device='cuda', requires_grad=True)
+
+    # Eager execution
+    out_eager = test_dropout_pattern_fill_diagonal(x, rate)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+
+    # Compiled execution
+    compiled_fn = torch.compile(test_dropout_pattern_fill_diagonal, fullgraph=True, dynamic=True)
+    out_compiled = compiled_fn(x, rate)
+    out_compiled.sum().backward()
+    print('Compile Success! ')
+
+    # Verify results match
+    assert torch.allclose(out_eager, out_compiled), "Divergence detected between eager and compiled modes"
+    print("Test Passed: Eager and Compiled outputs match.")

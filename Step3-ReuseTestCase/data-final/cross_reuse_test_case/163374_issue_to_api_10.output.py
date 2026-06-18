@@ -1,0 +1,61 @@
+import torch
+import torch.distributed as dist
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, Replicate
+from torch.utils.debug_mode import DebugMode
+
+def test_dtensor_inplace_clamp_regression():
+    """
+    Test case for Issue 163374: [DTensor] Inplace ops produces wrong result.
+    
+    This test reproduces the bug where an inplace operation (clamp_) on a 
+    DTensor with Partial placement results in incorrect placement and value.
+    
+    It leverages the code pattern from the similar API (tf.profiler.experimental.start),
+    specifically the conditional execution based on the worker/rank ID 
+    (task_id == 0 vs rank == 0) to handle verification logic.
+    """
+    # Initialize distributed environment
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    # Create a sharded tensor and reduce it to a Partial tensor
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+    partial_dt = in_dtensor.sum()
+
+    # Pattern reuse from tf.profiler.experimental.start:
+    # The similar API uses 'if task_id == 0:' to perform specific actions 
+    # (token generation) on the main worker. We mirror this pattern by 
+    # using 'if rank == 0:' to perform specific verification (DebugMode inspection).
+    if rank == 0:
+        with DebugMode(record_torchfunction=False) as debug_mode:
+            out = partial_dt.clamp_(max=2)
+            
+            # Verify the operation trace does not contain the bug's extra all_reduce
+            debug_str = debug_mode.debug_string()
+            # The bug manifests as an extra all_reduce after clamp_
+            # We check that the redistribution happened correctly before the op
+            ops = debug_str.split('\n')
+            clamp_idx = next(i for i, op in enumerate(ops) if 'aten::clamp_' in op)
+            
+            # Ensure no all_reduce happens after clamp_ (which was the bug)
+            post_clamp_ops = ops[clamp_idx:]
+            assert not any('all_reduce' in op for op in post_clamp_ops), \
+                "Bug detected: Extra all_reduce found after inplace clamp_"
+    else:
+        # Other ranks execute the operation without DebugMode overhead
+        out = partial_dt.clamp_(max=2)
+
+    # Assertions for all ranks
+    # 1. Placement should be Replicate, not Partial
+    assert out.placements == (Replicate(),), \
+        f"Placement mismatch: Expected (Replicate(),), got {out.placements}"
+
+    # 2. Value should be clamped (2.0), not the sum of partials (144.0)
+    full = out.full_tensor()
+    assert full.item() == 2.0, \
+        f"Value mismatch: Expected 2.0, got {full.item()}"
+
+if __name__ == '__main__':
+    test_dtensor_inplace_clamp_regression()

@@ -1,0 +1,33 @@
+import torch
+
+def test_atleast_3d_memory_format():
+    # Create a 4D tensor with channels_last memory format
+    # Replicating the tensor creation from the original bug report
+    x = torch.arange(0, 16).reshape(2, 2, 2, 2).to(memory_format=torch.channels_last)
+
+    # Call the similar API: torch.atleast_3d
+    # Since x is already 4D, atleast_3d should return it as a view without changing memory format
+    y = torch.atleast_3d(x)
+
+    # Verify that the values are equal
+    assert torch.equal(x, y), "Values should be equal after atleast_3d"
+
+    # Verify that the memory format (channels_last) is preserved
+    # The original bug report highlights that all_gather changed the memory ordering.
+    # We verify that atleast_3d preserves the channels_last format.
+    assert y.is_contiguous(memory_format=torch.channels_last), \
+        "Memory format (channels_last) should be preserved by atleast_3d"
+
+    # Verify that the storage is aligned (same underlying data pointer)
+    # Since atleast_3d on a >=3D tensor should be a view, the storage must be shared.
+    assert x.storage().data_ptr() == y.storage().data_ptr(), \
+        "Storage should be aligned (view) for atleast_3d on 4D tensor"
+
+    # Verify strides are identical
+    assert x.stride() == y.stride(), \
+        "Strides should be identical to preserve memory ordering"
+
+    print("Test passed: atleast_3d preserves memory ordering and format.")
+
+if __name__ == "__main__":
+    test_atleast_3d_memory_format()

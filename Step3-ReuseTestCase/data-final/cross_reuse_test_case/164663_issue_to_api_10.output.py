@@ -1,0 +1,53 @@
+import os
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.tensor.experimental import implicit_replication
+from torch.distributed._tools.fsdp2_mem_tracker import FSDPMemTracker
+
+
+class TestModuleEmbedding(nn.Module):
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        # Replacing RMSNorm with Embedding based on API similarity
+        self.emb = nn.Embedding(d_model, d_model)
+        self.output = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.emb(x)
+        x = self.output(x)
+        return x
+
+
+def main():
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+
+    dist.init_process_group(backend="nccl")
+
+    d_model = 128
+
+    model = TestModuleEmbedding(d_model)
+    model = model.to('cuda:0')
+    mesh = init_device_mesh("cuda", (dist.get_world_size(),))
+
+    # Apply the same sharding pattern as the original bug report
+    fully_shard([model.emb, model.output], mesh=mesh)
+    fully_shard(model, mesh=mesh)
+    print(model)
+
+    tracker = FSDPMemTracker(model)
+
+    with tracker, implicit_replication():
+        # Generate random indices for Embedding input
+        x = torch.randint(0, d_model, (16, d_model), device='cuda:0')
+        y = model(x)
+        loss = y.sum()
+        loss.backward()
+
+
+if __name__ == "__main__":
+    main()

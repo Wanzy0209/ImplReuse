@@ -1,0 +1,43 @@
+import torch
+
+def test_avgpool2d_mps_divisor_override():
+    """
+    Test case for torch.nn.AvgPool2d with divisor_override and ceil_mode on MPS backend.
+    Adapted from Issue ID: 160743.
+    """
+    # Check for MPS availability
+    if not torch.backends.mps.is_available():
+        print("MPS is not available, skipping test.")
+        return
+
+    torch.manual_seed(0)
+
+    # Parameters from the bug report that trigger the issue
+    # ceil_mode=True combined with divisor_override is the key area of interest
+    model = torch.nn.AvgPool2d(
+        kernel_size=[1, 6], 
+        stride=[4, 9], 
+        ceil_mode=True, 
+        divisor_override=3
+    )
+
+    # Adapted input to be 4D (Batch, Channel, Height, Width) for AvgPool2d.
+    # Original snippet used 3D input which is invalid for AvgPool2d.
+    # Width 10 is chosen to ensure a partial window is created with stride 9 and kernel 6,
+    # exercising the divisor_override logic on boundary conditions.
+    x = torch.randn(4, 6, 4, 10)
+
+    out_cpu = model(x)
+    out_mps = model(x.to("mps"))
+
+    # Verify outputs match
+    if not torch.allclose(out_cpu, out_mps.cpu(), atol=1e-2, rtol=1e-2):
+        print("Output does not match!")
+        print("CPU Output:\n", out_cpu)
+        print("MPS Output:\n", out_mps.cpu())
+        raise AssertionError("MPS and CPU outputs differ.")
+    else:
+        print("Test passed.")
+
+if __name__ == "__main__":
+    test_avgpool2d_mps_divisor_override()

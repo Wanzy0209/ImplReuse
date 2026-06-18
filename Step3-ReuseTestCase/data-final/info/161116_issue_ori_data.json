@@ -1,0 +1,198 @@
+{
+  "title": "NCCL Segfault when initializing a process group on an NVL72",
+  "issue_id": "161116",
+  "bug_description": "### 🐛 Describe the bug\n\nWe are trying to run distributed training with Torchtitan on a GB200 NVL72 cluster but using more than 10 trays (40 GPUs) fails with a NCCL segmentation fault. Using 10 and less trays works fine.\n\nWe boiled it down to the creation of the process group, so even this simple example crashes when we increase the number of trays to 11:\n```python\nimport torch\nimport torch.distributed as dist\nimport os\ndef main():\n    gpu_id = int(os.environ[\"LOCAL_RANK\"])\n    \n    device = f\"cuda:{gpu_id}\"\n    torch.cuda.set_device(device)\n    dist.init_process_group(backend='nccl',\n                            device_id=gpu_id,\n                            )\n    dist.barrier()\n    \nif __name__ == \"__main__\":\n    main()\n```\nError log is enormous but this is the relevant part:\n```\n#1436 0x0000400079529e3c in ncclTopoSearchTryGpu (system=<optimized out>, graph=<optimized out>, saveGraph=<optimized out>, step=<optimized out>, backToNet=<optimized out>, backToFirstRank=<optimized out>, forcedOrder=<optimized out>, time=0x4000fc2e9d74, type=-1, index=-1, g=0) at graph/search.cc:343\n#1437 0x0000400079528a80 in ncclTopoSearchRec (system=system@entry=0x4000fc520010, graph=graph@entry=0x4000fc2e9d78, saveGraph=saveGraph@entry=0x8fa53f8, time=time@entry=0x4000fc2e9d74) at graph/search.cc:725\n#1438 0x000040007952dde4 in ncclTopoCompute (system=0x4000fc520010, graph=graph@entry=0x8fa53f8) at graph/search.cc:1011\n#1439 0x0000400079504524 in initTransportsRank (timers=<optimized out>, parent=<optimized out>, comm=<optimized out>) at init.cc:860\n#1440 ncclCommInitRankFunc (job_=<optimized out>) at init.cc:1449\n#1441 0x00004000794f3258 in ncclAsyncJobMain (arg=0x90a77d0) at group.cc:71\n#1442 0x000040000026595c in start_thread (arg=0x400000044f00) at ./nptl/pthread_create.c:447\n#1443 0x00004000002cba4c in thread_start () at ../sysdeps/unix/sysv/linux/aarch64/clone3.S:76\n```\nWe run the script using this SLURM job file:\n```\n#!/bin/bash\n#SBATCH --ntasks=13\n#SBATCH --nodes=13\n#SBATCH --gpus-per-task=4\n\nnodes=( $( scontrol show hostnames $SLURM_JOB_NODELIST ) )\nnodes_array=($nodes)\nhead_node=${nodes_array[0]}\nhead_node_ip=$(srun --nodes=1 --ntasks=1 -w \"$head_node\" hostname --ip-address)\n\necho Node IP: $head_node_ip\nexport LOGLEVEL=INFO\n\nexport NCCL_DEBUG=INFO\nexport NCCL_DEBUG_SUBSYS=INIT,GRAPH,ENV, COLL\nexport TORCH_DISTRIBUTED_DEBUG=INFO\n\nexport LD_LIBRARY_PATH=/opt/amazon/efa/lib:$LD_LIBRARY_PATH\nexport LD_LIBRARY_PATH=/usr/local/lib/:$LD_LIBRARY_PATH\nexport CUDA_LAUNCH_BLOCKING=0\n\nexport TORCH_DIST_INIT_BARRIER=1\nexport TORCH_CPP_LOG_LEVEL=INFO\n\nexport NCCL_MIN_P2P_NCHANNELS=32\nexport NCCL_MIN_CTAS=64\nexport NCCL_MIN_NCHANNELS=32\nexport NCCL_CUMEM_ENABLE=1\nexport NCCL_NVLS_ENABLE=0\n\nsrun torchrun --nnodes 13 --nproc_per_node 4 --rdzv_id 101 --rdzv_backend c10d --rdzv_endpoint \"$head_node_ip:29001\" ./simple_barrier.py\n```\n**Steps taken so far:**\n**Recompile NCCL with debug symbols:**\nAfter consulting with the NCCL team we recompiled NCCL with debug symbols which shows the parts which are optimized out in the error above:\n```\nThread 6 \"python3\" received signal SIGSEGV, Segmentation fault.\n[Switching to Thread 0x4000e3e9a8c0 (LWP 1496391)]\n0x00004000001272c0 in ncclTopoSearchRecGpu (system=0x0, graph=0x0, saveGraph=0x0, gpu=0x0, step=0, backToNet=0, backToFirstRank=0, forcedOrder=0, time=0x4000e3e7540c) at graph/search.cc:545\n545\tncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, struct ncclTopoNode* gpu, int step, int backToNet, int backToFirstRank, int forcedOrder, int *time) {\n```\nAccording to @sjeaugey from the NCCL team: \"the 0x0 addresses (and all threads being in ncclTopoSearchRecGpu) are likely because of the stack overflow which corrupted the stack of all threads.\" which points to that we're hitting the stack limit. We already verified that \"ulimit -s\" is set to unlimited by running it right before python is executed.\n\n**NCCL collective in C++ with memory pressure",
+  "apis": [
+    "h_buf.data",
+    "in.close",
+    "numpy",
+    "m.def",
+    "dist.init_process_group",
+    "id_file.c_str"
+  ],
+  "best_code": "import torch\nimport torch.distributed as dist\nimport os\ndef main():\n    gpu_id = int(os.environ[\"LOCAL_RANK\"])\n    \n    device = f\"cuda:{gpu_id}\"\n    torch.cuda.set_device(device)\n    dist.init_process_group(backend='nccl',\n                            device_id=gpu_id,\n                            )\n    dist.barrier()\n    \nif __name__ == \"__main__\":\n    main()",
+  "pull_urls": [],
+  "_meta": {
+    "file": "161116_issue_ori_data.json",
+    "generated_at": "2026-04-20 23:02:14",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\161116_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\161116_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "We are trying to run distributed training with Torchtitan on a GB200 NVL72 cluster but using more than 10 trays (40 GPUs) fails with a NCCL segmentation fault. Using 10 and less trays works fine. We boiled it down to the creation of the process group, so even this simple example crashes when we increase the number of trays to 11. According to @sjeaugey from the NCCL team: \"the 0x0 addresses (and all threads being in ncclTopoSearchRecGpu) are likely because of the stack overflow which corrupted the stack of all threads.\" which points to that we're hitting the stack limit. We already verified that \"ulimit -s\" is set to unlimited by running it right before python is executed.",
+  "repro_code": "import torch\nimport torch.distributed as dist\nimport os\ndef main():\n    gpu_id = int(os.environ[\"LOCAL_RANK\"])\n    \n    device = f\"cuda:{gpu_id}\"\n    torch.cuda.set_device(device)\n    dist.init_process_group(backend='nccl',\n                            device_id=gpu_id,\n                            )\n    dist.barrier()\n    \nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "NCCL Segfault when initializing a process group on an NVL72",
+  "affected_api": "torch.distributed.init_process_group",
+  "trigger_conditions": {
+    "backend": "nccl",
+    "dtype": "unknown",
+    "input_shape": "unknown",
+    "other_conditions": "Running on GB200 NVL72 cluster with more than 10 trays (40 GPUs). Using 13 nodes with 4 GPUs per task. NCCL_NVLS_ENABLE=0, NCCL_MIN_P2P_NCHANNELS=32, NCCL_MIN_CTAS=64, NCCL_MIN_NCHANNELS=32, NCCL_CUMEM_ENABLE=1"
+  },
+  "environment": {
+    "pytorch_version": "unknown",
+    "python_version": "unknown",
+    "os": "Linux (aarch64)",
+    "hardware": "GB200 NVL72 cluster with 13 nodes, 4 GPUs per task"
+  },
+  "labels": [
+    "distributed",
+    "nccl",
+    "segfault"
+  ],
+  "add_fix_code": [],
+  "sub_fix_code": [],
+  "core_api": "torch.distributed.init_process_group",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [
+      {
+        "api_name": "tf.experimental.dtensor.create_distributed_mesh",
+        "api_type": "tensorflow",
+        "similarity": 0.994736909866333
+      },
+      {
+        "api_name": "tf.experimental.dtensor.create_tpu_mesh",
+        "api_type": "tensorflow",
+        "similarity": 0.994024395942688
+      },
+      {
+        "api_name": "tf.compat.v1.distribute.MirroredStrategy",
+        "api_type": "tensorflow",
+        "similarity": 0.9938892126083374
+      },
+      {
+        "api_name": "tf.distribute.MirroredStrategy",
+        "api_type": "tensorflow",
+        "similarity": 0.9938892126083374
+      },
+      {
+        "api_name": "tf.compat.v1.train.string_input_producer",
+        "api_type": "tensorflow",
+        "similarity": 0.9936602711677551
+      },
+      {
+        "api_name": "tf.compat.v1.decode_csv",
+        "api_type": "tensorflow",
+        "similarity": 0.9935716390609741
+      },
+      {
+        "api_name": "tf.io.decode_csv",
+        "api_type": "tensorflow",
+        "similarity": 0.9935716390609741
+      },
+      {
+        "api_name": "tf.compat.v1.losses.hinge_loss",
+        "api_type": "tensorflow",
+        "similarity": 0.9935418367385864
+      },
+      {
+        "api_name": "tf.compat.v1.nn.bidirectional_dynamic_rnn",
+        "api_type": "tensorflow",
+        "similarity": 0.9935208559036255
+      },
+      {
+        "api_name": "tf.image.random_hue",
+        "api_type": "tensorflow",
+        "similarity": 0.9934625625610352
+      },
+      {
+        "api_name": "tf.compat.v1.train.SummarySaverHook",
+        "api_type": "tensorflow",
+        "similarity": 0.9934265613555908
+      }
+    ],
+    "issue_to_api": [],
+    "pytorch_to_pytorch": [
+      {
+        "api_name": "dist.init_process_group",
+        "api_type": "pytorch",
+        "similarity": 1.0
+      },
+      {
+        "api_name": "torch.distributed.init_process_group",
+        "api_type": "pytorch",
+        "similarity": 1.0
+      },
+      {
+        "api_name": "torch.hub.load_state_dict_from_url",
+        "api_type": "pytorch",
+        "similarity": 0.9953010082244873
+      },
+      {
+        "api_name": "torch.distributed.broadcast_object_list",
+        "api_type": "pytorch",
+        "similarity": 0.9951349496841431
+      },
+      {
+        "api_name": "torch.distributed.send_object_list",
+        "api_type": "pytorch",
+        "similarity": 0.9948810338973999
+      },
+      {
+        "api_name": "torch.nn.functional.kl_div",
+        "api_type": "pytorch",
+        "similarity": 0.9948620796203613
+      },
+      {
+        "api_name": "torch.distributed.get_process_group_ranks",
+        "api_type": "pytorch",
+        "similarity": 0.9944459199905396
+      },
+      {
+        "api_name": "torch.distributed.scatter_object_list",
+        "api_type": "pytorch",
+        "similarity": 0.9944067001342773
+      },
+      {
+        "api_name": "torch.nn.functional.cross_entropy",
+        "api_type": "pytorch",
+        "similarity": 0.994143545627594
+      },
+      {
+        "api_name": "torch.nn.functional.binary_cross_entropy",
+        "api_type": "pytorch",
+        "similarity": 0.9940919876098633
+      },
+      {
+        "api_name": "torch.argsort",
+        "api_type": "pytorch",
+        "similarity": 0.9939810037612915
+      }
+    ]
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "pytorch_to_tensorflow",
+      "test_cases": [
+        "161116_pytorch_to_tensorflow_0.output.py",
+        "161116_pytorch_to_tensorflow_1.output.py",
+        "161116_pytorch_to_tensorflow_10.output.py",
+        "161116_pytorch_to_tensorflow_2.output.py",
+        "161116_pytorch_to_tensorflow_3.output.py",
+        "161116_pytorch_to_tensorflow_4.output.py",
+        "161116_pytorch_to_tensorflow_5.output.py",
+        "161116_pytorch_to_tensorflow_6.output.py",
+        "161116_pytorch_to_tensorflow_7.output.py",
+        "161116_pytorch_to_tensorflow_8.output.py",
+        "161116_pytorch_to_tensorflow_9.output.py"
+      ]
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": [
+        "161116_pytorch_to_pytorch_0.output.py",
+        "161116_pytorch_to_pytorch_1.output.py",
+        "161116_pytorch_to_pytorch_10.output.py",
+        "161116_pytorch_to_pytorch_2.output.py",
+        "161116_pytorch_to_pytorch_3.output.py",
+        "161116_pytorch_to_pytorch_4.output.py",
+        "161116_pytorch_to_pytorch_5.output.py",
+        "161116_pytorch_to_pytorch_6.output.py",
+        "161116_pytorch_to_pytorch_7.output.py",
+        "161116_pytorch_to_pytorch_8.output.py",
+        "161116_pytorch_to_pytorch_9.output.py"
+      ]
+    }
+  }
+}

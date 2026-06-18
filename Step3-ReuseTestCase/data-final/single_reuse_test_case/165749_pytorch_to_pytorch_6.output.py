@@ -1,0 +1,31 @@
+import torch
+from torch import lobpcg
+
+if __name__ == "__main__":
+    # Setup dimensions similar to the bug report (d > 64)
+    n = 65
+    k = 5
+    
+    # Create a parameterized matrix to allow for backward pass
+    # We construct a Symmetric Positive Definite matrix A = M @ M.T + I
+    M = torch.randn((n, n), requires_grad=True).cuda()
+    
+    # Define the function to be compiled
+    # lobpcg finds eigenvalues of A
+    def eigen_solver(M):
+        A = M @ M.T + torch.eye(n, device='cuda')
+        # lobpcg returns (eigenvalues, eigenvectors)
+        evals, evecs = lobpcg(A, k=k)
+        # Return sum of eigenvalues to create a scalar loss
+        return evals.sum()
+
+    # Compile the function
+    compiled_solver = torch.compile(eigen_solver)
+
+    # Run the compiled function and backward pass
+    try:
+        loss = compiled_solver(M)
+        loss.backward()
+        print("Test passed: torch.lobpcg works with torch.compile and backward pass.")
+    except Exception as e:
+        print(f"Test failed with error: {e}")

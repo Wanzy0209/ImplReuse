@@ -1,0 +1,28 @@
+import torch
+import torch.distributed as dist
+import os
+
+# Setup a minimal distributed environment required for the API
+os.environ["MASTER_ADDR"] = "localhost"
+os.environ["MASTER_PORT"] = "29500"
+
+if not dist.is_initialized():
+    # Using 'gloo' backend for CPU compatibility in this test case
+    dist.init_process_group(backend="gloo", rank=0, world_size=1)
+
+# Reproduce the pattern: @torch.compile + API call with specific arguments
+@torch.compile
+def get_rank_compiled(group, global_rank):
+    return dist.get_group_rank(group, global_rank)
+
+# Test execution
+group = dist.group.WORLD
+global_rank = 0
+
+# Call the compiled function
+result = get_rank_compiled(group, global_rank)
+
+# Assertion to verify correctness
+assert result == global_rank, f"Expected rank {global_rank}, but got {result}"
+
+print("Test passed.")

@@ -1,0 +1,25 @@
+import torch
+
+
+@torch.compile(backend="eager")
+def fn(x, i):
+    # Adapted to use torch.all in the condition
+    if torch.all(x > 0):
+        if i == 1:
+            torch._dynamo.graph_break()
+        return x + 1
+    return x
+
+
+# Create input where torch.all(x > 0) is True to enter the branch
+inp = torch.ones(3)
+
+# Execute to trigger compilation and graph break
+fn(inp, 0)
+fn(inp, 1)
+fn(inp, 2)
+
+# Verify results to ensure the graph was not empty and logic is preserved
+assert torch.equal(fn(inp, 0), inp + 1)
+assert torch.equal(fn(inp, 1), inp + 1)
+assert torch.equal(fn(inp, 2), inp + 1)

@@ -1,0 +1,27 @@
+import torch
+
+def fn(x, mask):
+    # Replicate the nested context and graph break structure from the bug report
+    torch._dynamo.graph_break()
+    with torch.no_grad():
+        with torch.no_grad():
+            torch._dynamo.graph_break()
+            # Integrate the similar API (torch.masked_select) as the operation
+            # being performed within the problematic scope.
+            return torch.masked_select(x, mask)
+
+# Inputs for masked_select
+x = torch.randn(3, 3)
+mask = torch.tensor([[True, False, False],
+                     [False, True, False],
+                     [False, False, True]])
+
+# Compile with eager backend to match the original report
+opt_m = torch.compile(fn, backend="eager")
+
+# Execute
+result = opt_m(x, mask)
+
+# Verify correctness
+expected = torch.masked_select(x, mask)
+assert torch.equal(result, expected)

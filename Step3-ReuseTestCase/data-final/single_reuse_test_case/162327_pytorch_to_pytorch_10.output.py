@@ -1,0 +1,34 @@
+import torch
+
+print(torch.__version__, flush=True)
+
+# Setup inputs from the original bug report
+# The original bug was triggered by specific shapes and dtypes
+input_data = [
+    torch.empty((5, 7, 4, 3, 7, 6), dtype=torch.int8),
+    torch.empty((4, 9, 2), dtype=torch.int32),
+    (),
+    False
+]
+
+# Adapt the call site for torch.sort
+# torch.sort(input, dim=-1, descending=False, stable=False, *, out=None)
+# We test the primary input tensor that caused the overflow in the original function.
+# Note: torch.sort does not take indices or output_size as arguments like max_unpool1d,
+# so we pass the tensor directly.
+
+try:
+    # Test with the first tensor (the main input in the original bug)
+    print("Testing torch.sort with the first tensor...")
+    result = torch.sort(input_data[0])
+    print("Test passed.")
+
+    # Test with the second tensor (indices in the original bug)
+    print("Testing torch.sort with the second tensor...")
+    result = torch.sort(input_data[1])
+    print("Test passed.")
+
+except RuntimeError as e:
+    print(f"RuntimeError: {e}")
+except Exception as e:
+    print(f"Exception: {e}")

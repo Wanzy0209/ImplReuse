@@ -1,0 +1,26 @@
+import warnings
+import tensorflow as tf
+
+# Mimic the strict warning environment from the bug report
+# to ensure no warnings are raised during the conversion process.
+warnings.simplefilter('error')
+
+print(tf.__version__)
+
+# Initialize a variable to represent the global step.
+# This corresponds to the tensor that needs to be converted to a scalar.
+global_step_tensor = tf.Variable(0, dtype=tf.int32, name='global_step')
+
+# Loop structure similar to the bug report's optimization loop.
+for i in range(100):
+    # Update the step (mimicking the optimizer step).
+    global_step_tensor.assign_add(1)
+
+    # Retrieve the scalar value using the similar API.
+    # This corresponds to the `float(closure())` call in LBFGS that caused the warning.
+    # We pass None for the session as we are in eager mode.
+    step_val = tf.compat.v1.train.global_step(None, global_step_tensor)
+
+    # Print and assert to verify correct behavior.
+    print(i, step_val)
+    assert step_val == i + 1

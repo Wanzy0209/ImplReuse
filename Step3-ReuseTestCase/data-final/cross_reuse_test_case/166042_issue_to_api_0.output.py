@@ -1,0 +1,39 @@
+import tensorflow as tf
+import numpy as np
+
+# The original bug (Issue 166042) involves an assertion failure in PyTorch
+# when indices passed to an embedding operation are not integers (specifically bfloat16).
+# The error was: assert "int" in str(indices.get_dtype())
+#
+# This test case targets tf.keras.backend to verify that it correctly handles
+# or rejects non-integer indices for embedding-like operations (gather),
+# mirroring the behavior that caused the divergence in PyTorch.
+
+def test_keras_backend_gather_dtype_validation():
+    # Setup: Create a reference tensor (embedding weights)
+    # Using float32 for weights is standard
+    weights = tf.constant(np.random.rand(10, 5), dtype=tf.float32)
+
+    # Setup: Create indices with bfloat16 (the problematic dtype from the PyTorch issue)
+    # We cast to bfloat16 to simulate the fuzzer's input
+    indices_bf16 = tf.constant([0, 1, 2], dtype=tf.bfloat16)
+
+    # Action: Attempt to gather using the backend function
+    # tf.keras.backend.gather is the backend-agnostic equivalent for indexing/embedding lookups
+    try:
+        result = tf.keras.backend.gather(weights, indices_bf16)
+        # If we reach here, the library accepted the float indices (divergence from expected strictness)
+        print("FAIL: tf.keras.backend.gather accepted bfloat16 indices.")
+        assert False, "Expected ValueError or TypeError for non-integer indices"
+    except (ValueError, TypeError) as e:
+        # Expected: The library should reject non-integer indices
+        error_str = str(e).lower()
+        # Check if the error message relates to integer requirements or dtype mismatches
+        if "int" in error_str or "dtype" in error_str:
+            print(f"PASS: Correctly rejected non-integer indices. Error: {e}")
+        else:
+            print(f"UNKNOWN: Caught error but message unclear. Error: {e}")
+            raise
+
+if __name__ == "__main__":
+    test_keras_backend_gather_dtype_validation()

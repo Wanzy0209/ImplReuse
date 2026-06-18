@@ -1,0 +1,58 @@
+import tensorflow as tf
+from tensorflow.python.profiler import option_builder
+
+# Disable eager execution to use the v1 session-based profiling API
+tf.compat.v1.disable_eager_execution()
+
+def test_profiler_captures_execution_context():
+    """
+    Test case adapted from PyTorch Issue 162858.
+    
+    The PyTorch issue requests that when a graph break occurs, the system
+    should log the last k bytecode instructions and the state of the symbolic
+    Python stack to provide developer context.
+    
+    This test verifies the analogous functionality in TensorFlow:
+    that tf.compat.v1.profiler.Profiler captures detailed execution context
+    (operations and memory usage) when a step is profiled.
+    """
+    # Build a simple computational graph
+    a = tf.compat.v1.placeholder(tf.float32, name='input_a')
+    b = tf.compat.v1.placeholder(tf.float32, name='input_b')
+    # Define an operation to be profiled
+    c = tf.add(a, b, name='add_op')
+
+    # Initialize the Profiler with the graph
+    # This is analogous to setting up the tracing environment in PyTorch
+    profiler = tf.compat.v1.profiler.Profiler(tf.compat.v1.get_default_graph())
+
+    with tf.compat.v1.Session() as sess:
+        # Configure RunOptions to capture full trace
+        # This is analogous to tracing bytecode instructions
+        run_options = tf.compat.v1.RunOptions(trace_level=tf.compat.v1.RunOptions.FULL_TRACE)
+        run_metadata = tf.compat.v1.RunMetadata()
+
+        # Run the session to generate metadata
+        # This execution step is analogous to the function execution leading up to a graph break
+        _ = sess.run(c, feed_dict={a: 1.0, b: 2.0},
+                     options=run_options,
+                     run_metadata=run_metadata)
+
+        # Add the step to the profiler
+        # This is analogous to logging the graph break event and its context
+        profiler.add_step(step=0, run_meta=run_metadata)
+
+        # Retrieve the profile data
+        # We use time_and_memory() to get detailed context about the operations,
+        # analogous to printing the last k bytecode instructions
+        opts = option_builder.ProfileOptionBuilder.time_and_memory()
+        profile_str = profiler.profile_operations(options=opts)
+
+        # Assert that the profiler successfully captured the context
+        # We expect to see the 'add_op' in the profile output, confirming
+        # that the internal state was logged correctly.
+        assert 'add_op' in profile_str, "Profiler did not capture expected operation context."
+        print("Test Passed: Profiler successfully captured execution context.")
+
+if __name__ == "__main__":
+    test_profiler_captures_execution_context()

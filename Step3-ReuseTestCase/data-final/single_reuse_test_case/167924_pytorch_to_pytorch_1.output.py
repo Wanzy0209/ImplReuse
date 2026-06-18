@@ -1,0 +1,34 @@
+import torch
+
+def test_var_on_sliced_mps_tensor():
+    """
+    Test case to verify torch.var behavior with a sliced tensor on MPS,
+    adapted from the crash report involving repeat_interleave.
+    """
+    if not torch.backends.mps.is_available():
+        print("MPS is not available. Skipping test.")
+        return
+
+    # Setup from the original bug report
+    counts = torch.tensor([0, 1, 0], device="mps")
+    data = torch.arange(2, device="mps")
+
+    # The original bug involved a non-prefix slice (counts[1:3]) causing a crash.
+    # We adapt the call site to use torch.var to check if it handles the sliced tensor correctly.
+    try:
+        # Call torch.var on the sliced tensor
+        mps_result = torch.var(counts[1:3])
+        
+        # Verify against CPU result to ensure correctness
+        counts_cpu = torch.tensor([0, 1, 0], device="cpu")
+        cpu_result = torch.var(counts_cpu[1:3])
+
+        assert torch.allclose(mps_result, cpu_result), f"MPS result {mps_result} does not match CPU result {cpu_result}"
+        print("Test passed: torch.var handled the sliced MPS tensor correctly.")
+        
+    except Exception as e:
+        print(f"Test failed with exception: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_var_on_sliced_mps_tensor()

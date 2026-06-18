@@ -1,0 +1,37 @@
+import torch
+from torch.distributions import constraints
+
+# Define the constraint bounds
+lower_bound = 0
+upper_bound = 10
+
+# Instantiate the integer interval constraint
+# This replaces the thread setup from the original issue
+constraint = constraints.integer_interval(lower_bound, upper_bound)
+
+# List of values to test (similar to threads_list in the original)
+test_values = [-1, 0, 5, 10, 11, 5.5, 10.0]
+
+# Store results
+results = []
+
+# Benchmark/Check for each value
+for val in test_values:
+    # Create a tensor for the value
+    tensor_val = torch.tensor(val)
+
+    # Check the constraint (replaces the matrix multiplication/timing)
+    is_valid = constraint.check(tensor_val)
+
+    # Determine expected result for assertion
+    # Valid if: value is an integer AND within [lower_bound, upper_bound]
+    expected = (val % 1 == 0) and (lower_bound <= val <= upper_bound)
+
+    # Verify the result
+    assert is_valid.item() == expected, \
+        f"Check failed for value {val}: expected {expected}, got {is_valid.item()}"
+
+    results.append(is_valid.item())
+    print(f"Value: {val}, Valid: {is_valid.item()}")
+
+print("All tests passed.")

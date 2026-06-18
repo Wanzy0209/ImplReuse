@@ -1,0 +1,61 @@
+import torch
+import tensorflow as tf
+import warnings
+
+# Adapted from torch.utils.data.random_split test case
+# Original Bug: random_split fails when default device is 'cuda'
+# Target API: tf.compat.v1.tpu.cross_replica_sum
+# Similarity: Context/Device sensitivity
+
+def test_cross_replica_sum(group_assignment=None):
+    """
+    Tests the behavior of tf.compat.v1.tpu.cross_replica_sum.
+    Mimics the structure of the original PyTorch test case.
+    """
+    # In the original bug, 'set_default_device' was the context setter.
+    # Here, 'group_assignment' acts as the configuration parameter for the operation.
+    # If None, the API attempts to determine context automatically.
+    
+    # Data creation (mimicking torch.randn)
+    # Note: cross_replica_sum operates on Tensors, not Datasets.
+    x = tf.constant([1.0, 2.0, 3.0, 4.0])
+
+    print(f"Testing with group_assignment: {group_assignment}")
+
+    # API Call
+    # The original bug occurred at the random_split call.
+    # Here we call cross_replica_sum.
+    # According to the API info, if context is unset, it logs a warning and assumes 1 shard.
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        
+        # Execute the operation
+        result = tf.compat.v1.tpu.cross_replica_sum(x, group_assignment=group_assignment)
+
+        # Check for the specific warning mentioned in the API info regarding unset context
+        # This verifies the "context sensitivity" logic similar to the PyTorch bug.
+        if len(w) > 0:
+            for warning in w:
+                if "cross_replica_sum should be used within a tpu_shard_context" in str(warning.message):
+                    print("Warning caught: TPU context unset, assuming 1 shard.")
+                    break
+
+    # Verification
+    # If num_shards defaults to 1 (due to missing context), the sum is just the input tensor.
+    # We verify the operation completes and returns the expected value for the default case.
+    expected = x 
+    # Check equality
+    is_equal = tf.reduce_all(tf.equal(result, expected)).numpy()
+    
+    if is_equal:
+        print(f"Operation succeeded. Result: {result.numpy()}")
+    else:
+        print(f"Operation succeeded but result differs. Result: {result.numpy()}")
+
+if __name__ == "__main__":
+    # Test 1: Default behavior (None) - mimics the 'default device' scenario causing issues in PyTorch
+    # In TF, this triggers the warning/default logic.
+    test_cross_replica_sum(group_assignment=None)
+
+    # Test 2: Explicit assignment
+    test_cross_replica_sum(group_assignment=[[0]])

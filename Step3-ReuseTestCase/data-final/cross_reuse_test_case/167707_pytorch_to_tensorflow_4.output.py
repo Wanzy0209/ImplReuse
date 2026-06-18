@@ -1,0 +1,33 @@
+import torch
+import tensorflow as tf
+
+# Adapted test case for tf.nn.space_to_depth
+# The original test case focuses on profiling and trace saving logic.
+# Since tf.nn.space_to_depth is a tensor manipulation operation, we adapt the 
+# test to verify the core functionality of the API: transforming spatial data 
+# into depth dimensions.
+
+def test_space_to_depth():
+    # Setup parameters
+    block_size = 2
+    data_format = "NHWC"
+    
+    # Create input tensor (mimicking torch.randn)
+    # Input shape [1, 4, 4, 1] is chosen so height and width are divisible by block_size
+    x = tf.random.normal([1, 4, 4, 1])
+
+    # Execute the API (mimicking the profile.start/stop block execution)
+    y = tf.nn.space_to_depth(x, block_size=block_size, data_format=data_format)
+
+    # Verification (mimicking the check for saved trace validity)
+    # Expected shape: [1, 2, 2, 4] (H/2, W/2, C*4)
+    expected_shape = [1, 2, 2, 4]
+    assert list(y.shape) == expected_shape, f"Shape mismatch: expected {expected_shape}, got {list(y.shape)}"
+    
+    # Verify data integrity (ensure operation is invertible/valid)
+    # We can check if the sum of elements is preserved (ignoring precision)
+    assert tf.reduce_all(tf.math.is_finite(y)), "Output contains NaN or Inf"
+
+if __name__ == "__main__":
+    test_space_to_depth()
+    print("Test passed.")

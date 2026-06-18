@@ -1,0 +1,46 @@
+import torch
+import tensorflow as tf
+
+def test_zeros_like_nested_context():
+    """
+    Test case for tf.raw_ops.ZerosLike adapted from the PyTorch Dynamo issue.
+    
+    The original issue involves a KeyError when torch._dynamo.graph_break() 
+    is called inside nested torch.no_grad() contexts.
+    
+    The similar API (tf.raw_ops.ZerosLike / control_flow_state.ZerosLike) 
+    contains logic to handle operations inside control flow contexts (op_ctxt).
+    This test verifies that ZerosLike operates correctly inside nested 
+    control flow contexts, mirroring the structure of the original bug.
+    """
+    # Input tensor
+    x = tf.constant([1.0, 2.0, 3.0])
+
+    # Mimic the nested context structure:
+    # PyTorch: with torch.no_grad(): with torch.no_grad(): graph_break()
+    # TensorFlow: with control_dependencies(): with control_dependencies(): ZerosLike()
+    # We also use tf.cond to ensure we hit the control flow context logic 
+    # present in the similar API implementation (_ZerosLikeV1).
+    
+    with tf.control_dependencies([x]):  # Outer context
+        with tf.control_dependencies([x]):  # Inner context
+            
+            # Define a branch that uses ZerosLike
+            def true_branch():
+                # This call corresponds to the 'graph_break' point in the original issue,
+                # triggering specific context handling logic.
+                return tf.raw_ops.ZerosLike(x=x)
+
+            def false_branch():
+                return tf.zeros_like(x)
+
+            # Execute within a conditional context to trigger the control flow logic
+            result = tf.cond(tf.constant(True), true_branch, false_branch)
+
+    # Verify the result is zeros
+    expected = tf.constant([0.0, 0.0, 0.0])
+    assert tf.reduce_all(tf.equal(result, expected)).numpy(), "Test failed: output is not zeros"
+
+if __name__ == "__main__":
+    test_zeros_like_nested_context()
+    print("Test passed.")

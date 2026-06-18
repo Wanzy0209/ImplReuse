@@ -1,0 +1,267 @@
+{
+  "title": "[MPS] On MacOS-26 torch.full fails for 4+Gb tensors",
+  "issue_id": "161265",
+  "bug_description": "### 🐛 Describe the bug\n\nIf one runs following example on macOS Tahoe\n```python\nimport torch\na = torch.ones(2, (1 << 31) + 5, dtype=torch.int8, device='mps')\nprint(a[1, -2])\nprint(a[:, -2])\n```\n\nresult will be\n```\ntensor(0, device='mps:0', dtype=torch.int8)\ntensor([1, 1], device='mps:0', dtype=torch.int8)\n```\nBut should have been 1 in both cases \nReason for that are relying on unsupported use of `fillBuffer` that for some reason stopped working for length exceeding 4Gb\nhttps://github.com/pytorch/pytorch/blob/639b8cc51ddebf10361f3840a6b0a244eb6092a1/aten/src/ATen/mps/MPSStream.mm#L161\n\n\nI.e. following Swift script returns non-unfirom values on MacOS Tahoe\n```swift\nimport Metal\n\nlet bufferSize = 1<<32 + 4\n\nguard let device = MTLCreateSystemDefaultDevice() else { fatalError(\"No Metal device found\") }\nguard let buffer = device.makeBuffer(length: bufferSize, options: .storageModeShared) else { fatalError(\"Failed to create buffer\") }\n\nguard let cmdQueue = device.makeCommandQueue() else { fatalError(\"Failed to create command queue\") }\nguard let cmdBuffer = cmdQueue.makeCommandBuffer() else { fatalError(\"Failed to create command buffer\") }\nguard let blitEncoder = cmdBuffer.makeBlitCommandEncoder() else { fatalError(\"Failed to create blit encoder\") }\n\nblitEncoder.fill(buffer: buffer, range: 0..<bufferSize, value: 0x42)\nblitEncoder.endEncoding()\n\ncmdBuffer.commit()\ncmdBuffer.waitUntilCompleted()\n\nlet tailOffs = 8\nlet hostPtr = buffer.contents().bindMemory(to: UInt8.self, capacity: bufferSize)\nlet tail = Array(UnsafeBufferPointer(start: hostPtr + (bufferSize - tailOffs), count: tailOffs))\n\nfor (idx, val) in tail.enumerated() {\n    print(\"Offs 0x\\(String(bufferSize - tailOffs + idx, radix: 16)): 0x\\(String(val, radix: 16))\")\n}\n```\n\n### Versions\n\n2.8.0, nightly\n\ncc @kulinseth @albanD @DenisVieriu97 @jhavukainen",
+  "apis": [
+    "nblitEncoder.fill",
+    "ncmdBuffer.waitUntilCompleted",
+    "ncmdBuffer.commit",
+    "device.makeCommandQueue",
+    "blitEncoder.endEncoding",
+    "device.makeBuffer"
+  ],
+  "best_code": "import torch\na = torch.ones(2, (1 << 31) + 5, dtype=torch.int8, device='mps')\nprint(a[1, -2])\nprint(a[:, -2])",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/164108"
+  ],
+  "_meta": {
+    "file": "161265_issue_ori_data.json",
+    "generated_at": "2026-04-20 23:12:38",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\161265_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\161265_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "If one runs following example on macOS Tahoe, the result will be tensor(0, device='mps:0', dtype=torch.int8) and tensor([1, 1], device='mps:0', dtype=torch.int8) but should have been 1 in both cases. Reason for that are relying on unsupported use of `fillBuffer` that for some reason stopped working for length exceeding 4Gb.",
+  "repro_code": "import torch\na = torch.ones(2, (1 << 31) + 5, dtype=torch.int8, device='mps')\nprint(a[1, -2])\nprint(a[:, -2])",
+  "repro_output": "[MPS] On MacOS-26 torch.full fails for 4+Gb tensors",
+  "affected_api": "torch.ones",
+  "trigger_conditions": {
+    "backend": "MPS",
+    "dtype": "torch.int8",
+    "input_shape": "(2, (1 << 31) + 5)",
+    "other_conditions": "macOS Tahoe, tensors larger than 4Gb"
+  },
+  "environment": {
+    "pytorch_version": "2.8.0, nightly",
+    "python_version": "",
+    "os": "macOS Tahoe",
+    "hardware": ""
+  },
+  "labels": [],
+  "add_fix_code": [
+    "      // For some reason fillBufferfor stopped working for lengh > 4Gb on MacOS 26",
+    "      // See https://github.com/pytorch/pytorch/issues/163962",
+    "      // Workaround by batching copy commands into 4Gb chunks",
+    "      constexpr size_t max_copy_size = 0x100000000; // 4GB",
+    "      size_t bytes_filled = 0;",
+    "      size_t bytes_remains = length;",
+    "      while (bytes_remains > 0) {",
+    "        NSUInteger bytes_to_copy = std::min(max_copy_size, bytes_remains);",
+    "        [blitEncoder fillBuffer:buffer range:NSMakeRange(offset + bytes_filled, bytes_to_copy) value:value];",
+    "        bytes_filled += bytes_to_copy;",
+    "        bytes_remains -= bytes_to_copy;",
+    "      }"
+  ],
+  "sub_fix_code": [
+    "      [blitEncoder fillBuffer:buffer range:NSMakeRange(offset, length) value:value];"
+  ],
+  "core_api": "torch.full",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [
+      {
+        "api_name": "tf.raw_ops.MatchingFilesDataset",
+        "api_type": "tensorflow",
+        "similarity": 0.994765043258667
+      },
+      {
+        "api_name": "tf.keras.backend.random_uniform",
+        "api_type": "tensorflow",
+        "similarity": 0.994638204574585
+      },
+      {
+        "api_name": "tf.keras.backend.random_normal",
+        "api_type": "tensorflow",
+        "similarity": 0.9944718480110168
+      },
+      {
+        "api_name": "tf.compat.v1.convert_to_tensor",
+        "api_type": "tensorflow",
+        "similarity": 0.9943698644638062
+      },
+      {
+        "api_name": "tf.convert_to_tensor",
+        "api_type": "tensorflow",
+        "similarity": 0.9943698644638062
+      },
+      {
+        "api_name": "tf.keras.ops.convert_to_tensor",
+        "api_type": "tensorflow",
+        "similarity": 0.9943698644638062
+      },
+      {
+        "api_name": "tf.compat.v1.summary.scalar",
+        "api_type": "tensorflow",
+        "similarity": 0.9939714670181274
+      },
+      {
+        "api_name": "tf.summary.scalar",
+        "api_type": "tensorflow",
+        "similarity": 0.9939714670181274
+      },
+      {
+        "api_name": "tf.experimental.dtensor.unpack",
+        "api_type": "tensorflow",
+        "similarity": 0.9939202070236206
+      },
+      {
+        "api_name": "tf.experimental.dtensor.default_mesh",
+        "api_type": "tensorflow",
+        "similarity": 0.9938597679138184
+      },
+      {
+        "api_name": "tf.io.match_filenames_once",
+        "api_type": "tensorflow",
+        "similarity": 0.9936569929122925
+      }
+    ],
+    "issue_to_api": [
+      {
+        "api_name": "tf.compat.v1.Summary.Value",
+        "api_type": "issue",
+        "similarity": 0.9733219146728516
+      },
+      {
+        "api_name": "tf.io.VarLenFeature",
+        "api_type": "issue",
+        "similarity": 0.9679629802703857
+      },
+      {
+        "api_name": "tf.keras.backend",
+        "api_type": "issue",
+        "similarity": 0.9677499532699585
+      },
+      {
+        "api_name": "tf.keras.backend.backend",
+        "api_type": "issue",
+        "similarity": 0.9677499532699585
+      },
+      {
+        "api_name": "tf.compat.v1.tpu.PaddingSpec",
+        "api_type": "issue",
+        "similarity": 0.9670906662940979
+      },
+      {
+        "api_name": "tf.compat.v1.user_ops.my_fact",
+        "api_type": "issue",
+        "similarity": 0.9667450189590454
+      },
+      {
+        "api_name": "tf.keras.backend.epsilon",
+        "api_type": "issue",
+        "similarity": 0.966644823551178
+      },
+      {
+        "api_name": "torch.backends.nnpack.is_available",
+        "api_type": "issue",
+        "similarity": 0.9655212163925171
+      },
+      {
+        "api_name": "torch.profiler.itt.range_pop",
+        "api_type": "issue",
+        "similarity": 0.9650722742080688
+      },
+      {
+        "api_name": "torch.backends.cuda.is_built",
+        "api_type": "issue",
+        "similarity": 0.9637714624404907
+      },
+      {
+        "api_name": "tf.raw_ops.HashTable",
+        "api_type": "issue",
+        "similarity": 0.9635872840881348
+      }
+    ],
+    "pytorch_to_pytorch": [
+      {
+        "api_name": "torch.full",
+        "api_type": "pytorch",
+        "similarity": 1.0
+      },
+      {
+        "api_name": "torch.fmax",
+        "api_type": "pytorch",
+        "similarity": 0.9989945888519287
+      },
+      {
+        "api_name": "torch.fmin",
+        "api_type": "pytorch",
+        "similarity": 0.998957097530365
+      },
+      {
+        "api_name": "torch.randint",
+        "api_type": "pytorch",
+        "similarity": 0.9988011717796326
+      },
+      {
+        "api_name": "torch.amin",
+        "api_type": "pytorch",
+        "similarity": 0.9984855651855469
+      },
+      {
+        "api_name": "torch.amax",
+        "api_type": "pytorch",
+        "similarity": 0.9984740614891052
+      },
+      {
+        "api_name": "torch.argmin",
+        "api_type": "pytorch",
+        "similarity": 0.9977133274078369
+      },
+      {
+        "api_name": "torch.argmax",
+        "api_type": "pytorch",
+        "similarity": 0.9977086782455444
+      },
+      {
+        "api_name": "torch.trace",
+        "api_type": "pytorch",
+        "similarity": 0.9976606369018555
+      },
+      {
+        "api_name": "torch.is_complex",
+        "api_type": "pytorch",
+        "similarity": 0.9975618124008179
+      },
+      {
+        "api_name": "torch.rand_like",
+        "api_type": "pytorch",
+        "similarity": 0.9974223375320435
+      }
+    ]
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "issue_to_api",
+      "test_cases": [
+        "161265_issue_to_api_0.output.py",
+        "161265_issue_to_api_1.output.py",
+        "161265_issue_to_api_10.output.py",
+        "161265_issue_to_api_2.output.py",
+        "161265_issue_to_api_3.output.py",
+        "161265_issue_to_api_4.output.py",
+        "161265_issue_to_api_5.output.py",
+        "161265_issue_to_api_6.output.py",
+        "161265_issue_to_api_7.output.py",
+        "161265_issue_to_api_8.output.py",
+        "161265_issue_to_api_9.output.py"
+      ]
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": [
+        "161265_pytorch_to_pytorch_0.output.py",
+        "161265_pytorch_to_pytorch_1.output.py",
+        "161265_pytorch_to_pytorch_10.output.py",
+        "161265_pytorch_to_pytorch_2.output.py",
+        "161265_pytorch_to_pytorch_3.output.py",
+        "161265_pytorch_to_pytorch_4.output.py",
+        "161265_pytorch_to_pytorch_5.output.py",
+        "161265_pytorch_to_pytorch_6.output.py",
+        "161265_pytorch_to_pytorch_7.output.py",
+        "161265_pytorch_to_pytorch_8.output.py",
+        "161265_pytorch_to_pytorch_9.output.py"
+      ]
+    }
+  }
+}

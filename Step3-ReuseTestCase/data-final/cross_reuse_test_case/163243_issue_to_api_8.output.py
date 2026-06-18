@@ -1,0 +1,56 @@
+import torch
+import tensorflow as tf
+
+def repro():
+    """
+    TensorFlow equivalent of the PyTorch reproduction logic.
+    Replaces torch.compile with tf.function (graph mode compilation).
+    Replaces loss.backward() with tf.compat.v1.gradients.
+    """
+    n = 8
+    dtype = tf.complex64
+
+    # Create complex tensor A
+    # PyTorch: torch.randn(4, n, n, dtype=dtype, requires_grad=True)
+    real_part = tf.random.normal((4, n, n))
+    imag_part = tf.random.normal((4, n, n))
+    A = tf.Variable(tf.complex(real_part, imag_part))
+
+    # Identity I
+    # PyTorch: torch.eye(n).unsqueeze(0).expand(A.shape[0], n, n)
+    I0 = tf.eye(n, dtype=dtype)
+    I = tf.tile(tf.expand_dims(I0, 0), [tf.shape(A)[0], 1, 1])
+
+    # Operation: A = I + 0.5 * (A @ A.mH)
+    # PyTorch: A.mH is the Hermitian (conjugate) transpose.
+    # TensorFlow equivalent: tf.linalg.adjoint(A)
+    AH = tf.linalg.adjoint(A)
+    A_new = I + 0.5 * tf.linalg.matmul(A, AH)
+
+    # Cholesky decomposition
+    # PyTorch: torch.linalg.cholesky(A, upper=True)
+    # TensorFlow: tf.linalg.cholesky returns lower triangular by default.
+    # We proceed with the default to maintain valid logic flow.
+    R = tf.linalg.cholesky(A_new)
+
+    # Loss calculation
+    loss = tf.reduce_sum(tf.abs(R))
+
+    # Gradient calculation using the Similar API
+    # PyTorch: loss.backward()
+    # Similar API: tf.compat.v1.gradients
+    grads = tf.compat.v1.gradients(loss, A)
+
+    return grads
+
+if __name__ == '__main__':
+    # Wrap in tf.function to mimic the compilation aspect of the original issue
+    compiled_repro = tf.function(repro)
+
+    # Execute to verify logic and gradient computation
+    gradients = compiled_repro()
+    
+    # Basic assertion to ensure gradients were computed
+    assert gradients[0] is not None
+    assert gradients[0].shape == (4, 8, 8)
+    print("Test passed. Gradients computed successfully.")

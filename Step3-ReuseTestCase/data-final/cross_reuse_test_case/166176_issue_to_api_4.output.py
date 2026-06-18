@@ -1,0 +1,28 @@
+import torch
+
+def fn(x):
+    # Trigger the first graph break
+    torch._dynamo.graph_break()
+
+    # Nested torch.no_grad contexts which trigger the resume codegen KeyError
+    with torch.no_grad():
+        with torch.no_grad():
+            # Trigger the second graph break inside the nested context
+            torch._dynamo.graph_break()
+
+    # Leverage the similar API (torch.isinf) as the operation to be compiled
+    return torch.isinf(x)
+
+# Input tensor containing a mix of finite and infinite values
+inp = torch.tensor([1.0, float('inf'), -float('inf'), 0.0])
+
+# Compile the function with the eager backend
+opt_m = torch.compile(fn, backend="eager")
+
+# Execute the compiled function
+# This should not raise a KeyError in torch._dynamo.resume_execution
+result = opt_m(inp)
+
+# Verify the result is correct
+expected = torch.tensor([False, True, True, False])
+assert torch.equal(result, expected), f"Expected {expected}, but got {result}"

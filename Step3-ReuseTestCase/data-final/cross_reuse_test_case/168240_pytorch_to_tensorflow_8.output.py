@@ -1,0 +1,37 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Define a model using the target API: tf.keras.layers.RNN
+class RNNModel(tf.keras.Model):
+    def __init__(self):
+        super(RNNModel, self).__init__()
+        # Using the target API: tf.keras.layers.RNN
+        # We wrap a SimpleRNNCell to create the RNN layer
+        self.rnn_layer = tf.keras.layers.RNN(cell=tf.keras.layers.SimpleRNNCell(64))
+
+    def call(self, inputs):
+        return self.rnn_layer(inputs)
+
+# Instantiate the model
+model = RNNModel()
+
+# Create random input data
+# Shape: (Batch Size, Timesteps, Features)
+x = tf.random.normal((1, 10, 32))
+
+# 1. Run the original model (Eager execution)
+original_output = model(x)
+
+# 2. Export the model
+# In TensorFlow, tf.function is used to export a model to a static graph (Autograph),
+# which is semantically similar to torch.export.export capturing the program.
+exported_model = tf.function(model)
+
+# 3. Run the exported model
+exported_output = exported_model(x)
+
+# 4. Verify behavior
+# Assert that the outputs of the original and exported models are close.
+# This checks if the graph capture logic (export) preserved the model's semantics.
+tf.debugging.assert_near(original_output, exported_output, message="Exported model output mismatch")

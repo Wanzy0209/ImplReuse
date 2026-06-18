@@ -1,0 +1,42 @@
+import torch
+import os
+import time
+import tensorflow as tf
+
+# List of threads to test
+threads_list = [1, 2, 4, 8, 16, 32, 48]
+
+# Size of the large tensors
+tensor_size = (10000, 10000)
+# Number of indices to gather
+num_indices = 5000
+
+# Store results
+times = []
+
+# Benchmark for each thread count
+for threads in threads_list:
+    # Set environment variables (TensorFlow respects these for underlying BLAS/MKL)
+    os.environ['OMP_NUM_THREADS'] = str(threads)
+    os.environ['MKL_NUM_THREADS'] = str(threads)
+    os.environ['OPENBLAS_NUM_THREADS'] = str(threads)
+
+    # Set TensorFlow specific threading configuration
+    # Note: This configures intra-op parallelism, similar to torch.set_num_threads
+    tf.config.threading.set_intra_op_parallelism_threads(threads)
+
+    # Create random tensors
+    # tf.keras.backend.gather requires a data tensor and indices
+    data = tf.random.normal(tensor_size)
+    indices = tf.random.uniform((num_indices,), maxval=tensor_size[0], dtype=tf.int32)
+
+    # Warm up
+    _ = tf.keras.backend.gather(data, indices)
+
+    # Time the gather operation
+    start_time = time.time()
+    _ = tf.keras.backend.gather(data, indices)
+    elapsed_time = time.time() - start_time
+
+    print(f"Threads: {threads}, Time: {elapsed_time:.4f} s")
+    times.append(elapsed_time)

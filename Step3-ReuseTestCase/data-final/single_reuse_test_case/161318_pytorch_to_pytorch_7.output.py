@@ -1,0 +1,55 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run(rank, world_size):
+    setup(rank, world_size)
+
+    if rank == 0:
+        # Original API: torch.compile
+        # We keep the compilation decorator to test if the similar API (send_object_list)
+        # causes issues with the compiler when handling data-dependent shapes.
+        torch._dynamo.config.capture_scalar_outputs = True
+        
+        @torch.compile(fullgraph=True)
+        def fn(encoder_attention_mask, encoder_hidden_states):
+            # Logic from original bug: calculating a scalar from data
+            text_len = encoder_attention_mask.sum().item()
+            
+            # Adaptation: Instead of just slicing, we send the slice using the similar API.
+            # This tests if the compiler can handle the data-dependent slice passed to 
+            # torch.distributed.send_object_list.
+            dist.send_object_list([encoder_hidden_states[:, :text_len]], dst=1)
+
+        # Inputs from original bug (adapted to CPU for general runnability)
+        mask = (torch.arange(512) < 8).unsqueeze(0)
+        hidden = torch.randn((1, 512, 4096))
+
+        fn(mask, hidden)
+        
+    elif rank == 1:
+        # Receiver logic to verify the operation completed successfully
+        tensor_list = [None]
+        dist.recv_object_list(tensor_list, src=0)
+        received_tensor = tensor_list[0]
+        
+        # Verify the shape matches the dynamic slice logic (text_len = 8)
+        assert received_tensor.shape == (1, 8, 4096), f"Expected shape (1, 8, 4096), got {received_tensor.shape}"
+        print("Test passed: Tensor received with correct dynamic shape.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Start processes
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)

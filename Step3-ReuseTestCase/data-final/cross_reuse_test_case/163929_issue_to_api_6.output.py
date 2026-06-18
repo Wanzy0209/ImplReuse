@@ -1,0 +1,45 @@
+import torch
+import pytest
+
+def test_inductor_argmin_argmax_on_transposed_mutated():
+    """
+    Test case for Issue 163929.
+    
+    Verifies that reduction operations (argmin, argmax) produce correct results
+    when operating on a matrix that has been mutated in-place and then transposed,
+    specifically under the torch.compile (inductor) backend.
+    """
+    torch.manual_seed(0)
+
+    # Helper function to replicate the bug pattern: In-place mutation -> Transpose -> Reduction
+    def apply_reduction_pattern(x, reduction_fn):
+        x.tan_()
+        x = x.t()
+        return reduction_fn(x)
+
+    # Test 1: argmin (as shown in the bug report code)
+    x_eager = torch.randn(4, 6)
+    x_compiled = x_eager.clone()
+
+    expected = apply_reduction_pattern(x_eager, torch.argmin)
+    compiled_fn = torch.compile(lambda x: apply_reduction_pattern(x, torch.argmin))
+    actual = compiled_fn(x_compiled)
+
+    torch.testing.assert_close(actual, expected, 
+                               msg="argmin output mismatch between eager and compiled")
+
+    # Test 2: argmax (as suggested by the issue title)
+    torch.manual_seed(0)
+    x_eager = torch.randn(4, 6)
+    x_compiled = x_eager.clone()
+
+    expected = apply_reduction_pattern(x_eager, torch.argmax)
+    compiled_fn = torch.compile(lambda x: apply_reduction_pattern(x, torch.argmax))
+    actual = compiled_fn(x_compiled)
+
+    torch.testing.assert_close(actual, expected, 
+                               msg="argmax output mismatch between eager and compiled")
+
+if __name__ == "__main__":
+    test_inductor_argmin_argmax_on_transposed_mutated()
+    print("Test passed successfully.")

@@ -1,0 +1,56 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    # Using 'nccl' as the bug is related to CUDA device interactions
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Non-tensor arguments to be sent
+    # The original bug involved redundant H2D/D2H for non-tensor arguments
+    obj_list = [1, 2.5, "test_string", [4, 5, 6]]
+
+    if rank == 0:
+        # Mimic the original bug's context: Profiler + DeviceContext
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ]
+        ) as prof:
+            with torch.device("cuda"):
+                # Call the similar API: torch.distributed.send_object_list
+                # We pass device="cuda" to test the interaction with the surrounding context
+                dist.send_object_list(obj_list, dst=1, device="cuda")
+        
+        print(f"Rank {rank} finished sending.")
+    else:
+        with torch.device("cuda"):
+            recv_list = [None] * len(obj_list)
+            dist.recv_object_list(recv_list, src=0)
+            
+            # Verify correctness
+            assert recv_list == obj_list, f"Data mismatch. Expected {obj_list}, got {recv_list}"
+            print(f"Rank {rank} received and verified data.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Check for CUDA availability as the bug is specific to CUDA contexts
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+    elif torch.cuda.device_count() < world_size:
+        print(f"Need at least {world_size} CUDA devices, skipping test.")
+    else:
+        mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

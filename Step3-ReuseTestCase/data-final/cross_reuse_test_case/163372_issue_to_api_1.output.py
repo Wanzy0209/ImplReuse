@@ -1,0 +1,93 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import unittest
+import sys
+
+class TestExpandCompilation(unittest.TestCase):
+    """
+    Test case for Issue 163372: Expand sometimes interpreted as Repeat by compiler.
+    
+    The bug manifests when torch.compile (Inductor) interprets an expand operation
+    as a repeat operation, causing excessive GPU RAM allocation.
+    """
+    
+    def setUp(self):
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        if self.device == 'cpu':
+            self.skipTest("CUDA required for this GPU memory bug test")
+
+    def test_expand_view_semantics_in_compiled_model(self):
+        BATCH_SIZE = 64
+        CHANNELS, IMG_SIZE = 3, 224
+        GRID_SIZE = 13
+
+        class ExpandModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                # Grid parameter used in grid_sample
+                self.grid = nn.Parameter(torch.randn((5000, GRID_SIZE, GRID_SIZE, 2), device=self.device))
+                self.fc = nn.Linear(GRID_SIZE*GRID_SIZE*CHANNELS, 16)
+
+            def forward(self, x):
+                per_channel = []
+                # The loop structure is critical to reproducing the specific compilation behavior
+                for i in range(CHANNELS):
+                    # Critical operation: expand should be a view (low memory)
+                    # If interpreted as repeat, this allocates 5000x memory per channel
+                    channel = x[:,i,...].expand(5000,-1,-1,-1)
+                    
+                    patch = F.grid_sample(channel, self.grid, mode="bilinear", align_corners=False, padding_mode="border")
+                    patch = patch.transpose(0,1).flatten(start_dim=2)
+                    per_channel.append(patch)
+                
+                x = torch.cat(per_channel, axis=2)
+                x = self.fc(x)
+                return x
+
+        model = ExpandModel().to(self.device)
+        
+        # Compile the model. The bug occurs specifically with torch.compile
+        # using the Inductor backend (default).
+        compiled_model = torch.compile(model)
+
+        # Reset memory stats to monitor allocation
+        torch.cuda.reset_peak_memory_stats()
+        initial_mem = torch.cuda.memory_allocated()
+
+        try:
+            # Run a few iterations. 
+            # If expand is interpreted as repeat, this will likely OOM on standard GPUs.
+            for _ in range(5):
+                x = torch.randn((BATCH_SIZE, CHANNELS, IMG_SIZE, IMG_SIZE), device=self.device)
+                output = compiled_model(x)
+                
+                # Verify output shape
+                self.assertEqual(output.shape, (BATCH_SIZE, 16))
+                
+                # Perform backward pass to ensure the graph is fully executed
+                loss = output.sum()
+                loss.backward()
+
+            # Check memory usage. 
+            # While exact memory is hard to assert, we can check if it's within a reasonable bound
+            # or simply that the test completed without OOM.
+            peak_mem = torch.cuda.max_memory_allocated()
+            
+            # A simple heuristic check: if memory grew by > 10GB, it's likely a repeat bug.
+            # (The tensor size is approx 64*3*224*224*4 bytes ~ 38MB input. 
+            # Expanded view is negligible. Repeated would be ~190GB).
+            mem_increase = peak_mem - initial_mem
+            
+            # Assert that memory increase is reasonable (e.g., less than 2GB for this small model)
+            # This threshold might need adjustment based on GPU architecture, but 2GB is safe for this op.
+            self.assertLess(mem_increase, 2 * 1024**3, 
+                            "Memory usage spiked significantly, suggesting expand was interpreted as repeat.")
+
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                self.fail(f"OOM Error occurred: {e}. This indicates expand was likely interpreted as repeat.")
+            raise
+
+if __name__ == '__main__':
+    unittest.main()

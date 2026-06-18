@@ -1,0 +1,28 @@
+import torch
+
+print(torch.__version__, flush=True)
+
+# Reproduce the bug pattern using the similar API.
+# The original bug involved passing a high-dimensional int8 tensor, 
+# a mismatched int32 tensor, an empty tuple, and a boolean value 
+# as positional arguments.
+
+input_args = [
+    torch.empty((5, 7, 4, 3, 7, 6), dtype=torch.int8),
+    torch.empty((4, 9, 2), dtype=torch.int32),
+    (),
+    False
+]
+
+# Call torch.fake_quantize_per_channel_affine with the malformed arguments.
+# Signature: torch.fake_quantize_per_channel_affine(input, scale, zero_point, axis, quant_min=-128, quant_max=127)
+# Mapping:
+# input -> torch.empty((5, 7, 4, 3, 7, 6), dtype=torch.int8)
+# scale -> torch.empty((4, 9, 2), dtype=torch.int32)
+# zero_point -> () (Invalid type, expects Tensor)
+# axis -> False (Invalid type, expects int)
+
+try:
+    torch.fake_quantize_per_channel_affine(*input_args)
+except Exception as e:
+    print(f"Exception occurred: {e}")

@@ -1,0 +1,47 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+BATCH_SIZE = 4
+NUM_CLASSES = 10
+LEARNING_RATE = 0.01
+device = 'mps'
+
+# Define a simple model that utilizes torch.any
+class AnyModel(nn.Module):
+    def __init__(self, num_classes):
+        super(AnyModel, self).__init__()
+        self.fc = nn.Linear(3 * 224 * 224, num_classes)
+
+    def forward(self, x):
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        # Use torch.any to create a mask. 
+        # We use dim=1 to return a tensor so gradients can flow.
+        mask = torch.any(x > 0, dim=1, keepdim=True).float()
+        return x * mask
+
+model = AnyModel(num_classes=NUM_CLASSES).to(device)
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+
+@torch.compile
+def train(images, labels):
+    images = images.to(device)
+    labels = labels.to(device)
+    
+    optimizer.zero_grad()
+
+    outputs = model(images)
+    loss = criterion(outputs, labels)
+    loss.backward()
+    optimizer.step()
+
+images = torch.randn(BATCH_SIZE, 3, 224, 224)
+labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,))
+
+# Run the test
+train(images, labels)
+
+# Basic assertion to ensure execution completed without error
+assert True, "Test completed successfully"

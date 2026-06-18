@@ -1,0 +1,63 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_from_list_with_sparse_conversion():
+    """
+    Test case adapted from PyTorch Issue 164823.
+    
+    Original Issue Logic:
+    1. Input: Dense Tensor
+    2. Transform: to_sparse() -> operation -> to_dense()
+    3. Context: torch.compile (Inductor) failed to handle the storage access during this flow.
+    
+    Adapted Logic for tf.data.experimental.from_list:
+    1. Input: List of Dense Tensors
+    2. Pipeline: Create dataset using from_list -> map (to_sparse -> op -> to_dense)
+    3. Goal: Verify that the similar API can handle the sparse/dense conversion pipeline correctly.
+    """
+    
+    # 1. Setup input data (Dense tensors, similar to torch.randn in the original bug)
+    # Using specific values to make assertions deterministic
+    dense_input_1 = tf.constant([[1.0, 0.0, 0.0], [0.0, 5.0, 0.0]])
+    dense_input_2 = tf.constant([[0.0, 2.0, 0.0], [3.0, 0.0, 4.0]])
+    input_list = [dense_input_1, dense_input_2]
+
+    # 2. Use the Similar API: tf.data.experimental.from_list
+    # This creates the dataset pipeline from the list of elements.
+    dataset = tf.data.experimental.from_list(input_list)
+
+    # 3. Define the transformation logic mirroring the original bug's forward pass:
+    # x_sparse = x.to_sparse()
+    # result = x_sparse * 2
+    # return result.to_dense()
+    def sparse_transform(x):
+        # Convert to sparse (equivalent to x.to_sparse())
+        x_sparse = tf.sparse.from_dense(x)
+        
+        # Perform operation (equivalent to x_sparse * 2)
+        # Note: In TF, sparse * dense is supported, here we multiply by a scalar 2.0
+        result_sparse = x_sparse * 2.0
+        
+        # Convert back to dense (equivalent to result.to_dense())
+        return tf.sparse.to_dense(result_sparse)
+
+    # Apply the transformation within the dataset pipeline
+    # This tests the API's ability to process the specific data structure flow
+    dataset = dataset.map(sparse_transform)
+
+    # 4. Verify results
+    outputs = list(dataset.as_numpy_iterator())
+
+    # Expected results for input 1: [[2.0, 0.0, 0.0], [0.0, 10.0, 0.0]]
+    expected_1 = np.array([[2.0, 0.0, 0.0], [0.0, 10.0, 0.0]])
+    # Expected results for input 2: [[0.0, 4.0, 0.0], [6.0, 0.0, 8.0]]
+    expected_2 = np.array([[0.0, 4.0, 0.0], [6.0, 0.0, 8.0]])
+
+    np.testing.assert_array_equal(outputs[0], expected_1)
+    np.testing.assert_array_equal(outputs[1], expected_2)
+    
+    print("Test passed: tf.data.experimental.from_list handles sparse conversion pipeline.")
+
+if __name__ == "__main__":
+    test_from_list_with_sparse_conversion()

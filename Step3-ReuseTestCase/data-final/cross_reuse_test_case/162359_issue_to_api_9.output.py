@@ -1,0 +1,75 @@
+import torch
+import torch.optim as optim
+
+def test_sequential_lr_tensor_aliasing():
+    """
+    Test case for Issue 162359: SequentialLR aliases lr Tensor with initial_lr.
+    
+    This test reproduces the bug where SequentialLR initialization aliases 
+    the optimizer's learning rate tensor with its initial learning rate tensor.
+    When the first scheduler (e.g., LinearLR) performs an in-place update,
+    it corrupts the base_lrs of subsequent chained schedulers.
+    
+    This pattern mirrors the object management seen in tf.keras.utils.CustomObjectScope,
+    where a collection of objects (schedulers) is managed within a specific scope/context,
+    but here the focus is on the state mutation during initialization.
+    """
+    
+    # 1. Use a tensor learning rate (as recommended to avoid recompilation)
+    lr = 1.0
+    x = torch.tensor(0.0, requires_grad=True)
+    opt = optim.AdamW([x], lr=torch.tensor(lr))
+
+    # 2. Initialize our chained schedulers
+    milestone = 10
+    start_factor = 0.2
+    warmup = optim.lr_scheduler.LinearLR(opt, start_factor=start_factor, end_factor=1.0, total_iters=milestone)
+    decay = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=10)
+
+    # Capture original base_lr for the decay scheduler
+    original_decay_base_lr = decay.base_lrs[0].item()
+
+    # 3. Initialize our SequentialLR
+    # Bug occurs here: SequentialLR.__init__ assigns group["lr"] = group["initial_lr"],
+    # aliasing the tensors. It then calls _initial_step() on the first scheduler.
+    scheduler = optim.lr_scheduler.SequentialLR(opt, schedulers=[warmup, decay], milestones=[milestone])
+
+    # 4. Verify Aliasing (The Bug)
+    # The optimizer's lr and initial_lr should point to the same memory location
+    assert opt.param_groups[0]['lr'].data_ptr() == opt.param_groups[0]['initial_lr'].data_ptr(), \
+        "Optimizer lr and initial_lr are not aliased as expected in the bug scenario."
+
+    # 5. Verify Corruption of base_lrs
+    # Because of the aliasing, the in-place update by LinearLR mutated initial_lr.
+    # Since decay.base_lrs references initial_lr, it is also corrupted.
+    expected_corrupted_value = start_factor * lr
+    
+    assert opt.param_groups[0]['initial_lr'].item() == expected_corrupted_value, \
+        f"Initial LR was not mutated. Expected {expected_corrupted_value}, got {opt.param_groups[0]['initial_lr'].item()}"
+        
+    assert decay.base_lrs[0].item() == expected_corrupted_value, \
+        f"Decay scheduler base_lr was corrupted. Expected {original_decay_base_lr}, got {decay.base_lrs[0].item()}"
+
+    # 6. Verify Functional Impact
+    # Step through the warmup phase
+    for _ in range(milestone):
+        scheduler.step()
+
+    # LR should be 1.0 (end_factor * original_lr)
+    assert opt.param_groups[0]['lr'].item() == 1.0
+
+    # Step into the decay phase
+    scheduler.step()
+
+    # Due to the bug, the CosineAnnealingLR starts from the corrupted base (0.2) instead of 1.0.
+    # The first step of decay should be close to 1.0, but with the bug it will be close to 0.2.
+    current_lr = opt.param_groups[0]['lr'].item()
+    
+    # This assertion demonstrates the failure: the LR drops incorrectly because the base was scaled.
+    assert current_lr < 0.5, \
+        f"LR did not drop as expected by the bug. LR is {current_lr}, but should be low (~0.2) due to corrupted base_lrs."
+
+    print("Bug reproduction successful: base_lrs were corrupted by tensor aliasing.")
+
+if __name__ == "__main__":
+    test_sequential_lr_tensor_aliasing()

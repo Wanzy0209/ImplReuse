@@ -1,0 +1,110 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_argmax_mixed_precision_compile():
+    """
+    Test case for tf.keras.ops.argmax inspired by PyTorch Issue 164086.
+    
+    The original issue involved a divergence between eager and compiled modes
+    due to type incompatibilities (fp16 vs float64) arising from complex 
+    operations (pow chains) and mixed precision inputs.
+    
+    This test adapts the logic to TensorFlow, using tf.keras.ops.argmax
+    (the similar API) within a mixed precision context to check for 
+    compilation stability or type errors.
+    """
+    
+    # Enable mixed precision to mimic the environment of the original bug
+    # (Original used emulate_precision_casts and float16 inputs)
+    policy = tf.keras.mixed_precision.Policy('mixed_float16')
+    tf.keras.mixed_precision.set_global_policy(policy)
+
+    # Inputs mimicking the shapes and types from the original bug report
+    # arg0: int64
+    arg0 = tf.constant(np.random.randint(0, 1000, (42, 56)), dtype=tf.int64)
+    # arg1, arg2: float16
+    arg1 = tf.random.uniform((50000, 128), dtype=tf.float16)
+    arg2 = tf.random.uniform((46, 128), dtype=tf.float16)
+    # arg3: float16
+    arg3 = tf.random.uniform((50000, 4, 46), dtype=tf.float16)
+    # arg4, arg5: float16
+    arg4 = tf.random.uniform((25786, 46), dtype=tf.float16)
+    arg5 = tf.random.uniform((24214, 46), dtype=tf.float16)
+
+    # Sentinel for gradient flow (conceptually)
+    sentinel = tf.constant(0.0, dtype=tf.float16)
+
+    @tf.function(jit_compile=True) # Analogous to torch.compile
+    def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+        # t0 = arg0
+        # t1 = torch.tanh(t0) -> Original API
+        # We keep a simple operation here to maintain flow
+        t1 = arg0 
+        
+        # t2 = t1.clone(); t2.zero_()
+        t2 = tf.zeros_like(t1, dtype=tf.int64)
+
+        # t5 = torch.nn.functional.linear(t3, t4)
+        # In TF: Matmul
+        t5 = tf.matmul(arg1, arg2, transpose_b=True)
+
+        # t7 = t6.max(dim=1).values
+        # Using the Similar API: tf.keras.ops.argmax
+        # Note: argmax returns int64, whereas max returned float16. 
+        # This type change is a stressor for the compiler, similar to the original bug.
+        t7 = tf.keras.ops.argmax(arg3, axis=1)
+        
+        # Cast back to float16 to allow subsequent pow operations
+        # This mimics the type casting issues in the original bug
+        t7 = tf.cast(t7, tf.float16)
+        t7 = tf.expand_dims(t7, axis=-1) # Ensure shape compatibility for broadcasting if needed
+        t7 = tf.tile(t7, [1, 46]) # Match shape (50000, 46)
+
+        # t10 = torch.cat([t8, t9], dim=0)
+        t10 = tf.concat([arg4, arg5], axis=0)
+
+        # t11 = torch.pow(torch.pow(torch.pow(torch.pow(t5, t7), t10), t5), t7)
+        # Complex nested pow operations which often trigger backend type errors
+        t11 = tf.pow(tf.pow(tf.pow(tf.pow(t5, t7), t10), t5), t7)
+
+        # t12 = torch.nn.functional.embedding(...)
+        # Clamp indices
+        # t11.size(0) - 1 -> tf.shape(t11)[0] - 1
+        max_idx = tf.shape(t11)[0] - 1
+        indices = tf.clip_by_value(t2, 0, max_idx)
+        
+        # Embedding lookup
+        # PyTorch: embedding(indices, weight)
+        # TensorFlow: gather(params, indices)
+        t12 = tf.gather(t11, indices)
+
+        output = t12 + sentinel
+        return output
+
+    # 1. Run Eager Mode
+    try:
+        # Disable jit for eager run
+        out_eager = foo.get_concrete_function(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+        print('Eager Success! ')
+    except Exception as e:
+        print(f'Eager Failed: {e}')
+        return
+
+    # 2. Run Compiled Mode
+    try:
+        out_compiled = foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+        print('Compile Success! ')
+        
+        # Check for divergence (NaNs or large differences)
+        # Note: Due to different compilation paths, exact bitwise match is not guaranteed,
+        # but we check for crashes or gross type errors.
+        if tf.reduce_any(tf.math.is_nan(out_compiled)):
+            print('Warning: Compiled output contains NaNs')
+            
+    except Exception as e:
+        print(f'Compile Failed: {e}')
+        print('This reproduces the divergence/crash pattern similar to the original issue.')
+
+if __name__ == '__main__':
+    test_argmax_mixed_precision_compile()

@@ -1,0 +1,39 @@
+import torch
+from torch.nn import functional as F
+
+# Check for MPS availability
+if not torch.backends.mps.is_available():
+    print("MPS device is not available. Skipping test.")
+else:
+    # Reproduce the non-contiguous tensor setup from the original bug report
+    shape = (5, 499, 768)
+    stride = (0, 768, 1)
+    storage_offset = 0
+    
+    # Calculate the number of elements required for the storage
+    numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+    base = torch.arange(numel, dtype=torch.float32, device="mps")
+    
+    # Create the non-contiguous input tensor
+    input = torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+
+    # Setup parameters for GroupNorm
+    # Input shape is interpreted as (N, C, L) = (5, 499, 768)
+    # Since 499 is prime, num_groups must be 1 or 499
+    num_groups = 1
+    num_channels = 499
+    
+    weight = torch.rand((num_channels,), device="mps", dtype=torch.float32)
+    bias = torch.rand((num_channels,), device="mps", dtype=torch.float32)
+
+    # Run the similar API (torch.nn.functional.group_norm)
+    # This verifies if the MPS buffer allocation regression affects GroupNorm
+    try:
+        output = F.group_norm(input, num_groups, weight, bias)
+        print("Test passed: No buffer allocation error detected for torch.nn.functional.group_norm.")
+    except RuntimeError as e:
+        if "buffer is not large enough" in str(e):
+            print(f"Bug reproduced: {e}")
+        else:
+            # Re-raise if it's a different error
+            raise

@@ -1,0 +1,36 @@
+import tensorflow as tf
+import tensorflow.experimental.numpy as tnp
+
+def test_quantized_tril():
+    # Create a 2D tensor (tril requires rank >= 2)
+    input_data = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]
+    input_tensor = tf.constant(input_data)
+
+    # Quantize the tensor to mimic the 'QuantizedCPU' context from the PyTorch bug
+    # We use quint8 to match the dtype in the original bug report
+    quantized_tensor, _, _ = tf.quantization.quantize(
+        input_tensor, 
+        min_range=0.0, 
+        max_range=10.0, 
+        dtype=tf.quint8, 
+        mode='MIN_COMBINED'
+    )
+    
+    print("Quantized input:", quantized_tensor)
+
+    # Attempt to use the similar API (tril) which involves creating zeros internally
+    # The implementation of tril uses: z = constant_op.constant(0, m.dtype)
+    # This tests if the zero-creation logic works for quantized dtypes
+    try:
+        out_tensor = tnp.tril(quantized_tensor)
+        print("Output tensor:", out_tensor)
+        
+        # Basic assertion to verify the operation completed and shape is preserved
+        assert out_tensor.shape == quantized_tensor.shape, "Shape mismatch"
+        print("Test passed: tril handled quantized input.")
+        
+    except Exception as e:
+        print(f"Error occurred: {e}")
+
+if __name__ == "__main__":
+    test_quantized_tril()

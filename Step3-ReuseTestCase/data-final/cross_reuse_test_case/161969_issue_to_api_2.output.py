@@ -1,0 +1,50 @@
+import torch
+import unittest
+
+class TestMPSCompileContiguity(unittest.TestCase):
+    def test_mps_compile_with_vmap_and_grad(self):
+        """
+        Test case based on Issue 161969.
+        Leverages the pattern from tf.test.is_built_with_cuda to check for
+        hardware availability (MPS) before running the test.
+        """
+        # Adapted pattern from tf.test.is_built_with_cuda:
+        # Check if the specific hardware backend (MPS) is available before running.
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS backend is not available")
+
+        device = torch.device("mps")
+        dtype = torch.float32
+
+        def example_function():
+            def logp(x, matrix):
+                # The bug report mentions that uncommenting the print statement
+                # (which checks is_contiguous) fixes the issue.
+                # We keep it commented to test the raw compilation behavior.
+                # print(matrix.is_contiguous()) 
+                
+                p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+                p_mat_sqrt_inv = p_mat_sqrt.inverse()
+                val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+                return -val/2
+
+            score_func = torch.vmap(torch.func.grad(logp, 0), (0, None))
+            return score_func
+
+        data = torch.zeros((2, 5, 3), device=device, dtype=dtype)
+        
+        # Compile the function
+        compiled_function = torch.compile(example_function())
+
+        p = torch.diag(torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)**2)
+        
+        # Execute the compiled function
+        # If the bug is present, this raises RuntimeError: A_t.is_contiguous() INTERNAL ASSERT FAILED
+        # If the bug is fixed, this executes successfully.
+        res = compiled_function(data, p)
+        
+        # Verify output shape to ensure execution completed as expected
+        self.assertEqual(res.shape, (2, 5, 3))
+
+if __name__ == "__main__":
+    unittest.main()

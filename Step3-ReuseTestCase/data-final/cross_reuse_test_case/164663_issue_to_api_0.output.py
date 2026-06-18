@@ -1,0 +1,87 @@
+import os
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.tensor.experimental import implicit_replication
+from torch.distributed._tools.fsdp2_mem_tracker import FSDPMemTracker
+
+
+class TestModule(nn.Module):
+    """
+    A module containing RMSNorm and Linear layers to reproduce the KeyError.
+    This structure mimics the atomic function composition seen in similar APIs.
+    """
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.norm = nn.RMSNorm(d_model)
+        self.output = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = self.output(x)
+        return x
+
+
+def test_fsdp_mem_tracker_rmsnorm():
+    """
+    Test case to verify FSDPMemTracker handles RMSNorm correctly during backward.
+    This test reproduces the logic of the reported issue where a KeyError
+    was raised when RMSNorm was wrapped with a Linear module.
+    """
+    # Setup distributed environment
+    if not dist.is_initialized():
+        # Initialize for the sake of the test script if not run via torchrun
+        os.environ["MASTER_ADDR"] = "localhost"
+        os.environ["MASTER_PORT"] = "29500"
+        dist.init_process_group(backend="nccl", rank=0, world_size=1)
+
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
+
+    d_model = 128
+    model = TestModule(d_model).to(f'cuda:{local_rank}')
+    
+    # Initialize device mesh
+    world_size = dist.get_world_size()
+    mesh = init_device_mesh("cuda", (world_size,))
+
+    # Apply fully_shard to the submodules and the parent model
+    # This specific wrapping pattern triggers the bug in the original issue
+    fully_shard([model.norm, model.output], mesh=mesh)
+    fully_shard(model, mesh=mesh)
+
+    # Initialize the memory tracker
+    tracker = FSDPMemTracker(model)
+
+    # Run forward and backward pass within the tracker context
+    # This mimics the execution flow of a ConcreteFunction in TensorFlow
+    try:
+        with tracker, implicit_replication():
+            x = torch.randn(16, d_model, device=f'cuda:{local_rank}')
+            y = model(x)
+            loss = y.sum()
+            loss.backward()
+        
+        print("Test Passed: FSDPMemTracker successfully tracked RMSNorm during backward.")
+        return True
+
+    except KeyError as e:
+        print(f"Test Failed: KeyError raised during backward pass - {e}")
+        return False
+    except Exception as e:
+        print(f"Test Failed: Unexpected error - {e}")
+        return False
+
+
+if __name__ == "__main__":
+    # Execute the test
+    success = test_fsdp_mem_tracker_rmsnorm()
+    
+    # Cleanup
+    if dist.is_initialized():
+        dist.destroy_process_group()
+    
+    exit(0 if success else 1)

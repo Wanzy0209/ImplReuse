@@ -1,0 +1,69 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_categorical_large_tensor_indexing():
+    """
+    Test case for tf.compat.v1.distributions.Categorical based on 
+    PyTorch issue #164048: Indexing on large tensor causes invalid configuration argument.
+    
+    This test adapts the logic of indexing a large tensor to the TensorFlow 
+    Categorical distribution, which internally handles indexing of probability 
+    tensors (logits/probs).
+    """
+    # Dimensions from the original PyTorch bug report
+    # mask = torch.randint(0, 20, (4, 87, 1056, 736), device="cuda")
+    # We interpret the last dimension (736) as the number of classes (K)
+    # and the preceding dimensions (4, 87, 1056) as the batch shape.
+    batch_shape = (4, 87, 1056)
+    num_classes = 736
+
+    # Check for GPU availability to mimic the original "device='cuda'" condition
+    gpus = tf.config.list_physical_devices('GPU')
+    device = "/GPU:0" if gpus else "/CPU:0"
+
+    with tf.device(device):
+        # Create a large tensor of logits, analogous to the 'mask' tensor in the bug.
+        # Using random values to simulate the tensor content.
+        logits = tf.random.uniform(
+            (*batch_shape, num_classes), 
+            minval=0, 
+            maxval=20, 
+            dtype=tf.float32
+        )
+
+        # Instantiate the similar API: Categorical distribution
+        # This distribution is parameterized by the large logits tensor.
+        dist = tf.compat.v1.distributions.Categorical(logits=logits)
+
+        # Create a tensor of indices (samples) to query the distribution.
+        # This mimics the indexing operation 'mask[to_apply]' by performing
+        # a lookup operation on the large tensor.
+        # We create indices matching the batch shape to stress the indexing logic.
+        indices = tf.random.uniform(
+            batch_shape, 
+            minval=0, 
+            maxval=num_classes, 
+            dtype=tf.int32
+        )
+
+        # Perform the operation that involves internal indexing of the large tensor.
+        # The 'prob' method will index into the logits/probs to find probabilities
+        # for the given indices.
+        try:
+            probabilities = dist.prob(indices)
+            
+            # Assertion to verify the operation completed and returned the correct shape
+            assert probabilities.shape == batch_shape, \
+                f"Expected shape {batch_shape}, but got {probabilities.shape}"
+            
+            print("Test Passed: Large tensor indexing handled successfully.")
+            
+        except tf.errors.InvalidArgumentError as e:
+            # Catching the specific error type mentioned in the PyTorch bug
+            print(f"Test Failed: Invalid configuration argument encountered - {e}")
+        except Exception as e:
+            print(f"Test Failed with unexpected error: {e}")
+
+if __name__ == "__main__":
+    test_categorical_large_tensor_indexing()

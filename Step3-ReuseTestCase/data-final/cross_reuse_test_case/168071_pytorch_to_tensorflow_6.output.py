@@ -1,0 +1,23 @@
+import tensorflow as tf
+
+# Adapted test case for tf.keras.backend.one_hot
+# Original PyTorch issue: Handling 0-shape dimensions during tensor manipulation.
+# Here we verify if one_hot handles a 0-shape dimension in the input indices correctly.
+
+# Create a tensor with a 0-shape dimension, similar to the PyTorch example (6, 0)
+indices = tf.zeros((6, 0), dtype=tf.int32)
+
+# Apply the similar API
+# one_hot adds a new dimension at the end. 
+# Input shape: (6, 0) -> Expected Output shape: (6, 0, num_classes)
+num_classes = 5
+
+try:
+    output = tf.keras.backend.one_hot(indices, num_classes)
+    print(f"Output shape: {output.shape}")
+    
+    # Verify the shape is correct and no RuntimeError occurred
+    assert output.shape == (6, 0, num_classes), f"Expected shape (6, 0, {num_classes}), but got {output.shape}"
+    print("Test passed: API handled 0-shape dimension correctly.")
+except Exception as e:
+    print(f"Test failed with error: {e}")

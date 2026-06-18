@@ -1,0 +1,57 @@
+import torch
+import tensorflow as tf
+import tensorflow.experimental.numpy as tnp
+from tensorflow.python.framework import test_util
+
+@test_util.run_all_in_graph_and_eager_modes
+class TestScatterSumLogic(tf.test.TestCase):
+    def test_scatter_sum_with_tnp_add(self):
+        """
+        Translates the logic from the PyTorch bug report (Issue 164030)
+        into TensorFlow using tf.experimental.numpy.
+        
+        Original Logic:
+        with torch.no_grad():
+            expert_counts.scatter_(1, topk_ids, 1)
+            tokens_per_expert = expert_counts.sum(dim=0)
+            
+        This test leverages tf.experimental.numpy.add (via tnp.add.at) 
+        to perform the scatter operation, mirroring the original behavior.
+        """
+        # Setup dimensions based on the bug report types: i64[256, 6] and i64[256, 64]
+        batch_size = 256
+        num_experts = 64
+        topk = 6
+
+        # Initialize expert_counts (equivalent to new_zeros in bug report)
+        expert_counts = tnp.zeros((batch_size, num_experts), dtype=tnp.int64)
+        
+        # Generate random topk_ids
+        topk_ids = tnp.random.randint(0, num_experts, (batch_size, topk), dtype=tnp.int64)
+
+        # Perform the scatter operation.
+        # PyTorch: expert_counts.scatter_(1, topk_ids, 1)
+        # TensorFlow: tnp.add.at is the equivalent of scatter_add (in-place add).
+        # We need row indices to scatter into the correct rows.
+        row_indices = tnp.arange(batch_size)[:, tnp.newaxis]
+        row_indices = tnp.broadcast_to(row_indices, (batch_size, topk))
+        
+        # This uses the similar API (tf.experimental.numpy.add) to perform the update
+        tnp.add.at(expert_counts, (row_indices, topk_ids), 1)
+
+        # Perform the sum operation.
+        # PyTorch: tokens_per_expert = expert_counts.sum(dim=0)
+        tokens_per_expert = tnp.sum(expert_counts, axis=0)
+
+        # Assertions
+        # The total number of tokens assigned should equal batch_size * topk
+        self.assertEqual(tnp.sum(tokens_per_expert).item(), batch_size * topk)
+        
+        # Verify the shape of the output
+        self.assertShapeEqual(np.zeros((num_experts,)), tokens_per_expert)
+        
+        # Verify that counts are non-negative
+        self.assertAllGreaterEqual(tokens_per_expert, 0)
+
+if __name__ == "__main__":
+    tf.test.main()

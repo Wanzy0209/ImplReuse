@@ -1,0 +1,106 @@
+import torch
+import os
+import tempfile
+from torch.utils.cpp_extension import load
+
+# --- Setup Custom CUDA Extension (Self-contained for reproducibility) ---
+cuda_source = """
+#include <torch/extension.h>
+
+torch::Tensor add_one(torch::Tensor x) {
+    return x + 1;
+}
+
+torch::Tensor add_two(torch::Tensor x) {
+    return x + 2;
+}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("add_one", &add_one, "Add one to tensor");
+    m.def("add_two", &add_two, "Add two to tensor");
+}
+"""
+
+# Write source to temporary file
+with tempfile.NamedTemporaryFile(mode='w', suffix='.cu', delete=False) as f:
+    f.write(cuda_source)
+    cu_path = f.name
+
+try:
+    # Load the custom CUDA ops
+    # Note: This requires a CUDA-enabled environment with nvcc in PATH
+    op = load(name="add_extension", sources=[cu_path], verbose=True)
+
+    # Register the custom ops
+    torch.library.define("myops::add_one", "(Tensor x) -> Tensor")
+    torch.library.define("myops::add_two", "(Tensor x) -> Tensor")
+    torch.library.impl("myops::add_one", "CUDA", op.add_one)
+    torch.library.impl("myops::add_two", "CUDA", op.add_two)
+
+    @torch.library.register_fake("myops::add_one")
+    def _(x): return torch.empty_like(x)
+
+    @torch.library.register_fake("myops::add_two")
+    def _(x): return torch.empty_like(x)
+
+    # --- Model Definition ---
+    class CondModel(torch.nn.Module):
+        def forward(self, x):
+            # Use torch.cond to switch between custom CUDA kernels
+            return torch.cond(x.shape[0] < 5, torch.ops.myops.add_one, torch.ops.myops.add_two, (x,))
+
+    # --- Helper Function (Leveraging Similar API Pattern) ---
+    def serialize_and_execute(model, args, dynamic_shapes, package_path="model.pt2"):
+        """
+        Serializes the model using AOTI and executes it.
+        This function structure mimics the 'serialize' helper from 
+        tensorflow.compiler.tests.xla_call_module_test, which encapsulates
+        the serialization and versioning/targeting logic.
+        
+        Pattern mapping:
+        - stablehlo.get_minimum_version() -> torch.cuda.is_available() check
+        - stablehlo.serialize_portable_artifact_str -> torch._inductor.aoti_compile_and_package
+        - return byte_str, version -> return result, package_path
+        """
+        # Check target availability
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is required for this test")
+
+        # Export the model
+        exported = torch.export.export(model, args, dynamic_shapes=dynamic_shapes)
+        
+        # Serialize (Compile and Package)
+        torch._inductor.aoti_compile_and_package(exported, package_path=package_path)
+        
+        # Load and Execute
+        aoti_model = torch._inductor.aoti_load_package(package_path)
+        result = aoti_model(*args)
+        
+        return result, package_path
+
+    # --- Test Execution ---
+    if __name__ == "__main__":
+        model = CondModel()
+        
+        # Test Case 1: Batch size < 5 (Should call add_one)
+        x1 = torch.zeros(3, device="cuda")
+        dynamic_shapes = {"x": {0: torch.export.Dim("batch", min=1, max=128)}}
+        
+        result1, _ = serialize_and_execute(model, (x1,), dynamic_shapes)
+        expected1 = torch.ones(3, device="cuda")
+        assert torch.allclose(result1, expected1), f"Test Case 1 Failed: Expected {expected1}, got {result1}"
+        print("Test Case 1 Passed: Batch size 3 executed add_one correctly.")
+
+        # Test Case 2: Batch size >= 5 (Should call add_two)
+        x2 = torch.zeros(6, device="cuda")
+        result2, _ = serialize_and_execute(model, (x2,), dynamic_shapes)
+        expected2 = torch.ones(6, device="cuda") * 2
+        assert torch.allclose(result2, expected2), f"Test Case 2 Failed: Expected {expected2}, got {result2}"
+        print("Test Case 2 Passed: Batch size 6 executed add_two correctly.")
+
+finally:
+    # Cleanup temporary files
+    if os.path.exists(cu_path):
+        os.remove(cu_path)
+    if os.path.exists("model.pt2"):
+        os.remove("model.pt2")

@@ -1,0 +1,44 @@
+import torch
+import torch.distributed as dist
+import os
+
+def main():
+    # Setup for distributed environment
+    # We initialize a single-process group to keep the test runnable without 
+    # external launchers like torchrun, mimicking the original script's simplicity.
+    # Note: XPU distributed operations typically require the 'ccl' backend.
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "29500"
+    
+    try:
+        dist.init_process_group(backend="ccl", rank=0, world_size=1)
+    except Exception as e:
+        print(f"Skipping test: Failed to initialize process group with backend 'ccl'. {e}")
+        return
+
+    if not torch.xpu.is_available():
+        print("XPU not available, skipping test.")
+        return
+
+    # Create data on XPU, similar to the original bug report
+    x = torch.randn(128).to("xpu")
+    
+    print("eager mode passed")
+
+    # Adapt the call site to use the similar API: torch.distributed.gather_object
+    # gather_object gathers picklable objects from the whole group.
+    # Since world_size is 1, we gather from rank 0 to rank 0.
+    gather_list = [None] 
+    dist.gather_object(x, gather_list, dst=0)
+
+    print("torch.distributed.gather_object passed")
+
+    # Assertions to verify correctness
+    assert len(gather_list) == 1
+    assert torch.equal(gather_list[0], x)
+    assert gather_list[0].device.type == 'xpu'
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,419 @@
+{
+  "title": "[dynamo] sys.setrecursionlimit doesn't seem to do anything",
+  "issue_id": "167789",
+  "bug_description": "```python\nimport sys\nimport torch\n\ndef fn(x, n):\n    if n == 0:\n        return x\n    return fn(x, n - 1) + 1\n\n@torch.compile(backend=\"eager\")\ndef outer(x):\n    return fn(x, 1000)\n\nsys.setrecursionlimit(10000000)\nouter(torch.ones(3))\n```\n\nThis code gives RecursionError even though the recursionlimit was set to a very high value. If we don't compile, then we don't hit a recursion limit. \n\nIf we set `tstate->c_recursion_remaining` to a high value as well somewhere in C dynamo, then we run successfully. So we should add some kind of eval_frame API to modify the C recursion limit.\n\ncc @ezyang @gchanan @kadeng @msaroufim @chauhang @penguinwu @voznesenskym @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @chenyang78 @amjames @Lucaskabela",
+  "apis": [
+    "nsys.setrecursionlimit",
+    "torch.compile",
+    "torch.ones",
+    "torch",
+    "sys.setrecursionlimit"
+  ],
+  "best_code": "import sys\nimport torch\n\ndef fn(x, n):\n    if n == 0:\n        return x\n    return fn(x, n - 1) + 1\n\n@torch.compile(backend=\"eager\")\ndef outer(x):\n    return fn(x, 1000)\n\nsys.setrecursionlimit(10000000)\nouter(torch.ones(3))",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/167888"
+  ],
+  "_meta": {
+    "file": "167789_issue_ori_data.json",
+    "generated_at": "2026-04-21 06:14:36",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\167789_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\167789_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "This code gives RecursionError even though the recursionlimit was set to a very high value. If we don't compile, then we don't hit a recursion limit. If we set `tstate->c_recursion_remaining` to a high value as well somewhere in C dynamo, then we run successfully. So we should add some kind of eval_frame API to modify the C recursion limit.",
+  "repro_code": "import sys\nimport torch\n\ndef fn(x, n):\n    if n == 0:\n        return x\n    return fn(x, n - 1) + 1\n\n@torch.compile(backend=\"eager\")\ndef outer(x):\n    return fn(x, 1000)\n\nsys.setrecursionlimit(10000000)\nouter(torch.ones(3))",
+  "repro_output": "[dynamo] sys.setrecursionlimit doesn't seem to do anything",
+  "affected_api": "torch.compile, sys.setrecursionlimit",
+  "trigger_conditions": {
+    "backend": "eager",
+    "dtype": "",
+    "input_shape": "torch.ones(3)",
+    "other_conditions": "Using torch.compile with recursion depth of 1000"
+  },
+  "environment": {
+    "pytorch_version": "",
+    "python_version": "",
+    "os": "",
+    "hardware": ""
+  },
+  "labels": [],
+  "add_fix_code": [
+    "    def test_set_c_recursion_limit(self):",
+    "        old_recursion_limit = sys.getrecursionlimit()",
+    "        try:",
+    "",
+    "            def fn(x, n):",
+    "                if n == 0:",
+    "                    return x",
+    "                return fn(x, n - 1) + 1",
+    "",
+    "            sys.setrecursionlimit(100)",
+    "",
+    "            with self.assertRaises(RecursionError):",
+    "                fn(torch.ones(3), 1000)",
+    "",
+    "            sys.setrecursionlimit(2000)",
+    "",
+    "            fn(torch.ones(3), 1000)",
+    "            opt_fn = torch.compile(fn, backend=\"eager\", dynamic=False)",
+    "            with self.assertRaises(Exception):",
+    "                opt_fn(torch.ones(3), 1000)",
+    "",
+    "            torch._C._dynamo.eval_frame.set_c_recursion_limit(100000)",
+    "            self.assertEqual(fn(torch.ones(3), 1000), opt_fn(torch.ones(3), 1000))",
+    "        finally:",
+    "            sys.setrecursionlimit(old_recursion_limit)",
+    "",
+    "def set_c_recursion_limit(limit: int) -> None: ...",
+    "int c_recursion_limit = -1;",
+    "",
+    "int get_c_recursion_limit() {",
+    "  return c_recursion_limit;",
+    "}",
+    "",
+    "static PyObject* set_c_recursion_limit_py(",
+    "    PyObject* dummy,",
+    "    PyObject* limit_obj) {",
+    "  int limit = PyLong_AsInt(limit_obj);",
+    "  if (limit == -1 && PyErr_Occurred()) {",
+    "    Py_RETURN_NONE;",
+    "  }",
+    "  c_recursion_limit = limit;",
+    "  Py_SetRecursionLimit(limit); // also set the Python limit",
+    "  Py_RETURN_NONE;",
+    "}",
+    "",
+    "    {\"set_c_recursion_limit\", set_c_recursion_limit_py, METH_O, NULL},",
+    "int get_c_recursion_limit();",
+    "",
+    "#if IS_PYTHON_3_12_PLUS && !IS_PYTHON_3_14_PLUS",
+    "",
+    "// c_recursion_remaining only defined in 3.12 and 3.13",
+    "",
+    "struct CRecursionLimitRAII {",
+    "  PyThreadState* tstate;",
+    "  int old_recursion_remaining;",
+    "  CRecursionLimitRAII(PyThreadState* tstate) : tstate{tstate} {",
+    "    auto limit = get_c_recursion_limit();",
+    "    auto& remaining = tstate->c_recursion_remaining;",
+    "    this->old_recursion_remaining = remaining;",
+    "    if (limit < 0) {",
+    "      // no change to limit",
+    "      return;",
+    "    }",
+    "    if (limit < remaining) {",
+    "      throw std::runtime_error(",
+    "          \"new c_recursion limit is lower than thread's current c_recursion_remaining.\");",
+    "    }",
+    "    remaining = limit;",
+    "  }",
+    "  ~CRecursionLimitRAII() {",
+    "    this->tstate->c_recursion_remaining = this->old_recursion_remaining;",
+    "  }",
+    "};",
+    "",
+    "#else",
+    "",
+    "struct CRecursionLimitRAII {",
+    "  CRecursionLimitRAII(PyThreadState* tstate) {}",
+    "};",
+    "",
+    "#endif",
+    "",
+    "    CRecursionLimitRAII tmp(tstate); // increase C recursion limit to the given",
+    "                                     // value during compilation",
+    "    def test_dynamo_set_recursion_limit(self):",
+    "        old_dynamo_recursion_limit = torch._dynamo.get_recursion_limit()",
+    "            torch._dynamo.set_recursion_limit(100000)",
+    "            if old_dynamo_recursion_limit > 0:",
+    "                torch._dynamo.set_recursion_limit(old_dynamo_recursion_limit)",
+    "            sys.setrecursionlimit(old_recursion_limit)",
+    "",
+    "    def test_dynamo_set_recursion_limit_usage(self):",
+    "        old_recursion_limit = sys.getrecursionlimit()",
+    "        old_dynamo_recursion_limit = torch._dynamo.get_recursion_limit()",
+    "        try:",
+    "            torch._dynamo.set_recursion_limit(100)",
+    "            self.assertEqual(torch._dynamo.get_recursion_limit(), 100)",
+    "",
+    "            with self.assertRaisesRegex(ValueError, \"recursion limit\"):",
+    "                torch._dynamo.set_recursion_limit(0)",
+    "",
+    "            self.assertEqual(torch._dynamo.get_recursion_limit(), 100)",
+    "",
+    "            torch._dynamo.set_recursion_limit(1)",
+    "            sys.setrecursionlimit(100)",
+    "",
+    "            @torch.compile(backend=\"eager\", dynamic=False)",
+    "            def fn(x, n):",
+    "                if n == 0:",
+    "                    return x",
+    "                return fn(x, n - 1) + 1",
+    "",
+    "            # with self.assertRaisesRegex(RuntimeError, \"new c_recursion limit\"):",
+    "            #     fn(torch.ones(3), 5)",
+    "        finally:",
+    "            if old_dynamo_recursion_limit > 0:",
+    "                torch._dynamo.set_recursion_limit(old_dynamo_recursion_limit)",
+    "def get_c_recursion_limit() -> int: ...",
+    "    \"set_recursion_limit\",",
+    "",
+    "",
+    "def get_recursion_limit() -> int:",
+    "    \"\"\"",
+    "    Returns the internal dynamo recursion limit set by `torch._dynamo.set_recursion_limit`.",
+    "    \"\"\"",
+    "    return torch._C._dynamo.eval_frame.get_c_recursion_limit()",
+    "",
+    "",
+    "def set_recursion_limit(limit: int) -> None:",
+    "    \"\"\"",
+    "    Sets an internal dynamo recursion limit.",
+    "",
+    "    This is possibly needed in Python 3.12-3.13 since there is a separate C recursion limit",
+    "    that is not visible at the Python level. If you are getting RecursionErrors during",
+    "    Dynamo compilation and `sys.setrecursionlimit()` doesn't help, this function may alleviate",
+    "    the issue.",
+    "",
+    "    NOTE: this function will also call `sys.setrecursionlimit()`.",
+    "    \"\"\"",
+    "    torch._C._dynamo.eval_frame.set_c_recursion_limit(limit)",
+    "static int c_recursion_limit = -1;",
+    "static PyObject* get_c_recursion_limit_py(PyObject* dummy, PyObject* args) {",
+    "  return (PyObject*)PyLong_FromInt32(c_recursion_limit);",
+    "}",
+    "",
+    "  if (limit < 1) {",
+    "    PyErr_SetString(",
+    "        PyExc_ValueError, \"recursion limit must be greater or equal than 1\");",
+    "    return NULL;",
+    "  }",
+    "    {\"get_c_recursion_limit\", get_c_recursion_limit_py, METH_NOARGS, NULL},",
+    "      PyErr_SetString(",
+    "          PyExc_RuntimeError,",
+    "    // C recursion limit failure",
+    "    if (PyErr_Occurred()) {",
+    "      fail();",
+    "      return eval_result;",
+    "    }",
+    "            with self.assertRaisesRegex(RuntimeError, \"new c_recursion limit\"):",
+    "                fn(torch.ones(3), 5)"
+  ],
+  "sub_fix_code": [
+    "    def test_set_c_recursion_limit(self):",
+    "            torch._C._dynamo.eval_frame.set_c_recursion_limit(100000)",
+    "int c_recursion_limit = -1;",
+    "      throw std::runtime_error(",
+    "            # with self.assertRaisesRegex(RuntimeError, \"new c_recursion limit\"):",
+    "            #     fn(torch.ones(3), 5)"
+  ],
+  "core_api": "torch.compile",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [
+      {
+        "api_name": "tf.compat.v1.tpu.rewrite",
+        "api_type": "tensorflow",
+        "similarity": 0.9947934746742249
+      },
+      {
+        "api_name": "tf.compat.v1.tpu.batch_parallel",
+        "api_type": "tensorflow",
+        "similarity": 0.9940187931060791
+      },
+      {
+        "api_name": "tf.experimental.dtensor.copy_to_mesh",
+        "api_type": "tensorflow",
+        "similarity": 0.9937996864318848
+      },
+      {
+        "api_name": "tf.compat.v1.enable_eager_execution",
+        "api_type": "tensorflow",
+        "similarity": 0.9934076070785522
+      },
+      {
+        "api_name": "tf.compat.v1.train.string_input_producer",
+        "api_type": "tensorflow",
+        "similarity": 0.9932727217674255
+      },
+      {
+        "api_name": "tf.compat.v1.train.add_queue_runner",
+        "api_type": "tensorflow",
+        "similarity": 0.9932515621185303
+      },
+      {
+        "api_name": "tf.compat.v1.name_scope",
+        "api_type": "tensorflow",
+        "similarity": 0.9931139349937439
+      },
+      {
+        "api_name": "tf.keras.backend.name_scope",
+        "api_type": "tensorflow",
+        "similarity": 0.9931139349937439
+      },
+      {
+        "api_name": "tf.keras.name_scope",
+        "api_type": "tensorflow",
+        "similarity": 0.9931139349937439
+      },
+      {
+        "api_name": "tf.name_scope",
+        "api_type": "tensorflow",
+        "similarity": 0.9931139349937439
+      },
+      {
+        "api_name": "tf.compat.v1.train.range_input_producer",
+        "api_type": "tensorflow",
+        "similarity": 0.9930681586265564
+      }
+    ],
+    "issue_to_api": [
+      {
+        "api_name": "tf.errors.OperatorNotAllowedInGraphError",
+        "api_type": "issue",
+        "similarity": 0.9825688600540161
+      },
+      {
+        "api_name": "torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed",
+        "api_type": "issue",
+        "similarity": 0.9816185235977173
+      },
+      {
+        "api_name": "torch.nn.functional.sigmoid",
+        "api_type": "issue",
+        "similarity": 0.9811781644821167
+      },
+      {
+        "api_name": "tf.keras.backend.epsilon",
+        "api_type": "issue",
+        "similarity": 0.9804871678352356
+      },
+      {
+        "api_name": "torch.nn.functional.tanh",
+        "api_type": "issue",
+        "similarity": 0.9800419211387634
+      },
+      {
+        "api_name": "torch.library.fallthrough_kernel",
+        "api_type": "issue",
+        "similarity": 0.9798305630683899
+      },
+      {
+        "api_name": "tf.keras.backend.floatx",
+        "api_type": "issue",
+        "similarity": 0.9795913696289062
+      },
+      {
+        "api_name": "torch.backends.cuda.math_sdp_enabled",
+        "api_type": "issue",
+        "similarity": 0.9791697263717651
+      },
+      {
+        "api_name": "tf.autograph.trace",
+        "api_type": "issue",
+        "similarity": 0.978798508644104
+      },
+      {
+        "api_name": "tf.compat.v1.linalg.trace",
+        "api_type": "issue",
+        "similarity": 0.978798508644104
+      },
+      {
+        "api_name": "tf.experimental.numpy.trace",
+        "api_type": "issue",
+        "similarity": 0.978798508644104
+      }
+    ],
+    "pytorch_to_pytorch": [
+      {
+        "api_name": "torch.compile",
+        "api_type": "pytorch",
+        "similarity": 1.0
+      },
+      {
+        "api_name": "torch.distributed.reduce",
+        "api_type": "pytorch",
+        "similarity": 0.9944814443588257
+      },
+      {
+        "api_name": "torch.prod",
+        "api_type": "pytorch",
+        "similarity": 0.9944407939910889
+      },
+      {
+        "api_name": "torch.library.impl_abstract",
+        "api_type": "pytorch",
+        "similarity": 0.9943459033966064
+      },
+      {
+        "api_name": "torch.all",
+        "api_type": "pytorch",
+        "similarity": 0.9942798018455505
+      },
+      {
+        "api_name": "torch.any",
+        "api_type": "pytorch",
+        "similarity": 0.9942690134048462
+      },
+      {
+        "api_name": "torch.lobpcg",
+        "api_type": "pytorch",
+        "similarity": 0.99420565366745
+      },
+      {
+        "api_name": "torch.distributed.send_object_list",
+        "api_type": "pytorch",
+        "similarity": 0.9941133856773376
+      },
+      {
+        "api_name": "torch.distributed.recv_object_list",
+        "api_type": "pytorch",
+        "similarity": 0.9941133260726929
+      },
+      {
+        "api_name": "torch.distributed.broadcast_object_list",
+        "api_type": "pytorch",
+        "similarity": 0.994113028049469
+      },
+      {
+        "api_name": "torch.distributed.gather_object",
+        "api_type": "pytorch",
+        "similarity": 0.9940178394317627
+      }
+    ]
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "issue_to_api",
+      "test_cases": [
+        "167789_issue_to_api_0.output.py",
+        "167789_issue_to_api_1.output.py",
+        "167789_issue_to_api_10.output.py",
+        "167789_issue_to_api_2.output.py",
+        "167789_issue_to_api_3.output.py",
+        "167789_issue_to_api_4.output.py",
+        "167789_issue_to_api_5.output.py",
+        "167789_issue_to_api_6.output.py",
+        "167789_issue_to_api_7.output.py",
+        "167789_issue_to_api_8.output.py",
+        "167789_issue_to_api_9.output.py"
+      ]
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": [
+        "167789_pytorch_to_pytorch_0.output.py",
+        "167789_pytorch_to_pytorch_1.output.py",
+        "167789_pytorch_to_pytorch_10.output.py",
+        "167789_pytorch_to_pytorch_2.output.py",
+        "167789_pytorch_to_pytorch_3.output.py",
+        "167789_pytorch_to_pytorch_4.output.py",
+        "167789_pytorch_to_pytorch_5.output.py",
+        "167789_pytorch_to_pytorch_6.output.py",
+        "167789_pytorch_to_pytorch_7.output.py",
+        "167789_pytorch_to_pytorch_8.output.py",
+        "167789_pytorch_to_pytorch_9.output.py"
+      ]
+    }
+  }
+}

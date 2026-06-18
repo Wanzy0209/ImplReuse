@@ -1,0 +1,47 @@
+import torch
+import torch.nn as nn
+
+class M(nn.Module):
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft, self.hop, self.win = n_fft, hop, win
+        # Register window as buffer so it moves with .to(device)
+        self.register_buffer("window", torch.hann_window(win))
+        # Introduce parameter for broadcasting / stride ops
+        self.p = nn.Parameter(torch.tensor(2.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        S = torch.stft(
+            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,
+            return_complex=True, window=self.window, pad_mode="constant"
+        )
+        R = torch.abs(S.real)   # unary op on real
+        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)
+        
+        # Adaptation: Replace torch.complex(R, I) with torch.randn_like
+        # to test if the similar API handles strides/memory formats correctly.
+        Z = torch.randn_like(R)
+        return Z
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(0)
+
+    x = torch.randn(1, 16000, device=device)
+    m = M().to(device)
+
+    # Eager: works fine
+    z_eager = m(x)
+    print("eager mode OK:", z_eager.shape)
+
+    # Compile: check for runtime stride assertion or errors
+    m_c = torch.compile(m)
+    z_compiled = m_c(x)
+    print("compiled mode OK:", z_compiled.shape)
+
+    # Basic sanity check
+    assert z_eager.shape == z_compiled.shape
+    assert z_eager.dtype == z_compiled.dtype
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,104 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_conv3d_divergence():
+    """
+    Test case adapted from PyTorch Issue 163569.
+    Original issue: torch.nn.functional.conv1d works in eager but fails compile.
+    This test checks for similar eager/compile divergence in tf.nn.conv3d
+    with mixed precision (bfloat16/float32) and complex tensor manipulations.
+    """
+    
+    # Enable XLA for compilation check (similar to torch.compile)
+    # Note: tf.function uses AutoGraph and Tracing, which is the TF equivalent of compilation.
+    
+    def foo(arg0, arg1, arg2):
+        # t0 = arg0 
+        # PyTorch: size=(2, 261, 17, 358), dtype=bfloat16
+        # TF Adaptation (3D): size=(2, 261, 17, 1, 358), dtype=bfloat16
+        t0 = arg0
+        
+        # t1 = t0.max(dim=0).values
+        # PyTorch: size=(261, 17, 358)
+        # TF Adaptation: size=(261, 17, 1, 358)
+        t1 = tf.reduce_max(t0, axis=0)
+        
+        # t2 = t1.transpose(1, 0)
+        # PyTorch: size=(17, 261, 358)
+        # TF Adaptation: size=(17, 261, 1, 358)
+        t2 = tf.transpose(t1, perm=[1, 0, 2, 3])
+        
+        # t3 = arg1
+        # PyTorch: size=(17, 64, 358), dtype=float32
+        # TF Adaptation: size=(17, 64, 1, 1, 358), dtype=float32
+        t3 = arg1
+        
+        # t4 = torch.exp(t3)
+        t4 = tf.exp(t3)
+        
+        # t5 = arg2
+        # PyTorch: size=(261, 1, 64), dtype=float32
+        t5 = arg2
+        
+        # t6 = t5.transpose(2, 1)
+        # PyTorch: size=(261, 64, 1) -> used as weight for conv1d
+        # TF Adaptation: conv3d filter needs (depth, height, width, in_channels, out_channels)
+        # We map (261, 64, 1) -> (1, 1, 1, 64, 261)
+        t6_transposed = tf.transpose(t5, perm=[0, 2, 1]) # (261, 64, 1)
+        t6 = tf.reshape(t6_transposed, (1, 1, 1, 64, 261))
+        
+        # t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0)
+        # PyTorch: size=(17, 261, 358)
+        # TF Adaptation: conv3d with data_format='NCDHW' to match PyTorch channel-first logic
+        # Input: (17, 64, 1, 1, 358), Filter: (1, 1, 1, 64, 261)
+        # Output: (17, 261, 1, 1, 358)
+        t7 = tf.nn.conv3d(
+            t4, 
+            t6, 
+            strides=[1, 1, 1, 1, 1], 
+            padding='VALID',
+            data_format='NCDHW'
+        )
+        
+        # t8 = t7.clone(); t8.zero_()
+        t8 = tf.zeros_like(t7)
+        
+        # t9 = t2 * t7 * t8
+        # t2 is (17, 261, 1, 358), t7 is (17, 261, 1, 1, 358)
+        # Expand dims of t2 to broadcast
+        t2_expanded = tf.expand_dims(t2, axis=3)
+        t9 = t2_expanded * t7 * t8
+        
+        return t9
+
+    # Initialize inputs
+    # arg0: (2, 261, 17, 1, 358) bfloat16
+    arg0 = tf.random.uniform((2, 261, 17, 1, 358), minval=-1.0, maxval=1.0, dtype=tf.bfloat16)
+    # arg1: (17, 64, 1, 1, 358) float32
+    arg1 = tf.random.uniform((17, 64, 1, 1, 358), minval=-1.0, maxval=1.0, dtype=tf.float32)
+    # arg2: (261, 1, 64) float32
+    arg2 = tf.random.uniform((261, 1, 64), minval=-1.0, maxval=1.0, dtype=tf.float32)
+
+    # 1. Run Eager
+    out_eager = foo(arg0, arg1, arg2)
+    
+    # 2. Run Compiled (tf.function)
+    compiled_foo = tf.function(foo)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    
+    # 3. Check for Divergence
+    # Note: bfloat16 precision might lead to small numerical differences, 
+    # but the logic (zeroing out t8) should result in exact zeros if logic is preserved.
+    # However, we check closeness to be safe against different backend implementations.
+    
+    try:
+        np.testing.assert_allclose(out_eager.numpy(), out_compiled.numpy(), rtol=1e-5, atol=1e-5)
+        print("Test Passed: Eager and Compiled results match.")
+    except AssertionError as e:
+        print("Test Failed: Divergence detected between Eager and Compiled.")
+        print(str(e))
+        raise
+
+if __name__ == '__main__':
+    test_conv3d_divergence()

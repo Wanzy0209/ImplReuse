@@ -1,0 +1,18 @@
+import torch
+
+# Replicate the configuration from the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def f(x):
+    # Adapted to use torch.prod instead of nonzero and slicing
+    return torch.prod(x)
+
+# Run the test
+input_data = torch.randn(3, 4)
+out = torch.compile(f, fullgraph=True)(input_data)
+
+# Verify the result
+expected = torch.prod(input_data)
+assert torch.allclose(out, expected), f"Expected {expected}, got {out}"
+print("Test passed successfully.")

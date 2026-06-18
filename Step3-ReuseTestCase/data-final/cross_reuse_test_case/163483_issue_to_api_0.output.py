@@ -1,0 +1,62 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_all_gather_memory_format(rank, world_size):
+    """
+    Test case to verify that torch.distributed.all_gather preserves the 
+    memory format (specifically channels_last) of the input tensor.
+    
+    This test reproduces the logic from Issue 163483 where the output 
+    tensor's memory ordering was unexpectedly changed.
+    """
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    
+    # Using nccl as per the original bug report
+    dist.init_process_group(backend='nccl', rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
+    # Create a tensor with channels_last memory format
+    # Shape (2, 2, 2, 2) is 4D, suitable for channels_last (N, C, H, W)
+    x = torch.arange(0, 16).reshape(2, 2, 2, 2).cuda().to(memory_format=torch.channels_last)
+    
+    # Verify input is indeed channels_last
+    assert x.is_contiguous(memory_format=torch.channels_last), "Input tensor setup failed: not channels_last"
+
+    # Prepare list for gathered tensors
+    x_list = [torch.zeros_like(x) for _ in range(world_size)]
+    
+    # Perform the all_gather operation
+    dist.all_gather(x_list, x)
+
+    # --- Assertions ---
+    
+    # 1. Check logical equality (values should be the same)
+    assert torch.equal(x, x_list[rank]), \
+        f"Rank {rank}: Logical content mismatch. Input and gathered output are not equal."
+
+    # 2. Check memory format preservation (The core bug check)
+    # The bug reported that x_list[rank] would revert to contiguous (default) format
+    assert x_list[rank].is_contiguous(memory_format=torch.channels_last), \
+        f"Rank {rank}: Memory format mismatch. Output lost channels_last format."
+
+    # 3. Check storage stride alignment (optional but stricter check for memory ordering)
+    # channels_last implies strides (H*W*C, 1, W*C, C) for (N, C, H, W) roughly
+    # Here we just ensure the stride pattern matches the input
+    assert x.stride() == x_list[rank].stride(), \
+        f"Rank {rank}: Stride mismatch. Memory ordering changed."
+
+    print(f"Rank {rank}: Test Passed. Memory format preserved correctly.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Check for CUDA availability as the bug report involves .cuda() and nccl
+    if not torch.cuda.is_available():
+        raise RuntimeError("This test requires CUDA to run, as per the original bug report.")
+    
+    world_size = 2
+    mp.spawn(test_all_gather_memory_format, args=(world_size,), nprocs=world_size, join=True)

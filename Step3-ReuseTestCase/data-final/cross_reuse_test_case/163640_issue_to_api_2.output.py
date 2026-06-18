@@ -1,0 +1,66 @@
+import torch
+import torch.nn as nn
+from torch.library import Library, impl, fallthrough_kernel
+
+# Define a custom library and operator to leverage the similar API
+my_lib = Library("my_test_lib", "DEF")
+my_lib.define("custom_mask_op(Tensor mask) -> Tensor")
+
+# Register a functional kernel for CPU that returns a Tensor (mimicking correct behavior)
+@impl(my_lib, "custom_mask_op", "CPU")
+def custom_mask_op_cpu(mask):
+    # Ensure we return a Tensor, not a bool, to avoid the original bug
+    return mask.to(torch.float32)
+
+# Leverage the similar API: torch.library.fallthrough_kernel
+# We register it for CUDA (assuming the test runs on CPU) to demonstrate usage
+# without breaking the execution flow.
+my_lib.impl("custom_mask_op", fallthrough_kernel, "CUDA")
+
+class TinyEnc(nn.Module):
+    def __init__(self, d_model=512, nhead=8, num_layers=1):
+        super().__init__()
+        layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, batch_first=True, dropout=0.1
+        )
+        self.enc = nn.TransformerEncoder(layer, num_layers=num_layers)
+        self.proj = nn.Linear(d_model, 10)
+
+    def forward(self, x, pad_mask):
+        # Use the custom operator defined via torch.library
+        # This simulates the internal call path that triggered the bug
+        processed_mask = torch.ops.my_test_lib.custom_mask_op(pad_mask)
+        
+        # TransformerEncoder expects a boolean mask for src_key_padding_mask
+        # We cast back to bool to maintain the original logic's interface
+        y = self.enc(x, mask=None, src_key_padding_mask=processed_mask.bool())
+        return self.proj(y)
+
+def test_transformer_encoder_with_custom_mask_op():
+    torch.manual_seed(0)
+    m = TinyEnc().eval()
+
+    B, T, C = 1, 41, 512
+    x = torch.randn(B, T, C, dtype=torch.float32)
+    pad_mask = (torch.rand(B, T) > 0.5)
+    pad_mask[..., 0] = True
+
+    # Eager mode check
+    with torch.inference_mode():
+        y_eager = m(x, pad_mask)
+    print("eager ok:", tuple(y_eager.shape))
+
+    # Compile mode check (fullgraph=True)
+    # This verifies that the custom op and the TransformerEncoder work together
+    # under torch.compile, and that the return type handling is correct.
+    cm = torch.compile(m, backend="inductor", fullgraph=True)
+    with torch.inference_mode():
+        y_compiled = cm(x, pad_mask)
+    
+    print("compile ok:", tuple(y_compiled.shape))
+    
+    # Assert outputs are close
+    assert torch.allclose(y_eager, y_compiled, atol=1e-3)
+
+if __name__ == "__main__":
+    test_transformer_encoder_with_custom_mask_op()

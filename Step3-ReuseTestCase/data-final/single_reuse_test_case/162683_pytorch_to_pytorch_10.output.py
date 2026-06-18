@@ -1,0 +1,35 @@
+import torch
+import time
+
+torch.manual_seed(0)
+
+# Adapted configurations for torch.split
+# Format: (input_shape, split_size_or_sections, dim)
+configs = [
+    ((1, 12, 10, 64), 5, 2),
+    ((1, 12, 10, 10), 10, 3),
+]
+
+def benchmark_split(shape, split_size_or_sections, dim, dtype=torch.float16, device="cpu", repeat=500):
+    A = torch.empty(shape, dtype=dtype, device=device).uniform_(0,1) * 2 - 1
+    
+    # warm up
+    for _ in range(5000):
+        _ = torch.split(A, split_size_or_sections, dim=dim)
+    
+    # run
+    times = []
+    for i in range(repeat):
+        start = time.time()
+        _ = torch.split(A, split_size_or_sections, dim=dim)
+        end = time.time()
+        if i > 100:
+            times.append(round((end - start) * 1000 * 1000))
+    times.sort()
+    avg_time_us = sum(times) / len(times)
+    return avg_time_us
+
+if __name__ == "__main__":
+    for shape, split_size, dim in configs:
+        t = benchmark_split(shape, split_size, dim)
+        print(f"torch.split({shape}, {split_size}, dim={dim})  ->  {t:.3f} us")

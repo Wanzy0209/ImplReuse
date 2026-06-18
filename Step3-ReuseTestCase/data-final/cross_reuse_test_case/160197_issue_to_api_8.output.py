@@ -1,0 +1,52 @@
+import torch
+import warnings
+
+def test_lbfgs_no_scalar_conversion_warning():
+    """
+    Test case for Issue 160197: LBFGS raises warning about converting a tensor 
+    with requires_grad=True to a scalar.
+    
+    This test adapts the pattern from the similar API (tf.config.run_functions_eagerly),
+    which involves defining a function (closure), passing it to a framework construct,
+    and verifying its execution behavior (side effects/warnings).
+    """
+    # Setup inputs and optimizer
+    a, b = torch.rand((2, 32, 32))
+    a.requires_grad_()
+    optimizer = torch.optim.LBFGS([a])
+    loss_fn = lambda x, y: (x - y).pow(2).mean()
+
+    # Define the closure function.
+    # This mirrors the pattern of defining a function (e.g., my_func) in the 
+    # tf.config.run_functions_eagerly example before passing it to the framework.
+    def closure():
+        optimizer.zero_grad()
+        loss = loss_fn(a, b)
+        loss.backward()
+        return loss
+
+    # Capture warnings to verify the fix/behavior.
+    # This mimics checking side effects (like prints) in the TF example.
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+
+        # Execute the optimizer step.
+        # This is analogous to calling the wrapped function in the TF example.
+        optimizer.step(closure)
+
+        # Filter for the specific warning mentioned in the bug report.
+        # The bug states that converting a tensor with requires_grad=True to a scalar
+        # raises a UserWarning.
+        scalar_warnings = [
+            warning for warning in w
+            if "Converting a tensor with requires_grad=True to a scalar" in str(warning.message)
+        ]
+
+        # Assertion: The warning should not be raised when using LBFGS with a closure.
+        # If the bug is present, this assertion will fail.
+        assert len(scalar_warnings) == 0, \
+            f"LBFGS raised an unexpected warning about converting requires_grad=True tensor to scalar: {scalar_warnings[0].message if scalar_warnings else ''}"
+
+if __name__ == "__main__":
+    test_lbfgs_no_scalar_conversion_warning()
+    print("Test passed: No scalar conversion warning detected.")

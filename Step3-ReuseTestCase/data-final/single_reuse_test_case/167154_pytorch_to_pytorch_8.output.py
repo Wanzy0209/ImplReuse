@@ -1,0 +1,41 @@
+import torch
+from torch.distributions import constraints
+
+# Check for MPS availability
+if not torch.backends.mps.is_available():
+    print("MPS device not available. Skipping test.")
+else:
+    # Reproduce the non-contiguous tensor setup from the bug report
+    shape = (5, 499, 768)
+    stride = (0, 768, 1)
+    storage_offset = 0
+    numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+    base = torch.arange(numel, dtype=torch.float32, device="mps")
+    input_tensor = torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+
+    # Define a class using the dependent_property decorator
+    class DummyDistribution:
+        def __init__(self, low, high):
+            self.low = low
+            self.high = high
+
+        @constraints.dependent_property(is_discrete=False, event_dim=0)
+        def support(self):
+            return constraints.interval(self.low, self.high)
+
+    # Instantiate the distribution
+    dist = DummyDistribution(0.0, 100.0)
+
+    # Call the check method on the constraint returned by the dependent_property
+    # This triggers operations on the non-contiguous MPS tensor.
+    # If the bug exists in this API path, it will raise an assertion error regarding buffer size.
+    try:
+        result = dist.support.check(input_tensor)
+        # Verify the result shape matches the input
+        assert result.shape == input_tensor.shape
+        print("Test passed: dependent_property handled non-contiguous MPS tensor correctly.")
+    except RuntimeError as e:
+        if "buffer is not large enough" in str(e):
+            print(f"Bug reproduced: {e}")
+        else:
+            raise

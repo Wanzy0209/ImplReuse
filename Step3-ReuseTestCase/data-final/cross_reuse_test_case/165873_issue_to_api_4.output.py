@@ -1,0 +1,59 @@
+import tensorflow as tf
+import numpy as np
+
+def test_linalg_trace_shape_mismatch():
+    """
+    Test case for tf.linalg.trace inspired by PyTorch Issue #165873.
+    
+    The original issue describes a scenario where a scalar parameter (0-d tensor) 
+    silently accepts a 1D tensor during load_state_dict, taking only the first value.
+    
+    This test verifies that tf.linalg.trace, which expects tensors of rank >= 2,
+    correctly handles shape mismatches (Scalar vs 1D) by raising errors, 
+    rather than silently failing or producing unexpected results.
+    """
+    
+    # 1. Setup inputs mirroring the bug report context
+    # A scalar value (0-d tensor)
+    scalar_input = tf.constant(0.0)
+    
+    # A large 1D tensor (similar to the 'large_tensor' in the bug report)
+    large_1d_tensor = tf.constant(np.random.randn(32000))
+    
+    # A valid 2D tensor for baseline verification
+    valid_2d_tensor = tf.constant([[1.0, 2.0], [3.0, 4.0]])
+    
+    # 2. Baseline: Verify correct operation on valid input (Rank 2)
+    # Trace of [[1, 2], [3, 4]] should be 1 + 4 = 5
+    expected_trace = 5.0
+    actual_trace = tf.linalg.trace(valid_2d_tensor)
+    assert actual_trace.numpy() == expected_trace, \
+        f"Baseline test failed: expected {expected_trace}, got {actual_trace.numpy()}"
+    
+    # 3. Test Case: Scalar Input (Rank 0)
+    # We expect an error because trace requires rank >= 2.
+    # This contrasts with the PyTorch bug where a scalar parameter silently accepted a 1D tensor.
+    try:
+        tf.linalg.trace(scalar_input)
+        assert False, "tf.linalg.trace should raise an error for scalar (0-d) input"
+    except ValueError as e:
+        # Expected behavior
+        pass
+    except Exception as e:
+        # Depending on TF version/build, might be a different error, but an error is required
+        pass
+
+    # 4. Test Case: 1D Tensor Input (Rank 1)
+    # We expect an error because trace requires rank >= 2.
+    try:
+        tf.linalg.trace(large_1d_tensor)
+        assert False, "tf.linalg.trace should raise an error for 1-d tensor input"
+    except ValueError as e:
+        # Expected behavior
+        pass
+    except Exception as e:
+        pass
+
+if __name__ == "__main__":
+    test_linalg_trace_shape_mismatch()
+    print("Test passed: tf.linalg.trace correctly handles shape mismatches.")

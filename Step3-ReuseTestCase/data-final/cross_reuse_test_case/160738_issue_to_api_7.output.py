@@ -1,0 +1,26 @@
+import torch
+import tensorflow as tf
+
+def test_get_build_info():
+    """
+    Test case adapted from the torch.var bug report structure.
+    The original bug checks if an operation (var) handles a specific edge case (dim=0 on 0-d tensor)
+    across different devices. Here, we apply the same structural logic to tf.sysconfig.get_build_info
+    to ensure the API call succeeds and returns the expected dictionary structure.
+    """
+    try:
+        # Mimic the operation call from the original bug report
+        output = tf.sysconfig.get_build_info()
+        
+        # Mimic the success output logic
+        print(f"get_build_info test succeeds. output: {output}")
+        
+        # Add assertion to verify the output type, similar to verifying the tensor output
+        assert isinstance(output, dict), "Output should be a dictionary"
+        
+    except Exception as e:
+        # Mimic the error handling logic
+        print(f"get_build_info test fails: {e}")
+
+if __name__ == "__main__":
+    test_get_build_info()

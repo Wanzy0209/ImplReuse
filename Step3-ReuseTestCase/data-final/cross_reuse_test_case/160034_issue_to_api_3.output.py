@@ -1,0 +1,33 @@
+import tensorflow as tf
+import numpy as np
+
+def test_tf_exp_complex64_support():
+    """
+    Test case adapted from Issue 160034 logic.
+    
+    The original issue highlights a failure in PyTorch's index_put_ when handling 
+    complex64 tensors on the MPS backend, resulting in a generic error message.
+    
+    This test verifies that the similar API, tf.experimental.numpy.exp, correctly 
+    handles complex64 inputs (as the exponential function is mathematically defined 
+    for complex numbers), ensuring proper dtype support.
+    """
+    # Create a complex64 tensor, mirroring the 'data' and 'image' creation in the bug report
+    input_tensor = tf.constant([1.0 + 2.0j, 3.0 + 4.0j], dtype=tf.complex64)
+
+    # Apply the similar API (tf.experimental.numpy.exp)
+    # In the original bug, this step failed with a generic error.
+    # Here we expect success.
+    result = tf.experimental.numpy.exp(input_tensor)
+
+    # Calculate expected result using numpy for validation
+    # exp(a + bi) = e^a * (cos(b) + i*sin(b))
+    expected = np.exp([1.0 + 2.0j, 3.0 + 4.0j])
+
+    # Assert that the TensorFlow implementation matches the expected mathematical output
+    np.testing.assert_allclose(result.numpy(), expected, rtol=1e-5)
+    
+    print("Test passed: tf.experimental.numpy.exp supports complex64.")
+
+if __name__ == "__main__":
+    test_tf_exp_complex64_support()

@@ -1,0 +1,74 @@
+import torch
+import tensorflow as tf
+
+def test_tf_control_dependencies_compile_divergence():
+    """
+    This test case adapts the logic from the PyTorch issue (Issue ID: 164725)
+    to TensorFlow. The original issue involves a divergence between eager and 
+    compiled modes when extracting a scalar value (.item()) from a tensor 
+    manipulated by masked_select and squeeze.
+
+    In TensorFlow, the analogous concept to managing execution order and 
+    side-effects within a compiled graph (tf.function) is tf.control_dependencies.
+    This test verifies that tf.control_dependencies correctly enforces the 
+    execution order of operations (specifically an assertion on the scalar value)
+    inside a tf.function, mirroring the need for correct handling of scalar 
+    extraction in the PyTorch bug.
+    """
+
+    # Replicate the tensor manipulation logic from the PyTorch issue
+    # PyTorch: var_node_4 = torch.full((6,), True, dtype=torch.bool)
+    var_node_4 = tf.fill((6,), True) # dtype=bool implied by value
+    
+    # PyTorch: var_node_3 = torch.reshape(var_node_4, [2, 3])
+    var_node_3 = tf.reshape(var_node_4, (2, 3))
+    
+    # PyTorch: _x_ms = torch.arange(max(1, 1), device=var_node_3.device).to(var_node_3.dtype)
+    # arange(1) -> [0]. to(bool) -> [False]
+    _x_ms = tf.range(1, dtype=tf.bool)
+    
+    # PyTorch: _mask_ms = torch.zeros_like(_x_ms, dtype=torch.bool)
+    _mask_ms = tf.zeros_like(_x_ms, dtype=tf.bool)
+    
+    # PyTorch: _mask_ms[:1] = True
+    # In TF, we use tensor_scatter_nd_update to modify specific indices
+    _mask_ms = tf.tensor_scatter_nd_update(_mask_ms, [[0]], [True])
+    
+    # PyTorch: var_node_2 = torch.masked_select(_x_ms, _mask_ms)
+    var_node_2 = tf.boolean_mask(_x_ms, _mask_ms)
+    
+    # PyTorch: var_node_1 = torch.squeeze(var_node_2)
+    var_node_1 = tf.squeeze(var_node_2) # Results in scalar tensor False
+    
+    # Define the compiled function using tf.function (analogous to torch.compile)
+    @tf.function
+    def compiled_program_with_deps():
+        # Retrieve the scalar tensor
+        scalar_tensor = var_node_1
+        
+        # In the PyTorch bug, .item() is called. In TF graph mode, we often need
+        # to ensure operations dependent on this value happen in order.
+        # We use tf.control_dependencies to enforce that an assertion (or check)
+        # on the scalar happens before the multiplication, preventing potential
+        # reordering issues in the compiled graph.
+        
+        # The value should be False based on the logic above.
+        with tf.control_dependencies([tf.assert_equal(scalar_tensor, False, message="Scalar value check failed")]):
+            sentinel = tf.constant(1.0)
+            # Cast bool to float for multiplication
+            result = tf.cast(scalar_tensor, tf.float32) * sentinel
+            
+        return result
+
+    # Execute the compiled program
+    try:
+        result = compiled_program_with_deps()
+        # Verify the result matches the expected logic (False * 1.0 = 0.0)
+        assert result == 0.0, f"Expected 0.0, got {result}"
+        print(' TF compile success with control dependencies')
+    except Exception as e:
+        print(f' TF compile failed: {e}')
+        raise
+
+if __name__ == "__main__":
+    test_tf_control_dependencies_compile_divergence()

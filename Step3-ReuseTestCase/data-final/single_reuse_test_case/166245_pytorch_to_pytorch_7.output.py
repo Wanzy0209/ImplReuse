@@ -1,0 +1,74 @@
+import torch
+
+# Configuration from the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch.manual_seed(751735337)
+
+def fuzzed_program(arg_0, arg_1, arg_2, arg_3, arg_4, arg_5, arg_6, sentinel):
+    # Reproduce the tensor operations from the fuzzer output
+    var_node_4 = arg_0 # size=(15, 108, 4), stride=(432, 1, 4), dtype=int16, device=cuda
+    var_node_3 = torch.chunk(var_node_4, 4, dim=1)[0] # size=(15, 27, 4), stride=(108, 4, 1), dtype=int16, device=cuda
+    var_node_2 = torch.chunk(var_node_3, 4, dim=2)[0] # size=(15, 27, 1), stride=(27, 1, 1), dtype=int16, device=cuda
+    var_node_1 = torch.squeeze(var_node_2) # size=(15, 27), stride=(1, 1), dtype=int16, device=cuda
+    
+    # Note: Explicitly adding device='cuda' to torch.full calls based on the comments in the bug report
+    var_node_8 = torch.full((13, 27), 3, dtype=torch.int16, device=var_node_4.device) # size=(13, 27), stride=(27, 1), dtype=int16, device=cuda
+    var_node_9 = arg_1 # size=(11,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_7 = var_node_8.size(0)
+    _index_var_node_7 = torch.randint(0, _input_size_var_node_7, (11,), device=var_node_8.device)
+    var_node_7 = torch.index_select(var_node_8, 0, _index_var_node_7) # size=(11, 27), stride=(1, 1), dtype=int16, device=cuda
+    var_node_6 = torch.clamp(var_node_7, min=-1.0, max=1.0) # size=(11, 27), stride=(1, 1), dtype=int16, device=cuda
+    
+    var_node_12 = arg_2 # size=(3, 27), stride=(27, 1), dtype=int16, device=cuda
+    var_node_11 = torch.clamp(var_node_12, min=-1.0, max=1.0) # size=(3, 27), stride=(27, 1), dtype=int16, device=cuda
+    var_node_13 = torch.full((1,), 3, dtype=torch.int64, device=var_node_4.device) # size=(1,), stride=(1,), dtype=int64, device=cuda
+    
+    _input_size_var_node_10 = var_node_11.size(0)
+    _index_var_node_10 = torch.randint(0, _input_size_var_node_10, (1,), device=var_node_11.device)
+    var_node_10 = torch.index_select(var_node_11, 0, _index_var_node_10) # size=(1, 27), stride=(27, 1), dtype=int16, device=cuda
+    
+    var_node_16 = arg_3 # size=(1, 27), stride=(1, 1), dtype=int16, device=cuda
+    var_node_17 = arg_4 # size=(1, 27), stride=(27, 1), dtype=int16, device=cuda
+    var_node_18 = arg_5 # size=(1, 27), stride=(27, 1), dtype=int16, device=cuda
+    var_node_15 = torch.cat([var_node_16, var_node_17, var_node_18], dim=0) # size=(3, 27), stride=(27, 1), dtype=int16, device=cuda
+    
+    var_node_20 = arg_6 # size=(1,), stride=(1,), dtype=int64, device=cuda
+    var_node_19 = torch.clamp(var_node_20, min=None, max=1.0) # size=(1,), stride=(1,), dtype=int64, device=cuda
+    
+    _input_size_var_node_14 = var_node_15.size(0)
+    _index_var_node_14 = torch.randint(0, _input_size_var_node_14, (1,), device=var_node_15.device)
+    var_node_14 = torch.index_select(var_node_15, 0, _index_var_node_14) # size=(1, 27), stride=(27, 1), dtype=int16, device=cuda
+    
+    var_node_22 = torch.full((4, 27), 3, dtype=torch.int16, device=var_node_4.device) # size=(4, 27), stride=(27, 1), dtype=int16, device=cuda
+    var_node_24 = torch.full((4,), 3, dtype=torch.int64, device=var_node_4.device) # size=(4,), stride=(1,), dtype=int64, device=cuda
+    var_node_25 = torch.full((2,), 3, dtype=torch.int64, device=var_node_4.device) # size=(2,), stride=(1,), dtype=int64, device=cuda
+
+    # Original API Under Test: torch.gather
+    # Similar API: torch.trunc
+    # Replacing the call site with torch.trunc
+    # We apply it to var_node_6 which has non-trivial stride and dtype history
+    result = torch.trunc(var_node_6)
+    
+    return result
+
+# Setup inputs
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+if device == 'cpu':
+    print("Warning: CUDA not available. Running on CPU. The original bug was specific to CUDA.")
+
+arg_0 = torch.randn(15, 108, 4, dtype=torch.int16, device=device)
+arg_1 = torch.randint(0, 100, (11,), dtype=torch.int64, device=device)
+arg_2 = torch.randn(3, 27, dtype=torch.int16, device=device)
+arg_3 = torch.randn(1, 27, dtype=torch.int16, device=device)
+arg_4 = torch.randn(1, 27, dtype=torch.int16, device=device)
+arg_5 = torch.randn(1, 27, dtype=torch.int16, device=device)
+arg_6 = torch.randint(0, 100, (1,), dtype=torch.int64, device=device)
+
+sentinel = None
+
+# Execute
+try:
+    output = fuzzed_program(arg_0, arg_1, arg_2, arg_3, arg_4, arg_5, arg_6, sentinel)
+    print("Test passed. Output shape:", output.shape, "dtype:", output.dtype)
+except Exception as e:
+    print(f"Test failed with error: {e}")

@@ -1,0 +1,44 @@
+import torch
+import unittest
+
+class TestMPSSigmoidIssue163962(unittest.TestCase):
+    """
+    Test case derived from Issue 163962: Internal assert failed when using Tensorly on MPS.
+    
+    The original issue involved a RuntimeError when performing PARAFAC decomposition 
+    (which uses torch.linalg.solve internally) on a tensor located on the MPS device.
+    
+    This test leverages the similar API 'torch.nn.functional.sigmoid' (which maps to 
+    input.sigmoid()) to verify the stability of the MPS backend with the specific 
+    tensor configuration that caused the original failure.
+    """
+
+    def test_sigmoid_on_mps_tensor_shape(self):
+        # Skip if MPS is not available (e.g., running on Linux/Windows without Mac GPU)
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS backend is not available on this system.")
+
+        # Reproduce the exact tensor creation logic from the bug report
+        # Original code: x = torch.ones(12,3,12).to("mps")
+        x = torch.ones(12, 3, 12).to("mps")
+
+        # The similar API is torch.nn.functional.sigmoid.
+        # Implementation pattern: return input.sigmoid()
+        # We apply this operation to the MPS tensor to check for similar runtime errors.
+        try:
+            # Using the method call style as indicated in the similar API info
+            result = x.sigmoid()
+        except RuntimeError as e:
+            self.fail(f"RuntimeError encountered on MPS device with sigmoid: {e}")
+
+        # Assertions to ensure the operation completed successfully and correctly
+        self.assertEqual(result.shape, (12, 3, 12), "Output shape should match input shape")
+        self.assertEqual(result.device.type, "mps", "Output should be on MPS device")
+        
+        # Verify the calculation is correct (sigmoid(1) ~= 0.7311)
+        expected_value = torch.sigmoid(torch.tensor(1.0))
+        self.assertTrue(torch.allclose(result, expected_value), 
+                        "Sigmoid calculation values are incorrect")
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,74 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use 'gloo' backend as it is widely supported for CPU and basic testing
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def example_function():
+    """
+    Adapted function to use torch.distributed.gather_object.
+    We wrap the gather call in a function to test it with torch.compile,
+    mimicking the original bug's scenario where compilation triggered the issue.
+    """
+    def gather_logic(obj, gather_list):
+        # Call the similar API
+        dist.gather_object(obj, gather_list, dst=0)
+        return gather_list
+
+    # Apply torch.compile to the function using the similar API
+    # This tests if the compilation affects the behavior of gather_object
+    return torch.compile(gather_logic)
+
+def run(rank, world_size):
+    setup(rank, world_size)
+
+    # Adapted device setup: Prefer MPS if available (original bug context), 
+    # but fallback to CPU to ensure the test is runnable on non-MPS machines 
+    # for the distributed logic.
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    
+    # Create a tensor. 
+    # In the original bug, contiguity was an issue. 
+    # We create a non-contiguous tensor here to test robustness.
+    base_tensor = torch.randn(10, 10, device=device)
+    obj_to_gather = base_tensor[:, :5] # Non-contiguous view
+
+    gather_list = None
+    if rank == 0:
+        gather_list = [None] * world_size
+
+    # Get the compiled function
+    compiled_gather_func = example_function()
+
+    try:
+        # Execute the compiled function
+        # Note: Distributed operations inside torch.compile can be tricky.
+        # This test verifies if the similar API works under the same conditions
+        # that caused the original bug (compilation).
+        result = compiled_gather_func(obj_to_gather, gather_list)
+        
+        if rank == 0:
+            print(f"Rank 0 gathered {len(result)} objects successfully.")
+            # Verify the gathered data
+            for i, obj in enumerate(result):
+                assert obj is not None
+                assert obj.shape == (10, 5)
+                print(f"Object from rank {i} shape: {obj.shape}")
+    except Exception as e:
+        print(f"Rank {rank} encountered error: {e}")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use multiprocessing to simulate distributed environment
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)

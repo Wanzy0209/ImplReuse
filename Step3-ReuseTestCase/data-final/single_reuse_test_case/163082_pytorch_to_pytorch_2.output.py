@@ -1,0 +1,36 @@
+import torch
+
+if torch.cuda.is_available():
+    torch.manual_seed(1337)
+
+    @torch.compile()
+    def compiled_feature_alpha_dropout(input):
+        return torch.nn.functional.feature_alpha_dropout(input, p=0.5, training=True)
+
+    def eager_feature_alpha_dropout(input):
+        return torch.nn.functional.feature_alpha_dropout(input, p=0.5, training=True)
+
+    device = 'cuda'
+    # Using the specific input from the original bug report to test edge cases
+    c = torch.tensor([[3.799999, 0.0, 0.0]], device=device, dtype=torch.float32)
+    
+    print("Input vector", [x.item() for x in c[0]])
+
+    # Run compiled version
+    # Reset seed to ensure deterministic comparison if RNG implementation allows
+    torch.manual_seed(1337)
+    xyz_compiled = compiled_feature_alpha_dropout(c)
+    print("Output vector (compile):", [x.item() for x in xyz_compiled[0]])
+
+    # Run eager version
+    torch.manual_seed(1337)
+    xyz_eager = eager_feature_alpha_dropout(c)
+    print("Output vector (without compile):", [x.item() for x in xyz_eager[0]])
+
+    # Check if the compiled version produces the same result as the eager version.
+    # Note: Due to the stochastic nature of dropout and potential kernel fusion in torch.compile,
+    # exact bitwise equality might not always be guaranteed even for correct implementations,
+    # but significant deviations or logic errors (like the norm bug in normalize) would be caught.
+    assert torch.allclose(xyz_compiled, xyz_eager), "Mismatch between compiled and eager execution"
+else:
+    print("CUDA not available, skipping test.")

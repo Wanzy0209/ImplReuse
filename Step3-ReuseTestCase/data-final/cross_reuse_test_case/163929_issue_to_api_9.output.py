@@ -1,0 +1,57 @@
+import torch
+import tensorflow as tf
+from tf.keras.ops import custom_gradient
+
+# Define the function using the similar API (custom_gradient)
+# This preserves the logic of the original bug: in-place mutation -> transpose -> reduction
+@custom_gradient
+def tan_transpose_argmin(x):
+    # Mimic x.tan_() (in-place mutation)
+    # In TensorFlow, we use assign on a Variable to mimic in-place behavior
+    x.assign(tf.math.tan(x))
+    
+    # Mimic x = x.t() (transpose)
+    # Note: TF transpose creates a new tensor, but we pass the mutated variable's value
+    y = tf.transpose(x)
+    
+    # Mimic return x.argmin()
+    result = tf.math.argmin(y)
+    
+    # Define the gradient function
+    # Since argmin is not differentiable with respect to the input values,
+    # we return zeros for the gradient.
+    def grad(upstream):
+        return tf.zeros_like(x)
+    
+    return result, grad
+
+# Test execution
+if __name__ == "__main__":
+    # Set seed for reproducibility
+    tf.random.set_seed(0)
+    
+    # Initialize input as a Variable to support in-place mutation
+    x_var = tf.Variable(tf.random.normal((4, 6)))
+    
+    # Store initial values to reset between runs
+    initial_values = x_var.numpy().copy()
+    
+    # 1. Eager Execution
+    # Reset variable
+    x_var.assign(initial_values)
+    out_eager = tan_transpose_argmin(x_var)
+    
+    # 2. Compiled Execution (similar to torch.compile)
+    # Reset variable
+    x_var.assign(initial_values)
+    # Use tf.function with jit_compile=True to mimic the compiler backend behavior
+    compiled_fn = tf.function(tan_transpose_argmin, jit_compile=True)
+    out_compiled = compiled_fn(x_var)
+    
+    # Assert that the results are close
+    # The original bug reported a mismatch here (Expected 1 but got 4)
+    try:
+        tf.debugging.assert_equal(out_eager, out_compiled)
+        print("Test passed: Eager and compiled outputs match.")
+    except tf.errors.InvalidArgumentError as e:
+        print(f"Test failed: {e}")

@@ -1,0 +1,38 @@
+import torch
+
+def test_torch_prod_mps_backward():
+    """
+    Test case adapted from Issue 161905.
+    Original Issue: torch.compile fails during loss.backward() on MPS.
+    Similar API: torch.prod.
+    
+    This test verifies that torch.prod works correctly on the MPS backend,
+    specifically during the backward pass (gradient computation), which was
+    the failure point in the original bug report.
+    """
+    if not torch.backends.mps.is_available():
+        print("MPS backend not available, skipping test.")
+        return
+
+    device = 'mps'
+    BATCH_SIZE = 4
+    
+    # Create a tensor on MPS requiring gradients, similar to the model inputs in the original bug
+    x = torch.randn(BATCH_SIZE, 3, 224, 224, requires_grad=True, device=device)
+
+    # Use the similar API: torch.prod
+    # We perform a reduction to get a scalar, which allows for a backward pass
+    output = torch.prod(x)
+
+    # The original bug failed specifically at loss.backward()
+    # We test the backward pass for torch.prod here
+    output.backward()
+
+    # Assertions to verify the operation completed successfully and gradients are valid
+    assert x.grad is not None, "Gradient computation failed: grad is None"
+    assert torch.all(torch.isfinite(x.grad)), "Gradient computation failed: grad contains NaN or Inf"
+    
+    print("Test passed: torch.prod backward pass on MPS is successful.")
+
+if __name__ == "__main__":
+    test_torch_prod_mps_backward()

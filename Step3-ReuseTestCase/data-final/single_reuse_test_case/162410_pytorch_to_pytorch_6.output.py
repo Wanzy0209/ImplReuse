@@ -1,0 +1,32 @@
+import torch
+import torch._inductor.config as inductor_config
+
+# Setup inputs for torch.lobpcg
+# A must be a symmetric positive definite matrix
+n = 100
+A = torch.randn(n, n, device="cuda")
+A = A @ A.T + torch.eye(n, device="cuda")
+k = 5
+X = torch.randn(n, k, device="cuda")
+
+def f(A, X):
+    # torch.lobpcg finds eigenvalues/vectors and modifies X in-place
+    return torch.lobpcg(A, k=k, X=X)
+
+X_copy = X.clone()
+opt_f = torch.compile(f)
+
+# Run eager version
+ref = f(A, X)
+
+# Run compiled version
+act = opt_f(A, X_copy)
+
+# Unpack results (eigenvalues, eigenvectors)
+ref_e, ref_v = ref
+act_e, act_v = act
+
+# Verify correctness
+torch.testing.assert_close(ref_e, act_e)
+torch.testing.assert_close(ref_v, act_v)
+print(f"{torch._inductor.metrics.generated_kernel_count=}")

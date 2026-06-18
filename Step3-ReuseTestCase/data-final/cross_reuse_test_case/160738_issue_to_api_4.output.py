@@ -1,0 +1,30 @@
+import torch
+import tensorflow as tf
+
+def test_linear_activation_zero_dim():
+    """
+    Test case adapted from the torch.var bug report (Issue 160738).
+    The original bug highlighted that torch.var failed on MPS when given 
+    a zero-dimensional tensor with dim=0. 
+    
+    This test verifies that the similar API, tf.keras.activations.linear,
+    correctly handles a zero-dimensional tensor (scalar input), preserving
+    the reproduction logic of testing edge cases with 0-d tensors.
+    """
+    # Create a zero-dimensional tensor (scalar)
+    x = tf.constant(3.0)
+    
+    try:
+        # Apply the linear activation function (identity function)
+        output = tf.keras.activations.linear(x)
+        
+        # Verify the output matches the input (identity behavior)
+        assert tf.equal(output, x).numpy(), "Output value does not match input"
+        assert output.shape == x.shape, "Output shape does not match input shape"
+        
+        print(f"linear activation test succeeds for 0-d input. output: {output}")
+    except Exception as e:
+        print(f"linear activation test fails for 0-d input: {e}")
+
+if __name__ == "__main__":
+    test_linear_activation_zero_dim()

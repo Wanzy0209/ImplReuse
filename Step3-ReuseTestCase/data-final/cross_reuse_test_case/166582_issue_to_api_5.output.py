@@ -1,0 +1,80 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Ensure we are in TF v1 graph mode to match the API context
+tf.compat.v1.disable_eager_execution()
+
+def make_backend_creator(target_device):
+    """
+    Returns a SessionCreator class that has the target device baked in.
+    This mirrors the `make_backend` function in the PyTorch bug report,
+    which returns a registered backend with the DUT (Device Under Test) baked in.
+    """
+    class _CustomASICSessionCreator(tf.compat.v1.train.SessionCreator):
+        """
+        Analogous to the custom backend registered via `torch._dynamo.register_backend`.
+        This class acts as a factory for the Session, injecting custom configuration
+        similar to how the PyTorch backend injects custom graph logic (e.g., replacing Linear).
+        """
+        def __init__(self):
+            self.target_device = target_device
+
+        def create_session(self):
+            # Simulate the "Graph Break" or specific hardware setup logic
+            # by configuring the session proto.
+            # In the PyTorch bug, the user modifies the graph nodes here.
+            # In TF, we configure the session that will run the graph.
+            config = tf.compat.v1.ConfigProto()
+            config.allow_soft_placement = True
+            config.log_device_placement = False
+            
+            # Return a session configured for our "custom hardware"
+            return tf.compat.v1.Session(config=config, graph=tf.compat.v1.get_default_graph())
+
+    return _CustomASICSessionCreator
+
+# Test Case
+def test_custom_session_creator_backend():
+    """
+    Test case that reproduces the logic of registering a custom backend
+    using the tf.compat.v1.train.SessionCreator API.
+    """
+    # 1. Define the Graph (The Model)
+    # This corresponds to the `nn.Linear` part of the bug report.
+    with tf.compat.v1.Graph().as_default():
+        # Inputs
+        input_tensor = tf.compat.v1.placeholder(tf.float32, shape=[None, 10], name='input')
+        
+        # Weights (Simulating the Linear layer weights)
+        weights = tf.compat.v1.get_variable("weights", shape=[10, 5], 
+                                            initializer=tf.compat.v1.random_normal_initializer())
+        bias = tf.compat.v1.get_variable("bias", shape=[5], 
+                                         initializer=tf.compat.v1.zeros_initializer())
+
+        # Operation: MatMul + Bias (Linear)
+        # In the PyTorch bug, this node is replaced by `dut_matmul_sync`.
+        # Here we define the standard op, but the SessionCreator controls execution.
+        with tf.device("/cpu:0"): # Force device to simulate hardware constraint
+            logits = tf.nn.bias_add(tf.matmul(input_tensor, weights), bias)
+
+        # 2. Instantiate the Custom Backend (SessionCreator)
+        # This mirrors the usage of `torch.compile` with the registered backend.
+        BackendCreator = make_backend_creator(target_device="/cpu:0")
+        session_creator = BackendCreator()
+        
+        # 3. Execution
+        with tf.compat.v1.train.MonitoredSession(session_creator=session_creator) as sess:
+            # Initialize variables
+            sess.run(tf.compat.v1.global_variables_initializer())
+            
+            # Run inference
+            test_input = np.random.rand(5, 10).astype(np.float32)
+            result = sess.run(logits, feed_dict={input_tensor: test_input})
+            
+            # Assertions to verify the "backend" (session) works
+            assert result.shape == (5, 5), "Output shape mismatch"
+            print("Test passed: Custom SessionCreator executed graph successfully.")
+
+if __name__ == "__main__":
+    test_custom_session_creator_backend()

@@ -1,0 +1,59 @@
+import torch
+import torch.utils._pytree as pytree
+import unittest
+
+class TestDynamoGuardOnTempVar(unittest.TestCase):
+    """
+    Test case for Issue #166900: [dynamo] Attempt to generate guard on 
+    Dynamo-generated temporary variable.
+    
+    This test verifies that torch.compile correctly handles pytree constants
+    when they are assigned to object attributes inside the compiled function,
+    specifically avoiding the error of generating guards on temporary variables.
+    """
+
+    def test_pytree_constant_in_dict_assignment(self):
+        # Define the custom classes used in the reproduction
+        class Foo:
+            pass
+
+        class Bar:
+            def __eq__(self, other):
+                return super().__eq__(other)
+
+            def __hash__(self):
+                return 0
+
+        # Register Bar as a pytree constant
+        pytree.register_constant(Bar)
+
+        # The compiled function that triggers the bug
+        @torch.compile(backend="eager")
+        def fn(x, obj):
+            # The bug occurs here when Dynamo tries to generate a guard
+            # for the temporary dictionary containing the Bar instance.
+            obj.attr = {3: Bar()}
+            return x + 1
+
+        input_tensor = torch.ones(3)
+        obj_instance = Foo()
+
+        # Execute the function. 
+        # If the bug is present, this will raise an exception related to guard generation.
+        try:
+            result = fn(input_tensor, obj_instance)
+        except Exception as e:
+            self.fail(f"torch.compile failed with the following error: {e}")
+
+        # Assertions to verify correct behavior
+        expected_tensor = input_tensor + 1
+        self.assertTrue(torch.equal(result, expected_tensor))
+        
+        # Verify the side effect (attribute assignment) happened correctly
+        self.assertTrue(hasattr(obj_instance, 'attr'))
+        self.assertIsInstance(obj_instance.attr, dict)
+        self.assertIn(3, obj_instance.attr)
+        self.assertIsInstance(obj_instance.attr[3], Bar)
+
+if __name__ == '__main__':
+    unittest.main()

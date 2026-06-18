@@ -1,0 +1,57 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_convert_to_tensor_large_complex():
+    """
+    Adapted from PyTorch issue #167727.
+    The original bug involves incorrect results for torch.addmm with large complex64 tensors.
+    Since tf.compat.v1.convert_to_tensor is a utility for converting inputs to tensors
+    (rather than a linear algebra operation like addmm), this test verifies that
+    the conversion of large complex64 tensors preserves data integrity correctly.
+    """
+    
+    # Test Case 1: Small tensors (Success case in PyTorch)
+    # Replicating the data generation logic
+    a_np = np.random.rand(64, 300).astype(np.complex64)
+    b_np = np.random.rand(64, 100).astype(np.complex64)
+    c_np = np.random.rand(100, 300).astype(np.complex64)
+
+    # Convert using the target API
+    a_tf = tf.compat.v1.convert_to_tensor(a_np)
+    b_tf = tf.compat.v1.convert_to_tensor(b_np)
+    c_tf = tf.compat.v1.convert_to_tensor(c_np)
+
+    # Verify conversion properties
+    assert a_tf.dtype == tf.complex64
+    assert a_tf.shape == (64, 300)
+    # Verify data integrity
+    np.testing.assert_allclose(a_tf.numpy(), a_np, rtol=1e-5)
+    np.testing.assert_allclose(b_tf.numpy(), b_np, rtol=1e-5)
+    np.testing.assert_allclose(c_tf.numpy(), c_np, rtol=1e-5)
+
+    # Test Case 2: Large tensors (Failure case in PyTorch)
+    # The bug manifested with dimensions like (64, 10000)
+    a_large_np = np.random.rand(64, 300).astype(np.complex64)
+    b_large_np = np.random.rand(64, 10000).astype(np.complex64)
+    c_large_np = np.random.rand(10000, 300).astype(np.complex64)
+
+    # Convert using the target API
+    a_large_tf = tf.compat.v1.convert_to_tensor(a_large_np)
+    b_large_tf = tf.compat.v1.convert_to_tensor(b_large_np)
+    c_large_tf = tf.compat.v1.convert_to_tensor(c_large_np)
+
+    # Verify conversion properties
+    assert b_large_tf.dtype == tf.complex64
+    assert b_large_tf.shape == (64, 10000)
+    
+    # Verify data integrity for large tensors
+    # This ensures the conversion logic handles the size/type combination that triggered the bug in PyTorch
+    np.testing.assert_allclose(a_large_tf.numpy(), a_large_np, rtol=1e-5)
+    np.testing.assert_allclose(b_large_tf.numpy(), b_large_np, rtol=1e-5)
+    np.testing.assert_allclose(c_large_tf.numpy(), c_large_np, rtol=1e-5)
+
+    print("Test passed: tf.compat.v1.convert_to_tensor handles large complex64 tensors correctly.")
+
+if __name__ == "__main__":
+    test_convert_to_tensor_large_complex()

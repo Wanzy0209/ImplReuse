@@ -1,0 +1,72 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Note: tf.compat.v1.tpu.rewrite requires a TPU environment to execute.
+# This test case includes the necessary setup logic.
+
+def test_tpu_rewrite_conditional():
+    # Attempt to initialize TPU
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+    except (ValueError, tf.errors.NotFoundError):
+        print("TPU not available. Skipping test execution.")
+        return
+
+    # Adapted from PyTorch: def fn(x, i): if i == 1: torch._dynamo.graph_break(); return x + 1
+    # In TensorFlow, we preserve the conditional structure. 
+    # There is no direct graph_break() equivalent, but the conditional logic
+    # is the core element being tested for compilation stability.
+    def fn(x, i):
+        if i == 1:
+            # PyTorch equivalent: torch._dynamo.graph_break()
+            # In TF, this branch creates a control flow divergence in the graph.
+            pass
+        return x + 1
+
+    # Inputs
+    # Using deterministic inputs for assertions
+    inp = tf.constant([1.0, 2.0, 3.0], dtype=tf.float32)
+    
+    # We use tensors for the condition to ensure the graph handles dynamic inputs,
+    # similar to how PyTorch's dynamo handles different integer arguments.
+    i0 = tf.constant(0)
+    i1 = tf.constant(1)
+    i2 = tf.constant(2)
+
+    # The API tf.compat.v1.tpu.rewrite expects inputs as a list of lists of tensors
+    # corresponding to the arguments of the computation function.
+    
+    # Call 1: i = 0 (Normal path)
+    # PyTorch: fn(inp, 0)
+    res0 = tf.compat.v1.tpu.rewrite(fn, inputs=[[inp], [i0]])
+    
+    # Call 2: i = 1 (Path with "break"/conditional)
+    # PyTorch: fn(inp, 1)
+    res1 = tf.compat.v1.tpu.rewrite(fn, inputs=[[inp], [i1]])
+    
+    # Call 3: i = 2 (Normal path again)
+    # PyTorch: fn(inp, 2)
+    res2 = tf.compat.v1.tpu.rewrite(fn, inputs=[[inp], [i2]])
+
+    # Verify results
+    # The PyTorch bug resulted in an empty graph, which would likely cause execution errors
+    # or incorrect outputs. Here we assert correct execution.
+    expected = inp + 1
+    
+    # tf.compat.v1.tpu.rewrite returns a list of tensors
+    assert len(res0) == 1
+    assert len(res1) == 1
+    assert len(res2) == 1
+    
+    # Check values
+    np.testing.assert_array_equal(res0[0].numpy(), expected.numpy())
+    np.testing.assert_array_equal(res1[0].numpy(), expected.numpy())
+    np.testing.assert_array_equal(res2[0].numpy(), expected.numpy())
+
+    print("Test case executed successfully.")
+
+if __name__ == "__main__":
+    test_tpu_rewrite_conditional()

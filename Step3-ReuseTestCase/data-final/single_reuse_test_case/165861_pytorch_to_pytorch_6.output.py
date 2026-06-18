@@ -1,0 +1,56 @@
+import torch
+import torch.nn as nn
+
+def test_maxunpool2d_large_dimensions():
+    """
+    Test case for torch.nn.MaxUnpool2d adapted from the reflect padding bug report.
+    The original bug occurs when a dimension size exceeds uint16 max (65536).
+    This test verifies if MaxUnpool2d handles large batch or spatial dimensions correctly.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available. This test is designed for CUDA based on the original bug report.")
+        return
+
+    device = torch.device("cuda")
+    large_dim = 2**16 + 1  # 65537, exceeding uint16 max
+
+    print(f"Testing MaxUnpool2d with dimensions > 65536 on {device}...")
+
+    # Test Case 1: Large Batch Dimension
+    # Analogous to: x = torch.rand(2**16, 2, device="cuda") in the original bug
+    print("\n1. Testing large batch dimension...")
+    try:
+        # Input: (Batch, Channels, Height, Width)
+        x = torch.randn(large_dim, 1, 10, 10, device=device)
+        
+        pool = nn.MaxPool2d(kernel_size=2, stride=2, return_indices=True)
+        unpool = nn.MaxUnpool2d(kernel_size=2, stride=2)
+        
+        pooled_output, indices = pool(x)
+        unpooled_output = unpool(pooled_output, indices)
+        
+        assert unpooled_output.shape == x.shape
+        print("   Large Batch Dimension: OK")
+    except Exception as e:
+        print(f"   Large Batch Dimension: FAILED with {e}")
+
+    # Test Case 2: Large Spatial Dimension (Height)
+    # Analogous to: x = torch.rand(1, 2**16, 2, device="cuda") in the original bug
+    print("\n2. Testing large spatial dimension...")
+    try:
+        # Input: (Batch, Channels, Height, Width)
+        x = torch.randn(1, 1, large_dim, 10, device=device)
+        
+        pool = nn.MaxPool2d(kernel_size=2, stride=2, return_indices=True)
+        unpool = nn.MaxUnpool2d(kernel_size=2, stride=2)
+        
+        pooled_output, indices = pool(x)
+        unpooled_output = unpool(pooled_output, indices)
+        
+        assert unpooled_output.shape == x.shape
+        print("   Large Spatial Dimension: OK")
+    except Exception as e:
+        print(f"   Large Spatial Dimension: FAILED with {e}")
+
+if __name__ == "__main__":
+    test_maxunpool2d_large_dimensions()

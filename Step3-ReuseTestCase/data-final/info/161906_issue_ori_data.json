@@ -1,0 +1,276 @@
+{
+  "title": "torch.compilefails withaten.complex.defaultsize/stride assertion when using STFT output recombined into complex tensor",
+  "issue_id": "161906",
+  "bug_description": "### 🐛 Describe the bug\n\n## Issue Description\nA simple model using `torch.stft` followed by recombination of real/imag parts into a complex tensor works fine in eager mode.\nHowever, when compiled with `torch.compile` (Inductor backend), runtime fails with a stride assertion inside `aten.complex.default`.\n\n+ Eager execution: ok! produces correct complex tensor\n\n+ Compiled execution: error! AssertionError in assert_size_stride for torch.ops.aten.complex.default\n\n## Minimal Reproduction Script\n```python\nimport torch\nimport torch.nn as nn\n\nclass M(nn.Module):\n    def __init__(self, n_fft=512, hop=160, win=320):\n        super().__init__()\n        self.n_fft, self.hop, self.win = n_fft, hop, win\n        # Register window as buffer so it moves with .to(device)\n        self.register_buffer(\"window\", torch.hann_window(win))\n        # Introduce parameter for broadcasting / stride ops\n        self.p = nn.Parameter(torch.tensor(2.0))\n\n    def forward(self, x: torch.Tensor) -> torch.Tensor:\n        S = torch.stft(\n            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,\n            return_complex=True, window=self.window, pad_mode=\"constant\"\n        )\n        R = torch.abs(S.real)   # unary op on real\n        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)\n        Z = torch.complex(R, I) # recombine -> triggers aten.complex.default\n        return Z\n\ndef main():\n    device = \"cuda\" if torch.cuda.is_available() else \"cpu\"\n    torch.manual_seed(0)\n\n    x = torch.randn(1, 16000, device=device)\n    m = M().to(device)\n\n    # Eager: works fine\n    z_eager = m(x)\n    assert z_eager.is_complex()\n    print(\"eager mode OK:\", z_eager.shape, z_eager.is_complex())\n\n    # Compile: runtime stride assertion in aten.complex.default\n    m_c = torch.compile(m)\n    z_compiled = m_c(x)\n\nif __name__ == \"__main__\":\n    main()\n```\n\n## Observed Behavior\n```\neager mode OK: torch.Size([1, 257, 101]) True\n......\nassert_size_stride(buf10, (1, 257, 101), (25957, 101, 1), 'torch.ops.aten.complex.default')\nAssertionError: expected size 257==257, stride 1==101 at dim=1; expected size 101==101, stride 257==1 at dim=2\nError in op: torch.ops.aten.complex.default\nThis error most often comes from a incorrect fake (aka meta) kernel for a custom op.\nUse torch.library.opcheck to test your custom op.\nSee https://pytorch.org/docs/stable/library.html#torch.library.opcheck\n```\n\n### Versions\n\n```\nPyTorch version: 2.8.0a0+gitba56102\nIs debug build: True\nCUDA used to build PyTorch: 12.6\nROCM used to build PyTorch: N/A\n\nOS: Ubuntu 22.04.4 LTS (x86_64)\nGCC version: (Ubuntu 12.3.0-1ubuntu1~22.04) 12.3.0\nClang version: Could not collect\nCMake version: version 3.22.1\nLibc version: glibc-2.35\n\nPython version: 3.10.16 (main, Dec 11 2024, 16:24:50) [GCC 11.2.0] (64-bit runtime)\nPython platform: Linux-6.8.0-59-generic-x86_64-with-glibc2.35\nIs CUDA available: True\n```\n\ncc @chauhang @penguinwu @voznesenskym @EikanWang @jgong5 @Guobing-Chen @XiaobingSuper @zhuhaozhe @blzheng @wenzhe-nrv @jiayisunx @ipiszy @chenyang78 @kadeng @muchulee8 @amjames @aakhundov @coconutruben",
+  "apis": [
+    "torch.hann_window",
+    "torch.stft",
+    "torch.randn",
+    "torch.manual_seed",
+    "z_eager.is_complex",
+    "self.register_buffer"
+  ],
+  "best_code": "import torch\nimport torch.nn as nn\n\nclass M(nn.Module):\n    def __init__(self, n_fft=512, hop=160, win=320):\n        super().__init__()\n        self.n_fft, self.hop, self.win = n_fft, hop, win\n        # Register window as buffer so it moves with .to(device)\n        self.register_buffer(\"window\", torch.hann_window(win))\n        # Introduce parameter for broadcasting / stride ops\n        self.p = nn.Parameter(torch.tensor(2.0))\n\n    def forward(self, x: torch.Tensor) -> torch.Tensor:\n        S = torch.stft(\n            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,\n            return_complex=True, window=self.window, pad_mode=\"constant\"\n        )\n        R = torch.abs(S.real)   # unary op on real\n        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)\n        Z = torch.complex(R, I) # recombine -> triggers aten.complex.default\n        return Z\n\ndef main():\n    device = \"cuda\" if torch.cuda.is_available() else \"cpu\"\n    torch.manual_seed(0)\n\n    x = torch.randn(1, 16000, device=device)\n    m = M().to(device)\n\n    # Eager: works fine\n    z_eager = m(x)\n    assert z_eager.is_complex()\n    print(\"eager mode OK:\", z_eager.shape, z_eager.is_complex())\n\n    # Compile: runtime stride assertion in aten.complex.default\n    m_c = torch.compile(m)\n    z_compiled = m_c(x)\n\nif __name__ == \"__main__\":\n    main()",
+  "pull_urls": [
+    "https://github.com/pytorch/pytorch/pull/160894"
+  ],
+  "_meta": {
+    "file": "161906_issue_ori_data.json",
+    "generated_at": "2026-04-21 00:30:07",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\161906_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\161906_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "A simple model using torch.stft followed by recombination of real/imag parts into a complex tensor works fine in eager mode. However, when compiled with torch.compile (Inductor backend), runtime fails with a stride assertion inside aten.complex.default.",
+  "repro_code": "import torch\nimport torch.nn as nn\n\nclass M(nn.Module):\n    def __init__(self, n_fft=512, hop=160, win=320):\n        super().__init__()\n        self.n_fft, self.hop, self.win = n_fft, hop, win\n        # Register window as buffer so it moves with .to(device)\n        self.register_buffer(\"window\", torch.hann_window(win))\n        # Introduce parameter for broadcasting / stride ops\n        self.p = nn.Parameter(torch.tensor(2.0))\n\n    def forward(self, x: torch.Tensor) -> torch.Tensor:\n        S = torch.stft(\n            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,\n            return_complex=True, window=self.window, pad_mode=\"constant\"\n        )\n        R = torch.abs(S.real)   # unary op on real\n        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)\n        Z = torch.complex(R, I) # recombine -> triggers aten.complex.default\n        return Z\n\ndef main():\n    device = \"cuda\" if torch.cuda.is_available() else \"cpu\"\n    torch.manual_seed(0)\n\n    x = torch.randn(1, 16000, device=device)\n    m = M().to(device)\n\n    # Eager: works fine\n    z_eager = m(x)\n    assert z_eager.is_complex()\n    print(\"eager mode OK:\", z_eager.shape, z_eager.is_complex())\n\n    # Compile: runtime stride assertion in aten.complex.default\n    m_c = torch.compile(m)\n    z_compiled = m_c(x)\n\nif __name__ == \"__main__\":\n    main()",
+  "repro_output": "torch.compilefails withaten.complex.defaultsize/stride assertion when using STFT output recombined into complex tensor",
+  "affected_api": "torch.complex, torch.stft, torch.ops.aten.complex.default",
+  "trigger_conditions": {
+    "backend": "Inductor",
+    "dtype": "complex",
+    "input_shape": "(1, 16000)",
+    "other_conditions": "Using torch.stft with return_complex=True followed by operations on real/imag parts and recombining with torch.complex"
+  },
+  "environment": {
+    "pytorch_version": "2.8.0a0+gitba56102",
+    "python_version": "3.10.16",
+    "os": "Ubuntu 22.04.4 LTS (x86_64)",
+    "hardware": "CUDA 12.6"
+  },
+  "labels": [],
+  "add_fix_code": [
+    "    def test_complex_from_real_imag(self):",
+    "        def fn(x, y):",
+    "            return aten.complex.default(x, y)",
+    "",
+    "        a = torch.randn([5, 3]).permute(1, 0)",
+    "",
+    "        self.common(",
+    "            fn,",
+    "            (a, a),",
+    "            exact_stride=True,",
+    "            reference_in_float=False,",
+    "        )",
+    "",
+    "    result = elementwise_meta(",
+    "        real.to(corresponding_complex_dtype(real.dtype)),",
+    "        imag.to(corresponding_complex_dtype(imag.dtype)),",
+    "        type_promotion=ELEMENTWISE_TYPE_PROMOTION_KIND.DEFAULT,",
+    "    )",
+    "    return result",
+    "    \"test_complex_from_real_imag_dynamic_shapes\": TestFailure((\"cpu\", \"cuda\", \"xpu\")),"
+  ],
+  "sub_fix_code": [
+    "    out_shape = _broadcast_shapes(real.shape, imag.shape)",
+    "    return real.new_empty(out_shape, dtype=corresponding_complex_dtype(real.dtype))"
+  ],
+  "core_api": "torch.complex",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [
+      {
+        "api_name": "tf.compat.v1.nn.dropout",
+        "api_type": "tensorflow",
+        "similarity": 0.9948827624320984
+      },
+      {
+        "api_name": "tf.keras.backend.dropout",
+        "api_type": "tensorflow",
+        "similarity": 0.9948827624320984
+      },
+      {
+        "api_name": "tf.keras.random.dropout",
+        "api_type": "tensorflow",
+        "similarity": 0.9948827624320984
+      },
+      {
+        "api_name": "tf.nn.dropout",
+        "api_type": "tensorflow",
+        "similarity": 0.9948827624320984
+      },
+      {
+        "api_name": "tf.experimental.numpy.random.uniform",
+        "api_type": "tensorflow",
+        "similarity": 0.9947834014892578
+      },
+      {
+        "api_name": "tf.keras.random.uniform",
+        "api_type": "tensorflow",
+        "similarity": 0.9947834014892578
+      },
+      {
+        "api_name": "tf.random.uniform",
+        "api_type": "tensorflow",
+        "similarity": 0.9947834014892578
+      },
+      {
+        "api_name": "tf.experimental.numpy.tril",
+        "api_type": "tensorflow",
+        "similarity": 0.9947018623352051
+      },
+      {
+        "api_name": "tf.keras.ops.tril",
+        "api_type": "tensorflow",
+        "similarity": 0.9947018623352051
+      },
+      {
+        "api_name": "tf.experimental.numpy.broadcast_arrays",
+        "api_type": "tensorflow",
+        "similarity": 0.9946033358573914
+      },
+      {
+        "api_name": "tf.experimental.numpy.triu",
+        "api_type": "tensorflow",
+        "similarity": 0.9945533275604248
+      }
+    ],
+    "issue_to_api": [
+      {
+        "api_name": "tf.nn.relu",
+        "api_type": "issue",
+        "similarity": 0.9755957722663879
+      },
+      {
+        "api_name": "tf.keras.activations.relu",
+        "api_type": "issue",
+        "similarity": 0.9755957126617432
+      },
+      {
+        "api_name": "tf.keras.backend.relu",
+        "api_type": "issue",
+        "similarity": 0.9755957126617432
+      },
+      {
+        "api_name": "tf.keras.ops.relu",
+        "api_type": "issue",
+        "similarity": 0.9755957126617432
+      },
+      {
+        "api_name": "torch.logdet",
+        "api_type": "issue",
+        "similarity": 0.9739256501197815
+      },
+      {
+        "api_name": "torch.diagflat",
+        "api_type": "issue",
+        "similarity": 0.9731118679046631
+      },
+      {
+        "api_name": "tf.compat.v1.math.add",
+        "api_type": "issue",
+        "similarity": 0.9727963209152222
+      },
+      {
+        "api_name": "tf.experimental.numpy.add",
+        "api_type": "issue",
+        "similarity": 0.9727963209152222
+      },
+      {
+        "api_name": "tf.keras.layers.add",
+        "api_type": "issue",
+        "similarity": 0.9727963209152222
+      },
+      {
+        "api_name": "tf.keras.ops.add",
+        "api_type": "issue",
+        "similarity": 0.9727963209152222
+      },
+      {
+        "api_name": "tf.math.add",
+        "api_type": "issue",
+        "similarity": 0.9727963209152222
+      }
+    ],
+    "pytorch_to_pytorch": [
+      {
+        "api_name": "torch.complex",
+        "api_type": "pytorch",
+        "similarity": 0.9999999403953552
+      },
+      {
+        "api_name": "torch.block_diag",
+        "api_type": "pytorch",
+        "similarity": 0.9962974786758423
+      },
+      {
+        "api_name": "torch.equal",
+        "api_type": "pytorch",
+        "similarity": 0.9959219694137573
+      },
+      {
+        "api_name": "torch.renorm",
+        "api_type": "pytorch",
+        "similarity": 0.9956239461898804
+      },
+      {
+        "api_name": "torch.nn.functional.pixel_unshuffle",
+        "api_type": "pytorch",
+        "similarity": 0.9955276846885681
+      },
+      {
+        "api_name": "torch.nn.functional.pixel_shuffle",
+        "api_type": "pytorch",
+        "similarity": 0.9954826831817627
+      },
+      {
+        "api_name": "torch.arange",
+        "api_type": "pytorch",
+        "similarity": 0.9951874017715454
+      },
+      {
+        "api_name": "torch.quantile",
+        "api_type": "pytorch",
+        "similarity": 0.9950755834579468
+      },
+      {
+        "api_name": "torch.randn_like",
+        "api_type": "pytorch",
+        "similarity": 0.9950602650642395
+      },
+      {
+        "api_name": "torch.randint_like",
+        "api_type": "pytorch",
+        "similarity": 0.9949209690093994
+      },
+      {
+        "api_name": "torch.movedim",
+        "api_type": "pytorch",
+        "similarity": 0.9949060082435608
+      }
+    ]
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "issue_to_api",
+      "test_cases": [
+        "161906_issue_to_api_0.output.py",
+        "161906_issue_to_api_1.output.py",
+        "161906_issue_to_api_10.output.py",
+        "161906_issue_to_api_2.output.py",
+        "161906_issue_to_api_3.output.py",
+        "161906_issue_to_api_4.output.py",
+        "161906_issue_to_api_5.output.py",
+        "161906_issue_to_api_6.output.py",
+        "161906_issue_to_api_7.output.py",
+        "161906_issue_to_api_8.output.py",
+        "161906_issue_to_api_9.output.py"
+      ]
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": [
+        "161906_pytorch_to_pytorch_0.output.py",
+        "161906_pytorch_to_pytorch_1.output.py",
+        "161906_pytorch_to_pytorch_10.output.py",
+        "161906_pytorch_to_pytorch_2.output.py",
+        "161906_pytorch_to_pytorch_3.output.py",
+        "161906_pytorch_to_pytorch_4.output.py",
+        "161906_pytorch_to_pytorch_5.output.py",
+        "161906_pytorch_to_pytorch_6.output.py",
+        "161906_pytorch_to_pytorch_7.output.py",
+        "161906_pytorch_to_pytorch_8.output.py",
+        "161906_pytorch_to_pytorch_9.output.py"
+      ]
+    }
+  }
+}

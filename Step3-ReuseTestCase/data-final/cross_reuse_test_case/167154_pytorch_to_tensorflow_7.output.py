@@ -1,0 +1,46 @@
+import torch
+import tensorflow as tf
+
+def test_bessel_j1_non_contiguous():
+    """
+    Adapted test case for tf.math.special.bessel_j1 based on PyTorch MPS buffer allocation bug.
+    The original bug involved passing a non-contiguous tensor (created via as_strided with stride 0)
+    to a linear operation. This test verifies if tf.math.special.bessel_j1 handles similar
+    broadcasted/non-contiguous inputs without crashing.
+    """
+    
+    # In the PyTorch example, the input is created with shape (5, 499, 768) and stride (0, 768, 1).
+    # A stride of 0 in the first dimension implies broadcasting.
+    # We simulate this in TensorFlow by creating a base tensor and broadcasting it.
+    
+    # Create a base tensor representing the unique data (shape 499, 768)
+    # Using tf.range to mimic the original torch.arange logic
+    base_size = 499 * 768
+    base = tf.range(base_size, dtype=tf.float32)
+    base = tf.reshape(base, (499, 768))
+
+    # Create the input tensor by broadcasting the base to shape (5, 499, 768)
+    # This creates a non-contiguous view (semantically equivalent to stride 0 in the first dim)
+    target_shape = (5, 499, 768)
+    input_tensor = tf.broadcast_to(base, target_shape)
+
+    # Verify the tensor is non-contiguous/broadcasted
+    # (TensorFlow doesn't expose 'is_contiguous' directly like PyTorch, but broadcast_to creates a view)
+    
+    try:
+        # Call the target API
+        result = tf.math.special.bessel_j1(input_tensor)
+        
+        # Assertions to verify correctness
+        assert result.shape == target_shape, f"Shape mismatch: expected {target_shape}, got {result.shape}"
+        assert result.dtype == tf.float32, f"Dtype mismatch: expected float32, got {result.dtype}"
+        
+        print("Test passed: tf.math.special.bessel_j1 handled broadcasted (non-contiguous) input correctly.")
+        return True
+        
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        return False
+
+if __name__ == "__main__":
+    test_bessel_j1_non_contiguous()

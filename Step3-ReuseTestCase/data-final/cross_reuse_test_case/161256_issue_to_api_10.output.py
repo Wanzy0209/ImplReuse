@@ -1,0 +1,29 @@
+import torch
+import unittest
+
+class TestFloat64Matmul(unittest.TestCase):
+    def test_float64_matmul_on_cuda(self):
+        # Leverage the pattern from tf.test.is_built_with_cuda to ensure 
+        # the test only runs if CUDA support is actually available.
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is not available, skipping GPU test.")
+
+        # Reproduce the original bug logic: float64 matmul on CUDA
+        torch.set_default_dtype(torch.float64)
+        
+        x = torch.randn(1000, 1000, device="cuda")
+        y = torch.randn(1000, 1000, device="cuda")
+        
+        # This operation caused a segfault in ROCm 6.4.3
+        z = x @ y
+        
+        # Assertions to verify the operation completed successfully
+        self.assertIsNotNone(z)
+        self.assertEqual(z.shape, (1000, 1000))
+        self.assertEqual(z.dtype, torch.float64)
+        
+        # Accessing a value ensures the kernel execution finished without crashing
+        self.assertIsInstance(z[0, 0].item(), float)
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,101 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Ensure reproducibility
+tf.random.set_seed(974450504)
+np.random.seed(974450504)
+
+def fuzzed_program_tf(arg_0, arg_1):
+    # var_node_3 = arg_0 # size=(17, 30, 17, 3), dtype=bool
+    # var_node_2 = torch.chunk(var_node_3, 3, dim=3)[0] # size=(17, 30, 17, 1)
+    # tf.split returns a list, we take the first element
+    var_node_2 = tf.split(arg_0, 3, axis=3)[0]
+    
+    # var_node_5 = torch.full((17,), 3, dtype=torch.int64)
+    var_node_5 = tf.fill([17], 3)
+    
+    # var_node_6 = arg_1 # size=(15,), dtype=int64
+    
+    # _input_size_var_node_4 = var_node_5.size(0)
+    # _index_var_node_4 = torch.randint(0, _input_size_var_node_4, (15,), device=var_node_5.device)
+    # var_node_4 = torch.gather(var_node_5, 0, _index_var_node_4)
+    # Note: tf.gather is equivalent to torch.gather with dim=0
+    _input_size_var_node_4 = tf.shape(var_node_5)[0]
+    _index_var_node_4 = tf.random.uniform((15,), minval=0, maxval=_input_size_var_node_4, dtype=tf.int32)
+    var_node_4 = tf.gather(var_node_5, _index_var_node_4)
+    
+    # _input_size_var_node_1 = var_node_2.size(0)
+    # _index_var_node_1 = torch.randint(0, _input_size_var_node_1, (15,), device=var_node_2.device)
+    # var_node_1 = torch.index_select(var_node_2, 0, _index_var_node_1)
+    # torch.index_select is tf.gather with axis/batch_dims
+    _input_size_var_node_1 = tf.shape(var_node_2)[0]
+    _index_var_node_1 = tf.random.uniform((15,), minval=0, maxval=_input_size_var_node_1, dtype=tf.int32)
+    var_node_1 = tf.gather(var_node_2, _index_var_node_1, axis=0)
+    
+    # var_node_0 = torch.squeeze(var_node_1) # size=(15, 30, 17)
+    # This is the API under test logic
+    var_node_0 = tf.squeeze(var_node_1)
+    
+    return var_node_0
+
+# Prepare inputs
+# arg_0: size=(17, 30, 17, 3), dtype=bool
+# Using numpy to mimic as_strided behavior roughly or just creating the tensor
+arg_0 = tf.random.uniform((17, 30, 17, 3), minval=0, maxval=2, dtype=tf.int32) == 1
+arg_1 = tf.random.uniform((15,), minval=5, maxval=30, dtype=tf.int64)
+
+# 1. Test Eager Execution
+print("Testing Eager Execution...")
+try:
+    result_eager = fuzzed_program_tf(arg_0, arg_1)
+    print(f" Eager success. Output shape: {result_eager.shape}")
+except Exception as e:
+    print(f" Eager failed: {e}")
+
+# 2. Test TFLite Conversion (Compilation) and Analysis
+# This adapts the test to use tf.lite.experimental.Analyzer as requested
+print("\nTesting TFLite Compilation and Analysis...")
+try:
+    # Wrap in a concrete function for TFLite
+    @tf.function(input_signature=[tf.TensorSpec(shape=(17, 30, 17, 3), dtype=tf.bool), 
+                                  tf.TensorSpec(shape=(15,), dtype=tf.int64)])
+    def model_fn(arg_0, arg_1):
+        return fuzzed_program_tf(arg_0, arg_1)
+
+    # Convert to TFLite
+    converter = tf.lite.TFLiteConverter.from_concrete_functions([model_fn.get_concrete_function()], model_fn)
+    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
+    tflite_model = converter.convert()
+
+    # Use the Similar API: tf.lite.experimental.Analyzer
+    # This analyzes the flatbuffer model for issues
+    analyzer_output = tf.lite.experimental.Analyzer.analyze(model_content=tflite_model)
+    print(" Analyzer execution success.")
+    # print(analyzer_output) # Uncomment to see full analysis
+
+    # 3. Test TFLite Inference
+    interpreter = tf.lite.Interpreter(model_content=tflite_model)
+    interpreter.allocate_tensors()
+    
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    
+    interpreter.set_tensor(input_details[0]['index'], arg_0)
+    interpreter.set_tensor(input_details[1]['index'], arg_1)
+    
+    interpreter.invoke()
+    result_tflite = interpreter.get_tensor(output_details[0]['index'])
+    
+    print(f" TFLite inference success. Output shape: {result_tflite.shape}")
+    
+    # Verify consistency
+    if np.array_equal(result_eager.numpy(), result_tflite):
+        print(" Eager and TFLite outputs match.")
+    else:
+        print(" Eager and TFLite outputs diverge.")
+
+except Exception as e:
+    print(f" TFLite/Analyzer failed: {e}")
+    import traceback
+    traceback.print_exc()

@@ -1,0 +1,62 @@
+{
+  "title": "torch.func.jvp does not support flash_attn",
+  "issue_id": "165517",
+  "bug_description": "### 🐛 Describe the bug\n\nWhen I was using the function `torch.func.jvp` to compute grad in my loss function, and my model includes the use of flash attention as follows:\n```python\ndef qwen_image_flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads: int, attention_mask = None, enable_fp8_attention: bool = False):\n    if FLASH_ATTN_3_AVAILABLE and attention_mask is None:\n        if not enable_fp8_attention:\n            q = rearrange(q, \"b n s d -> b s n d\", n=num_heads)\n            k = rearrange(k, \"b n s d -> b s n d\", n=num_heads)\n            v = rearrange(v, \"b n s d -> b s n d\", n=num_heads)\n            x = flash_attn_interface.flash_attn_func(q, k, v)\n            if isinstance(x, tuple):\n                x = x[0]\n            x = rearrange(x, \"b s n d -> b s (n d)\", n=num_heads)\n        else:\n            origin_dtype = q.dtype\n            q_std, k_std, v_std = q.std(), k.std(), v.std()\n            q, k, v = (q / q_std).to(torch.float8_e4m3fn), (k / k_std).to(torch.float8_e4m3fn), (v / v_std).to(torch.float8_e4m3fn)\n            q = rearrange(q, \"b n s d -> b s n d\", n=num_heads)\n            k = rearrange(k, \"b n s d -> b s n d\", n=num_heads)\n            v = rearrange(v, \"b n s d -> b s n d\", n=num_heads)\n            x = flash_attn_interface.flash_attn_func(q, k, v, softmax_scale=q_std * k_std / math.sqrt(q.size(-1)))\n            if isinstance(x, tuple):\n                x = x[0]\n            x = x.to(origin_dtype) * v_std\n            x = rearrange(x, \"b s n d -> b s (n d)\", n=num_heads)\n    else:\n        x = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attention_mask)\n        x = rearrange(x, \"b n s d -> b s (n d)\", n=num_heads)\n    return x\n```\nThe error is as follows:\n```\nFile \"/datadrive/DiffSynth-Studio/diffsynth/models/qwen_image_dit.py\", line 416, in forward\nimg_attn_out, txt_attn_out = self.attn(\nFile \"/home/t2vg-a100-G4-42/.conda/envs/qwenimage/lib/python3.10/site-packages/torch/nn/modules/module.py\", line 1739, in _wrapped_call_impl\nreturn self._call_impl(*args, **kwargs)\nFile \"/home/t2vg-a100-G4-42/.conda/envs/qwenimage/lib/python3.10/site-packages/torch/nn/modules/module.py\", line 1750, in _call_impl\nreturn forward_call(*args, **kwargs)\nFile \"/datadrive/DiffSynth-Studio/diffsynth/models/qwen_image_dit.py\", line 312, in forward\njoint_attn_out = qwen_image_flash_attention(joint_q, joint_k, joint_v, num_heads=joint_q.shape[1], attention_mask=attention_mask, enable_fp8_attention=enable_fp8_attention).to(joint_q.dtype)\nFile \"/datadrive/DiffSynth-Studio/diffsynth/models/qwen_image_dit.py\", line 21, in qwen_image_flash_attention\nx = flash_attn_interface.flash_attn_func(q, k, v)\nFile \"/home/t2vg-a100-G4-42/.conda/envs/qwenimage/lib/python3.10/site-packages/flash_attn/flash_attn_interface.py\", line 1201, in flash_attn_func\nreturn FlashAttnFunc.apply(\nFile \"/home/t2vg-a100-G4-42/.conda/envs/qwenimage/lib/python3.10/site-packages/torch/autograd/function.py\", line 578, in apply\nraise RuntimeError(\nRuntimeError: In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod. For more details, please see [https://pytorch.org/docs/main/notes/extending.func.html](https://www.google.com/url?sa=E&q=https%3A%2F%2Fpytorch.org%2Fdocs%2Fmain%2Fnotes%2Fextending.func.html)\n```\n\nHow to enable flash attention in the use of jvp? Or can `torch.func.jvp` add compatibility to those functions?\n\n### Versions\n\nPyTorch version: 2.6.0+cu124\nIs debug build: False\nCUDA used to build PyTorch: 12.4\nROCM used to build PyTorch: N/A\n\nOS: Ubuntu 20.04.6 LTS (x86_64)\nGCC version: (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0\nClang version: Could not collect\nCMake version: version 3.16.3\nLibc version: glibc-2.31\n\nPython version: 3.10.18 (main, Jun 5 2025, 13:14:17) [GCC 11.2.0] (64-bit runtime)\nPython platform: Linux-5.15.0-1017-azure-x86_64-with-glibc2.31\nIs CUDA available: True\nCUDA runtime version: 12.1.66\nCUDA_MODULE_LOADING set to: LAZY\nGPU",
+  "apis": [
+    "q.size",
+    "q.std",
+    "v.std",
+    "math.sqrt",
+    "numpy",
+    "torch.nn.functional.scaled_dot_product_attention"
+  ],
+  "best_code": "def qwen_image_flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads: int, attention_mask = None, enable_fp8_attention: bool = False):\n    if FLASH_ATTN_3_AVAILABLE and attention_mask is None:\n        if not enable_fp8_attention:\n            q = rearrange(q, \"b n s d -> b s n d\", n=num_heads)\n            k = rearrange(k, \"b n s d -> b s n d\", n=num_heads)\n            v = rearrange(v, \"b n s d -> b s n d\", n=num_heads)\n            x = flash_attn_interface.flash_attn_func(q, k, v)\n            if isinstance(x, tuple):\n                x = x[0]\n            x = rearrange(x, \"b s n d -> b s (n d)\", n=num_heads)\n        else:\n            origin_dtype = q.dtype\n            q_std, k_std, v_std = q.std(), k.std(), v.std()\n            q, k, v = (q / q_std).to(torch.float8_e4m3fn), (k / k_std).to(torch.float8_e4m3fn), (v / v_std).to(torch.float8_e4m3fn)\n            q = rearrange(q, \"b n s d -> b s n d\", n=num_heads)\n            k = rearrange(k, \"b n s d -> b s n d\", n=num_heads)\n            v = rearrange(v, \"b n s d -> b s n d\", n=num_heads)\n            x = flash_attn_interface.flash_attn_func(q, k, v, softmax_scale=q_std * k_std / math.sqrt(q.size(-1)))\n            if isinstance(x, tuple):\n                x = x[0]\n            x = x.to(origin_dtype) * v_std\n            x = rearrange(x, \"b s n d -> b s (n d)\", n=num_heads)\n    else:\n        x = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attention_mask)\n        x = rearrange(x, \"b n s d -> b s (n d)\", n=num_heads)\n    return x",
+  "pull_urls": [],
+  "_meta": {
+    "file": "165517_issue_ori_data.json",
+    "generated_at": "2026-04-21 04:49:09",
+    "model": "glm-4.7",
+    "llm_input_file": "data\\pytorch_llm_processed_data\\llm_io\\165517_issue_ori_data.input.txt",
+    "llm_output_file": "data\\pytorch_llm_processed_data\\llm_io\\165517_issue_ori_data.output.txt",
+    "parse_error": false
+  },
+  "error_description": "When using torch.func.jvp to compute grad in a loss function with a model that includes flash attention, a RuntimeError is raised: 'In order to use an autograd.Function with functorch transforms (vmap, grad, jvp, jacrev, ...), it must override the setup_context staticmethod.' The error occurs at flash_attn_interface.flash_attn_func when called within a model being differentiated using torch.func.jvp.",
+  "repro_code": "def qwen_image_flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads: int, attention_mask = None, enable_fp8_attention: bool = False):\n    if FLASH_ATTN_3_AVAILABLE and attention_mask is None:\n        if not enable_fp8_attention:\n            q = rearrange(q, \"b n s d -> b s n d\", n=num_heads)\n            k = rearrange(k, \"b n s d -> b s n d\", n=num_heads)\n            v = rearrange(v, \"b n s d -> b s n d\", n=num_heads)\n            x = flash_attn_interface.flash_attn_func(q, k, v)\n            if isinstance(x, tuple):\n                x = x[0]\n            x = rearrange(x, \"b s n d -> b s (n d)\", n=num_heads)\n        else:\n            origin_dtype = q.dtype\n            q_std, k_std, v_std = q.std(), k.std(), v.std()\n            q, k, v = (q / q_std).to(torch.float8_e4m3fn), (k / k_std).to(torch.float8_e4m3fn), (v / v_std).to(torch.float8_e4m3fn)\n            q = rearrange(q, \"b n s d -> b s n d\", n=num_heads)\n            k = rearrange(k, \"b n s d -> b s n d\", n=num_heads)\n            v = rearrange(v, \"b n s d -> b s n d\", n=num_heads)\n            x = flash_attn_interface.flash_attn_func(q, k, v, softmax_scale=q_std * k_std / math.sqrt(q.size(-1)))\n            if isinstance(x, tuple):\n                x = x[0]\n            x = x.to(origin_dtype) * v_std\n            x = rearrange(x, \"b s n d -> b s (n d)\", n=num_heads)\n    else:\n        x = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attention_mask)\n        x = rearrange(x, \"b n s d -> b s (n d)\", n=num_heads)\n    return x",
+  "repro_output": "torch.func.jvp does not support flash_attn",
+  "affected_api": "torch.func.jvp, flash_attn_interface.flash_attn_func",
+  "trigger_conditions": {
+    "backend": "CUDA",
+    "dtype": "torch.float8_e4m3fn, origin_dtype",
+    "input_shape": "b n s d (batch, num_heads, sequence, dimension)",
+    "other_conditions": "Using torch.func.jvp with flash_attn_interface.flash_attn_func when FLASH_ATTN_3_AVAILABLE is True and attention_mask is None"
+  },
+  "environment": {
+    "pytorch_version": "2.6.0+cu124",
+    "python_version": "3.10.18",
+    "os": "Ubuntu 20.04.6 LTS (x86_64)",
+    "hardware": "A100 GPU"
+  },
+  "labels": [
+    "functorch",
+    "flash-attn",
+    "jvp"
+  ],
+  "add_fix_code": [],
+  "sub_fix_code": [],
+  "core_api": "torch.func.jvp",
+  "similar_apis": {
+    "pytorch_to_tensorflow": [],
+    "issue_to_api": [],
+    "pytorch_to_pytorch": []
+  },
+  "reuse_test_cases": {
+    "cross": {
+      "source_type": "",
+      "test_cases": []
+    },
+    "single": {
+      "source_type": "pytorch_to_pytorch",
+      "test_cases": []
+    }
+  }
+}

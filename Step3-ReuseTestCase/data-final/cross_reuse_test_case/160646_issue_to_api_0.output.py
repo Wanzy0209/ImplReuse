@@ -1,0 +1,84 @@
+import tempfile
+
+import torch
+import torch.nn as nn
+import triton
+import triton.language as tl
+from torch.library import triton_op, wrap_triton
+
+
+# Reproducing the bug logic: Custom Triton Kernel
+@triton.jit
+def my_kernel(
+    out1,
+    out2,
+):
+    # the actual kernel does something more meaningful of course
+    tl.store(out1, 1.0)
+    tl.store(out2, 1.0)
+
+
+# Reproducing the bug logic: Custom Triton Op
+@triton_op("repro::my_triton_op", mutates_args={})
+def my_triton_op(
+    q: torch.Tensor,
+    block_size: int = 128,
+) -> torch.Tensor:
+    out1 = torch.empty((1,), device=q.device)
+    out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)
+
+    wrap_triton(my_kernel)[(1, 1)](
+        out1,
+        out2,
+    )
+
+    return out1
+
+
+# Leveraging the similar API: torch.nn.Dropout
+# We define a module that uses both the standard Dropout and the custom Triton op
+class MyModule(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Reuse torch.nn.Dropout as a standard component
+        self.dropout = nn.Dropout(p=0.5)
+
+    def forward(self, q):
+        # Apply Dropout
+        q = self.dropout(q)
+        # Apply custom Triton op
+        return my_triton_op(q)
+
+
+def test_aoti_compile_triton_with_dropout():
+    """
+    Test case to reproduce the AOT compilation failure with Triton ops in PyTorch 2.8,
+    while leveraging torch.nn.Dropout as a standard module component.
+    """
+    model = MyModule().to("cuda")
+    
+    with torch.inference_mode():
+        q = torch.randn(1024, device="cuda")
+        # Export the model with dynamic shapes
+        exported_model = torch.export.export(
+            model, 
+            (q,), 
+            dynamic_shapes=({0: torch.export.Dim("dim")},)
+        )
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            # Attempt AOT compilation
+            torch._inductor.aoti_compile_and_package(
+                exported_model,
+                package_path=tmpdir + "/package.pt2",
+            )
+            print("AOT Compilation successful.")
+        except Exception as e:
+            print(f"AOT Compilation failed: {e}")
+            # Re-raise to indicate test failure (reproducing the bug)
+            raise
+
+
+if __name__ == "__main__":
+    test_aoti_compile_triton_with_dropout()

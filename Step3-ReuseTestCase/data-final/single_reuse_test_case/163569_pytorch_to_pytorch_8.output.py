@@ -1,0 +1,62 @@
+import torch
+import sys
+
+# Reproduce the configuration settings from the original bug report
+# as they are likely relevant to the eager/compile divergence issue.
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    # t0, t1, t2 logic is preserved to maintain the complex stride scenario
+    # from the original bug report.
+    t0 = arg0 # size=(2, 261, 17, 358), stride=(1588446, 6086, 358, 1), dtype=bfloat16, device=cuda
+    t1 = t0.max(dim=0).values # size=(261, 17, 358), stride=(358, 93438, 1), dtype=bfloat16, device=cuda
+    t2 = t1.transpose(1, 0) # size=(17, 261, 358), stride=(93438, 358, 1), dtype=bfloat16, device=cuda
+
+    # Adaptation for torch.cdist
+    # torch.cdist(x1, x2) expects x1: (Batch, P, M) and x2: (Batch, R, M)
+    # Output is (Batch, P, R).
+    # We want the output shape to match t2 (17, 261, 358) for the multiplication at the end.
+    # So we need: Batch=17, P=261, R=358. M can be arbitrary, let's use 64.
+    
+    t3 = arg1 # size=(17, 261, 64), dtype=float32, device=cuda
+    t4 = torch.exp(t3) # size=(17, 261, 64), dtype=float32, device=cuda
+    
+    t5 = arg2 # size=(17, 64, 358), dtype=float32, device=cuda
+    # We transpose t5 to match the (Batch, R, M) requirement for cdist where R=358, M=64
+    t6 = t5.transpose(1, 2) # size=(17, 358, 64), dtype=float32, device=cuda
+    
+    # Original call: torch.nn.functional.conv1d(t4, t6, stride=1, padding=0)
+    # Replaced with: torch.cdist(t4, t6)
+    # t4: (17, 261, 64) -> (Batch, P, M)
+    # t6: (17, 358, 64) -> (Batch, R, M)
+    # t7 output: (17, 261, 358) -> (Batch, P, R)
+    t7 = torch.cdist(t4, t6) # size=(17, 261, 358), dtype=float32, device=cuda
+    
+    t8 = t7.clone(); t8.zero_() # size=(17, 261, 358), dtype=float32, device=cuda
+    t9 = t2 * t7 * t8 # size=(17, 261, 358), dtype=float32, device=cuda
+    output = t9  # output tensor
+    return output
+
+# Input arguments adapted for torch.cdist
+# arg0 is kept identical to the original to preserve the complex stride behavior
+arg0 = torch.rand([2, 261, 17, 358], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+
+# arg1 adapted to shape (Batch, P, M) = (17, 261, 64)
+arg1 = torch.rand([17, 261, 64], dtype=torch.float32, device='cuda', requires_grad=True)
+
+# arg2 adapted to shape (Batch, M, R) = (17, 64, 358) so it can be transposed to (17, 358, 64)
+arg2 = torch.rand([17, 64, 358], dtype=torch.float32, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    # Test Eager Mode
+    out_eager = foo(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+    
+    # Test Compiled Mode
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+    print('Compile Success! ')
