@@ -1,0 +1,178 @@
+Please fix the following Python test case based on the error message.
+
+## Original Test Case:
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_ctc_beam_search_decoder_consistency():
+    """
+    Test case for tf.compat.v1.nn.ctc_beam_search_decoder adapted from 
+    PyTorch index_add_ complex tensor inconsistency issue (Issue 160845).
+    
+    The original issue highlights an inconsistency in tensor accumulation 
+    (index_add) where the imaginary component was dropped on MPS. 
+    This test verifies that the CTC beam search decoder correctly handles 
+    input accumulation (logits) and returns valid, consistent results 
+    (decoded paths and probabilities) without dropping information.
+    """
+    
+    # Mimic the setup from the bug report: seed, shape, and data generation
+    np.random.seed(0)
+    
+    # Define dimensions
+    batch_size = 2
+    num_classes = 5  # 4 classes + 1 blank
+    max_time_steps = 10
+    
+    # Create inputs (logits)
+    # In the original bug, src had specific real/imag components. 
+    # Here we ensure logits have distinct values to verify correct accumulation.
+    logits = np.random.randn(max_time_steps, batch_size, num_classes).astype(np.float32)
+    
+    # Define sequence lengths
+    sequence_length = np.array([max_time_steps, max_time_steps], dtype=np.int32)
+    
+    # Run the API
+    # Analogous to t_mps.index_add_ and t_cpu.index_add_ in the bug report.
+    # We run the decoder and check if the output matches expectations.
+    decoded, log_probabilities = tf.compat.v1.nn.ctc_beam_search_decoder(
+        logits,
+        sequence_length,
+        beam_width=10,
+        top_paths=1,
+        merge_repeated=True
+    )
+    
+    # Verification logic
+    # The original bug checked if the imaginary sum was 0 (incorrect) vs non-zero (correct).
+    # Here we check if the log probabilities are valid (not NaN/Inf) and if decoding occurred.
+    with tf.compat.v1.Session() as sess:
+        decoded_out, log_prob_out = sess.run([decoded, log_probabilities])
+        
+        # 1. Check Log Probabilities (Analogous to checking imag sum)
+        # Ensure probabilities are finite numbers, indicating correct accumulation.
+        assert np.all(np.isfinite(log_prob_out)), \
+            f"Log probabilities are invalid (NaN/Inf): {log_prob_out}"
+            
+        # 2. Check Decoded Indices (Analogous to checking tensor values)
+        # Ensure the decoder actually found paths within the valid class range.
+        # decoded_out is a list of SparseTensors
+        sparse_tensor = decoded_out[0]
+        indices = sparse_tensor.indices
+        values = sparse_tensor.values
+        
+        # Verify values are within [0, num_classes)
+        assert np.all(values >= 0) and np.all(values < num_classes), \
+            f"Decoded indices out of bounds: {values}"
+            
+        # Verify shape consistency
+        # The sparse tensor should have shape [batch_size, max_time_steps]
+        expected_shape = [batch_size, max_time_steps]
+        assert list(sparse_tensor.dense_shape) == expected_shape, \
+            f"Output shape mismatch. Expected {expected_shape}, got {list(sparse_tensor.dense_shape)}"
+
+        print("Test passed: CTC Beam Search Decoder handled inputs consistently.")
+
+if __name__ == "__main__":
+    test_ctc_beam_search_decoder_consistency()
+```
+
+## Error Message:
+```
+2026-06-19 21:31:52.824800: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcuda.so.1
+2026-06-19 21:31:52.873692: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:52.874696: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1618] Found device 0 with properties: 
+name: NVIDIA GeForce RTX 4090 major: 8 minor: 9 memoryClockRate(GHz): 2.52
+pciBusID: 0000:04:00.0
+2026-06-19 21:31:52.874744: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:52.875927: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1618] Found device 1 with properties: 
+name: NVIDIA GeForce RTX 4090 major: 8 minor: 9 memoryClockRate(GHz): 2.52
+pciBusID: 0000:0c:00.0
+2026-06-19 21:31:52.875966: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:52.878505: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1618] Found device 2 with properties: 
+name: NVIDIA GeForce RTX 2080 Ti major: 7 minor: 5 memoryClockRate(GHz): 1.545
+pciBusID: 0000:1b:00.0
+2026-06-19 21:31:52.878644: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcudart.so.10.0
+2026-06-19 21:31:52.879638: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcublas.so.10.0
+2026-06-19 21:31:52.880525: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcufft.so.10.0
+2026-06-19 21:31:52.880739: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcurand.so.10.0
+2026-06-19 21:31:52.881856: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcusolver.so.10.0
+2026-06-19 21:31:52.882710: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcusparse.so.10.0
+2026-06-19 21:31:52.885382: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcudnn.so.7
+2026-06-19 21:31:52.885467: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:52.886537: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:52.887927: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:52.890137: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:52.891189: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:52.892505: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:52.894707: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1746] Adding visible gpu devices: 0, 1, 2
+2026-06-19 21:31:52.894904: I tensorflow/core/platform/cpu_feature_guard.cc:142] Your CPU supports instructions that this TensorFlow binary was not compiled to use: SSE4.1 SSE4.2 AVX AVX2 AVX512F FMA
+2026-06-19 21:31:52.910418: I tensorflow/core/platform/profile_utils/cpu_utils.cc:94] CPU Frequency: 2199995000 Hz
+2026-06-19 21:31:52.913134: I tensorflow/compiler/xla/service/service.cc:168] XLA service 0x557365ee1d50 initialized for platform Host (this does not guarantee that XLA will be used). Devices:
+2026-06-19 21:31:52.913198: I tensorflow/compiler/xla/service/service.cc:176]   StreamExecutor device (0): Host, Default Version
+2026-06-19 21:31:53.224341: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.247145: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.250299: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.251784: I tensorflow/compiler/xla/service/service.cc:168] XLA service 0x557363718cb0 initialized for platform CUDA (this does not guarantee that XLA will be used). Devices:
+2026-06-19 21:31:53.251879: I tensorflow/compiler/xla/service/service.cc:176]   StreamExecutor device (0): NVIDIA GeForce RTX 4090, Compute Capability 8.9
+2026-06-19 21:31:53.251902: I tensorflow/compiler/xla/service/service.cc:176]   StreamExecutor device (1): NVIDIA GeForce RTX 4090, Compute Capability 8.9
+2026-06-19 21:31:53.251919: I tensorflow/compiler/xla/service/service.cc:176]   StreamExecutor device (2): NVIDIA GeForce RTX 2080 Ti, Compute Capability 7.5
+2026-06-19 21:31:53.252762: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.254320: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1618] Found device 0 with properties: 
+name: NVIDIA GeForce RTX 4090 major: 8 minor: 9 memoryClockRate(GHz): 2.52
+pciBusID: 0000:04:00.0
+2026-06-19 21:31:53.254486: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.255944: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1618] Found device 1 with properties: 
+name: NVIDIA GeForce RTX 4090 major: 8 minor: 9 memoryClockRate(GHz): 2.52
+pciBusID: 0000:0c:00.0
+2026-06-19 21:31:53.256087: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.257020: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1618] Found device 2 with properties: 
+name: NVIDIA GeForce RTX 2080 Ti major: 7 minor: 5 memoryClockRate(GHz): 1.545
+pciBusID: 0000:1b:00.0
+2026-06-19 21:31:53.257096: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcudart.so.10.0
+2026-06-19 21:31:53.257140: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcublas.so.10.0
+2026-06-19 21:31:53.257170: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcufft.so.10.0
+2026-06-19 21:31:53.257199: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcurand.so.10.0
+2026-06-19 21:31:53.257227: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcusolver.so.10.0
+2026-06-19 21:31:53.257262: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcusparse.so.10.0
+2026-06-19 21:31:53.257291: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcudnn.so.7
+2026-06-19 21:31:53.257424: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.259029: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.260585: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.261611: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.262630: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.263664: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.264491: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1746] Adding visible gpu devices: 0, 1, 2
+2026-06-19 21:31:53.264528: I tensorflow/stream_executor/platform/default/dso_loader.cc:44] Successfully opened dynamic library libcudart.so.10.0
+2026-06-19 21:31:53.267413: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1159] Device interconnect StreamExecutor with strength 1 edge matrix:
+2026-06-19 21:31:53.267431: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1165]      0 1 2 
+2026-06-19 21:31:53.267436: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1178] 0:   N N N 
+2026-06-19 21:31:53.267440: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1178] 1:   N N N 
+2026-06-19 21:31:53.267444: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1178] 2:   N N N 
+2026-06-19 21:31:53.267530: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.268504: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.269543: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.270396: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.271255: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1304] Created TensorFlow device (/job:localhost/replica:0/task:0/device:GPU:0 with 22503 MB memory) -> physical GPU (device: 0, name: NVIDIA GeForce RTX 4090, pci bus id: 0000:04:00.0, compute capability: 8.9)
+2026-06-19 21:31:53.271959: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.272940: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1304] Created TensorFlow device (/job:localhost/replica:0/task:0/device:GPU:1 with 22503 MB memory) -> physical GPU (device: 1, name: NVIDIA GeForce RTX 4090, pci bus id: 0000:0c:00.0, compute capability: 8.9)
+2026-06-19 21:31:53.273512: I tensorflow/stream_executor/cuda/cuda_gpu_executor.cc:983] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero
+2026-06-19 21:31:53.274365: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1304] Created TensorFlow device (/job:localhost/replica:0/task:0/device:GPU:2 with 10129 MB memory) -> physical GPU (device: 2, name: NVIDIA GeForce RTX 2080 Ti, pci bus id: 0000:1b:00.0, compute capability: 7.5)
+Traceback (most recent call last):
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/160845_issue_to_api_8.output.py", line 74, in <module>
+    test_ctc_beam_search_decoder_consistency()
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/160845_issue_to_api_8.output.py", line 69, in test_ctc_beam_search_decoder_consistency
+    f"Output shape mismatch. Expected {expected_shape}, got {list(sparse_tensor.dense_shape)}"
+AssertionError: Output shape mismatch. Expected [2, 10], got [2, 6]
+
+```
+
+## Requirements:
+1. Analyze the error message carefully
+2. Fix the test case to resolve the error
+3. Keep the test logic intact - do not change the core test functionality
+4. If the error is due to missing dependencies or environment issues, try to add mock or skip conditions
+5. Output only the fixed Python code, wrapped in ```python ... ``` blocks
+
+## Fixed Test Case:

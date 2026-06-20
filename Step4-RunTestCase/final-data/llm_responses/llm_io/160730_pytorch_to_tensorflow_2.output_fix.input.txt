@@ -1,0 +1,95 @@
+Please fix the following Python test case based on the error message.
+
+## Original Test Case:
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+import tf.experimental.dtensor as dtensor
+
+# Setup for DTensor: Create a mesh and a replicated layout
+# This simulates the distributed environment context for the API under test.
+mesh = dtensor.create_mesh(['x'], ['cpu'])
+layout = dtensor.Layout.replicated(mesh, rank=3)
+
+def foo(x):
+    t = tf.tan(x)
+    # Equivalent to torch.tan(x).expand(31, 51, 1)
+    e = tf.broadcast_to(t, [31, 51, 1])
+    mean_val = tf.reduce_mean(e)
+    
+    # Using Python control flow inside tf.function.
+    # Autograph will convert this to tf.cond, similar to how torch.compile 
+    # handles control flow graph breaks.
+    if mean_val > 0.5:
+        out1 = tf.subtract(e, e * 0.5)
+    else:
+        out1 = tf.add(e, e * 0.5)
+        
+    # print("break")  # No error occurs if uncomment this line in original bug
+    
+    return tf.sin(out1)
+
+# Replicate the data generation from the original bug report
+np.random.seed(0)
+x_np = np.random.uniform(0, 10, size=(31, 51, 1)).astype(np.float16)
+x_tf = tf.constant(x_np)
+
+# 1. Eager Execution (Baseline)
+eager_res = foo(x_tf)
+
+# 2. DTensor Execution using the similar API: copy_to_mesh
+# We wrap the function in tf.function to simulate the compilation aspect
+# and ensure the graph logic is tested.
+compiled_foo = tf.function(foo)
+
+# Use copy_to_mesh to move the input tensor to the DTensor mesh
+x_dt = dtensor.copy_to_mesh(x_tf, layout)
+
+# Execute the logic on the DTensor
+dtensor_res = compiled_foo(x_dt)
+
+# Convert DTensor back to a local tensor for comparison
+dtensor_res_local = dtensor_res.to_tensor()
+
+# Verify that the results match
+# This checks if copy_to_mesh and the subsequent graph execution preserve
+# numerical accuracy compared to standard eager execution.
+np.testing.assert_allclose(eager_res.numpy(), dtensor_res_local.numpy(), rtol=1e-5, atol=1e-5)
+
+print("Test passed: Eager and DTensor results match.")
+```
+
+## Error Message:
+```
+Traceback (most recent call last):
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/160730_pytorch_to_tensorflow_2.output.py", line 2, in <module>
+    import tensorflow as tf
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow/__init__.py", line 99, in <module>
+    from tensorflow_core import *
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow_core/__init__.py", line 28, in <module>
+    from tensorflow.python import pywrap_tensorflow  # pylint: disable=unused-import
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow/__init__.py", line 50, in __getattr__
+    module = self._load()
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow/__init__.py", line 44, in _load
+    module = _importlib.import_module(self.__name__)
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/importlib/__init__.py", line 127, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow_core/python/__init__.py", line 52, in <module>
+    from tensorflow.core.framework.graph_pb2 import *
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow_core/core/framework/graph_pb2.py", line 7, in <module>
+    from google.protobuf import descriptor as _descriptor
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/google/protobuf/descriptor.py", line 47, in <module>
+    from google.protobuf.pyext import _message
+ImportError: /usr/lib/x86_64-linux-gnu/libstdc++.so.6: version `GLIBCXX_3.4.29' not found (required by /home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/google/protobuf/pyext/_message.cpython-37m-x86_64-linux-gnu.so)
+
+```
+
+## Requirements:
+1. Analyze the error message carefully
+2. Fix the test case to resolve the error
+3. Keep the test logic intact - do not change the core test functionality
+4. If the error is due to missing dependencies or environment issues, try to add mock or skip conditions
+5. Output only the fixed Python code, wrapped in ```python ... ``` blocks
+
+## Fixed Test Case:

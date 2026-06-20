@@ -1,0 +1,68 @@
+import tensorflow as tf
+import numpy as np
+
+class SpatialDropoutModelActive(tf.keras.Model):
+    """
+    Model using SpatialDropout1D with a non-zero rate.
+    Corresponds to the 'AnyDimsModelEmpty' in the original PyTorch setup
+    (one specific configuration).
+    """
+    def __init__(self):
+        super().__init__()
+        self.dropout = tf.keras.layers.SpatialDropout1D(0.5)
+
+    def call(self, x, training=False):
+        print('input shape:', x.shape)
+        y = self.dropout(x, training=training)
+        print('output shape:', y.shape)
+        return y
+
+class SpatialDropoutModelInactive(tf.keras.Model):
+    """
+    Model using SpatialDropout1D with a zero rate (no dropout).
+    Corresponds to the 'AnyDimsModelNull' in the original PyTorch setup
+    (a different configuration).
+    """
+    def __init__(self):
+        super().__init__()
+        self.dropout = tf.keras.layers.SpatialDropout1D(0.0)
+
+    def call(self, x, training=False):
+        print('input shape:', x.shape)
+        y = self.dropout(x, training=training)
+        print('output shape:', y.shape)
+        return y
+
+def process(model, x):
+    print('model:', model.__class__.__name__)
+    print('running eager mode...')
+    # Run in eager mode
+    out_eager = model(x, training=True)
+    
+    print('exporting/tracing...')
+    # In TensorFlow, tf.function is the equivalent of graph capture/export.
+    # We trace the call method to simulate the export process.
+    traced_call = tf.function(model.call)
+    out_graph = traced_call(x, training=True)
+    
+    # Verify that the output shape is correct and consistent between eager and graph modes
+    assert out_eager.shape == out_graph.shape, \
+        f"Shape mismatch detected: Eager {out_eager.shape} vs Graph {out_graph.shape}"
+    
+    # For SpatialDropout1D, input and output shapes must match
+    assert x.shape == out_graph.shape, \
+        f"Shape mismatch detected: Input {x.shape} vs Output {out_graph.shape}"
+    print()
+
+if __name__ == "__main__":
+    # Input data: (batch_size, timesteps, channels)
+    # SpatialDropout1D requires a 3D input.
+    x = np.random.rand(2, 10, 5).astype(np.float32)
+
+    # Process the first model
+    process(SpatialDropoutModelActive(), x)
+
+    # Process the second model sequentially
+    # The original bug involved incorrect output shapes for the second model
+    # due to caching/state pollution.
+    process(SpatialDropoutModelInactive(), x)

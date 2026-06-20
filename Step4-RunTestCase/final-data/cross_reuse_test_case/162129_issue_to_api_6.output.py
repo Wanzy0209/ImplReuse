@@ -1,0 +1,45 @@
+import tensorflow as tf
+import numpy as np
+from tensorflow.keras import backend as K
+
+def test_depthwise_conv2d_data_format_validation():
+    """
+    Test case for tf.keras.backend.depthwise_conv2d.
+    
+    This test verifies that the API correctly validates the 'data_format' argument,
+    ensuring it raises a ValueError for invalid inputs rather than failing silently
+    or producing incorrect results, which aligns with the logic of checking for
+    "silent incorrectness" found in the original bug report.
+    """
+    # Setup inputs (Direct construction of tensors)
+    # Shape: (batch_size, height, width, channels) for channels_last
+    x = np.random.rand(1, 5, 5, 3).astype('float32')
+    # Shape: (height, width, in_channels, channel_multiplier)
+    depthwise_kernel = np.random.rand(3, 3, 3, 1).astype('float32')
+
+    # Test 1: Valid data_format
+    # Ensures the function operates correctly with valid direct construction.
+    try:
+        output = K.depthwise_conv2d(x, depthwise_kernel, data_format='channels_last')
+        assert output.shape == (1, 3, 3, 3), f"Expected shape (1, 3, 3, 3), got {output.shape}"
+        print("Test Passed: Valid data_format processed correctly.")
+    except Exception as e:
+        print(f"Test Failed: Valid data_format raised exception: {e}")
+
+    # Test 2: Invalid data_format
+    # The original bug report highlights an issue where incorrect direct construction
+    # leads to silent incorrectness. Here we verify that depthwise_conv2d explicitly
+    # raises an error for invalid arguments, preventing silent failure.
+    try:
+        # Attempting to use an invalid data_format string
+        output = K.depthwise_conv2d(x, depthwise_kernel, data_format='invalid_format')
+        print("Test Failed: Expected ValueError for invalid data_format, but none was raised.")
+    except ValueError as e:
+        # Check if the error message is informative
+        assert "data_format" in str(e).lower(), "Error message should mention 'data_format'"
+        print(f"Test Passed: ValueError raised as expected for invalid data_format: {e}")
+    except Exception as e:
+        print(f"Test Failed: Unexpected exception type raised: {type(e).__name__}: {e}")
+
+if __name__ == "__main__":
+    test_depthwise_conv2d_data_format_validation()

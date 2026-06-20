@@ -1,0 +1,66 @@
+```python
+import sys
+import torch
+
+# Handle missing torch.export (available in PyTorch >= 2.1)
+try:
+    from torch.export import Dim, export
+except ImportError:
+    print("Skipping test: torch.export module not found. This test requires PyTorch >= 2.1.")
+    sys.exit(0)
+
+def test_reshape_copy_unbacked_semantics():
+    """
+    Test that torch.ops.aten._reshape_copy handles unbacked SymInts
+    correctly during torch.export decomposition.
+    
+    This test reproduces the issue where unbacked semantics for _reshape_copy
+    were not defined, causing failures when decomposing view ops with dynamic shapes.
+    """
+    
+    # Define a minimal model that uses view (which will be decomposed)
+    class SimpleModel(torch.nn.Module):
+        def forward(self, x):
+            # Reshape (B, S, D) -> (B, S*D)
+            return x.view(x.size(0), -1)
+
+    # Setup dynamic shapes
+    seq_len = Dim("seq_len", min=1, max=128)
+    
+    model = SimpleModel()
+    # Input tensor: (Batch=1, Seq=12, Dim=64)
+    inputs = torch.randn(1, 12, 64)
+    
+    # Define the decomposition function that maps view to _reshape_copy
+    def view_decomposition(x: torch.Tensor, size: torch.Size) -> torch.Tensor:
+        return torch.ops.aten._reshape_copy.default(x, size)
+
+    # Export the model with dynamic shapes
+    # This creates a graph containing SymInts (unbacked symbols)
+    ep = export(
+        model,
+        args=(inputs,),
+        kwargs={},
+        dynamic_shapes=({1: seq_len},),
+        strict=False,
+    )
+    
+    # Apply decompositions
+    decomp_table = export.default_decompositions()
+    # Replace the default view decomposition with our custom one using _reshape_copy
+    decomp_table[torch.ops.aten.view.default] = view_decomposition
+    
+    # Run decompositions
+    # If unbacked semantics are not defined, this step will raise an error
+    after_decomp = ep.run_decompositions(decomp_table=decomp_table)
+    
+    # Verify the graph contains _reshape_copy to ensure the decomposition was applied
+    graph = after_decomp.graph
+    has_reshape_copy = any(node.target == torch.ops.aten._reshape_copy.default for node in graph.nodes)
+    
+    assert has_reshape_copy, "Graph should contain aten._reshape_copy.default after decomposition"
+    print("Test Passed: _reshape_copy handles unbacked semantics correctly.")
+
+if __name__ == "__main__":
+    test_reshape_copy_unbacked_semantics()
+```

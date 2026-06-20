@@ -1,0 +1,89 @@
+Please fix the following Python test case based on the error message.
+
+## Original Test Case:
+```python
+import torch
+import unittest
+from enum import Enum
+from torch.nn.attention.flex_attention import flex_attention
+
+# Leveraging the pattern of tf.compat.v1.tpu.PaddingSpec to define 
+# configuration modes for the attention mechanism, similar to how 
+# PaddingSpec defines policies for TPU replication.
+class FlexAttentionSpec(Enum):
+    """Represents the attention configuration mode, analogous to PaddingSpec."""
+    MHA = 0  # Standard Multi-Head Attention
+    GQA = 1  # Grouped Query Attention (The failing case in the bug report)
+
+class TestFlexAttentionB200(unittest.TestCase):
+    def test_flex_attention_backward_with_gqa(self):
+        """
+        Test case to reproduce the FlexAttention backward compilation failure 
+        with GQA on NVIDIA B200.
+        
+        This test adapts the pattern of using a specification enum (similar to 
+        tf.compat.v1.tpu.PaddingSpec) to configure the attention call, ensuring 
+        the test covers the specific configuration (GQA) that triggered the bug.
+        """
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is not available, skipping test.")
+
+        # Configuration based on the bug report
+        batch_size, seq_len, head_dim = 2, 4096, 128
+        # GQA specific dimensions: Q has 32 heads, K/V have 8 heads
+        q_heads = 32
+        kv_heads = 8 
+
+        # Initialize tensors with requires_grad=True to test backward pass
+        with torch.device("cuda"):
+            q = torch.randn([batch_size, q_heads, seq_len, head_dim], dtype=torch.bfloat16, requires_grad=True)
+            k = torch.randn([batch_size, kv_heads, seq_len, head_dim], dtype=torch.bfloat16, requires_grad=True)
+            v = torch.randn([batch_size, kv_heads, seq_len, head_dim], dtype=torch.bfloat16, requires_grad=True)
+
+        # Compile with the specific backend that failed in the bug report
+        compiled_flex_attention = torch.compile(flex_attention, fullgraph=True, backend="inductor")
+
+        # Test the GQA configuration (the failing case)
+        spec = FlexAttentionSpec.GQA
+        
+        try:
+            # Execute forward pass with GQA enabled based on the Spec
+            y = compiled_flex_attention(q, k, v, enable_gqa=(spec == FlexAttentionSpec.GQA))
+            
+            # Execute backward pass (where the compilation failure occurred)
+            y.backward(torch.randn_like(y))
+            
+            # If we reach here, the bug is fixed/passed
+            self.assertTrue(True, "FlexAttention backward with GQA compiled and executed successfully.")
+            
+        except Exception as e:
+            # Catching the specific compilation error mentioned in the bug report
+            # (TritonGPUHoistTMEMAlloc failure)
+            error_msg = str(e)
+            if "TritonGPUHoistTMEMAlloc" in error_msg or "Failures have been detected while processing an MLIR pass pipeline" in error_msg:
+                self.fail(f"FlexAttention backward compilation failed with GQA (Spec={spec.name}): {error_msg}")
+            else:
+                # Re-raise if it's a different error
+                raise
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+## Error Message:
+```
+Traceback (most recent call last):
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/160074_issue_to_api_5.output.py", line 4, in <module>
+    from torch.nn.attention.flex_attention import flex_attention
+ModuleNotFoundError: No module named 'torch.nn.attention'
+
+```
+
+## Requirements:
+1. Analyze the error message carefully
+2. Fix the test case to resolve the error
+3. Keep the test logic intact - do not change the core test functionality
+4. If the error is due to missing dependencies or environment issues, try to add mock or skip conditions
+5. Output only the fixed Python code, wrapped in ```python ... ``` blocks
+
+## Fixed Test Case:

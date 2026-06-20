@@ -1,0 +1,48 @@
+```python
+import tensorflow as tf
+import time
+
+class MatmulCpuOverheadTest(tf.test.TestCase):
+    def test_matmul_cpu_overhead(self):
+        # Check for GPU availability
+        # Use tf.test.is_gpu_available() for compatibility with TensorFlow 1.x
+        # where tf.config.list_physical_devices is not available.
+        if not tf.test.is_gpu_available():
+            self.skipTest("No GPU found")
+
+        # Parameters from the original bug report
+        warmup = 128
+        iters = 16384
+
+        # Create tensors on GPU with bfloat16 dtype
+        with tf.device('/GPU:0'):
+            a = tf.zeros((512, 512), dtype=tf.bfloat16)
+
+        # Warmup phase to ensure kernels are loaded and caches are warm
+        for _ in range(warmup):
+            _ = tf.linalg.matmul(a, a)
+
+        # Synchronize/Flush to ensure clean state before timing
+        # In TF eager mode, we rely on the dispatch mechanism. 
+        # To strictly mimic the synchronization of the original script, 
+        # we ensure the previous ops are dispatched.
+        # Note: The bug is specifically about CPU overhead (dispatch time).
+        
+        t0 = time.perf_counter()
+        for _ in range(iters):
+            # Perform the matrix multiplication
+            _ = tf.linalg.matmul(a, a)
+        t1 = time.perf_counter()
+
+        # Calculate average time in microseconds
+        avg_time_us = 1e6 * (t1 - t0) / iters
+        print(f"Average time per matmul: {avg_time_us}")
+
+        # Assertion to catch significant performance regressions.
+        # The original issue showed a regression from ~8.3us to ~8.5us.
+        # We set a threshold that allows for normal variance but catches major overhead spikes.
+        self.assertLess(avg_time_us, 50.0, "CPU overhead for matmul is too high")
+
+if __name__ == '__main__':
+    tf.test.main()
+```

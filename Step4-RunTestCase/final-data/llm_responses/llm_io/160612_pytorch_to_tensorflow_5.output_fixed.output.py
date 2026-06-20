@@ -1,0 +1,30 @@
+import tensorflow as tf
+
+# Enable eager execution to allow .numpy() calls on tensors
+# This is necessary because tf.compat.v1 disables eager execution by default
+tf.compat.v1.enable_eager_execution()
+
+# Adapted test case for tf.compat.v1.string_to_hash_bucket
+# based on the structure of the PyTorch prune.remove example.
+
+# 1. Setup input data (similar to initializing nn.Linear)
+input_strings = tf.constant(["Hello", "TensorFlow", "2.x"])
+num_buckets = 3
+
+# 2. Call the API (similar to calling prune.remove)
+# The original PyTorch example finalized a pruning step.
+# Here, we convert strings to hash buckets.
+hashed_tensor = tf.compat.v1.string_to_hash_bucket(input_strings, num_buckets)
+
+# 3. Verify the behavior (similar to inspecting the module 'm')
+# Check that the output type is int64
+assert hashed_tensor.dtype == tf.int64, "Output dtype should be int64"
+
+# Check that the output shape matches the input shape
+assert hashed_tensor.shape == input_strings.shape, "Output shape should match input shape"
+
+# Check that all values are within the valid bucket range [0, num_buckets)
+assert tf.reduce_all(hashed_tensor >= 0).numpy(), "Hash values should be non-negative"
+assert tf.reduce_all(hashed_tensor < num_buckets).numpy(), "Hash values should be less than num_buckets"
+
+print("Test passed. Result:", hashed_tensor)

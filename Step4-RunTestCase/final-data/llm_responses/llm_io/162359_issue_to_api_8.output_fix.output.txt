@@ -1,0 +1,66 @@
+```python
+import torch
+from torch import optim
+import math
+
+def test_sequentiallr_tensor_aliasing_bug():
+    """
+    Verifies that SequentialLR does NOT alias the lr Tensor with initial_lr,
+    ensuring base_lrs for chained schedulers are not corrupted when using a Tensor learning rate.
+    """
+    # 1. Use a tensor learning rate.
+    lr = 1.0
+    x = torch.tensor(0.0)
+    opt = optim.AdamW([x], lr=torch.tensor(lr))
+
+    # 2. Initialize our chained schedulers.
+    milestone, total_steps = 40, 100
+    start_factor, end_factor = 0.2, 1.0
+    warmup = optim.lr_scheduler.LinearLR(opt, start_factor, end_factor, total_iters=milestone)
+    decay = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=total_steps - milestone)
+
+    # Note that each scheduler's base_lrs aliases with the optimizer's initial_lr.
+    # This is expected behavior for schedulers to track the base LR.
+    assert warmup.base_lrs[0].data_ptr() == opt.param_groups[0]['initial_lr'].data_ptr()
+    assert decay.base_lrs[0].data_ptr() == opt.param_groups[0]['initial_lr'].data_ptr()
+
+    # 3. Initialize our SequentialLR.
+    scheduler = optim.lr_scheduler.SequentialLR(opt, schedulers=[warmup, decay], milestones=[milestone])
+
+    # In the fixed version, SequentialLR should NOT alias lr with initial_lr in a way that causes corruption.
+    # We check that initial_lr is NOT corrupted.
+    assert opt.param_groups[0]['initial_lr'].item() == lr, \
+        f"initial_lr was corrupted! Expected {lr}, got {opt.param_groups[0]['initial_lr'].item()}"
+    
+    # Check that base_lrs are NOT corrupted.
+    assert warmup.base_lrs[0].item() == lr, \
+        f"warmup.base_lrs was corrupted! Expected {lr}, got {warmup.base_lrs[0].item()}"
+    assert decay.base_lrs[0].item() == lr, \
+        f"decay.base_lrs was corrupted! Expected {lr}, got {decay.base_lrs[0].item()}"
+
+    # 4. Verify the impact on the chained scheduler (CosineAnnealingLR).
+    # Step through the warmup phase
+    for _ in range(milestone):
+        scheduler.step()
+
+    # Step into the decay phase
+    scheduler.step()
+    
+    current_lr = scheduler.get_last_lr()[0].item()
+    
+    # Calculate what the LR should be (correct behavior)
+    # The base_lr for decay is lr (1.0)
+    t = 1
+    T_max = total_steps - milestone
+    correct_base_lr = lr
+    expected_correct_lr = correct_base_lr * (1 + math.cos(math.pi * t / T_max)) / 2
+    
+    # Assert that the behavior is correct: the LR is NOT scaled by start_factor incorrectly
+    assert abs(current_lr - expected_correct_lr) < 1e-6, \
+        f"Expected correct LR {expected_correct_lr}, got {current_lr}"
+
+    print("Test passed: base_lrs were NOT corrupted (bug is fixed).")
+
+if __name__ == "__main__":
+    test_sequentiallr_tensor_aliasing_bug()
+```

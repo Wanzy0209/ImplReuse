@@ -1,0 +1,70 @@
+```python
+import tempfile
+
+import torch
+import torch.special
+
+
+class MyModule(torch.nn.Module):
+    """
+    A module that uses torch.special.scaled_modified_bessel_k1
+    to test AOT compilation stability, mirroring the structure
+    of the original bug report involving a custom Triton op.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        # Using the similar API instead of the custom triton_op
+        return torch.special.scaled_modified_bessel_k1(x)
+
+
+def main():
+    # Check for torch.export availability (PyTorch >= 2.1)
+    if not hasattr(torch, 'export'):
+        print("Test skipped: torch.export is not available (requires PyTorch >= 2.1).")
+        return
+
+    # Check for CUDA availability
+    if not torch.cuda.is_available():
+        print("Test skipped: CUDA is not available.")
+        return
+
+    # Setup model
+    model = MyModule().to("cuda")
+    
+    # Prepare input
+    # scaled_modified_bessel_k1 is typically defined for positive inputs,
+    # so we ensure the input is positive.
+    x = torch.randn(1024, device="cuda").abs() + 0.1
+
+    # 1. Sanity check: Run the model in eager mode
+    with torch.inference_mode():
+        expected_output = model(x)
+        assert expected_output.shape == x.shape
+        assert expected_output.dtype == x.dtype
+
+    # 2. Export the model (preserving the dynamic_shapes logic from the bug report)
+    with torch.inference_mode():
+        exported_model = torch.export.export(
+            model, 
+            (x,), 
+            dynamic_shapes=({0: torch.export.Dim("dim")},)
+        )
+
+    # 3. AOT Compile and Package (The step that failed in the original issue)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            torch._inductor.aoti_compile_and_package(
+                exported_model,
+                package_path=tmpdir + "/package.pt2",
+            )
+            print("Test passed: AOT compilation successful for torch.special.scaled_modified_bessel_k1")
+        except Exception as e:
+            print(f"Test failed: AOT compilation raised an exception: {e}")
+            raise
+
+
+if __name__ == "__main__":
+    main()
+```

@@ -1,0 +1,36 @@
+import torch
+import torch.nn.functional as F
+
+def test_tanh_inductor_backward():
+    """
+    Test case adapted from Issue 160074.
+    Replaces flex_attention with the similar API torch.nn.functional.tanh
+    to verify if the compilation failure is specific to FlexAttention or 
+    a general issue with the inductor backend on the target hardware.
+    """
+    # Check if torch.compile is available (requires PyTorch 2.0+)
+    if not hasattr(torch, 'compile'):
+        print("Skipping test: torch.compile is not available. PyTorch 2.0+ is required.")
+        return
+
+    # Compile the similar API (tanh) using the same configuration as the bug report
+    compiled_tanh = torch.compile(F.tanh, fullgraph=True, backend="inductor")
+
+    with torch.device("cuda"):
+        # Create input tensor with similar properties (bfloat16, requires_grad, large shape)
+        # to mimic the memory and compute characteristics of the original bug.
+        x = torch.randn([2, 32, 4096, 128], dtype=torch.bfloat16, requires_grad=True)
+
+        # Forward pass
+        y = compiled_tanh(x)
+
+        # Backward pass (The original bug failed here during compilation of the backward pass)
+        y.backward(torch.randn_like(y))
+
+        # Verify gradients are computed correctly
+        assert x.grad is not None
+        assert x.grad.shape == x.shape
+        print("Test passed: torch.compile with tanh succeeded on backward pass.")
+
+if __name__ == "__main__":
+    test_tanh_inductor_backward()

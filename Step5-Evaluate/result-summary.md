@@ -14,4 +14,8 @@
 
 （没执行完）Cross-Framework: 257 success, 95 fail
 
-可执行率：257 / (257 + 95) = 73.01%
+更正：Cross-Framework: 257 - 15 = 242 success, 95 + 15 = 110 fail
+
+出错：3
+
+可执行率：242 / (242 + 110) = 68.75%

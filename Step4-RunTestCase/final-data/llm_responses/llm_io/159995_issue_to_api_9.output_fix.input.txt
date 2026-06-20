@@ -1,0 +1,132 @@
+Please fix the following Python test case based on the error message.
+
+## Original Test Case:
+```python
+import torch
+import unittest
+import tempfile
+import os
+
+class TestAotiCompileWithCond(unittest.TestCase):
+    def test_aoti_compile_cond_with_custom_ops(self):
+        """
+        Test that torch._inductor.aoti_compile_and_package handles
+        torch.cond branches containing custom CUDA kernels correctly.
+        
+        This test preserves the logic of the original bug report (Issue 159995)
+        but mocks the custom CUDA extension with Python implementations
+        to ensure the test is runnable without external C++ compilation.
+        """
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is not available")
+
+        # Define custom ops similar to the bug report
+        torch.library.define("myops::add_one", "(Tensor x) -> Tensor")
+        torch.library.define("myops::add_two", "(Tensor x) -> Tensor")
+
+        # Mock implementations for the custom CUDA kernels
+        # In the original bug, these were C++ CUDA kernels.
+        # We use lambda x: x + 1 to simulate the behavior.
+        def add_one_impl(x):
+            return x + 1
+        
+        def add_two_impl(x):
+            return x + 2
+
+        # Register implementations for CUDA
+        torch.library.impl("myops::add_one", "CUDA", add_one_impl)
+        torch.library.impl("myops::add_two", "CUDA", add_two_impl)
+
+        # Register fake implementations for meta/trace
+        @torch.library.register_fake("myops::add_one")
+        def add_one_fake(x):
+            return torch.empty_like(x)
+
+        @torch.library.register_fake("myops::add_two")
+        def add_two_fake(x):
+            return torch.empty_like(x)
+
+        # Define the model using torch.cond
+        class CondModel(torch.nn.Module):
+            def forward(self, x):
+                return torch.cond(
+                    x.shape[0] < 5, 
+                    torch.ops.myops.add_one, 
+                    torch.ops.myops.add_two, 
+                    (x,)
+                )
+
+        model = CondModel()
+
+        # Setup dynamic shapes
+        batch_dim = torch.export.Dim("batch", min=1, max=128)
+        
+        # Export the model with a sample input that triggers the first branch (shape 3 < 5)
+        example_input = torch.zeros(3, device="cuda")
+        exported = torch.export.export(
+            model, 
+            (example_input,), 
+            dynamic_shapes={"x": {0: batch_dim}}
+        )
+
+        # Use a temporary directory for the package
+        with tempfile.TemporaryDirectory() as tmpdir:
+            package_path = os.path.join(tmpdir, "model.pt2")
+            
+            # Compile and package
+            torch._inductor.aoti_compile_and_package(exported, package_path=package_path)
+            
+            # Load the packaged model
+            aoti_model = torch._inductor.aoti_load_package(package_path)
+
+            # Test Case 1: Input shape 6 (triggers else branch: add_two)
+            # This verifies that the conditional logic and the second kernel work in AOTI
+            input_1 = torch.zeros(6, device="cuda")
+            result_1 = aoti_model(input_1)
+            
+            # Expected result: 0 + 2 = 2
+            expected_1 = torch.full((6,), 2.0, device="cuda")
+            
+            # Assert correctness
+            self.assertTrue(torch.allclose(result_1, expected_1))
+
+            # Test Case 2: Input shape 2 (triggers if branch: add_one)
+            # This verifies the first kernel works in AOTI
+            input_2 = torch.zeros(2, device="cuda")
+            result_2 = aoti_model(input_2)
+            
+            # Expected result: 0 + 1 = 1
+            expected_2 = torch.full((2,), 1.0, device="cuda")
+            
+            self.assertTrue(torch.allclose(result_2, expected_2))
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+## Error Message:
+```
+E
+======================================================================
+ERROR: test_aoti_compile_cond_with_custom_ops (__main__.TestAotiCompileWithCond)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/159995_issue_to_api_9.output.py", line 37, in test_aoti_compile_cond_with_custom_ops
+    @torch.library.register_fake("myops::add_one")
+AttributeError: module 'torch.library' has no attribute 'register_fake'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.061s
+
+FAILED (errors=1)
+
+```
+
+## Requirements:
+1. Analyze the error message carefully
+2. Fix the test case to resolve the error
+3. Keep the test logic intact - do not change the core test functionality
+4. If the error is due to missing dependencies or environment issues, try to add mock or skip conditions
+5. Output only the fixed Python code, wrapped in ```python ... ``` blocks
+
+## Fixed Test Case:

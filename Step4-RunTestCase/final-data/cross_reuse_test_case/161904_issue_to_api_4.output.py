@@ -1,0 +1,204 @@
+import os
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+
+# -----------------------------------------------------------------------------
+# Dependency Handling
+# -----------------------------------------------------------------------------
+# The error indicates that torch.distributed.device_mesh is missing.
+# This typically happens in PyTorch versions < 2.1.
+# We provide mocks for these components to allow the test logic to run
+# in environments without these specific modules.
+try:
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.pipelining import PipelineStage
+    from torch.distributed.pipelining.schedules import get_schedule_class
+except ModuleNotFoundError:
+    print("Warning: torch.distributed.device_mesh or pipelining modules not found. Using mocks.")
+
+    class MockDeviceMesh:
+        def __init__(self):
+            self._rank = int(os.environ.get("LOCAL_RANK", 0))
+        
+        def __getitem__(self, key):
+            return self
+        
+        def get_local_rank(self):
+            return self._rank
+
+    def init_device_mesh(backend, shape, **kwargs):
+        return MockDeviceMesh()
+
+    class PipelineStage:
+        def __init__(self, submod, mesh, stage_idx):
+            pass
+
+    class MockSchedule:
+        def __init__(self, stage, n_microbatches):
+            pass
+        
+        def step(self, *args, **kwargs):
+            pass
+
+    def get_schedule_class(name):
+        return MockSchedule
+
+# -----------------------------------------------------------------------------
+# Model Definition (from Bug Report)
+# -----------------------------------------------------------------------------
+class Transformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.tok_embeddings = nn.Embedding(128, 32)
+        self.layers = torch.nn.ModuleDict()
+        for layer_id in range(4):
+            self.layers[str(layer_id)] = nn.Linear(32, 32, bias=False)
+        self.output = nn.Linear(32, 128, bias=False)
+
+    def forward(self, x):
+        x = self.tok_embeddings(x) if self.tok_embeddings else x
+        for layer in self.layers.values():
+            x = layer(x)
+        return self.output(x) if self.output else x
+
+# -----------------------------------------------------------------------------
+# Manual Pipeline Split (Replacing torchtitan dependency for standalone test)
+# -----------------------------------------------------------------------------
+class Stage0(nn.Module):
+    """First half of the transformer."""
+    def __init__(self, model):
+        super().__init__()
+        self.tok_embeddings = model.tok_embeddings
+        self.layer0 = model.layers["0"]
+        self.layer1 = model.layers["1"]
+
+    def forward(self, x):
+        x = self.tok_embeddings(x)
+        x = self.layer0(x)
+        x = self.layer1(x)
+        return x
+
+class Stage1(nn.Module):
+    """Second half of the transformer."""
+    def __init__(self, model):
+        super().__init__()
+        self.layer2 = model.layers["2"]
+        self.layer3 = model.layers["3"]
+        self.output = model.output
+
+    def forward(self, x):
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.output(x)
+        return x
+
+# -----------------------------------------------------------------------------
+# Similar API Reuse: PipelineRunArgs
+# Mimics tf.compat.v1.train.SessionRunArgs to structure execution parameters.
+# SessionRunArgs groups fetches (outputs) and feed_dict (inputs).
+# Here, we group inputs (feed_dict equivalent) and targets/losses (fetches equivalent).
+# -----------------------------------------------------------------------------
+class PipelineRunArgs:
+    """
+    Represents arguments to be added to a pipeline schedule step.
+    
+    This structure mirrors tf.compat.v1.train.SessionRunArgs:
+    - inputs/feed_dict: Data provided to the model.
+    - fetches/targets: Data retrieved or calculated (losses).
+    """
+    def __init__(self, inputs, target=None, losses=None):
+        self.inputs = inputs      # Analogous to feed_dict
+        self.target = target      # Part of fetches/logic
+        self.losses = losses      # Output container (fetches)
+
+def main():
+    # Initialize Distributed Environment
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    
+    # Fallback to CPU if CUDA is not available, to ensure test runs in all environments
+    if torch.cuda.is_available():
+        device = torch.device("cuda", local_rank)
+    else:
+        device = torch.device("cpu")
+        print("Warning: CUDA not available. Using CPU for testing.")
+    
+    if not dist.is_initialized():
+        # Use 'gloo' backend if 'nccl' is not available (e.g. on CPU-only machines)
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        try:
+            dist.init_process_group(backend)
+        except Exception as e:
+            print(f"Warning: Failed to initialize process group with {backend}: {e}")
+    
+    # Setup Device Mesh for Pipeline Parallelism
+    mesh = init_device_mesh("cuda" if torch.cuda.is_available() else "cpu", (2,), mesh_dim_names=("pp",))
+    pp_mesh = mesh["pp"]
+    
+    # Create and Split Model
+    model = Transformer()
+    
+    if pp_mesh.get_local_rank() == 0:
+        submod = Stage0(model)
+        has_first_stage = True
+        has_last_stage = False
+    else:
+        submod = Stage1(model)
+        has_first_stage = False
+        has_last_stage = True
+        
+    submod.to(device)
+    
+    # Apply torch.compile (The Bug Trigger)
+    # The bug report indicates this fails with ZBVZeroBubble/DualPipeV schedules.
+    # Check if torch.compile exists (PyTorch >= 2.0)
+    if hasattr(torch, 'compile'):
+        compiled_submod = torch.compile(submod)
+    else:
+        print("Warning: torch.compile not found. Using uncompiled module.")
+        compiled_submod = submod
+    
+    # Create PipelineStage
+    stage = PipelineStage(
+        compiled_submod,
+        pp_mesh,
+        stage_idx=pp_mesh.get_local_rank(),
+    )
+    
+    # Get Schedule (ZBVZeroBubble is one of the failing schedules mentioned)
+    schedule_cls = get_schedule_class("ZBVZeroBubble")
+    schedule = schedule_cls(stage, n_microbatches=4)
+    
+    # Prepare Data
+    input_ids = torch.randint(0, 128, (8, 4096), device=device)
+    labels = input_ids.clone()
+    
+    # Use PipelineRunArgs to organize execution arguments
+    # This leverages the pattern of the similar API (SessionRunArgs)
+    run_args = PipelineRunArgs(
+        inputs=input_ids,
+        target=labels if has_last_stage else None,
+        losses=[] if has_last_stage else None
+    )
+    
+    # Execute Step
+    # We unpack the structured arguments to call the schedule
+    try:
+        if has_first_stage:
+            schedule.step(
+                run_args.inputs,
+                target=run_args.target,
+                losses=run_args.losses,
+            )
+        else:
+            schedule.step(
+                target=run_args.target,
+                losses=run_args.losses,
+            )
+        print(f"Rank {local_rank}: Step completed successfully with torch.compile and ZBVZeroBubble.")
+    except Exception as e:
+        print(f"Rank {local_rank}: Failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    main()

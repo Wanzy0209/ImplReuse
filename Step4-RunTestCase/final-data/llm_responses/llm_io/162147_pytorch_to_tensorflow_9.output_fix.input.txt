@@ -1,0 +1,207 @@
+Please fix the following Python test case based on the error message.
+
+## Original Test Case:
+```python
+import tensorflow as tf
+import numpy as np
+import math
+
+class FastLearnedCellX3TF(tf.keras.layers.Layer):
+    def __init__(self, D_in, H, D_out,
+                 L_w1=12, L_w2=12, L_b2=12,
+                 k1=3, k2=3, k3=3, tau1=1.0, tau2=1.0, tau3=1.0,
+                 d_addr=64,           # address bottleneck
+                 learn_addr=False,
+                 learn_tape_w1=True, learn_tape_w2=True, learn_tape_b2=True):
+        super().__init__()
+        self.D_in, self.H, self.D_out = D_in, H, D_out
+
+        # keep sizes as plain Python ints
+        self.L_w1, self.L_w2, self.L_b2 = int(L_w1), int(L_w2), int(L_b2)
+        self.k1, self.k2, self.k3 = int(k1), int(k2), int(k3)
+        self.t1, self.t2, self.t3 = float(tau1), float(tau2), float(tau3)
+
+        # address bottleneck
+        # Using a Dense layer for P, but manually handling weights to match PyTorch init logic closely
+        self.P = self.add_weight(name='P_weight', shape=(d_addr, D_in), 
+                                 initializer=tf.random_normal_initializer(stddev=1.0/math.sqrt(D_in)),
+                                 trainable=learn_addr)
+
+        def init_U(name, L, d, learn):
+            # Initialize U, normalize rows
+            U = tf.random.normal((L, d))
+            U = U - tf.reduce_mean(U, axis=1, keepdims=True)
+            norm = tf.norm(U, axis=1, keepdims=True) + 1e-8
+            U = U / norm
+            return self.add_weight(name=name, shape=U.shape, initializer=tf.constant_initializer(U), trainable=learn)
+
+        # three unembeddings in addr-space
+        self.U1 = init_U('U1', self.L_w1, d_addr, learn_addr)
+        self.U2 = init_U('U2', self.L_w2, d_addr, learn_addr)
+        self.U3 = init_U('U3', self.L_b2, d_addr, learn_addr)
+
+        # value tapes
+        # Normalize along dims (1,2) for W1, W2 and dim 1 for b2
+        def init_W(name, shape, dims, learn):
+            W = tf.random.normal(shape)
+            # Normalize
+            for axis in dims:
+                W = tf.nn.l2_normalize(W, axis=axis)
+            return self.add_weight(name=name, shape=shape, initializer=tf.constant_initializer(W), trainable=learn)
+
+        self.W1 = init_W('W1', (self.L_w1, H, D_in), (1, 2), learn_tape_w1)
+        self.W2 = init_W('W2', (self.L_w2, D_out, H), (1, 2), learn_tape_w2)
+        self.b2 = init_W('b2', (self.L_b2, D_out), (1,),      learn_tape_b2)
+
+    def _tk(self, z, k, tau):
+        # Top-k and Softmax
+        topv, topi = tf.nn.top_k(z, k=k, sorted=False)
+        w = tf.nn.softmax(topv / (tau + 1e-8), axis=1)
+        return topi, w
+
+    def _address(self, x_addr):
+        # fused logits for all three heads
+        # U_pack: [Ltot, d]
+        U_pack = tf.concat([self.U1, self.U2, self.U3], axis=0)
+        
+        # Z = x_addr @ U_pack.t() -> [N, Ltot]
+        # x_addr is [N, d_addr], U_pack is [Ltot, d_addr]
+        Z = tf.matmul(x_addr, U_pack, transpose_b=True)
+        
+        s1, s2, s3 = self.L_w1, self.L_w2, self.L_b2
+        z1, z2, z3 = tf.split(Z, [s1, s2, s3], axis=1)
+        
+        i1, w1 = self._tk(z1, self.k1, self.t1)
+        i2, w2 = self._tk(z2, self.k2, self.t2)
+        i3, w3 = self._tk(z3, self.k3, self.t3)
+        return (i1, w1), (i2, w2), (i3, w3)
+
+    def _apply_mixture(self, x_flat, topi, weights, W):
+        """
+        Mix-then-apply
+        x_flat : [N, in]
+        topi   : [N, k]
+        weights: [N, k]
+        W      : [L, out, in]
+        return : [N, out]
+        """
+        # Gather W based on topi
+        # topi is [N, k], W is [L, out, in]
+        # We want to gather W[0]...W[L-1] based on indices in topi.
+        # tf.gather with batch_dims=1 allows us to treat the first dimension of topi as batch.
+        # However, W is 3D. We want to gather along axis 0.
+        # Result shape: [N, k, out, in]
+        
+        # Since topi is [N, k], we can use tf.gather with params=W and indices=topi.
+        # We need to ensure topi is int32/int64.
+        selected_W = tf.gather(W, topi, axis=0) # [N, k, out, in]
+        
+        # x_flat is [N, in]. We want to multiply selected_W by x_flat.
+        # selected_W: [N, k, out, in]
+        # x_flat:     [N, in]
+        # We want to perform matrix multiplication for the last dim.
+        # tf.einsum('nkoi,ni->nko', selected_W, x_flat)
+        mixed = tf.einsum('nkoi,ni->nko', selected_W, x_flat) # [N, k, out]
+        
+        # Apply weights
+        # weights: [N, k] -> expand to [N, k, 1]
+        weights_exp = tf.expand_dims(weights, -1)
+        weighted_mixed = mixed * weights_exp # [N, k, out]
+        
+        # Sum over k
+        return tf.reduce_sum(weighted_mixed, axis=1) # [N, out]
+
+    def call(self, inputs, training=False):
+        # inputs: [N, D_in]
+        
+        # Apply dropout to inputs as part of the adaptation to tf.nn.dropout
+        # This tests the similar API within the context of the complex module
+        x = tf.nn.dropout(inputs, rate=0.1) if training else inputs
+        
+        # Addressing
+        # x_addr = x @ P.t() -> P is [d_addr, D_in], x is [N, D_in]
+        x_addr = tf.matmul(x, self.P, transpose_b=True) # [N, d_addr]
+        
+        (i1, w1), (i2, w2), (i3, w3) = self._address(x_addr)
+        
+        # Layer 1
+        # x_flat is x [N, D_in]
+        h = self._apply_mixture(x, i1, w1, self.W1) # [N, H]
+        h = tf.nn.gelu(h)
+        
+        # Layer 2
+        # h is [N, H]
+        y = self._apply_mixture(h, i2, w2, self.W2) # [N, D_out]
+        
+        # Bias
+        # b2 is [L_b2, D_out]
+        b = self._apply_mixture(tf.ones_like(y), i3, w3, self.b2) # [N, D_out]
+        
+        return y + b
+
+def test_fast_learned_cell_x3_tf():
+    # Parameters
+    D_in, H, D_out = 128, 256, 10
+    batch_size = 8
+    
+    # Instantiate layer
+    layer = FastLearnedCellX3TF(D_in, H, D_out)
+    
+    # Create dummy input
+    x = tf.random.normal((batch_size, D_in))
+    
+    # Forward pass (training=True to activate dropout)
+    with tf.GradientTape() as tape:
+        output_train = layer(x, training=True)
+        loss = tf.reduce_sum(output_train)
+    
+    # Check output shape
+    assert output_train.shape == (batch_size, D_out), f"Output shape mismatch: {output_train.shape}"
+    
+    # Check gradients (to ensure graph complexity is traversable)
+    grads = tape.gradient(loss, layer.trainable_variables)
+    assert len(grads) > 0, "No gradients computed"
+    assert all(g is not None for g in grads), "Some gradients are None"
+    
+    # Forward pass (inference)
+    output_infer = layer(x, training=False)
+    assert output_infer.shape == (batch_size, D_out), f"Output shape mismatch: {output_infer.shape}"
+    
+    print("Test passed. FastLearnedCellX3TF executes successfully.")
+
+if __name__ == "__main__":
+    test_fast_learned_cell_x3_tf()
+```
+
+## Error Message:
+```
+WARNING:tensorflow:From /home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow_core/python/ops/resource_variable_ops.py:1630: calling BaseResourceVariable.__init__ (from tensorflow.python.ops.resource_variable_ops) with constraint is deprecated and will be removed in a future version.
+Instructions for updating:
+If using Keras pass *_constraint arguments to layers.
+Traceback (most recent call last):
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/162147_pytorch_to_tensorflow_9.output.py", line 169, in <module>
+    test_fast_learned_cell_x3_tf()
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/162147_pytorch_to_tensorflow_9.output.py", line 144, in test_fast_learned_cell_x3_tf
+    layer = FastLearnedCellX3TF(D_in, H, D_out)
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/162147_pytorch_to_tensorflow_9.output.py", line 35, in __init__
+    self.U1 = init_U('U1', self.L_w1, d_addr, learn_addr)
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/162147_pytorch_to_tensorflow_9.output.py", line 32, in init_U
+    return self.add_weight(name=name, shape=U.shape, initializer=tf.constant_initializer(U), trainable=learn)
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow_core/python/util/deprecation.py", line 507, in new_func
+    return func(*args, **kwargs)
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow_core/python/util/deprecation.py", line 507, in new_func
+    return func(*args, **kwargs)
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow_core/python/ops/init_ops.py", line 232, in __init__
+    "tuple of values, or numpy.ndarray)." % type(value))
+TypeError: Invalid type for initial value: <class 'tensorflow.python.framework.ops.Tensor'> (expected Python scalar, list or tuple of values, or numpy.ndarray).
+
+```
+
+## Requirements:
+1. Analyze the error message carefully
+2. Fix the test case to resolve the error
+3. Keep the test logic intact - do not change the core test functionality
+4. If the error is due to missing dependencies or environment issues, try to add mock or skip conditions
+5. Output only the fixed Python code, wrapped in ```python ... ``` blocks
+
+## Fixed Test Case:

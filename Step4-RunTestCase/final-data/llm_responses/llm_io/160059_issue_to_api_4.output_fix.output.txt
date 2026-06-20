@@ -1,0 +1,71 @@
+```python
+import torch
+import torch.nn as nn
+import unittest
+
+# Helper function from the original bug report
+def inverse_sigmoid(x: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+    x = x.clamp(min=0, max=1)
+    x1 = x.clamp(min=eps)
+    x2 = (1 - x).clamp(min=eps)
+    return torch.log(x1 / x2)
+
+# Handle missing torch.compiler for older PyTorch versions
+# We need to mock it to prevent AttributeError during class definition
+HAS_COMPILER = hasattr(torch, 'compiler')
+if not HAS_COMPILER:
+    class _MockCompiler:
+        @staticmethod
+        def disable(recursive=False):
+            def decorator(func):
+                return func
+            return decorator
+    torch.compiler = _MockCompiler()
+
+class TestJitScriptCompilerDisableRegression(unittest.TestCase):
+    """
+    Regression test for Issue #160059.
+    
+    Verifies that torch.jit.script does not fail with an 'undefined value' error
+    when scripting a module decorated with @torch.compiler.disable.
+    
+    The test structure mirrors the pattern of wrapping execution logic
+    (similar to how tf.experimental.async_scope wraps operations), ensuring
+    that the decorator does not interfere with the scripting process.
+    """
+
+    def setUp(self):
+        # If we are using the mock, skip the test as the feature isn't available
+        if not HAS_COMPILER:
+            self.skipTest("torch.compiler is not available in this PyTorch version")
+
+    def test_jit_script_with_compiler_disable_decorator(self):
+        """
+        Test that torch.jit.script successfully compiles a module
+        where the forward method uses @torch.compiler.disable.
+        """
+        class Model(nn.Module):
+            @torch.compiler.disable(recursive=False)
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                x = inverse_sigmoid(x)
+                return x
+
+        model = Model()
+        
+        # The bug in 2.8.0 caused an 'undefined value' error here.
+        # We assert that this operation completes without raising an exception.
+        try:
+            scripted_model = torch.jit.script(model)
+        except Exception as e:
+            self.fail(f"torch.jit.script failed with @torch.compiler.disable decorator: {e}")
+
+        # Verify the scripted model is functional
+        input_tensor = torch.tensor([0.5, 0.1, 0.9])
+        output = scripted_model(input_tensor)
+        
+        self.assertEqual(output.shape, input_tensor.shape)
+        self.assertIsInstance(output, torch.Tensor)
+
+if __name__ == '__main__':
+    unittest.main()
+```

@@ -1,0 +1,99 @@
+Please fix the following Python test case based on the error message.
+
+## Original Test Case:
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import unittest
+from torchvision.models.resnet import resnet18
+
+# Translating the pattern of tf.compat.v1.global_variables_initializer
+# which checks execution context (eager vs graph) and returns an appropriate Op.
+# Here we check the device context and return a compiled training step.
+
+def get_compiled_step_initializer(device):
+    """
+    Returns a compiled training step function for the specified device.
+    This mimics the structure of global_variables_initializer which checks
+    context and returns an initialization Op.
+    """
+    # Check context (MPS availability) similar to context.executing_eagerly()
+    if device == 'mps' and not torch.backends.mps.is_available():
+        return None # Indicate skip or handle error
+
+    # Define the core operation (similar to variables_initializer logic)
+    def _train_step(model, images, labels, optimizer, criterion):
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward() # The specific line failing in the bug report
+        optimizer.step()
+        return loss
+
+    # Apply the compilation (similar to returning the specific Op)
+    # The bug is that this fails on MPS during backward()
+    return torch.compile(_train_step)
+
+class TestTorchCompileMPS(unittest.TestCase):
+    def test_resnet18_backward_on_mps(self):
+        device = 'mps'
+        
+        # Get the compiled function using our initializer pattern
+        train_step = get_compiled_step_initializer(device)
+        
+        if train_step is None:
+            self.skipTest("MPS backend is not available.")
+
+        # Setup model and data
+        BATCH_SIZE = 4
+        NUM_CLASSES = 10
+        model = resnet18(num_classes=NUM_CLASSES).to(device)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.SGD(model.parameters(), lr=0.01)
+        
+        images = torch.randn(BATCH_SIZE, 3, 224, 224).to(device)
+        labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,)).to(device)
+        
+        # Execute the compiled step
+        # This should trigger the bug if not fixed
+        try:
+            loss = train_step(model, images, labels, optimizer, criterion)
+            # If we reach here, the backward pass succeeded
+            self.assertIsNotNone(loss)
+        except RuntimeError as e:
+            self.fail(f"torch.compile failed on MPS backend during backward pass: {e}")
+
+if __name__ == '__main__':
+    unittest.main()
+```
+
+## Error Message:
+```
+Traceback (most recent call last):
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/161905_issue_to_api_1.output.py", line 5, in <module>
+    from torchvision.models.resnet import resnet18
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/torchvision/__init__.py", line 5, in <module>
+    from torchvision import datasets, io, models, ops, transforms, utils
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/torchvision/datasets/__init__.py", line 1, in <module>
+    from ._optical_flow import FlyingChairs, FlyingThings3D, HD1K, KittiFlow, Sintel
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/torchvision/datasets/_optical_flow.py", line 12, in <module>
+    from .utils import _read_pfm, verify_str_arg
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/torchvision/datasets/utils.py", line 22, in <module>
+    import requests
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/requests/__init__.py", line 43, in <module>
+    import urllib3
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/urllib3/__init__.py", line 42, in <module>
+    "urllib3 v2.0 only supports OpenSSL 1.1.1+, currently "
+ImportError: urllib3 v2.0 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'OpenSSL 1.0.2u  20 Dec 2019'. See: https://github.com/urllib3/urllib3/issues/2168
+
+```
+
+## Requirements:
+1. Analyze the error message carefully
+2. Fix the test case to resolve the error
+3. Keep the test logic intact - do not change the core test functionality
+4. If the error is due to missing dependencies or environment issues, try to add mock or skip conditions
+5. Output only the fixed Python code, wrapped in ```python ... ``` blocks
+
+## Fixed Test Case:
