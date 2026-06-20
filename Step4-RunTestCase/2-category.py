@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Categorize test cases based on execution results and logs.
+Process cross and single results separately.
 """
 
 import argparse
@@ -11,7 +12,6 @@ import re
 from pathlib import Path
 from typing import Dict, List
 from collections import Counter
-
 
 # Failure type classification rules (from generate_stats.py)
 MISSING_DEPENDENCY = [
@@ -152,24 +152,10 @@ def load_log(log_path: Path):
         return {}
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Categorize test cases based on logs.")
-    parser.add_argument(
-        "--log-dir",
-        type=Path,
-        default=Path(__file__).parent / "test_results",
-        help="Directory containing .log files."
-    )
-    parser.add_argument(
-        "--output-file",
-        type=Path,
-        default=Path(__file__).parent / "categorized_results.csv",
-        help="Output CSV file for categorized results."
-    )
-    args = parser.parse_args()
-
-    log_files = list(args.log_dir.glob("*.log"))
-    print(f"Processing {len(log_files)} log files...")
+def categorize_results(log_dir: Path, output_file: Path, category_label: str):
+    """Categorize results from a log directory."""
+    log_files = list(log_dir.glob("*.log"))
+    print(f"Processing {len(log_files)} log files in {log_dir}...")
 
     results = []
     for log_file in log_files:
@@ -205,17 +191,66 @@ def main():
     # Write to CSV
     if results:
         fieldnames = ['file', 'returncode', 'category', 'generation_status', 'stdout', 'stderr']
-        with open(args.output_file, 'w', newline='', encoding='utf-8-sig') as f:
+        with open(output_file, 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(results)
-        print(f"Saved categorized results to {args.output_file}")
+        print(f"Saved categorized results to {output_file}")
 
         # Print summary
         categories = Counter(r['category'] for r in results)
-        print("\nCategory Summary:")
+        print(f"\n{category_label} Category Summary:")
         for cat, count in categories.items():
             print(f"  {cat}: {count}")
+
+        return categories
+    return {}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Categorize test cases based on logs.")
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        default=Path(__file__).parent / "test_results",
+        help="Directory containing test results (with cross_results and single_results subdirectories)."
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path(__file__).parent,
+        help="Output directory for categorized results."
+    )
+    args = parser.parse_args()
+
+    # Process cross-framework results
+    cross_log_dir = args.log_dir / "cross_results"
+    cross_output_file = args.output_dir / "cross_categorized_results.csv"
+    print("\n=== Processing Cross-Framework Results ===")
+    cross_categories = categorize_results(cross_log_dir, cross_output_file, "Cross-Framework")
+
+    # Process single-framework results
+    single_log_dir = args.log_dir / "single_results"
+    single_output_file = args.output_dir / "single_categorized_results.csv"
+    print("\n=== Processing Single-Framework Results ===")
+    single_categories = categorize_results(single_log_dir, single_output_file, "Single-Framework")
+
+    # Overall summary
+    print("\n=== Overall Summary ===")
+    print("Cross-Framework:")
+    for cat, count in cross_categories.items():
+        print(f"  {cat}: {count}")
+    print("\nSingle-Framework:")
+    for cat, count in single_categories.items():
+        print(f"  {cat}: {count}")
+
+    # Combined summary
+    print("\n=== Combined Summary ===")
+    all_categories = Counter()
+    all_categories.update(cross_categories)
+    all_categories.update(single_categories)
+    for cat, count in all_categories.items():
+        print(f"  {cat}: {count}")
 
 
 if __name__ == "__main__":

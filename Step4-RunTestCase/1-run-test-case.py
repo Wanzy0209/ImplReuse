@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Execute test cases and save logs and results.
+Execute test cases from cross_reuse_test_case and single_reuse_test_case directories.
 """
 
 import argparse
@@ -10,9 +10,9 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Any
 
-
 SCRIPT_DIR = Path(__file__).parent
-DEFAULT_TEST_CASE_DIR = SCRIPT_DIR.parent / "Step3-ReuseTestCase/test_cases"
+DEFAULT_CROSS_DIR = SCRIPT_DIR.parent / "Step3-ReuseTestCase/data-final/cross_reuse_test_case"
+DEFAULT_SINGLE_DIR = SCRIPT_DIR.parent / "Step3-ReuseTestCase/data-final/single_reuse_test_case"
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "test_results"
 
 
@@ -47,13 +47,55 @@ def execute_test_case(test_case_path: Path, result_dir: Path) -> Dict[str, Any]:
     return result
 
 
+def execute_test_cases(test_case_dir: Path, output_dir: Path, limit: int = 0):
+    """Execute all test cases in a directory."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    test_case_files = list(test_case_dir.glob("*.py"))
+    if limit > 0:
+        test_case_files = test_case_files[:limit]
+
+    print(f"Executing {len(test_case_files)} test cases in {test_case_dir}...")
+
+    success_count = 0
+    fail_count = 0
+
+    for test_case_file in test_case_files:
+        print(f"Running {test_case_file.name}...")
+        try:
+            result = execute_test_case(test_case_file, output_dir)
+            if result['returncode'] == 0:
+                status = "Success"
+                success_count += 1
+            else:
+                status = "Failed"
+                fail_count += 1
+            print(f"  {status} (returncode: {result['returncode']})")
+        except Exception as exc:
+            print(f"  Error: {exc}")
+            fail_count += 1
+
+    print(f"\nSummary for {test_case_dir.name}:")
+    print(f"  Success: {success_count}")
+    print(f"  Failed: {fail_count}")
+    print(f"  Total: {success_count + fail_count}")
+
+    return success_count, fail_count
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Execute test cases and save results.")
+    parser = argparse.ArgumentParser(description="Execute test cases from cross and single directories.")
     parser.add_argument(
-        "--test-case-dir",
+        "--cross-dir",
         type=Path,
-        default=DEFAULT_TEST_CASE_DIR,
-        help="Directory containing test case .py files."
+        default=DEFAULT_CROSS_DIR,
+        help="Directory containing cross-framework reuse test cases."
+    )
+    parser.add_argument(
+        "--single-dir",
+        type=Path,
+        default=DEFAULT_SINGLE_DIR,
+        help="Directory containing single-framework reuse test cases."
     )
     parser.add_argument(
         "--output-dir",
@@ -61,25 +103,26 @@ def main():
         default=DEFAULT_OUTPUT_DIR,
         help="Output directory for result logs."
     )
-    parser.add_argument("--limit", type=int, default=0, help="Process only first N test cases.")
+    parser.add_argument("--limit", type=int, default=0, help="Process only first N test cases per directory.")
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    test_case_files = list(args.test_case_dir.glob("*.py"))
-    if args.limit > 0:
-        test_case_files = test_case_files[:args.limit]
+    # Execute cross-framework test cases
+    cross_output_dir = args.output_dir / "cross_results"
+    print("\n=== Executing Cross-Framework Reuse Test Cases ===")
+    cross_success, cross_fail = execute_test_cases(args.cross_dir, cross_output_dir, args.limit)
 
-    print(f"Executing {len(test_case_files)} test cases...")
+    # Execute single-framework test cases
+    single_output_dir = args.output_dir / "single_results"
+    print("\n=== Executing Single-Framework Reuse Test Cases ===")
+    single_success, single_fail = execute_test_cases(args.single_dir, single_output_dir, args.limit)
 
-    for test_case_file in test_case_files:
-        print(f"Running {test_case_file.name}...")
-        try:
-            result = execute_test_case(test_case_file, args.output_dir)
-            status = "Success" if result['returncode'] == 0 else "Failed"
-            print(f"  {status} (returncode: {result['returncode']})")
-        except Exception as exc:
-            print(f"  Error: {exc}")
+    # Overall summary
+    print("\n=== Overall Summary ===")
+    print(f"Cross-Framework: {cross_success} success, {cross_fail} fail")
+    print(f"Single-Framework: {single_success} success, {single_fail} fail")
+    print(f"Total: {cross_success + single_success} success, {cross_fail + single_fail} fail")
 
 
 if __name__ == "__main__":

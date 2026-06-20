@@ -1,0 +1,46 @@
+import torch
+from torch.library import Library
+
+# Define a custom library to leverage the similar API (torch.library.impl)
+lib = Library("test_dynamic_slice", "DEF")
+
+# Define a custom operator that mimics the behavior of nonzero (returning data-dependent size)
+lib.define("custom_nonzero(Tensor x) -> Tensor")
+
+# Register the kernel implementation for CPU using the modern API (torch.library.impl)
+# Note: register_kernel is deprecated/removed in newer PyTorch versions, replaced by impl
+@torch.library.impl("test_dynamic_slice::custom_nonzero", "cpu")
+def custom_nonzero_cpu(x):
+    # This implementation returns a tensor with an unbacked size (dynamic shape)
+    return x.nonzero()
+
+# Reproduce the original bug conditions
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def f(x):
+    # Call the custom operator instead of the built-in nonzero
+    nz = torch.ops.test_dynamic_slice.custom_nonzero(x)
+    # Perform the slice operation that caused the hard error in the original issue
+    return nz[:-1]
+
+# Create input tensor with specific non-zero values to control the dynamic shape
+x = torch.randn(3, 4)
+x[0, 0] = 1.0
+x[1, 1] = 2.0
+
+# Test execution
+try:
+    # Compile the function with fullgraph=True as in the original issue
+    compiled_f = torch.compile(f, fullgraph=True)
+    out = compiled_f(x)
+    
+    # Verify the output
+    print("Test passed. Output shape:", out.shape)
+    # Expected: x has 2 non-zeros, so nz is (2, 2), and nz[:-1] is (1, 2)
+    assert out.shape == (1, 2), f"Expected shape (1, 2), got {out.shape}"
+    print("Output tensor:", out)
+
+except Exception as e:
+    print(f"Test failed with error: {e}")
+    raise

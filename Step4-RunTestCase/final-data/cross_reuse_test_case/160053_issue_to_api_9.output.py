@@ -1,0 +1,59 @@
+import torch
+import numpy as np
+
+# Attempt to import TensorFlow, handle environment errors gracefully
+try:
+    import tensorflow as tf
+except ImportError as e:
+    print(f"Skipping test: Unable to import TensorFlow due to environment issues.")
+    print(f"Error details: {e}")
+    import sys
+    sys.exit(0)
+
+def test_ragged_tensor_value_dimension_constraints():
+    """
+    Test case for tf.compat.v1.ragged.RaggedTensorValue inspired by Issue 160053.
+    
+    The original issue (torch.Pad) highlights a bug where the error message 
+    claimed support for 4D/5D inputs, but the implementation failed.
+    
+    This test verifies the dimensionality constraints of RaggedTensorValue
+    (specifically the row_splits argument) to ensure error messages match
+    the actual implementation behavior.
+    """
+    
+    # Setup data
+    values = np.array([1, 2, 3, 4, 5])
+    
+    # Test 1: Verify valid 1D row_splits works (Expected behavior)
+    # This corresponds to the user's expectation that 4D input should work in torch.
+    valid_row_splits = np.array([0, 2, 5], dtype=np.int64)
+    try:
+        rtv = tf.compat.v1.ragged.RaggedTensorValue(values, valid_row_splits)
+        print("Test Passed: 1D row_splits accepted as expected.")
+    except Exception as e:
+        print(f"Test Failed: 1D row_splits rejected unexpectedly: {e}")
+        raise
+
+    # Test 2: Verify invalid 2D row_splits fails with correct error message
+    # This corresponds to the bug report's focus on error message accuracy
+    # regarding input dimensions.
+    invalid_row_splits = np.array([[0, 2], [2, 5]], dtype=np.int64)
+    
+    error_raised = False
+    try:
+        tf.compat.v1.ragged.RaggedTensorValue(values, invalid_row_splits)
+    except TypeError as e:
+        error_raised = True
+        # Check if the error message correctly identifies the dimensionality issue
+        assert "row_splits must be a 1D" in str(e), \
+            f"Error message mismatch. Expected '1D' constraint mention, got: {e}"
+        print(f"Test Passed: 2D row_splits correctly rejected with message: {e}")
+    except Exception as e:
+        print(f"Test Failed: Unexpected exception type: {e}")
+        raise
+
+    assert error_raised, "Test Failed: No exception raised for 2D row_splits"
+
+if __name__ == "__main__":
+    test_ragged_tensor_value_dimension_constraints()

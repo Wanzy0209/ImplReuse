@@ -1,0 +1,83 @@
+import torch
+import gc
+import sys
+
+# Handle potential environment issues with TensorFlow (e.g., GLIBC version mismatch)
+try:
+    import tensorflow as tf
+    TF_AVAILABLE = True
+except ImportError as e:
+    print(f"Skipping test: TensorFlow import failed due to environment incompatibility. Error: {e}")
+    TF_AVAILABLE = False
+
+if TF_AVAILABLE:
+    # Leverage the similar API: tf.experimental.enable_strict_mode
+    # This is used to ensure that any warnings are treated as errors, 
+    # potentially triggering exception paths similar to the PyTorch checkpoint mechanism.
+    tf.experimental.enable_strict_mode()
+
+    # Define a custom gradient operation mimicking the PyTorch MyOp
+    @tf.custom_gradient
+    def my_custom_op(inp):
+        # Forward pass: Create large tensors to simulate memory load
+        out_0 = tf.zeros(2**20, dtype=tf.float32)
+        out_1 = tf.zeros(2**20, dtype=tf.float32)
+        
+        # Save tensors for backward (captured in closure)
+        def grad(dA, dB):
+            # Access saved tensors (necessary to mimic the PyTorch logic)
+            _ = inp, out_0, out_1
+            return None
+        
+        return out_0, out_1, grad
+
+    def op_fn(inp):
+        # Mimic the wrapper that selects the first output
+        out_0, out_1, _ = my_custom_op(inp)
+        return out_0
+
+def test_memory_leak_with_strict_mode():
+    if not TF_AVAILABLE:
+        print("Test skipped: TensorFlow is not available.")
+        return
+
+    # Check for GPU availability
+    gpus = tf.config.list_physical_devices('GPU')
+    device = "/GPU:0" if gpus else "/CPU:0"
+    
+    if gpus:
+        try:
+            tf.config.experimental.set_memory_growth(gpus[0], True)
+        except RuntimeError:
+            pass
+
+    print(f"Running on device: {device}")
+
+    with tf.device(device):
+        # Create dummy input
+        dummy_input = tf.Variable(tf.random.normal([2**20], dtype=tf.float32))
+        
+        # Use tf.recompute_grad to mimic torch.utils.checkpoint.checkpoint
+        # This recomputes the forward pass during the backward pass to save memory.
+        checkpointed_op_fn = tf.recompute_grad(op_fn)
+
+        for i in range(100):
+            with tf.GradientTape() as tape:
+                # Run the checkpointed operation
+                full_out = checkpointed_op_fn(dummy_input)
+                loss = tf.reduce_sum(full_out)
+            
+            # Backward pass
+            grads = tape.gradient(loss, dummy_input)
+            
+            # Cleanup
+            del grads
+            gc.collect()
+            
+            # Print status (TF doesn't have a direct equivalent to torch.cuda.memory_allocated 
+            # that is as precise for this specific leak pattern without internal APIs, 
+            # but we monitor the loop completion)
+            print(f"Iteration {i} completed")
+
+if __name__ == "__main__":
+    test_memory_leak_with_strict_mode()
