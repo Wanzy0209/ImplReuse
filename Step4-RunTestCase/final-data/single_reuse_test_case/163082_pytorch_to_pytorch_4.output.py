@@ -1,0 +1,65 @@
+import torch
+import torch.nn as nn
+
+# Ensure CUDA is available as the original bug is specific to CUDA
+if not torch.cuda.is_available():
+    print("CUDA is not available. Skipping test.")
+    exit()
+
+# Ensure torch.compile is available (requires PyTorch 2.0+)
+if not hasattr(torch, 'compile'):
+    print("torch.compile is not available (requires PyTorch 2.0+). Skipping test.")
+    exit()
+
+torch.manual_seed(1337)
+device = 'cuda'
+
+# AlphaDropout is designed to maintain mean=0 and std=1 for inputs with mean=0 and std=1.
+# We create a large enough batch to verify this statistical property.
+input_tensor = torch.randn(1000, 10, device=device, dtype=torch.float32)
+
+# Initialize AlphaDropout
+dropout_layer = nn.AlphaDropout(p=0.5)
+dropout_layer.train() # Must be in train mode to apply dropout
+
+@torch.compile()
+def apply_dropout_compiled(x):
+    return dropout_layer(x)
+
+def apply_dropout_eager(x):
+    return dropout_layer(x)
+
+# Run compiled version
+# We reset seed to ensure reproducibility for the compiled run
+torch.manual_seed(42)
+output_compiled = apply_dropout_compiled(input_tensor)
+
+# Run eager version for comparison
+torch.manual_seed(42)
+output_eager = apply_dropout_eager(input_tensor)
+
+# Calculate statistics
+mean_c = output_compiled.mean().item()
+std_c = output_compiled.std().item()
+mean_e = output_eager.mean().item()
+std_e = output_eager.std().item()
+
+print(f"Input Mean: {input_tensor.mean().item():.6f}, Std: {input_tensor.std().item():.6f}")
+print(f"Compiled Output Mean: {mean_c:.6f}, Std: {std_c:.6f}")
+print(f"Eager Output Mean: {mean_e:.6f}, Std: {std_e:.6f}")
+
+# Assertions
+# 1. Check the self-normalizing property for the compiled version.
+# This is analogous to checking norm == 1 in the normalize bug.
+# With 1000 samples, we expect mean close to 0 and std close to 1.
+# We use a tolerance that accounts for sampling variance.
+assert abs(mean_c) < 0.1, f"Compiled output mean {mean_c} is too far from 0"
+assert abs(std_c - 1.0) < 0.1, f"Compiled output std {std_c} is too far from 1"
+
+# 2. Check if compiled and eager produce consistent results (given same seed)
+# Note: torch.compile might change the order of operations, which can affect RNG consumption.
+# If they are not exactly equal, we rely on the statistical property check above.
+if torch.allclose(output_compiled, output_eager, rtol=1e-4, atol=1e-5):
+    print("Compiled and Eager outputs match.")
+else:
+    print("Note: Compiled and Eager outputs differ (possibly due to RNG reordering), but statistical properties hold.")

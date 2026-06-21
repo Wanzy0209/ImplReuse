@@ -1,0 +1,74 @@
+import tensorflow as tf
+
+# Fix: Enable eager execution to ensure .numpy() method is available on Tensors.
+# This is required because the test logic relies on imperative execution to access values directly.
+tf.compat.v1.enable_eager_execution()
+
+def test_duplicate_execution_merge_mistake():
+    """
+    This test case simulates the bug reported in Issue 165624 where a merge mistake
+    caused a custom pre-pass to be executed twice.
+    
+    Here, we leverage tf.keras.layers.add to represent the 'custom pass' logic.
+    We verify that the buggy control flow (duplicate execution) produces a different
+    result than the intended single execution.
+    """
+    
+    # Setup inputs
+    # Simulating a graph node value
+    initial_value = tf.constant([10.0, 20.0, 30.0])
+    # Simulating a modification made by the custom pass
+    increment = tf.constant([1.0, 1.0, 1.0])
+
+    # Define the "custom pass" using the similar API
+    def joint_custom_pre_pass(tensor):
+        return tf.keras.layers.add([tensor, increment])
+
+    # --- Scenario 1: The Buggy Logic (Duplicate Execution) ---
+    # This mimics the code structure in the bug report where the 'if' block appears twice.
+    
+    # First execution (Line 581-584 equivalent)
+    if True:  # config.joint_custom_pre_pass is not None
+        buggy_result = joint_custom_pre_pass(initial_value)
+    
+    # Intermediate operations (e.g., remove_noop_ops)
+    # We assume these pass through the value for this test
+    intermediate_val = buggy_result 
+
+    # Second execution (Line 593-596 equivalent - The Merge Mistake)
+    if True:  # config.joint_custom_pre_pass is not None
+        buggy_result = joint_custom_pre_pass(intermediate_val)
+
+    # --- Scenario 2: The Correct Logic (Single Execution) ---
+    
+    # Single execution
+    if True:  # config.joint_custom_pre_pass is not None
+        correct_result = joint_custom_pre_pass(initial_value)
+    
+    # Intermediate operations
+    # No second execution block
+
+    # --- Assertions ---
+    
+    # The buggy logic adds the increment twice: 10 + 1 + 1 = 12
+    expected_buggy = tf.constant([12.0, 22.0, 32.0])
+    
+    # The correct logic adds the increment once: 10 + 1 = 11
+    expected_correct = tf.constant([11.0, 21.0, 31.0])
+
+    # Verify the buggy result matches the double-addition
+    assert tf.reduce_all(tf.equal(buggy_result, expected_buggy)).numpy(), \
+        "Buggy logic did not result in double execution as expected."
+
+    # Verify the correct result matches the single-addition
+    assert tf.reduce_all(tf.equal(correct_result, expected_correct)).numpy(), \
+        "Correct logic failed."
+
+    # Verify that the bug actually causes a deviation
+    assert not tf.reduce_all(tf.equal(buggy_result, correct_result)).numpy(), \
+        "Buggy and Correct results should differ."
+
+    print("Test passed: The merge mistake logic successfully reproduced the double execution error.")
+
+if __name__ == "__main__":
+    test_duplicate_execution_merge_mistake()

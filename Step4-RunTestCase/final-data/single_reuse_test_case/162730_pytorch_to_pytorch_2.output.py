@@ -1,0 +1,32 @@
+import torch
+# Removed import einops to fix ModuleNotFoundError
+
+# Create test tensors on MPS
+device = 'mps'
+
+# Instance norm requires input shape (N, C, *) or (C, *)
+# We set C (channels) to 64 to match the weight size we will generate
+C = 64
+x = torch.randn(1, C, 32, 32, device=device)
+
+# Create a base weight tensor to rearrange into a non-contiguous 1D tensor
+# Instance norm weight must be of size C (number of channels)
+W_base = torch.randn(8, 8, device=device)
+# Replaced einops.rearrange with torch.reshape to remove dependency
+w_noncontig = W_base.reshape(-1)
+w_contig = w_noncontig.contiguous()
+
+print(f"Weight contiguous: {w_contig.is_contiguous()}")
+print(f"Weight non-contiguous: {w_noncontig.is_contiguous()}")
+
+# These should be identical but might not be on MPS if the bug exists
+result1 = torch.nn.functional.instance_norm(x, weight=w_noncontig)
+result2 = torch.nn.functional.instance_norm(x, weight=w_contig)
+
+print(f"Results match: {torch.allclose(result1, result2, atol=1e-5)}")
+print(f"Max difference: {torch.abs(result1 - result2).max()}")
+
+# Compare with CPU (works correctly)
+result_cpu_noncontig = torch.nn.functional.instance_norm(x.cpu(), weight=w_noncontig.cpu())
+result_cpu_contig = torch.nn.functional.instance_norm(x.cpu(), weight=w_contig.cpu())
+print(f"CPU contiguous vs non-contiguous match: {torch.allclose(result_cpu_noncontig, result_cpu_contig, atol=1e-5)}")

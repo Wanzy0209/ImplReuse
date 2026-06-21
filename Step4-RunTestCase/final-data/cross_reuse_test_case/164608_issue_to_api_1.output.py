@@ -1,0 +1,60 @@
+import torch
+from torch.nn.functional import sigmoid
+
+def test_sigmoid_dynamo_cache_reset():
+    """
+    Test to ensure torch.compile(sigmoid) does not suffer from cache state issues
+    similar to the create_block_mask bug (Issue 164608).
+    
+    The original bug manifested as garbage values in q_num_blocks when running
+    a compiled create_block_mask function with different batch sizes sequentially.
+    This test adapts that logic to verify that sigmoid maintains correctness
+    across varying input shapes under torch.compile.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # torch.set_default_device("cuda") is not available in older PyTorch versions.
+    # We explicitly set the device and dtype in tensor creation instead.
+    # torch.set_default_dtype(torch.bfloat16)
+    
+    torch.cuda.manual_seed(10007)
+
+    # Compile the target API
+    compiled_sigmoid = torch.compile(sigmoid)
+
+    # Define varying input sizes to trigger potential cache issues
+    # Mimicking the batch_sizes = [1, 2] and seq_len = 1024 from the original issue
+    sizes = [(1, 1024), (2, 1024)]
+
+    print("STEP 1: Establish ground truth with eager")
+    ground_truth = {}
+    for size in sizes:
+        # Explicitly set device and dtype for compatibility
+        input_tensor = torch.randn(size, device="cuda", dtype=torch.bfloat16)
+        eager_output = sigmoid(input_tensor)
+        ground_truth[size] = eager_output
+        print(f"  size={size}: output_shape={eager_output.shape}")
+
+    print("\nSTEP 2: Test compiled in parametrization order")
+    for size in sizes:
+        # Explicitly set device and dtype for compatibility
+        input_tensor = torch.randn(size, device="cuda", dtype=torch.bfloat16)
+        compiled_output = compiled_sigmoid(input_tensor)
+        ground_truth_output = ground_truth[size]
+
+        # Check shape (equivalent to checking q_num_blocks in the original bug)
+        shape_match = compiled_output.shape == ground_truth_output.shape
+
+        # Check values (equivalent to checking for garbage data)
+        value_match = torch.allclose(compiled_output, ground_truth_output)
+
+        status = "" if shape_match and value_match else ""
+        print(f"  size={size}: shape_match={shape_match}, value_match={value_match} {status}")
+
+        assert shape_match, f"Shape mismatch for size {size}. Got {compiled_output.shape}, expected {ground_truth_output.shape}"
+        assert value_match, f"Value mismatch for size {size}."
+
+if __name__ == "__main__":
+    test_sigmoid_dynamo_cache_reset()

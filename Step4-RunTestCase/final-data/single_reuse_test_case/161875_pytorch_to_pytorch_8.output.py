@@ -1,0 +1,21 @@
+import torch
+
+# Adapted test case for torch.nn.functional.cross_entropy
+# The original bug involved passing an extremely large integer (padding)
+# which caused a segmentation fault.
+# Here we test the 'ignore_index' parameter with the same extreme value
+# to check for similar memory safety issues.
+
+# Input: (N, C) where N is batch size and C is number of classes
+input_data = torch.randn(1, 3)
+# Target: (N) class indices
+target_data = torch.tensor([0])
+
+# Use the same extreme value from the original bug report
+extreme_ignore_index = 9223372036854775803
+
+output = torch.nn.functional.cross_entropy(
+    input_data,
+    target_data,
+    ignore_index=extreme_ignore_index
+)

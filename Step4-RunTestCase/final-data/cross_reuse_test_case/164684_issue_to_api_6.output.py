@@ -1,0 +1,78 @@
+import torch
+import pytest
+
+# Check if torch._dynamo is available (requires PyTorch 2.x+)
+if not hasattr(torch, '_dynamo'):
+    pytest.skip("PyTorch version does not support torch._dynamo (requires PyTorch 2.x+)", allow_module_level=True)
+
+# Configure Dynamo to trigger the specific code path reported in the issue
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def test_mul_symbool_faketensor_divergence():
+    """
+    Test case for Issue 164684: Eager/Compile Divergence in torch.mul.
+    
+    This test reproduces the TypeError: "unsupported operand type(s) for *: 'SymBool' and 'FakeTensor'"
+    which occurs when multiplying a scalar boolean (extracted via .item()) with a tensor 
+    requiring gradients inside a torch.compile context.
+    
+    The structure of this test is inspired by the similar API 'tf.keras.metrics.serialize',
+    following the pattern of accepting a primary input and a context/target, performing a 
+    core operation, and returning a processed result.
+    """
+    
+    # Reusing the pattern: serialize(module_str, target) -> ...
+    # Adapted to: process_bool_tensor(bool_input, grad_context) -> ...
+    def process_bool_tensor(bool_input, grad_context):
+        # Step 1: Extract scalar (becomes SymBool during tracing)
+        # Analogous to processing the input string in serialize()
+        scalar_val = bool_input.squeeze().item()
+        
+        # Step 2: Core operation (The bug location)
+        # Analogous to the serialization call in serialize()
+        # Bug: SymBool * FakeTensor raises TypeError
+        result = scalar_val * grad_context
+        
+        # Step 3: Post-processing
+        if result.is_complex():
+            result = result.real
+        return result
+
+    # Setup inputs
+    # Using CPU to ensure the test runs in all environments, 
+    # though the original issue was observed on CUDA.
+    device = 'cpu'
+    arg_0 = torch.randint(0, 2, (1,), dtype=torch.bool, device=device) > 0
+    sentinel = torch.tensor(1.0, requires_grad=True, device=device)
+
+    # 1. Test Eager Mode (Baseline)
+    try:
+        eager_result = process_bool_tensor(arg_0, sentinel)
+        print(" Eager execution successful")
+    except Exception as e:
+        pytest.fail(f"Eager mode failed unexpectedly: {e}")
+
+    # 2. Test Compiled Mode (Bug Reproduction)
+    compiled_fn = torch.compile(process_bool_tensor, fullgraph=True, dynamic=True)
+    
+    try:
+        compiled_result = compiled_fn(arg_0, sentinel)
+        print(" Compiled execution successful")
+        
+        # Verify consistency between eager and compiled results
+        assert torch.allclose(eager_result, compiled_result), \
+            "Eager and Compiled results diverged"
+            
+    except TypeError as e:
+        # Check for the specific error message from the bug report
+        if "SymBool" in str(e) and "FakeTensor" in str(e):
+            print(f" Bug reproduced: {e}")
+            # Re-raise to indicate test failure (bug exists)
+            raise
+        else:
+            # Re-raise unexpected TypeErrors
+            raise
+
+if __name__ == "__main__":
+    test_mul_symbool_faketensor_divergence()

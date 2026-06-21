@@ -1,0 +1,36 @@
+import torch
+import time
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+
+# Adapted configurations for pixel_shuffle.
+# pixel_shuffle requires input shape (Batch, Channels * r^2, Height, Width).
+# We use upscale_factor=2, so Channels must be divisible by 4.
+configs = [
+    ((1, 12, 10, 64), 2),
+    ((1, 12, 10, 10), 2),
+]
+
+def benchmark_pixel_shuffle(input_shape, upscale_factor, dtype=torch.float16, device="cpu", repeat=500):
+    A = torch.empty(input_shape, dtype=dtype, device=device).uniform_(0,1) * 2 - 1
+    # warm up
+    for _ in range(5000):
+        _ = F.pixel_shuffle(A, upscale_factor)
+    # run
+    times = []
+    for i in range(repeat):
+        start = time.time()
+        _ = F.pixel_shuffle(A, upscale_factor)
+        end = time.time()
+        if i > 100:
+            times.append(round((end - start) * 1000 * 1000))
+    times.sort()
+    print(times)
+    avg_time_ms = sum(times) / len(times)
+    return avg_time_ms
+
+if __name__ == "__main__":
+    for shape, factor in configs:
+        t = benchmark_pixel_shuffle(shape, factor)
+        print(f"{shape} (factor {factor}) -> {t:.3f} us")

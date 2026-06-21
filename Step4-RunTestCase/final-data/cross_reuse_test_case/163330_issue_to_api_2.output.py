@@ -1,0 +1,73 @@
+import torch
+import torch.distributed as dist
+
+# Handle missing module gracefully
+try:
+    from torch.distributed.device_mesh import init_device_mesh, _mesh_resources
+except (ModuleNotFoundError, ImportError):
+    # If the module is not available, define dummy objects to allow the script to load,
+    # but the test will skip execution.
+    init_device_mesh = None
+    _mesh_resources = None
+
+def test_get_root_mesh_state_isolation():
+    """
+    Test case to verify that get_root_mesh returns the correct parent mesh
+    and does not suffer from state pollution when multiple meshes are initialized.
+    
+    This test leverages a structural pattern similar to map_structure_up_to,
+    where a verification function is applied to a sequence of mesh configurations.
+    """
+    # Check if dependencies are available
+    if init_device_mesh is None or _mesh_resources is None:
+        print("Skipping test: torch.distributed.device_mesh not found. This test requires PyTorch 2.x+.")
+        return
+
+    # Initialize process group if not already initialized
+    if not dist.is_initialized():
+        dist.init_process_group("nccl")
+
+    # Define the structure of mesh configurations to test.
+    # This acts as the 'shallow_tree' or structure input.
+    # Format: (shape, dim_names, sub_mesh_dim)
+    mesh_configs = [
+        ((1, 4, 2), ("a", "b", "c"), "c"), # Mesh 1
+        ((2, 2, 2), ("a", "b", "c"), "c"), # Mesh 2
+    ]
+
+    # Storage for created (parent, child) mesh pairs
+    mesh_pairs = []
+
+    # Create meshes based on the structure
+    for shape, names, sub_dim in mesh_configs:
+        mesh = init_device_mesh("cuda", shape, mesh_dim_names=names)
+        sub_mesh = mesh[sub_dim]
+        mesh_pairs.append((mesh, sub_mesh))
+
+    # Define the verification function (similar to 'func' in map_structure_up_to)
+    def verify_root_pair(mesh_pair):
+        parent, child = mesh_pair
+        actual_root = _mesh_resources.get_root_mesh(child)
+        
+        # The core assertion: the root of the child must be the specific parent
+        # it was derived from, not any other globally initialized mesh.
+        assert actual_root is parent, (
+            f"get_root_mesh failed: Expected parent with shape {parent.shape}, "
+            f"but got root with shape {actual_root.shape}"
+        )
+
+    # Apply verification to all pairs
+    for pair in mesh_pairs:
+        verify_root_pair(pair)
+
+    # Explicitly re-verify the first mesh to catch the specific bug reported
+    # where creating mesh2 causes get_root_mesh(mesh1_c) to return mesh2.
+    mesh1, mesh1_c = mesh_pairs[0]
+    verify_root_pair((mesh1, mesh1_c))
+
+    if dist.get_rank() == 0:
+        print("Test passed: get_root_mesh correctly identifies parent meshes.")
+
+if __name__ == "__main__":
+    # Usage: torchrun --nproc_per_node=8 <script_name>.py
+    test_get_root_mesh_state_isolation()

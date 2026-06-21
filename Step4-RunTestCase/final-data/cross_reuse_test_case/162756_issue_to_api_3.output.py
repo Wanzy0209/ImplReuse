@@ -1,0 +1,48 @@
+import torch
+import sys
+
+def test_compile_combo_kernels_with_cumsum():
+    """
+    Test case for Issue 162756: torch.compile fails with NameError 
+    when helper functions are required and combo_kernels enabled.
+    """
+    # Check for CUDA availability as the bug is specific to CUDA
+    if not torch.cuda.is_available():
+        print("Skipping test: CUDA not available")
+        return
+
+    # Reproduce the bug conditions
+    # Enable combo_kernels which triggers the NameError in the buggy version
+    torch._inductor.config.combo_kernels = True
+
+    @torch.compile
+    def fn(x, y, z):
+        # cumsum requires helper functions which caused the NameError
+        return x.sum(1), y.mean(1), z.cumsum(1)
+
+    inps = (
+        torch.rand(16, 128, device="cuda"),
+        torch.rand(32, 128, device="cuda"),
+        torch.rand(32, 256, device="cuda"),
+    )
+
+    try:
+        # Run the compiled function
+        res = fn(*inps)
+        
+        # Verify output shapes to ensure correctness
+        assert res[0].shape == (16,), f"Expected shape (16,), got {res[0].shape}"
+        assert res[1].shape == (32,), f"Expected shape (32,), got {res[1].shape}"
+        assert res[2].shape == (32, 256), f"Expected shape (32, 256), got {res[2].shape}"
+        
+        print("Test Passed: torch.compile executed successfully with combo_kernels enabled.")
+        
+    except NameError as e:
+        if "_triton_helper_fn" in str(e):
+            print(f"Test Failed: Bug reproduced - {e}")
+            sys.exit(1)
+        else:
+            raise
+
+if __name__ == "__main__":
+    test_compile_combo_kernels_with_cumsum()

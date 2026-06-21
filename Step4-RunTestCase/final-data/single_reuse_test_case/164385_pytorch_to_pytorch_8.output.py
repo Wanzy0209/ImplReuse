@@ -1,0 +1,35 @@
+import torch
+import sys
+
+try:
+    import sympy
+except ImportError:
+    print("Skipping test: sympy module is not installed.")
+    sys.exit(0)
+
+"""
+Test torch.sigmoid with a complex symbolic expression.
+Adapted from the FloorDiv bug report to verify symbolic behavior.
+"""
+
+# Create symbolic variables
+s14 = sympy.Symbol('s14', integer=True, positive=True)
+s37 = sympy.Symbol('s37', integer=True, positive=True)
+s46 = sympy.Symbol('s46', integer=True, positive=True)
+
+print("Testing torch.sigmoid with complex symbolic expression...")
+
+# Build the input expression step by step
+# Note: Using standard division for the input to sigmoid, 
+# adapted from the original FloorDiv structure
+inner_expr = s14 / 2016
+middle_expr = (24 * s37 + 672) * inner_expr
+input_expr = middle_expr + 21
+
+print(f"Input expression: {input_expr}")
+
+# Create the Sigmoid expression
+# In a symbolic tracing context, this should preserve the Sigmoid structure
+result = torch.sigmoid(input_expr)
+print(f"Sigmoid result: {result}")
+print(f"Sigmoid result (srepr): {sympy.srepr(result)}")

@@ -1,0 +1,43 @@
+import torch
+import pytest
+import tensorflow as tf
+from transformers import TFAutoModelForCausalLM
+
+# The original issue parametrizes devices ("cpu", "mps").
+# In TensorFlow, we leverage tf.config.LogicalDevice to discover and test
+# against available logical devices (e.g., CPU, GPU).
+LOGICAL_DEVICES = [
+    d.name for d in tf.config.list_logical_devices() 
+    if d.device_type in ('CPU', 'GPU')
+]
+
+@pytest.mark.parametrize("device_name", LOGICAL_DEVICES)
+def test_isolated_language_model_logical_device(device_name):
+    """
+    Test case adapted from PyTorch issue #167515.
+    Verifies that a 4D attention mask does not produce NaN values on different logical devices.
+    """
+    # Using a standard small model for reproducibility (TF equivalent of AutoModelForCausalLM)
+    model = TFAutoModelForCausalLM.from_pretrained("distilgpt2")
+
+    input_ids = tf.constant([[0, 1, 0, 0], [0, 1, 2, 3]])
+
+    # Preserving the 4D attention mask structure from the bug report
+    attention_mask = tf.constant([
+        [[[ True, False, False, False],
+          [ True,  True, False, False],
+          [False, False, False, False],
+          [False, False, False, False]]],
+        [[[ True, False, False, False],
+          [ True,  True, False, False],
+          [ True,  True,  True, False],
+          [ True,  True,  True,  True]]]])
+
+    # Place operations on the specific logical device
+    with tf.device(device_name):
+        # TensorFlow runs in inference mode by default (no gradient tape),
+        # corresponding to the torch.no_grad() context in the original issue.
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+
+    # Check for NaNs, which was the failure mode in the original bug
+    assert not tf.reduce_any(tf.math.is_nan(outputs.logits)), f"Logits contain NaN values on {device_name}"

@@ -1,0 +1,55 @@
+import tensorflow as tf
+import numpy as np
+
+def test_central_storage_uneven_distribution():
+    """
+    Test case adapted from PyTorch DTensor uneven strided shard bug (Issue 168134).
+    
+    Original Bug Logic:
+    - Global tensor: [0, 1, 2, 3, 4]
+    - Split factor: 2
+    - Expected: Rank 0 gets [0, 1, 3, 4], Rank 1 gets [2, pad]
+    - Buggy: Rank 0 got [0, 1, 3], Rank 1 got [2, 4] (incorrect striding/gaps)
+
+    Similar API Logic (tf.distribute.experimental.CentralStorageStrategy):
+    - Since CentralStorageStrategy does not shard variables (keeps them central),
+      we test the distribution of the input data pipeline (dataset) which mimics
+      the sharding of data across replicas.
+    - We distribute the sequence [0, 1, 2, 3, 4] with a batch size of 2 to create
+      uneven chunks, verifying that the local data on replicas is handled correctly.
+    """
+    # Initialize the strategy (equivalent to init_device_mesh)
+    strategy = tf.distribute.experimental.CentralStorageStrategy()
+
+    # Global data [0, 1, 2, 3, 4]
+    global_data = np.array([0, 1, 2, 3, 4], dtype=np.float32)
+
+    # Create a dataset to distribute the tensor elements
+    # Batch size 2 mimics the split_factor=2 from the PyTorch bug
+    # This creates batches: [0, 1], [2, 3], [4]
+    dataset = tf.data.Dataset.from_tensor_slices(global_data).batch(2)
+
+    # Distribute the dataset (equivalent to distribute_tensor)
+    dist_dataset = strategy.experimental_distribute_dataset(dataset)
+
+    # Function to inspect local tensor on each replica
+    @tf.function
+    def step_fn(local_batch):
+        # Mimic the print statement from the original bug report to check local values
+        # tf.print executes on the device/replica
+        tf.print("Replica local tensor:", local_batch)
+        return local_batch
+
+    # Fix: Wrap the iteration loop in a tf.function.
+    # Distributed datasets in TensorFlow require iteration to happen within
+    # a tf.function context to handle graph execution and synchronization correctly.
+    @tf.function
+    def run_loop(dist_dataset):
+        for batch in dist_dataset:
+            strategy.run(step_fn, args=(batch,))
+
+    # Execute the loop
+    run_loop(dist_dataset)
+
+if __name__ == "__main__":
+    test_central_storage_uneven_distribution()

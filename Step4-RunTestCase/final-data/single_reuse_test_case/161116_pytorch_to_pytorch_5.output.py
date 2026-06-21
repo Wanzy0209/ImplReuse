@@ -1,0 +1,31 @@
+import torch
+import torch.nn.functional as F
+import os
+
+def main():
+    # Adapted from the original bug report's setup to handle GPU context
+    # Defaults to 0 if LOCAL_RANK is not set for standalone testing
+    gpu_id = int(os.environ.get("LOCAL_RANK", "0"))
+    
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+
+    # Prepare inputs for torch.nn.functional.kl_div
+    # input: log-probabilities
+    input_tensor = torch.randn(10, 10, requires_grad=True).log_softmax(dim=1).to(device)
+    # target: probabilities
+    target_tensor = torch.randn(10, 10).softmax(dim=1).to(device)
+
+    # Call the similar API: torch.nn.functional.kl_div
+    # This replaces the original torch.distributed.init_process_group call site
+    loss = F.kl_div(input_tensor, target_tensor, reduction='batchmean')
+
+    # Assertions to verify the API executed correctly
+    assert loss is not None
+    assert torch.is_tensor(loss)
+    assert loss.device.type == 'cuda'
+    
+    print(f"Test passed. KL Divergence Loss: {loss.item()}")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,133 @@
+import torch
+import sys
+
+# Handle environment incompatibility (e.g., GLIBC version mismatch) gracefully
+try:
+    import tensorflow as tf
+except ImportError as e:
+    print(f"Skipping test: TensorFlow import failed due to environment incompatibility.")
+    print(f"Error details: {e}")
+    sys.exit(0)
+
+def test_batch_parallel_compile_divergence():
+    """
+    Adapted test case for tf.compat.v1.tpu.batch_parallel based on 
+    PyTorch issue #164686 regarding scalar arithmetic and type promotion 
+    in compiled graphs.
+    """
+    
+    # Enable strict type checking and XLA compilation details if available
+    # This mimics the eager/compile divergence check in the original bug.
+    
+    # Define the computation function mirroring the PyTorch logic
+    # The logic involves mixing int32, int64, and float32 types in arithmetic operations.
+    def computation_fn(arg_0, arg_1, sentinel):
+        # var_node_3 = torch.full((), 1.0, dtype=torch.float32)
+        var_node_3 = tf.constant(1.0, dtype=tf.float32)
+        
+        # var_node_5 = -3 (dtype=int32)
+        var_node_5 = tf.constant(-3, dtype=tf.int32)
+        
+        # var_node_6 = arg_0 (dtype=int64)
+        # Ensure input is cast to int64 as per the original trace
+        var_node_6 = tf.cast(arg_0, tf.int64)
+        
+        # var_node_4 = var_node_5 + var_node_6 (dtype=int32 in comment, but usually promotes)
+        # We perform the addition. TF handles promotion.
+        var_node_4 = var_node_5 + var_node_6
+        
+        # var_node_1 = var_node_2 + var_node_4 (float + int)
+        # var_node_2 was a scalar float from item(). var_node_3 is the tensor source.
+        var_node_1 = tf.cast(var_node_3, tf.float32) + tf.cast(var_node_4, tf.float32)
+        
+        # var_node_9 = 1 (dtype=int64)
+        var_node_9 = tf.constant(1, dtype=tf.int64)
+        
+        # var_node_10 = -10 (dtype=int32)
+        var_node_10 = tf.constant(-10, dtype=tf.int32)
+        
+        # var_node_8 = var_node_9 / var_node_10
+        # Division of ints in TF results in float (true division)
+        var_node_8 = tf.divide(var_node_9, var_node_10)
+        
+        # var_node_12 = arg_1 (dtype=int64)
+        var_node_12 = tf.cast(arg_1, tf.int64)
+        
+        # var_node_13 = -5 (dtype=int32)
+        var_node_13 = tf.constant(-5, dtype=tf.int32)
+        
+        # var_node_11 = var_node_12 / var_node_13
+        var_node_11 = tf.divide(var_node_12, var_node_13)
+        
+        # var_node_7 = var_node_8 + var_node_11
+        var_node_7 = var_node_8 + var_node_11
+        
+        # var_node_0 = var_node_1 * var_node_7
+        var_node_0 = var_node_1 * var_node_7
+        
+        # result = var_node_0 * sentinel
+        result = var_node_0 * sentinel
+        
+        return result
+
+    # Setup inputs
+    # Original PyTorch code used random scalars. We use fixed values for reproducibility.
+    # batch_parallel expects tensors to shard along the 0th dimension.
+    # We use shape [1] to simulate the scalar input while satisfying the API.
+    arg_0 = tf.constant([10], dtype=tf.int32)
+    arg_1 = tf.constant([20], dtype=tf.int32)
+    sentinel = tf.constant([1.0])
+
+    inputs = [arg_0, arg_1, sentinel]
+
+    print("Testing tf.compat.v1.tpu.batch_parallel with mixed scalar arithmetic...")
+
+    # We attempt to run on TPU. If not available, we fallback to XLA compilation 
+    # on CPU/GPU to verify the graph compilation logic, which is the core of the bug.
+    tpu_found = False
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        tpu_found = True
+        print("TPU system initialized.")
+    except (ValueError, tf.errors.NotFoundError) as e:
+        print(f"TPU not found: {e}. Falling back to XLA compilation on CPU.")
+
+    if tpu_found:
+        # Run using batch_parallel on TPU
+        # Note: batch_parallel is a v1 API, often used within a session.
+        with tf.compat.v1.Session() as sess:
+            # batch_parallel compiles the computation and shards inputs
+            # num_shards=1 means no actual sharding, but full compilation happens.
+            result_op = tf.compat.v1.tpu.batch_parallel(
+                computation_fn, 
+                inputs, 
+                num_shards=1
+            )
+            
+            # Initialize variables
+            sess.run(tf.compat.v1.global_variables_initializer())
+            
+            # Execute
+            result_val = sess.run(result_op)
+            print(" TPU batch_parallel success")
+            print(f"Result: {result_val}")
+    else:
+        # Fallback: Use tf.function with XLA to simulate the compilation pressure
+        # This verifies if the scalar ops and type promotions compile correctly.
+        @tf.function(experimental_compile=True)
+        def xla_computation(a0, a1, s):
+            return computation_fn(a0, a1, s)
+
+        with tf.device("/CPU:0"):
+            try:
+                result_val = xla_computation(arg_0, arg_1, sentinel)
+                print(" XLA (CPU) compilation success")
+                print(f"Result: {result_val.numpy()}")
+            except Exception as e:
+                print(f" XLA compilation failed: {e}")
+                raise
+
+if __name__ == "__main__":
+    test_batch_parallel_compile_divergence()

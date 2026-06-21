@@ -1,0 +1,34 @@
+import torch
+
+def test_cholesky_solve_in_nested_no_grad_with_graph_break():
+    # Setup inputs for torch.cholesky_solve
+    # cholesky_solve(input, input2, upper=False)
+    # input2 must be a positive-definite matrix
+    input2 = torch.randn(3, 3)
+    input2 = input2 @ input2.T + torch.eye(3)  # Make it symmetric positive definite
+    input1 = torch.randn(3, 3)
+
+    def fn(x):
+        torch._dynamo.graph_break()
+        with torch.no_grad():
+            with torch.no_grad():
+                # Leverage the similar API (torch.cholesky_solve) inside the 
+                # nested context that triggered the original bug.
+                res = torch.cholesky_solve(input1, input2)
+                torch._dynamo.graph_break()
+        return x + 1 + res.sum()
+
+    inp = torch.ones(3)
+    
+    # Run eager to get expected result
+    expected = fn(inp)
+    
+    # Run compiled
+    opt_m = torch.compile(fn, backend="eager")
+    result = opt_m(inp)
+    
+    # Assert correctness and that it didn't crash with KeyError
+    assert torch.allclose(result, expected)
+
+if __name__ == "__main__":
+    test_cholesky_solve_in_nested_no_grad_with_graph_break()

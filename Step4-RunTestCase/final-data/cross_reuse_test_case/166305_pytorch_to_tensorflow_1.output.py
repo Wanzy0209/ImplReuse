@@ -1,0 +1,73 @@
+import torch
+import tensorflow as tf
+import tf.compat.v1 as tf_compat
+
+# 1. Define Custom Gradient (Equivalent to SimplistDoubleFn in PyTorch)
+@tf.custom_gradient
+def simplest_double_fn(x):
+    def grad(dy):
+        return dy * 2
+    return x * 2, grad
+
+def main():
+    # Initialize TPU system (Equivalent to dist.init_process_group)
+    resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(resolver)
+    tf.tpu.experimental.initialize_tpu_system(resolver)
+    strategy = tf.distribute.TPUStrategy(resolver)
+
+    with strategy.scope():
+        # Define a trainable variable (Equivalent to nn.Conv2d weights)
+        # Input channels: 3, Output channels: 3, Kernel: 3x3
+        # Shape: [filter_height, filter_width, in_channels, out_channels]
+        kernel = tf.Variable(tf.random.normal([3, 3, 3, 3]), name='conv_kernel')
+
+        # Define the computation to be sharded (Equivalent to the Model's forward)
+        def computation(inputs):
+            x_shard = inputs[0]
+            
+            # Apply Conv2d (Equivalent to nn.Conv2d)
+            # Using padding='SAME' to match PyTorch padding=1 behavior for size preservation
+            x_conv = tf.nn.conv2d(x_shard, kernel, strides=[1, 1, 1, 1], padding='SAME')
+            
+            # Apply Custom Function (Equivalent to DoubleLayer)
+            return simplest_double_fn(x_conv)
+
+        # Prepare Inputs
+        # Batch size 8 (assuming 8 cores for standard TPU setup)
+        batch_size = 8
+        # Using NHWC format for TensorFlow
+        inputs = [tf.random.normal([batch_size, 256, 256, 3])]
+
+        # Run batch_parallel
+        # This acts as the "torch.compile + DDP" step: it compiles the graph for TPU
+        # and shards the computation across available devices.
+        outputs = tf_compat.tpu.batch_parallel(
+            computation,
+            inputs,
+            num_shards=strategy.num_replicas_in_sync
+        )
+
+        # Calculate Loss (Equivalent to F.mse_loss(out, x))
+        # Note: We compare against the original input 'inputs[0]' to match the original logic
+        loss = tf.reduce_mean(tf.square(outputs - inputs[0]))
+
+        # Calculate Gradients (Equivalent to loss.backward())
+        with tf.GradientTape() as tape:
+            # Re-run to ensure operations are recorded for gradient calculation
+            outputs = tf_compat.tpu.batch_parallel(
+                computation,
+                inputs,
+                num_shards=strategy.num_replicas_in_sync
+            )
+            loss = tf.reduce_mean(tf.square(outputs - inputs[0]))
+        
+        grads = tape.gradient(loss, kernel)
+
+        # Verification
+        # The original bug caused a failure. Here we assert that gradients are computed.
+        assert grads is not None, "Gradients should not be None"
+        print(f"Test passed. Loss: {loss.numpy()}, Gradients computed: {grads is not None}")
+
+if __name__ == "__main__":
+    main()

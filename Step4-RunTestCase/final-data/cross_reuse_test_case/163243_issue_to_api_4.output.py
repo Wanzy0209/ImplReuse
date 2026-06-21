@@ -1,0 +1,52 @@
+import torch
+
+def test_mh_compile_with_type_check():
+    """
+    Test case for Issue 163243: .mH compile problem with inductor backend.
+    Leverages torch.is_floating_point to verify type handling during the compilation
+    of complex tensor operations involving the .mH view.
+    """
+    n = 8
+    dtype = torch.complex64
+
+    A = torch.randn(4, n, n, dtype=dtype, requires_grad=True)
+    A = A.clone(memory_format=torch.contiguous_format)
+
+    # Leverage torch.is_floating_point to verify tensor type properties.
+    # Complex tensors are distinct from floating point tensors.
+    # This check ensures we are operating on the expected type before the view operation.
+    is_fp = torch.is_floating_point(A)
+    assert not is_fp, "Input tensor A is complex64, is_floating_point should be False."
+
+    I0 = torch.eye(n, dtype=A.dtype, device=A.device)
+    I = I0.unsqueeze(0).expand(A.shape[0], n, n).contiguous()
+
+    # The problematic operation involving .mH view.
+    # The inductor backend may fail here due to stride issues when viewing ComplexFloat as Float.
+    A = I + 0.5 * (A @ A.mH)
+
+    # Verify type consistency after the operation
+    assert not torch.is_floating_point(A)
+
+    R = torch.linalg.cholesky(A, upper=True)
+    loss = R.abs().sum()
+    loss.backward()
+
+
+if __name__ == '__main__':
+    # Check if torch.compile is available (requires PyTorch 2.0+)
+    if not hasattr(torch, 'compile'):
+        print("torch.compile is not available (requires PyTorch 2.0+). Skipping test.")
+    else:
+        # Compile with the inductor backend to trigger the reported issue
+        compiled_fn = torch.compile(test_mh_compile_with_type_check, backend="inductor")
+        
+        try:
+            compiled_fn()
+            print("Test passed successfully.")
+        except RuntimeError as e:
+            # Expected error if bug is present: 
+            # "self.stride(-1) must be 1 to view ComplexFloat as Float (different element sizes), but got X"
+            print(f"Test failed with RuntimeError: {e}")
+        except Exception as e:
+            print(f"Test failed with unexpected error: {e}")

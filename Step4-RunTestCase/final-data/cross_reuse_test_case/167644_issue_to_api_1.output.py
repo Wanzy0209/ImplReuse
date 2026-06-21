@@ -1,0 +1,44 @@
+import os
+import torch
+import warnings
+
+def main():
+    """
+    Test case for torch.hub.get_dir based on the warning behavior pattern 
+    observed in the original issue (Issue ID: 167644).
+    
+    The original issue describes a scenario where calling a public API 
+    (torch.set_float32_matmul_precision) triggers a deprecation warning 
+    about internal behavior.
+    
+    This test case applies a similar logic to torch.hub.get_dir, which 
+    explicitly checks for a deprecated environment variable (TORCH_HUB) 
+    and issues a warning.
+    """
+    
+    # Set the deprecated environment variable to trigger the warning logic
+    # inside torch.hub.get_dir, mirroring the internal state check in the original bug.
+    os.environ["TORCH_HUB"] = "/tmp/old_torch_hub"
+
+    # Capture warnings to verify the behavior
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        
+        # Call the API
+        torch.hub.get_dir()
+
+        # Assertions to verify the warning was raised
+        assert len(w) > 0, "Expected a warning to be raised"
+        assert issubclass(w[0].category, UserWarning), "Expected a UserWarning"
+        assert "TORCH_HUB is deprecated" in str(w[0].message), \
+            f"Expected deprecation message, got: {w[0].message}"
+        
+        print("Test passed: Warning captured as expected.")
+        print(f"Warning message: {w[0].message}")
+
+    # Clean up environment variable
+    if "TORCH_HUB" in os.environ:
+        del os.environ["TORCH_HUB"]
+
+if __name__ == '__main__':
+    main()

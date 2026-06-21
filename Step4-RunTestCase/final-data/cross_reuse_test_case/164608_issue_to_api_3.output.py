@@ -1,0 +1,97 @@
+import torch
+import functools
+import sys
+
+# Handle missing module gracefully
+try:
+    from torch.nn.attention.flex_attention import create_block_mask
+except ImportError:
+    print("Skipping test: Module 'torch.nn.attention.flex_attention' not found. "
+          "This feature is available in PyTorch 2.4+.")
+    sys.exit(0)
+
+# Helper function from the bug report to define visibility logic
+def _score_mode_fn_visibility(batch, head, q_idx, kv_idx, lower_bound, upper_bound):
+    return (kv_idx >= lower_bound[q_idx]) & (kv_idx <= upper_bound[q_idx])
+
+# Helper function to create attention visibility tensors
+def create_attn_visibility(batch_size, seq_len):
+    start = [x * seq_len for x in range(batch_size)]
+    end = [x + (seq_len - 1) for x in start]
+    attn_visibility = torch.tensor([start, end], dtype=torch.int32, device="cuda")
+    return attn_visibility.view(2, -1)
+
+def test_create_block_mask_compiled_cache_reset():
+    """
+    Test to verify that create_block_mask handles state correctly when compiled.
+    
+    This test addresses the issue where Dynamo cache/compilation context 
+    (potentially involving torch.library.get_ctx internally for fake impls) 
+    was not being reset, leading to garbage q_num_blocks in subsequent runs 
+    with different batch sizes.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    torch.set_default_device("cuda")
+    torch.set_default_dtype(torch.bfloat16)
+    torch.cuda.manual_seed(10007)
+
+    seq_len = 1024
+    # Varying batch sizes to trigger the cache/state bug
+    batch_sizes = [1, 2]
+
+    # Compile the function once. The bug manifests when this compiled instance
+    # is reused for different input shapes (batch sizes).
+    compiled_create_block_mask = torch.compile(create_block_mask)
+
+    print("Testing compiled create_block_mask with varying batch sizes...")
+
+    for i, batch_size in enumerate(batch_sizes):
+        attn_visibility = create_attn_visibility(batch_size, seq_len)
+        kv_seqlen = batch_size * seq_len
+        _, num_tokens = attn_visibility.view(2, -1).shape
+
+        # 1. Run Eager Mode to establish ground truth
+        mask_eager = create_block_mask(
+            functools.partial(
+                _score_mode_fn_visibility,
+                lower_bound=attn_visibility.view(2, -1)[0],
+                upper_bound=attn_visibility.view(2, -1)[1],
+            ),
+            1,
+            None,
+            num_tokens,
+            kv_seqlen,
+            device=attn_visibility.device,
+        )
+
+        # 2. Run Compiled Mode
+        mask_compiled = compiled_create_block_mask(
+            functools.partial(
+                _score_mode_fn_visibility,
+                lower_bound=attn_visibility.view(2, -1)[0],
+                upper_bound=attn_visibility.view(2, -1)[1],
+            ),
+            1,
+            None,
+            num_tokens,
+            kv_seqlen,
+            device=attn_visibility.device,
+        )
+
+        # 3. Assert that metadata matches
+        # The bug specifically reported garbage values in q_num_blocks
+        assert torch.equal(mask_compiled.q_num_blocks, mask_eager.q_num_blocks), \
+            f"Iteration {i+1} (batch_size={batch_size}): q_num_blocks mismatch. " \
+            f"Compiled={mask_compiled.q_num_blocks}, Eager={mask_eager.q_num_blocks}"
+
+        assert torch.equal(mask_compiled.kv_num_blocks, mask_eager.kv_num_blocks), \
+            f"Iteration {i+1} (batch_size={batch_size}): kv_num_blocks mismatch."
+
+        print(f"  Iteration {i+1} (batch_size={batch_size}): Passed. "
+              f"q_num_blocks={mask_compiled.q_num_blocks}")
+
+if __name__ == "__main__":
+    test_create_block_mask_compiled_cache_reset()

@@ -1,0 +1,51 @@
+import tensorflow as tf
+import numpy as np
+
+def test_keras_backend_epsilon_numerical_stability():
+    """
+    Test case derived from Issue 165738 regarding sqrt operations.
+    
+    The original issue highlighted performance problems with tl.sqrt_rn on XPU.
+    This test verifies the usage of tf.keras.backend.epsilon to ensure
+    numerical stability in similar mathematical operations (square roots),
+    preventing NaNs when inputs are near zero, which is a common requirement
+    when porting kernel logic between different hardware backends.
+    """
+    # Retrieve the epsilon value, analogous to constant handling in kernel configs
+    epsilon = tf.keras.backend.epsilon()
+
+    # 1. Verify the API returns the expected default fuzz factor
+    assert isinstance(epsilon, float), "Epsilon should be a float"
+    assert epsilon == 1e-07, f"Default epsilon should be 1e-07, got {epsilon}"
+
+    # 2. Simulate a scenario similar to the bug report: pointwise math operations
+    # Create input data that includes edge cases (zero, small numbers)
+    # mimicking the tensor inputs (in_ptr0, etc.) in the original Triton kernel.
+    input_tensor = tf.constant([0.0, 1e-8, 1.0, 16.0], dtype=tf.float32)
+
+    # 3. Apply the similar API (epsilon) to stabilize a sqrt operation.
+    # This reflects the relationship: using epsilon to guard the math operation
+    # that was central to the original bug report.
+    stabilized_input = input_tensor + epsilon
+    result = tf.sqrt(stabilized_input)
+
+    # 4. Assertions to ensure correctness and stability
+    # Ensure no NaNs are produced (which would happen without epsilon for 0.0)
+    has_nan = tf.reduce_any(tf.math.is_nan(result))
+    
+    # Fix: Use tf.keras.backend.get_value() to retrieve the value from the tensor
+    # instead of .numpy() which is not available in graph mode or certain TF configurations.
+    has_nan_val = tf.keras.backend.get_value(has_nan)
+    assert not has_nan_val, "Result contains NaNs, epsilon failed to stabilize sqrt."
+
+    # Verify calculation correctness
+    expected_values = np.sqrt(np.array([0.0, 1e-8, 1.0, 16.0]) + epsilon)
+    
+    # Fix: Use tf.keras.backend.get_value() for result as well to ensure compatibility
+    result_val = tf.keras.backend.get_value(result)
+    np.testing.assert_allclose(result_val, expected_values, rtol=1e-6)
+
+    print("Test passed: tf.keras.backend.epsilon ensures numerical stability.")
+
+if __name__ == "__main__":
+    test_keras_backend_epsilon_numerical_stability()

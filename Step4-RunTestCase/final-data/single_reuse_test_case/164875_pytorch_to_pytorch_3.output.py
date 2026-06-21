@@ -1,0 +1,45 @@
+import torch
+
+# Configuration from the bug report
+# Guard against missing _dynamo attribute in older PyTorch versions or specific builds
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1014698)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0 # size=(20, 0), stride=(1, 20), dtype=int64
+    var_node_3 = torch.full((), True, dtype=torch.bool) # size=(), stride=(), dtype=bool
+    _x_nz = torch.zeros((), dtype=torch.bool, device=var_node_3.device)
+    _x_nz_flat = _x_nz.reshape(-1)
+    _x_nz_flat[:20] = True
+    var_node_2 = torch.nonzero(_x_nz) # size=(1, 1), stride=(1, 1), dtype=int64
+    
+    # Replaced torch.add with torch.div
+    var_node_0 = torch.div(var_node_1, var_node_2)
+    
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(5, 30, (20,)).to(torch.int64), (20, 0), (1, 20))
+
+args = (arg_0,) + (sentinel,)
+
+# Run Eager
+result_original = fuzzed_program(*args)
+print(' eager success')
+
+# Run Compiled
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print(' compile success')
+
+# Verify results match
+torch.testing.assert_close(result_original, result_compiled)

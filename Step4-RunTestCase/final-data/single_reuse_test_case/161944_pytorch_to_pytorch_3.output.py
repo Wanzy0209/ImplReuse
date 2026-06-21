@@ -1,0 +1,23 @@
+import torch
+
+# Reproduces the precision check for torch.square similar to the torch.exp bug report
+# to verify if Inductor uses fast math optimizations that affect accuracy.
+
+# Fix: torch.set_default_device is not available in older PyTorch versions.
+# We explicitly specify the device in tensor creation instead.
+device = 'cuda'
+
+inp = torch.randn(8192, device=device)
+func = torch.square
+out1 = func(inp)
+out2 = torch.compile(func)(inp)
+out3_high = func(inp.to(torch.float64))
+
+print("Max difference (eager vs high precision):", (out3_high - out1).abs().max())
+print("Max difference (compiled vs high precision):", (out3_high - out2).abs().max())
+
+# Optional assertion to check if compiled version deviates significantly more than eager
+# This would fail if fast math introduces significant errors compared to eager execution
+diff_eager = (out3_high - out1).abs().max()
+diff_compiled = (out3_high - out2).abs().max()
+assert diff_compiled <= diff_eager * 10 + 1e-6, "Compiled version has significantly higher error"

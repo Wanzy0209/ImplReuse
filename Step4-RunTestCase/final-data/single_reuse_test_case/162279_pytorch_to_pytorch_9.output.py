@@ -1,0 +1,40 @@
+import torch
+import torch.nn as nn
+import torch.nn.utils.prune as prune
+
+class ModelDim0(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(10, 10)
+
+class ModelDim1(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(10, 10)
+
+def process(model, dim):
+    print(f'Model: {model.__class__.__name__}')
+    print(f'Pruning along dim: {dim}')
+    
+    # Apply ln_structured pruning
+    # We prune 50% of the channels with the lowest L2-norm along the specified dimension
+    prune.ln_structured(model.linear, name='weight', amount=0.5, n=2, dim=dim)
+    
+    # Verify mask exists
+    assert hasattr(model.linear, 'weight_mask'), "Mask not created"
+    
+    # Verify pruning occurred (mask should have zeros)
+    mask = model.linear.weight_mask
+    assert torch.any(mask == 0), "Pruning did not zero out any elements"
+    
+    print(f'Pruning successful. Mask shape: {mask.shape}')
+    print()
+
+# Test Case: Run pruning on two different models with different dimensions
+# to check for state pollution or caching issues similar to the original bug.
+
+m1 = ModelDim0()
+process(m1, 0)
+
+m2 = ModelDim1()
+process(m2, 1)

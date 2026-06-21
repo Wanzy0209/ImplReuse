@@ -1,0 +1,52 @@
+import sys
+import numpy as np
+
+try:
+    import torch
+    import tensorflow as tf
+except ImportError as e:
+    # Handle environment dependency errors (e.g., missing GLIBCXX) gracefully
+    print(f"Skipping test due to environment dependency error: {e}")
+    print("This is likely due to a missing GLIBCXX version required by TensorFlow/Protobuf.")
+    sys.exit(0)
+
+# Adaptation of the PyTorch Eager/Compile Divergence test for tf.signal.overlap_and_add.
+# The original bug report (Issue 165105) highlights a divergence in torch.matmul 
+# involving float16 tensors and specific shapes (e.g., 14, 416).
+# This test verifies that tf.signal.overlap_and_add produces consistent results
+# between eager execution and graph (tf.function) execution using similar 
+# tensor characteristics (dtype and dimensions).
+
+def test_overlap_and_add_divergence():
+    # Use dimensions found in the PyTorch fuzzer output (var_node_5: 14, 416)
+    # We interpret (14, 416) as (frames, frame_length) for overlap_and_add
+    frames = 14
+    frame_length = 416
+    frame_step = 208  # Must be <= frame_length, chosen to test overlap logic
+
+    # Use float16 as per the original bug report
+    # Using a specific constant value found in the fuzzer: 0.1331787109375
+    signal = tf.constant(0.1331787109375, shape=(frames, frame_length), dtype=tf.float16)
+
+    # 1. Eager Execution
+    result_eager = tf.signal.overlap_and_add(signal, frame_step)
+
+    # 2. Compiled Execution (tf.function)
+    @tf.function
+    def run_overlap_and_add(sig, step):
+        return tf.signal.overlap_and_add(sig, step)
+
+    result_compiled = run_overlap_and_add(signal, frame_step)
+
+    # 3. Verify Consistency
+    # Check for divergence (Eager vs Compile)
+    # Using a tolerance suitable for float16 precision
+    if not np.allclose(result_eager.numpy(), result_compiled.numpy(), atol=1e-3):
+        print("Eager Result (first 5):", result_eager.numpy()[:5])
+        print("Compiled Result (first 5):", result_compiled.numpy()[:5])
+        raise AssertionError("Divergence detected between eager and compiled execution for tf.signal.overlap_and_add")
+
+    print("Test passed: No divergence detected.")
+
+if __name__ == "__main__":
+    test_overlap_and_add_divergence()

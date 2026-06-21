@@ -1,0 +1,49 @@
+import torch
+
+def test_sparse_bmm_to_dense():
+    """
+    Test case adapted from Issue 167716 for torch.bmm.
+    The original issue reported a Segmentation fault when calling to_dense()
+    on the result of torch.sparse.mm with two sparse inputs.
+    This test verifies the similar behavior for torch.bmm with sparse inputs.
+    """
+    torch.manual_seed(42)
+
+    # Create batched sparse tensor A (Batch=2, M=3, K=4)
+    # Indices format for 3D sparse tensor: [batch_indices, row_indices, col_indices]
+    indices_A = torch.tensor([[0, 0, 0, 1, 1, 1], 
+                              [0, 1, 2, 0, 1, 2], 
+                              [0, 2, 3, 0, 2, 3]])
+    values_A = torch.tensor([1.0, 2.0, 3.0, 1.0, 2.0, 3.0])
+    A = torch.sparse_coo_tensor(indices_A, values_A, size=(2, 3, 4))
+
+    # Create batched sparse tensor B (Batch=2, K=4, N=2)
+    # Fixed indices: The size for dim 2 is 2, so indices must be 0 or 1.
+    # Changed the '2's in the last row to '1's to fix the index out of bounds error.
+    indices_B = torch.tensor([[0, 0, 0, 0, 1, 1, 1, 1], 
+                              [0, 1, 2, 3, 0, 1, 2, 3], 
+                              [0, 1, 1, 1, 0, 1, 1, 1]])
+    values_B = torch.tensor([4.0, 5.0, 6.0, 7.0, 4.0, 5.0, 6.0, 7.0])
+    B = torch.sparse_coo_tensor(indices_B, values_B, size=(2, 4, 2))
+
+    # Perform batched matrix multiplication with sparse inputs
+    C = torch.bmm(A, B)
+
+    # Attempt to convert the result to dense.
+    # In the original bug (torch.sparse.mm), this caused a Segmentation fault.
+    C_dense = C.to_dense()
+
+    # Verify the output shape and basic properties
+    assert C_dense.shape == (2, 3, 2), f"Expected shape (2, 3, 2), got {C_dense.shape}"
+    
+    # Verify against dense computation to ensure correctness
+    A_dense = A.to_dense()
+    B_dense = B.to_dense()
+    expected = torch.bmm(A_dense, B_dense)
+    
+    assert torch.allclose(C_dense, expected), "Dense conversion result does not match expected dense computation"
+    
+    print("Test passed: torch.bmm with sparse inputs and to_dense() executed successfully.")
+
+if __name__ == "__main__":
+    test_sparse_bmm_to_dense()

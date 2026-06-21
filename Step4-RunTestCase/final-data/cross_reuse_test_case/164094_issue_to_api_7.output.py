@@ -1,0 +1,50 @@
+import tensorflow as tf
+from tensorflow.linalg import LinearOperatorScaledIdentity
+
+def test_linear_operator_scaled_identity_backward():
+    """
+    This test case mirrors the logic of the PyTorch issue (Issue ID: 164094).
+    In the issue, the user defines a custom autograd.Function to carry state 
+    (a CUDA stream) from the forward pass to the backward pass, attempting to 
+    modify the execution context of the backward pass.
+
+    Here, we leverage the similar API, `tf.linalg.LinearOperatorScaledIdentity`,
+    which encapsulates state (the `multiplier`) within the operator. We verify
+    that this state is correctly preserved and utilized during the backward pass
+    (gradient calculation), analogous to the user's goal of ensuring specific
+    behavior in the backward pass based on forward-pass context.
+    """
+    # Define the operator with a specific multiplier (analogous to ctx.stream in the issue)
+    multiplier = 5.0
+    operator = LinearOperatorScaledIdentity(num_rows=2, multiplier=multiplier)
+
+    # Input tensor
+    x = tf.constant([[1.0, 2.0], [3.0, 4.0]])
+
+    # Forward pass: y = A @ x, where A = multiplier * I
+    with tf.GradientTape() as tape:
+        # FIX: Explicitly watch the input tensor x because it is a constant.
+        # GradientTape does not watch constants by default, which would result
+        # in grads being None and causing the "None values not supported" error.
+        tape.watch(x)
+        
+        y = operator.matmul(x)
+        # Create a scalar loss to compute gradients
+        loss = tf.reduce_sum(y)
+
+    # Backward pass: Compute gradients
+    # This corresponds to the 'backward' method in the PyTorch issue
+    grads = tape.gradient(loss, x)
+
+    # Expected gradient: d(sum(multiplier * x))/dx = multiplier
+    expected_grads = tf.fill(x.shape, multiplier)
+
+    # Assert that the backward pass correctly used the 'multiplier' state
+    # This validates the pattern of preserving state from initialization/forward
+    # to the backward computation.
+    assert tf.reduce_all(tf.equal(grads, expected_grads)).numpy(), \
+        "Gradient did not reflect the operator's state (multiplier) in the backward pass."
+
+if __name__ == "__main__":
+    test_linear_operator_scaled_identity_backward()
+    print("Test passed.")

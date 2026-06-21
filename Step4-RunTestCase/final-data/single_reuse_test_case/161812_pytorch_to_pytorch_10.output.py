@@ -1,0 +1,30 @@
+import torch as th
+
+# Reproduce the setup from the bug report
+# Removed layout=th.jagged as it is not a valid attribute in standard PyTorch
+x = th.nested.nested_tensor([th.ones(3, 2, 3), th.ones(4, 2, 3)])
+
+# Adapt the test case for torch.gather
+# torch.gather requires an index tensor. We create a jagged index tensor 
+# compatible with the input x to gather along dimension 0 (the jagged dimension).
+index = th.nested.nested_tensor(
+    [th.zeros(3, 2, 3, dtype=th.long), th.zeros(4, 2, 3, dtype=th.long)]
+)
+
+# Call the similar API (torch.gather) along the problematic dimension
+try:
+    result = th.gather(x, 0, index)
+    print("torch.gather succeeded on dim 0")
+except Exception as e:
+    print(f"torch.gather failed on dim 0: {e}")
+
+# Also test along a non-jagged dimension (dim=1) for comparison
+index_dim1 = th.nested.nested_tensor(
+    [th.zeros(3, 1, 3, dtype=th.long), th.zeros(4, 1, 3, dtype=th.long)]
+)
+
+try:
+    result_dim1 = th.gather(x, 1, index_dim1)
+    print("torch.gather succeeded on dim 1")
+except Exception as e:
+    print(f"torch.gather failed on dim 1: {e}")

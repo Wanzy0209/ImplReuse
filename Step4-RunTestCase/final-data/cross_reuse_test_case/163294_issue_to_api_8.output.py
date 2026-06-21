@@ -1,0 +1,71 @@
+import torch
+import sys
+
+# torch.export was introduced in PyTorch 2.1.
+# We handle the import gracefully for older versions to prevent ModuleNotFoundError.
+try:
+    import torch.export
+except ModuleNotFoundError:
+    print("Skipping test: 'torch.export' module not found. This test requires PyTorch 2.1 or newer.")
+    sys.exit(0)
+
+def test_retracing_no_grad_submodule_not_empty():
+    """
+    Regression test for Issue 163294.
+    
+    Verifies that re-exporting a module containing torch.no_grad
+    does not result in an empty submodule. The bug manifested as
+    the submodule (submod_1) losing its internal operations (e.g., mul)
+    during the second export call.
+    """
+    class SetGradCase(torch.nn.Module):
+        def forward(self, x):
+            with torch.no_grad():
+                y = x * 4
+            return y
+
+    # First export
+    ep = torch.export.export(
+        SetGradCase(),
+        (torch.randn(6),),
+        strict=False,
+    )
+
+    # Second export (retracing)
+    # This is the step that triggered the bug: creating an empty submod_1
+    ep2 = torch.export.export(ep.module(), (torch.randn(6),))
+
+    # Verify the structure of the re-exported program
+    # We expect to find a submodule that contains the multiplication operation.
+    submodule_found = False
+    for name, submodule in ep2.named_modules():
+        if name != "":  # Skip the root module
+            submodule_found = True
+            
+            # Extract computation nodes from the submodule's graph
+            # We ignore structural nodes like 'placeholder', 'output', 'get_attr'
+            ops = [n for n in submodule.graph.nodes if n.op not in ("placeholder", "output", "get_attr")]
+            
+            # The bug report indicates the submodule becomes empty (len(ops) == 0)
+            assert len(ops) > 0, (
+                f"Submodule '{name}' is empty in re-exported program. "
+                "Expected to find operations like 'mul' inside the torch.no_grad block."
+            )
+            
+            # Specifically check for the multiplication operation
+            has_mul = any("mul" in str(n.target) for n in ops)
+            assert has_mul, f"Submodule '{name}' is missing the expected 'mul' operation."
+
+    assert submodule_found, "No submodule found in the re-exported program."
+
+    # Verify that the re-exported module executes correctly
+    input_data = torch.randn(6)
+    output = ep2.module()(input_data)
+    
+    # Check result correctness
+    expected_output = input_data * 4
+    assert torch.allclose(output, expected_output), "Output does not match expected calculation."
+
+if __name__ == "__main__":
+    test_retracing_no_grad_submodule_not_empty()
+    print("Test passed.")

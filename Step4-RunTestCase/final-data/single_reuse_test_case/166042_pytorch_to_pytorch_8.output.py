@@ -1,0 +1,56 @@
+import torch
+import torch.nn as nn
+
+# Reproduce the environment configuration from the bug report
+# Handle cases where torch._dynamo is not available (older PyTorch versions)
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1352030645)
+
+def test_lazy_conv_transpose_3d():
+    # The bug report involves CUDA and bfloat16 tensors
+    if not torch.cuda.is_available():
+        print("Test requires CUDA to run.")
+        return
+
+    # Check if torch.compile is available (requires PyTorch 2.0+)
+    if not hasattr(torch, 'compile'):
+        print("Test requires torch.compile (PyTorch 2.0+) to run.")
+        return
+
+    device = 'cuda'
+    
+    # Create a bfloat16 input tensor
+    # Shape: (Batch, Channels, Depth, Height, Width)
+    # LazyConvTranspose3d will infer in_channels from the input size (4 here)
+    input_tensor = torch.randn(2, 4, 5, 5, 5, dtype=torch.bfloat16, device=device)
+
+    # Instantiate the similar API: torch.nn.LazyConvTranspose3d
+    # Args: out_channels, kernel_size
+    layer = nn.LazyConvTranspose3d(out_channels=8, kernel_size=3).to(device)
+
+    # Compile the model using torch.compile (torch._dynamo)
+    # This is where the eager/compile divergence or assertion might occur
+    try:
+        compiled_layer = torch.compile(layer)
+        output = compiled_layer(input_tensor)
+        
+        # Basic sanity check
+        assert output is not None
+        assert output.shape[0] == 2
+        assert output.shape[1] == 8 # out_channels
+        
+        print("Test passed: torch.nn.LazyConvTranspose3d works with torch.compile and bfloat16.")
+
+    except AssertionError as e:
+        # Catching potential assertions like "int" in str(indices.get_dtype())
+        # or other dynamo-related failures
+        print(f"Assertion failed: {e}")
+        raise
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_lazy_conv_transpose_3d()

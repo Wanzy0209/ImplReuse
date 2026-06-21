@@ -1,0 +1,25 @@
+import torch
+
+# Check if torch._dynamo exists to avoid AttributeError in older PyTorch versions
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def f(x):
+    nz = x.nonzero()  # Creates a tensor with unbacked (dynamic) size
+    # Apply torch.any along the dimension that preserves the unbacked size
+    # nz has shape (N, 2), reducing along dim=1 results in shape (N,)
+    y = nz.any(dim=1)
+    # Slice the tensor with unbacked size
+    return y[:-1]
+
+# Verify the similar API (torch.any) works correctly under torch.compile
+# when dealing with dynamic shapes and slicing.
+if hasattr(torch, 'compile'):
+    out = torch.compile(f, fullgraph=True)(torch.randn(3, 4))
+else:
+    # Fallback to eager execution if torch.compile is not available
+    out = f(torch.randn(3, 4))
+
+print(out)
+assert isinstance(out, torch.Tensor)

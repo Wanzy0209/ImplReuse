@@ -1,0 +1,53 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use 'gloo' backend for CPU compatibility, matching the original bug's device context
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Adapted from the original bug report:
+    # Original: torch.fmod crashed with dividend=INT64_MIN and divisor=-1
+    # We test if torch.distributed.all_gather handles these specific edge case values correctly.
+    
+    int64_min = torch.iinfo(torch.int64).min
+    
+    # Create tensors containing the problematic values
+    # Rank 0 uses the dividend value (INT64_MIN)
+    # Rank 1 uses the divisor value (-1)
+    if rank == 0:
+        input_tensor = torch.full((2, 3), int64_min, dtype=torch.int64)
+    else:
+        input_tensor = torch.full((2, 3), -1, dtype=torch.int64)
+
+    # Prepare output list for all_gather
+    output_list = [torch.zeros_like(input_tensor) for _ in range(world_size)]
+
+    # Call the similar API: torch.distributed.all_gather
+    dist.all_gather(output_list, input_tensor)
+
+    # Assertions to verify data integrity
+    # Check that Rank 0's data (INT64_MIN) was gathered correctly
+    assert torch.equal(output_list[0], torch.full((2, 3), int64_min, dtype=torch.int64)), \
+        f"Rank {rank}: Mismatch in gathered data for rank 0 (INT64_MIN)"
+    
+    # Check that Rank 1's data (-1) was gathered correctly
+    assert torch.equal(output_list[1], torch.full((2, 3), -1, dtype=torch.int64)), \
+        f"Rank {rank}: Mismatch in gathered data for rank 1 (-1)"
+
+    print(f"Rank {rank}: Test passed. torch.distributed.all_gather handled edge cases correctly.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

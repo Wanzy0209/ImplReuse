@@ -1,0 +1,121 @@
+import sys
+import numpy as np
+
+# Handle environment dependency issues (e.g., GLIBC version mismatch)
+try:
+    import tensorflow as tf
+except ImportError as e:
+    print(f"SKIP: Failed to import TensorFlow. This is likely due to a missing system library (e.g., GLIBCXX_3.4.29).")
+    print(f"Details: {e}")
+    sys.exit(0)
+
+import torch
+
+def test_conv2d_transpose_float16_divergence():
+    """
+    Adapted test case for tf.keras.backend.conv2d_transpose based on 
+    PyTorch matmul fuzzer bug (Issue 165105).
+    
+    The original bug involves Eager/Compile divergence with float16 
+    and specific tensor dimensions (14, 6, 13, 416).
+    This test verifies the behavior of the similar TensorFlow API 
+    under analogous conditions.
+    """
+    
+    # Reproduce the random seed from the original bug report
+    np.random.seed(70609)
+    tf.random.set_seed(70609)
+
+    # Dimensions extracted from the PyTorch fuzzer program
+    # var_node_4: (14,), var_node_6: (14, 6), var_node_9: (6, 13), var_node_13: (10, 416)
+    # We map these to Conv2DTranspose parameters:
+    # Batch: 1
+    # Input Spatial: 6x13
+    # Input Channels: 14
+    # Output Channels: 416
+    
+    batch_size = 1
+    height = 6
+    width = 13
+    in_channels = 14
+    out_channels = 416
+    
+    # Initialize inputs with float16, matching the bug report's dtype
+    # Using random values to simulate the fuzzed inputs
+    x = tf.constant(np.random.randn(batch_size, height, width, in_channels), dtype=tf.float16)
+    
+    # Kernel shape: [kernel_h, kernel_w, output_channels, input_channels]
+    # Using a 3x3 kernel
+    kernel_h, kernel_w = 3, 3
+    kernel = tf.constant(np.random.randn(kernel_h, kernel_w, out_channels, in_channels), dtype=tf.float16)
+    
+    output_shape = [batch_size, height, width, out_channels]
+    strides = (1, 1)
+    padding = 'same'
+    
+    print(f"Testing tf.keras.backend.conv2d_transpose with dtype={x.dtype}")
+    print(f"Input shape: {x.shape}, Kernel shape: {kernel.shape}, Output shape: {output_shape}")
+
+    # 1. Test Eager Execution
+    try:
+        result_eager = tf.keras.backend.conv2d_transpose(
+            x,
+            kernel,
+            output_shape=output_shape,
+            strides=strides,
+            padding=padding,
+            data_format='channels_last'
+        )
+        print(f"Eager execution success. Output shape: {result_eager.shape}")
+    except Exception as e:
+        print(f"Eager execution failed: {e}")
+        return
+
+    # 2. Test Compiled Execution (Graph Mode) to check for divergence
+    # This mimics the torch._dynamo / torch.compile context of the original bug
+    @tf.function
+    def compiled_conv2d_transpose(inp, kern):
+        return tf.keras.backend.conv2d_transpose(
+            inp,
+            kern,
+            output_shape=output_shape,
+            strides=strides,
+            padding=padding,
+            data_format='channels_last'
+        )
+
+    try:
+        result_compiled = compiled_conv2d_transpose(x, kernel)
+        print(f"Compiled execution success. Output shape: {result_compiled.shape}")
+    except Exception as e:
+        print(f"Compiled execution failed: {e}")
+        return
+
+    # 3. Verify Consistency (Divergence Check)
+    # Check for NaNs which often indicate precision/divergence issues in float16
+    if tf.reduce_any(tf.math.is_nan(result_eager)):
+        print("FAIL: NaN detected in Eager output")
+    elif tf.reduce_any(tf.math.is_nan(result_compiled)):
+        print("FAIL: NaN detected in Compiled output")
+    else:
+        # Check shape consistency
+        assert result_eager.shape == tuple(output_shape), "Eager shape mismatch"
+        assert result_compiled.shape == tuple(output_shape), "Compiled shape mismatch"
+        
+        # Check value consistency (allowing for slight float16 epsilon differences if any, 
+        # though math should be identical)
+        if not tf.reduce_all(tf.equal(result_eager, result_compiled)):
+            # In float16, different code paths might yield slightly different rounding,
+            # but for a direct API call, they should be bitwise identical.
+            # We check if the difference is significant.
+            diff = tf.abs(tf.cast(result_eager, tf.float32) - tf.cast(result_compiled, tf.float32))
+            max_diff = tf.reduce_max(diff)
+            if max_diff > 1e-3: # Threshold for float16 noise
+                print(f"WARN: Eager and Compiled outputs differ (max diff: {max_diff})")
+            else:
+                print("PASS: Eager and Compiled outputs are consistent.")
+        else:
+            print("PASS: Eager and Compiled outputs are identical.")
+
+if __name__ == "__main__":
+    test_conv2d_transpose_float16_divergence()

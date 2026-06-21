@@ -1,0 +1,48 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_reduce_sparse(rank, world_size):
+    """
+    Test case to verify torch.distributed.reduce with sparse tensors.
+    Adapted from the original torch.compile sparse tensor bug report.
+    """
+    # Initialize the distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Use 'gloo' backend for CPU tensors
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Create a sparse tensor similar to the original bug report
+    # Note: We use a fixed seed for reproducibility
+    torch.manual_seed(rank)
+    x = torch.randn(10, 10)
+    x_sparse = x.to_sparse()
+
+    print(f"Rank {rank}: Input sparse tensor created.")
+
+    # Adaptation: Replace torch.compile(model)(x) with torch.distributed.reduce
+    # We attempt to reduce the sparse tensor to rank 0
+    try:
+        # dist.reduce is an in-place operation
+        dist.reduce(x_sparse, dst=0)
+        
+        if rank == 0:
+            print("Rank 0: Reduce operation completed successfully.")
+            print("Result (to_dense):", x_sparse.to_dense())
+        else:
+            print(f"Rank {rank}: Data sent to rank 0.")
+            
+    except NotImplementedError as e:
+        print(f"Rank {rank}: NotImplementedError encountered - {e}")
+    except Exception as e:
+        print(f"Rank {rank}: Unexpected error - {e}")
+    finally:
+        dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn 2 processes to simulate a distributed environment
+    mp.spawn(test_reduce_sparse, args=(world_size,), nprocs=world_size, join=True)

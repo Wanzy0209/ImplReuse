@@ -1,0 +1,34 @@
+import torch
+
+# Test 1: Basic usage of torch.triu_indices
+print("Test 1: Basic square matrix")
+row, col = torch.triu_indices(3, 3)
+print(row, col)
+# Verify the output matches expected indices for a 3x3 upper triangle
+assert torch.equal(row, torch.tensor([0, 0, 0, 1, 1, 2])), f"Row indices mismatch: {row}"
+assert torch.equal(col, torch.tensor([0, 1, 2, 1, 2, 2])), f"Column indices mismatch: {col}"
+
+# Test 2: Usage with offset (k)
+print("\nTest 2: Square matrix with offset")
+row, col = torch.triu_indices(3, 3, offset=1)
+print(row, col)
+# Verify the output matches expected indices with offset
+assert torch.equal(row, torch.tensor([0, 0, 1])), f"Row indices mismatch: {row}"
+assert torch.equal(col, torch.tensor([1, 2, 2])), f"Column indices mismatch: {col}"
+
+# Test 3: Rectangular matrix
+print("\nTest 3: Rectangular matrix")
+row, col = torch.triu_indices(3, 4)
+print(row, col)
+# Verify the output matches expected indices for a 3x4 matrix
+assert torch.equal(row, torch.tensor([0, 0, 0, 0, 1, 1, 1, 2, 2])), f"Row indices mismatch: {row}"
+assert torch.equal(col, torch.tensor([0, 1, 2, 3, 1, 2, 3, 2, 3])), f"Column indices mismatch: {col}"
+
+# Test 4: Default m (should equal n)
+print("\nTest 4: Default m parameter")
+row, col = torch.triu_indices(3)
+print(row, col)
+assert torch.equal(row, torch.tensor([0, 0, 0, 1, 1, 2])), f"Row indices mismatch: {row}"
+assert torch.equal(col, torch.tensor([0, 1, 2, 1, 2, 2])), f"Column indices mismatch: {col}"
+
+print("\nAll tests passed.")

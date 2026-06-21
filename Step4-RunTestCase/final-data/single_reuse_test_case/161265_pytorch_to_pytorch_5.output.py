@@ -1,0 +1,19 @@
+import torch
+
+# Check for MPS availability to ensure the test runs only on supported hardware
+if torch.backends.mps.is_available():
+    # Create a tensor larger than 4GB (2^32 + 10 bytes) using int8 dtype.
+    # We fill with -1. If the 'fillBuffer' bug occurs (Issue 161265), 
+    # parts of the buffer may remain 0.
+    # torch.amax should return -1, but would return 0 if the buffer is unfilled.
+    a = torch.full((2, (1 << 31) + 5), -1, dtype=torch.int8, device='mps')
+
+    # Test torch.amax
+    result = torch.amax(a)
+
+    # Verify the result
+    # If the bug manifests, the unfilled region (0) will be the max instead of -1.
+    assert result == -1, f"torch.amax failed on large tensor. Expected -1, got {result}"
+    print("Test passed.")
+else:
+    print("MPS device not found. Skipping test.")

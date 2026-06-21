@@ -1,0 +1,43 @@
+import tensorflow as tf
+from tensorflow import keras
+
+def test_set_image_data_format():
+    """
+    Test case for tf.keras.backend.set_image_data_format.
+    This test verifies the state modification and validation logic,
+    ensuring the API behaves correctly and raises appropriate errors
+    (reflecting the importance of correct stack traces/messages in the original issue).
+    """
+    # Setup: Save original state to ensure clean environment (similar to graph isolation)
+    original_format = keras.backend.image_data_format()
+
+    # Test Case 1: Valid format 'channels_first'
+    # Mimics the sequence of operations leading to a state change
+    keras.backend.set_image_data_format('channels_first')
+    current_format = keras.backend.image_data_format()
+    assert current_format == 'channels_first', \
+        f"Expected 'channels_first', got '{current_format}'"
+
+    # Test Case 2: Valid format 'channels_last'
+    keras.backend.set_image_data_format('channels_last')
+    current_format = keras.backend.image_data_format()
+    assert current_format == 'channels_last', \
+        f"Expected 'channels_last', got '{current_format}'"
+
+    # Test Case 3: Invalid format
+    # Mimics the "wrong" behavior check - ensuring the API handles errors correctly
+    # and provides the correct stack trace/message.
+    try:
+        keras.backend.set_image_data_format('invalid_format')
+        assert False, "ValueError not raised for invalid format"
+    except ValueError as e:
+        # Check that the error message is specific (part of the "trace" info)
+        assert 'Unknown data_format' in str(e), \
+            f"Error message mismatch: {str(e)}"
+
+    # Teardown: Restore original state
+    keras.backend.set_image_data_format(original_format)
+
+if __name__ == "__main__":
+    test_set_image_data_format()
+    print("Test passed.")

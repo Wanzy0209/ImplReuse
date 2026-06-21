@@ -1,0 +1,36 @@
+import torch
+import torch.library
+
+# Define a custom operator similar to torch.addmm used in the bug report
+torch.library.define("test::addmm", "(Tensor a, Tensor mat1, Tensor mat2) -> Tensor")
+
+# Use the correct API: torch.library.register_fake
+# This registers the "fake" or abstract implementation of the operator,
+# which is essential for torch.compile (Inductor) to infer shapes and metadata.
+@torch.library.register_fake("test::addmm")
+def addmm_abstract(a, mat1, mat2):
+    # The abstract implementation must return a tensor with the correct shape, dtype, and device.
+    # For torch.addmm(a, mat1, mat2), the output shape is the same as 'a'.
+    return torch.empty_like(a)
+
+# Setup dimensions matching the original bug report
+m, k, n = 20120, 1536, 512
+
+# Create FakeTensors to verify the abstract implementation.
+# FakeTensors carry metadata (shape/dtype/device) but no data, mimicking
+# the environment torch.compile uses during tracing.
+fake_a = torch.empty((m, n), device='cuda').fake()
+fake_mat1 = torch.empty((m, k), device='cuda').fake()
+fake_mat2 = torch.empty((k, n), device='cuda').fake()
+
+# Call the custom operator with FakeTensors.
+# This verifies that torch.library.register_fake was registered correctly
+# and produces valid output metadata.
+result = torch.ops.test.addmm(fake_a, fake_mat1, fake_mat2)
+
+# Assertions to ensure the abstract implementation is correct
+assert result.shape == (m, n), f"Shape mismatch: expected {(m, n)}, got {result.shape}"
+assert result.dtype == fake_a.dtype, f"Dtype mismatch: expected {fake_a.dtype}, got {result.dtype}"
+assert result.device == fake_a.device, f"Device mismatch: expected {fake_a.device}, got {result.device}"
+
+print("Test passed: torch.library.register_fake successfully defined the operator's metadata.")

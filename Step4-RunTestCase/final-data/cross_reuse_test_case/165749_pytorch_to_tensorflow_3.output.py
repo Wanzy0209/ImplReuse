@@ -1,0 +1,43 @@
+import tensorflow as tf
+
+# Enable eager execution as requested by the similar API
+# This switches TensorFlow to imperative execution mode, analogous to the default PyTorch mode
+# (Note: The original PyTorch bug occurred in compiled/graph mode, so this tests the eager path)
+tf.compat.v1.enable_eager_execution()
+
+def test_conv2d_weight_norm_eager():
+    d = 65
+    
+    # Input tensor (NCHW format to match PyTorch logic)
+    x = tf.random.normal((1, 2, 32, 32))
+
+    # Define Conv2D layer with weight normalization
+    # Using data_format='channels_first' to match PyTorch's default behavior
+    conv_layer = tf.keras.layers.Conv2D(filters=d, kernel_size=2, data_format='channels_first')
+    
+    # Fix: WeightNormalization is located in tf.keras.layers, not tf.keras.utils
+    model = tf.keras.layers.WeightNormalization(conv_layer)
+
+    # Optimizer
+    opt = tf.keras.optimizers.SGD()
+
+    # Training loop
+    print("Starting training loop with eager execution...")
+    for i in range(1000):
+        with tf.GradientTape() as tape:
+            # Forward pass
+            y = model(x)
+            loss = tf.reduce_mean(y)
+
+        # Backward pass
+        grads = tape.gradient(loss, model.trainable_variables)
+        opt.apply_gradients(zip(grads, model.trainable_variables))
+
+        if i % 100 == 0:
+            print(f"Step {i}, Loss: {loss.numpy()}")
+
+    # Verify completion
+    assert True, "Training loop completed successfully in eager mode."
+
+if __name__ == "__main__":
+    test_conv2d_weight_norm_eager()

@@ -1,0 +1,53 @@
+import tensorflow as tf
+import numpy as np
+
+# Ensure eager execution is enabled.
+# The error message indicates the code is running in Graph mode, but the test logic
+# (imperative variable updates and assertions) requires Eager execution.
+if not tf.executing_eagerly():
+    tf.compat.v1.enable_eager_execution()
+
+def test_variable_aggregation_nan_handling():
+    """
+    Test case to verify NaN handling in tf.VariableAggregation context.
+    This test is inspired by the PyTorch MPS bug where grid_sampler_3d 
+    incorrectly handled NaN values (clamping instead of propagating).
+    
+    Here we verify that TensorFlow variables with specific aggregation 
+    strategies propagate NaN values correctly during operations, 
+    ensuring they are not silently dropped or clamped.
+    """
+    
+    # Test 1: Variable with MEAN aggregation
+    # We initialize a variable and assign a NaN value to it.
+    # We expect the variable to hold the NaN value (propagation).
+    var_mean = tf.Variable(0.0, aggregation=tf.VariableAggregation.MEAN)
+    var_mean.assign(float('nan'))
+    
+    # Assert that the value is indeed NaN.
+    # If the system clamped it (like the MPS bug), this assertion would fail.
+    # We use .numpy() to evaluate the tensor to a Python boolean for the assertion.
+    assert tf.math.is_nan(var_mean.read_value()).numpy(), \
+        "VariableAggregation.MEAN should propagate NaN value, not clamp it."
+
+    # Test 2: Variable with SUM aggregation
+    # We initialize a variable and add a NaN value to it.
+    # We expect the result to be NaN.
+    var_sum = tf.Variable(1.0, aggregation=tf.VariableAggregation.SUM)
+    var_sum.assign_add(float('nan'))
+    
+    # Assert that the value is NaN.
+    # Mathematically, 1.0 + NaN = NaN.
+    assert tf.math.is_nan(var_sum.read_value()).numpy(), \
+        "VariableAggregation.SUM should propagate NaN value (1.0 + nan = nan)."
+
+    # Test 3: Variable with NONE aggregation
+    var_none = tf.Variable(0.0, aggregation=tf.VariableAggregation.NONE)
+    var_none.assign(float('nan'))
+    assert tf.math.is_nan(var_none.read_value()).numpy(), \
+        "VariableAggregation.NONE should propagate NaN value."
+
+    print("Test passed: NaN values are handled correctly in VariableAggregation.")
+
+if __name__ == "__main__":
+    test_variable_aggregation_nan_handling()

@@ -1,0 +1,31 @@
+import torch
+import pytest
+
+def test_torch_frac_compile_float16():
+    """
+    Test case for torch.frac with torch.compile, adapted from the torch.bmm issue.
+    The original issue (165892) reported a failure when using torch.bmm with 
+    out_dtype inside torch.compile on float16 CUDA tensors. This test verifies
+    that torch.frac (a similar API in terms of tensor operations) works correctly
+    under torch.compile with float16 inputs.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
+    # Setup matching the issue: float16 on CUDA
+    A = torch.rand((1, 1024, 1024), device="cuda", dtype=torch.float16)
+
+    # Define the compiled function using the similar API: torch.frac
+    @torch.compile
+    def frac_func(input):
+        # torch.frac does not support out_dtype like bmm, but we test
+        # the compilation path with the same input dtype configuration.
+        return torch.frac(input)
+
+    # Execute the compiled function
+    compiled_result = frac_func(A)
+
+    # Verify against eager execution to ensure correctness
+    expected_result = torch.frac(A)
+    
+    assert torch.allclose(compiled_result, expected_result)

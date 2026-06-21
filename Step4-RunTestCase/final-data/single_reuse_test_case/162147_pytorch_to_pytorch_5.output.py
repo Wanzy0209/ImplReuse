@@ -1,0 +1,108 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+
+def test_cummax_as_indexing_alternative():
+    """
+    Test cummax as an alternative to index_select/topk pattern
+    in the context of the FastLearnedCellX3 module
+    """
+    # Setup similar to FastLearnedCellX3
+    N, k, L, out_dim, in_dim = 32, 3, 12, 64, 128
+    
+    # Create input and weight matrix
+    x_flat = torch.randn(N, in_dim)
+    W = torch.randn(L, out_dim, in_dim)
+    
+    # Create logits for addressing
+    z = torch.randn(N, L)
+    
+    # Use cummax to get cumulative maximum values and indices
+    values, indices = torch.cummax(z, dim=1)
+    
+    # The last index gives us the argmax
+    argmax_indices = indices[:, -1:]  # [N, 1]
+    
+    # Use indices to select from W (similar to index_select)
+    selected_W = W[argmax_indices.squeeze(1)]  # [N, out_dim, in_dim]
+    
+    # Apply the selected weights
+    output = torch.einsum('ni, noi -> no', x_flat, selected_W)
+    
+    # Verify shapes
+    assert values.shape == (N, L)
+    assert indices.shape == (N, L)
+    assert output.shape == (N, out_dim)
+    
+    print("cummax as indexing alternative test passed!")
+
+def test_cummax_with_different_dims():
+    """Test cummax with different dimensions"""
+    # Test along dim 0
+    x = torch.randn(5, 4)
+    values, indices = torch.cummax(x, dim=0)
+    assert values.shape == x.shape
+    assert indices.shape == x.shape
+    
+    # Test along dim 1
+    values, indices = torch.cummax(x, dim=1)
+    assert values.shape == x.shape
+    assert indices.shape == x.shape
+    
+    print("cummax with different dims test passed!")
+
+def test_cummax_gradient_flow():
+    """Test gradient flow through cummax"""
+    x = torch.randn(4, 5, requires_grad=True)
+    
+    values, indices = torch.cummax(x, dim=1)
+    
+    # Use values in a computation
+    loss = values.sum()
+    loss.backward()
+    
+    # Verify gradients
+    assert x.grad is not None
+    assert x.grad.shape == x.shape
+    
+    print("cummax gradient flow test passed!")
+
+def test_cummax_in_addressing_context():
+    """
+    Test cummax in a context similar to the _address method in FastLearnedCellX3
+    """
+    # Setup similar to FastLearnedCellX3 addressing
+    N, d_addr, L_tot = 32, 64, 36
+    
+    # Create simulated address space
+    x_addr = torch.randn(N, d_addr)
+    U_pack = torch.randn(L_tot, d_addr)
+    
+    # Compute logits
+    Z = x_addr @ U_pack.t()  # [N, Ltot]
+    
+    # Use cummax to get cumulative maximum values and indices
+    values, indices = torch.cummax(Z, dim=1)
+    
+    # Verify shapes
+    assert values.shape == (N, L_tot)
+    assert indices.shape == (N, L_tot)
+    
+    # Verify indices are within valid range
+    assert (indices >= 0).all()
+    assert (indices < L_tot).all()
+    
+    # Verify that values are indeed cumulative maximums
+    for i in range(N):
+        for j in range(L_tot):
+            expected_max = Z[i, :j+1].max().item()
+            assert abs(values[i, j].item() - expected_max) < 1e-6
+    
+    print("cummax in addressing context test passed!")
+
+if __name__ == "__main__":
+    test_cummax_as_indexing_alternative()
+    test_cummax_with_different_dims()
+    test_cummax_gradient_flow()
+    test_cummax_in_addressing_context()

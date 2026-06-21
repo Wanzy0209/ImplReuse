@@ -1,0 +1,67 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use gloo backend for CPU compatibility
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Replicate the data generation logic from the original bug report
+    # to ensure we are testing the specific data types (int32, int64, scalars)
+    torch.manual_seed(19989)
+
+    # Original: arg_0 = torch.tensor(torch.randn(()), dtype=torch.int32).item()
+    # This creates a random float, casts to int32, then extracts as python int
+    raw_val = torch.randn(())
+    # Fix UserWarning: use .to() instead of torch.tensor() for type conversion
+    arg_0 = raw_val.to(dtype=torch.int32).item()
+
+    var_node_2 = -6 # dtype=int64
+    var_node_3 = arg_0 # dtype=int32
+    var_node_1 = var_node_2 * var_node_3 # dtype=int32
+    var_node_5 = torch.full((), 1, dtype=torch.int64)
+    var_node_4 = var_node_5.item() # dtype=int64
+    
+    # Fix: Use floor division // to ensure result is int, matching the comment # dtype=int64
+    # and satisfying the assertion isinstance(object_list[0], int)
+    var_node_0 = var_node_1 // var_node_4 
+
+    # We want to broadcast these objects.
+    # The original bug involved a divergence, here we check if broadcast_object_list
+    # handles these specific scalar types correctly.
+    
+    object_list = [var_node_0, var_node_1, var_node_4]
+
+    if rank == 0:
+        print(f"Rank 0 preparing to broadcast: {object_list}")
+    else:
+        object_list = [None, None, None]
+
+    # Call the similar API: torch.distributed.broadcast_object_list
+    # This replaces the torch.compile call site from the original test
+    dist.broadcast_object_list(object_list, src=0)
+
+    if rank != 0:
+        # Verify the received data matches the expected types and values
+        # Since we used a seed, we can calculate expected values or just check types
+        # For simplicity in this test, we check that the broadcast succeeded and types are preserved
+        assert isinstance(object_list[0], int), f"Expected int, got {type(object_list[0])}"
+        assert isinstance(object_list[1], int), f"Expected int, got {type(object_list[1])}"
+        assert isinstance(object_list[2], int), f"Expected int, got {type(object_list[2])}"
+        print(f"Rank {rank} received objects successfully: {object_list}")
+        print(" broadcast_object_list success")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

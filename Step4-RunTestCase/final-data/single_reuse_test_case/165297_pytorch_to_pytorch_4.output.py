@@ -1,0 +1,38 @@
+import torch
+import torch.nn as nn
+
+def test_maxpool1d_nan():
+    device = torch.device("cuda")
+
+    # Large input tensor dimensions adapted for 1D
+    # Using large dimensions to stress memory access patterns
+    N, C, L = 32, 64, 200000
+    
+    # Create tensor with bfloat16 on CUDA
+    # We initialize it as (N, L, C) to simulate the 'channels_last' memory layout
+    # where the Channel dimension is the inner-most dimension in memory.
+    x = torch.randn(N, L, C, dtype=torch.bfloat16, device=device)
+
+    # Permute to (N, C, L) which is the standard input shape for MaxPool1d.
+    # This results in a non-contiguous tensor with strides corresponding to
+    # a channels_last memory format (stride[1] == 1, stride[2] == C).
+    x = x.permute(0, 2, 1)
+
+    # Uncommenting the line below avoids potential NaNs if the bug exists
+    # x = x.contiguous()
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}, shape={x.shape}, stride={x.stride()}")
+
+    pool = nn.MaxPool1d(kernel_size=3, stride=2, padding=1).to(device)
+    y = pool(x)
+
+    print(f"Output contains NaN? {torch.isnan(y).any().item()}")
+    print(f"Output contains Inf? {torch.isinf(y).any().item()}")
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    if torch.isnan(y).any():
+        print("Detected NaNs in MaxPool1d output!")
+        raise AssertionError("MaxPool1d produced NaNs with non-contiguous bfloat16 input")
+
+if __name__ == "__main__":
+    test_maxpool1d_nan()

@@ -1,0 +1,87 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Set seeds for reproducibility
+tf.random.set_seed(974450504)
+np.random.seed(974450504)
+
+def fuzzed_program_tf(var_node_1):
+    """
+    Adapted from the original PyTorch fuzzed_program.
+    Replaces torch.squeeze with tf.keras.ops.triu.
+    """
+    # Original API: var_node_0 = torch.squeeze(var_node_1)
+    # Similar API: tf.keras.ops.triu
+    # var_node_1 shape is (15, 30, 17, 1). triu operates on the last two dimensions (17, 1).
+    var_node_0 = tf.keras.ops.triu(var_node_1)
+    
+    # In the original, a sentinel was used to ensure gradient computation.
+    # We mimic a simple operation to ensure the graph is valid.
+    # sentinel = tf.constant(1.0)
+    # result = var_node_0 * sentinel
+    
+    return var_node_0
+
+# --- Input Generation (mimicking the PyTorch setup) ---
+
+# var_node_3: size=(17, 30, 17, 3), dtype=bool
+# PyTorch: torch.as_strided(torch.randint(0, 2, ...), ...)
+# TF: Create a random boolean tensor directly
+var_node_3 = tf.cast(tf.random.uniform((17, 30, 17, 3), 0, 2, dtype=tf.int32), tf.bool)
+
+# var_node_2 = torch.chunk(var_node_3, 3, dim=3)[0]
+# size=(17, 30, 17, 1)
+var_node_2 = tf.split(var_node_3, 3, axis=3)[0]
+
+# var_node_5 = torch.full((17,), 3, dtype=torch.int64)
+var_node_5 = tf.fill([17], 3)
+
+# _index_var_node_4 = torch.randint(0, _input_size_var_node_4, (15,), ...)
+# var_node_4 = torch.gather(var_node_5, 0, _index_var_node_4)
+# (Note: var_node_4 is unused in the path to var_node_1, but kept for structural fidelity)
+_input_size_var_node_4 = tf.shape(var_node_5)[0]
+_index_var_node_4 = tf.random.uniform((15,), 0, _input_size_var_node_4, dtype=tf.int32)
+var_node_4 = tf.gather(var_node_5, _index_var_node_4)
+
+# var_node_1 = torch.index_select(var_node_2, 0, _index_var_node_1)
+# size=(15, 30, 17, 1)
+_input_size_var_node_1 = tf.shape(var_node_2)[0]
+_index_var_node_1 = tf.random.uniform((15,), 0, _input_size_var_node_1, dtype=tf.int32)
+var_node_1 = tf.gather(var_node_2, _index_var_node_1, axis=0)
+
+# --- Execution ---
+
+print("Testing Eager Execution...")
+try:
+    result_eager = fuzzed_program_tf(var_node_1)
+    print(f" eager success, shape: {result_eager.shape}")
+except Exception as e:
+    print(f" eager failed: {e}")
+
+print("\nTesting Compiled Execution (tf.function)...")
+try:
+    # tf.function is the TensorFlow equivalent of torch.compile
+    compiled_program = tf.function(fuzzed_program_tf)
+    result_compiled = compiled_program(var_node_1)
+    print(f" compile success, shape: {result_compiled.shape}")
+except Exception as e:
+    print(f" compile failed: {e}")
+
+# --- Verification ---
+if 'result_eager' in locals() and 'result_compiled' in locals():
+    # Check for divergence
+    if tf.reduce_all(tf.equal(result_eager, result_compiled)):
+        print(" No divergence detected between eager and compiled results.")
+    else:
+        print(" Divergence detected: Eager and Compiled results differ.")
+        
+    # Check shape expectations
+    # triu on (15, 30, 17, 1) -> operates on (17, 1). 
+    # Upper triangle of a (17, 1) matrix with k=0 is all zeros (since i > j is always true for j=0).
+    # Expected shape: (15, 30, 17, 1)
+    expected_shape = tf.TensorShape([15, 30, 17, 1])
+    if result_eager.shape == expected_shape:
+        print(f" Shape matches expected: {expected_shape}")
+    else:
+        print(f" Shape mismatch. Expected: {expected_shape}, Got: {result_eager.shape}")

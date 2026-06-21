@@ -1,0 +1,65 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    if rank == 0:
+        # Sender
+        # Create tensors matching the shapes from the original bug report
+        # t0: size=(1, 1), dtype=float32
+        # t1: size=(), dtype=float32 (0-d tensor)
+        t0 = torch.empty([1, 1], dtype=torch.float32, requires_grad=True)
+        t1 = torch.empty([], dtype=torch.float32, requires_grad=True)
+        
+        # Fill with some values to verify transfer
+        # Fix: Wrap in-place operations in torch.no_grad() to avoid modifying leaf variables that require grad
+        with torch.no_grad():
+            t0.fill_(1.5)
+            t1.fill_(2.5)
+
+        # Send the list of objects
+        dist.send_object_list([t0, t1], dst=1)
+        print(f"Rank {rank}: Sent objects")
+
+    elif rank == 1:
+        # Receiver
+        # Adapted call site: torch.distributed.recv_object_list
+        # We prepare a list to receive the objects into
+        recv_list = [None, None]
+        
+        # Call the similar API
+        dist.recv_object_list(recv_list, src=0)
+        
+        # Verification
+        # Check if we received the correct number of objects
+        assert len(recv_list) == 2, "Received list length mismatch"
+        
+        # Verify shapes match the original bug report's tensor shapes
+        assert recv_list[0].shape == (1, 1), f"Expected shape (1, 1), got {recv_list[0].shape}"
+        assert recv_list[1].shape == (), f"Expected shape (), got {recv_list[1].shape}"
+        
+        # Verify values
+        assert recv_list[0].item() == 1.5, "Value mismatch for t0"
+        assert recv_list[1].item() == 2.5, "Value mismatch for t1"
+        
+        print(f"Rank {rank}: Received objects successfully. Shapes: {recv_list[0].shape}, {recv_list[1].shape}")
+        print('Eager Success! ')
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use spawn to run the distributed test
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

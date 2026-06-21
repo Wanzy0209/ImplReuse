@@ -1,0 +1,50 @@
+import torch
+import tensorflow as tf
+import tempfile
+import warnings
+import sys
+
+def cli_main():
+    """
+    Reproduces the logic of the PyTorch issue where calling a high-level 
+    configuration API triggers internal deprecation warnings.
+    
+    Original Issue: torch.set_float32_matmul_precision triggers warnings about internal TF32 flags.
+    Target API: tf.saved_model.SaveOptions (used to configure saving behavior).
+    """
+    
+    # Define a minimal model to save
+    class SimpleModel(tf.Module):
+        def __init__(self):
+            self.variable = tf.Variable([1.0], name='v')
+
+    model = SimpleModel()
+
+    # Use the similar API: tf.saved_model.SaveOptions
+    # This mirrors torch.set_float32_matmul_precision in that it configures
+    # the behavior of a subsequent operation (saving vs matrix multiplication).
+    # We use experimental flags to mirror the "internal behavior" aspect of the PyTorch bug.
+    options = tf.saved_model.SaveOptions(
+        save_debug_info=True,
+        experimental_io_device="/job:localhost"
+    )
+
+    # Capture warnings to detect the "spam" described in the issue
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        
+        # Perform the operation
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tf.saved_model.save(model, tmpdir, options=options)
+
+        # Check for warnings similar to the PyTorch issue
+        # (UserWarnings about internal deprecations that the user cannot fix)
+        if w:
+            print(f"Detected {len(w)} warnings during API usage:", file=sys.stderr)
+            for warning in w:
+                print(f" - {warning.category.__name__}: {warning.message}", file=sys.stderr)
+        else:
+            print("No warnings detected.")
+
+if __name__ == '__main__':
+    cli_main()

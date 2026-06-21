@@ -1,0 +1,61 @@
+import torch
+from torch._dynamo.functional_export import _dynamo_graph_capture_for_export
+from torch._functorch.aot_autograd import aot_export_joint_with_descriptors
+from torch._guards import tracing, TracingContext
+from contextlib import ExitStack
+
+# Define a module that uses the similar API (torch.special.i0)
+# and accepts keyword arguments, which is the core of the reported bug.
+class ModuleWithKwargsAndI0(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = torch.nn.Linear(3, 2)
+
+    def forward(self, x, scale=1.0):
+        # Leverage the similar API: torch.special.i0
+        x_transformed = torch.special.i0(x)
+        return self.linear(x_transformed) * scale
+
+def graph_capture_and_aot_export_joint_with_descriptors(model, inputs, kwargs=None):
+    if kwargs is None:
+        kwargs = {}
+    with torch._dynamo.config.patch(install_free_tensors=True):
+        # Capture the graph using dynamo
+        gm = _dynamo_graph_capture_for_export(model)(*inputs, **kwargs)
+        fake_mode = gm.meta.get("fake_mode", None)
+
+    with tracing(TracingContext(fake_mode)):
+        return aot_export_joint_with_descriptors_alone(gm, inputs, kwargs=kwargs)
+
+def aot_export_joint_with_descriptors_alone(model, inputs, kwargs=None):
+    if kwargs is None:
+        kwargs = {}
+    with ExitStack() as stack:
+        # This is the API under test from the issue
+        joint_with_descriptors = aot_export_joint_with_descriptors(
+            stack,
+            model,
+            inputs,
+            kwargs=kwargs,
+        )
+        return joint_with_descriptors.graph_module
+
+# Test execution
+if __name__ == "__main__":
+    model = ModuleWithKwargsAndI0()
+    
+    inputs = (torch.randn(4, 3),)
+    kwargs = {"scale": torch.randn(1)}
+
+    try:
+        # Attempt to export the model with kwargs
+        gm = graph_capture_and_aot_export_joint_with_descriptors(model, inputs, kwargs=kwargs)
+        
+        # Verify the result is a valid GraphModule
+        assert gm is not None
+        assert hasattr(gm, 'graph')
+        
+        print("Test Passed: aot_export_joint_with_descriptors works with kwargs and torch.special.i0")
+    except Exception as e:
+        print(f"Test Failed: {e}")
+        raise

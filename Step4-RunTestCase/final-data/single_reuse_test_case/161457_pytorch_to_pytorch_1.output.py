@@ -1,0 +1,49 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+import unittest
+
+# Move the worker function to the module level to make it picklable for multiprocessing
+def worker(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use gloo for CPU compatibility to ensure the test runs in most environments
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Create bfloat16 tensors
+    torch.manual_seed(42)
+    # Using a size similar to the input_ids or hidden states in the bug
+    tensor = torch.randn(1000, 1000, dtype=torch.bfloat16) * (rank + 1)
+    
+    # Calculate expected sum manually on rank 0
+    if rank == 0:
+        expected = torch.zeros_like(tensor)
+        for r in range(world_size):
+            torch.manual_seed(42)
+            expected += torch.randn(1000, 1000, dtype=torch.bfloat16) * (r + 1)
+    else:
+        expected = None
+
+    # Call the similar API: torch.distributed.reduce
+    dist.reduce(tensor, dst=0, op=dist.ReduceOp.SUM)
+
+    # Verify correctness
+    if rank == 0:
+        # Using tolerance from the original bug report
+        # Using assert instead of self.assertTrue because worker is now a global function
+        assert torch.allclose(tensor, expected, atol=0.001), "Reduce operation result mismatch"
+
+    dist.destroy_process_group()
+
+class TestDistributedReduce(unittest.TestCase):
+    def test_reduce_bf16_correctness(self):
+        """
+        Test torch.distributed.reduce with bfloat16 tensors to ensure correctness.
+        Adapted from the meta-llama bfloat16 correctness issue context.
+        """
+        world_size = 2
+        mp.spawn(worker, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == '__main__':
+    unittest.main()

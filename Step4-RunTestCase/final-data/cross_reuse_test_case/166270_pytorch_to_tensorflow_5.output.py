@@ -1,0 +1,55 @@
+import torch
+import tensorflow as tf
+
+# Set seed for reproducibility
+tf.random.set_seed(1061983224)
+
+def fuzzed_program(arg_0, sentinel):
+    # var_node_3 = torch.chunk(var_node_4, 4, dim=0)[0]
+    # TensorFlow equivalent: tf.split
+    var_node_3 = tf.split(arg_0, 4, axis=0)[0]
+    
+    # var_node_2 = torch.squeeze(var_node_3)
+    # TensorFlow equivalent: tf.squeeze
+    var_node_2 = tf.squeeze(var_node_3)
+    
+    # var_node_1 = torch.stack([var_node_2], dim=0)
+    # TensorFlow equivalent: tf.stack
+    var_node_1 = tf.stack([var_node_2], axis=0)
+    
+    # var_node_0 = torch.reshape(var_node_1, [1])
+    # TensorFlow equivalent: tf.reshape
+    var_node_0 = tf.reshape(var_node_1, [1])
+    
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+    return result
+
+# Sentinel variable to ensure gradient computation context
+sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+# arg_0 = torch.as_strided(...).bool()
+# TensorFlow equivalent: Create a bool tensor of shape (4,)
+# Note: as_strided creates a view, TF tensors are immutable, so we create a direct tensor.
+arg_0 = tf.cast(tf.random.uniform((4,), 0, 2, dtype=tf.int32), tf.bool)
+
+# Run in Eager mode
+try:
+    result_eager = fuzzed_program(arg_0, sentinel)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# Run in Compiled mode (Graph mode) using tf.function
+# This corresponds to torch.compile
+try:
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(arg_0, sentinel)
+    print(' compile success')
+except Exception as e:
+    print(f' compile failed: {e}')
+
+# Verify results match
+if 'result_eager' in locals() and 'result_compiled' in locals():
+    assert tf.reduce_all(tf.equal(result_eager, result_compiled)).numpy()
+    print(' results match')

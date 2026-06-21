@@ -1,0 +1,135 @@
+import tensorflow as tf
+import numpy as np
+
+# Define the CausalAttention layer in TensorFlow, mirroring the PyTorch structure
+class CausalAttention(tf.keras.layers.Layer):
+    def __init__(self, embed_size, heads):
+        super(CausalAttention, self).__init__()
+        self.embed_size = embed_size
+        self.heads = heads
+        self.head_dim = embed_size // heads
+        
+        assert self.head_dim * heads == embed_size, "Embed size needs to be divisible by heads"
+        
+        # Linear layers for values, keys, queries
+        self.values = tf.keras.layers.Dense(self.head_dim, use_bias=False)
+        self.keys = tf.keras.layers.Dense(self.head_dim, use_bias=False)
+        self.queries = tf.keras.layers.Dense(self.head_dim, use_bias=False)
+        
+        # Final output linear layer
+        self.fc_out = tf.keras.layers.Dense(embed_size)
+
+    def call(self, values, keys, query, mask):
+        N = tf.shape(query)[0]
+        value_len = tf.shape(values)[1]
+        key_len = tf.shape(keys)[1]
+        query_len = tf.shape(query)[1]
+
+        # Reshape to (N, Length, Heads, Head_Dim)
+        values = tf.reshape(values, (N, value_len, self.heads, self.head_dim))
+        keys = tf.reshape(keys, (N, key_len, self.heads, self.head_dim))
+        queries = tf.reshape(query, (N, query_len, self.heads, self.head_dim))
+
+        # Pass through linear layers
+        values = self.values(values)
+        keys = self.keys(keys)
+        queries = self.queries(queries)
+
+        # Einsum for energy: (N, query_len, heads, head_dim) * (N, key_len, heads, head_dim) -> (N, heads, query_len, key_len)
+        # Note: PyTorch einsum "nqhd,nkhd->nhqk"
+        energy = tf.einsum("nqhd,nkhd->nhqk", queries, keys)
+
+        # Masking
+        if mask is not None:
+            # PyTorch: energy.masked_fill(mask == 0, float("-1e20"))
+            # TensorFlow equivalent using tf.where
+            # Ensure mask is boolean for the condition
+            mask_bool = tf.cast(mask, tf.bool)
+            # We need to broadcast mask to match energy shape (N, heads, query_len, key_len)
+            # Assuming mask input is (N, 1, 1, key_len) or similar compatible shape
+            energy = tf.where(mask_bool, energy, tf.fill(tf.shape(energy), -1e20))
+
+        # Softmax
+        attention = tf.nn.softmax(energy / tf.math.sqrt(tf.cast(self.embed_size, tf.float32)), axis=3)
+
+        # Einsum for output: (N, heads, query_len, key_len) * (N, value_len, heads, head_dim) -> (N, query_len, heads, head_dim)
+        # PyTorch: "nhql,nlhd->nqhd"
+        out = tf.einsum("nhql,nlhd->nqhd", attention, values)
+        
+        # Reshape and final linear
+        out = tf.reshape(out, (N, query_len, self.heads * self.head_dim))
+        out = self.fc_out(out)
+        
+        return out
+
+def test_batch_parallel_consistency():
+    """
+    Test case to verify numerical consistency between eager execution
+    and tf.compat.v1.tpu.batch_parallel (compiled/sharded execution).
+    """
+    print("Initializing TPU system...")
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        print("TPU initialized successfully.")
+    except ValueError:
+        print("TPU not found. This test requires a TPU runtime. Skipping.")
+        return
+
+    # Model Parameters
+    embed_size = 64
+    heads = 4
+    batch_size = 8
+    seq_len = 10
+    num_shards = 2  # Split batch of 8 into 2 shards of 4
+
+    # Instantiate Model
+    model = CausalAttention(embed_size, heads)
+
+    # Create dummy inputs
+    # Shape: (Batch, Seq_Len, Embed_Size)
+    x = tf.random.normal((batch_size, seq_len, embed_size))
+    # Shape: (Batch, 1, 1, Seq_Len) - Standard causal mask shape
+    mask = tf.ones((batch_size, 1, 1, seq_len))
+
+    # 1. Run Eager Execution (Baseline)
+    print("Running eager execution...")
+    eager_output = model(x, x, x, mask)
+
+    # 2. Run using tf.compat.v1.tpu.batch_parallel
+    # We define a computation function that accepts the sharded inputs
+    def computation_fn(inputs):
+        # inputs is a list of tensors: [x_shard, mask_shard]
+        inp_x, inp_mask = inputs
+        return model(inp_x, inp_x, inp_x, inp_mask)
+
+    # Wrap in tf.function to ensure compilation/XLA usage
+    @tf.function
+    def run_batch_parallel():
+        return tf.compat.v1.tpu.batch_parallel(
+            computation_fn,
+            inputs=[[x], [mask]], # List of arguments to split
+            num_shards=num_shards
+        )
+
+    print("Running batch_parallel (compiled) execution...")
+    parallel_output = run_batch_parallel()
+
+    # 3. Verify Numerical Consistency
+    # The outputs should be identical (or very close) regardless of sharding/compilation
+    print("Comparing outputs...")
+    try:
+        np.testing.assert_allclose(
+            parallel_output.numpy(), 
+            eager_output.numpy(), 
+            rtol=1e-5, 
+            atol=1e-5,
+            err_msg="Numerical inconsistency detected between eager and batch_parallel execution!"
+        )
+        print("Test Passed: Numerical consistency maintained.")
+    except AssertionError as e:
+        print(f"Test Failed: {e}")
+
+if __name__ == "__main__":
+    test_batch_parallel_consistency()

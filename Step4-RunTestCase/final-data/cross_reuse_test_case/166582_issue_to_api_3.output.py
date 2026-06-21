@@ -1,0 +1,124 @@
+import torch
+import torch._dynamo
+import torch.nn as nn
+import torch.fx as fx
+import asyncio
+from torch._inductor.compile_fx import compile_fx
+from torch._dynamo import register_backend
+
+# --- Helper mimicking the similar API (tf.keras.backend.epsilon) ---
+def backend_epsilon():
+    """Returns the value of the fuzz factor used in numeric expressions.
+    
+    This mimics the pattern of tf.keras.backend.epsilon to provide a 
+    small constant for quantization stability checks.
+    """
+    return 1e-7
+
+# --- Mock Hardware Matmul (replacing test_tpu.matmul) ---
+async def mock_hardware_matmul(dut, a: torch.Tensor, b: torch.Tensor, transpose=False, is_torch=False):
+    """Simulates the async hardware matmul operation."""
+    # Simulate hardware delay
+    await asyncio.sleep(0.001)
+    
+    # Perform actual matmul for simulation purposes
+    # In a real scenario, this would interact with the DUT
+    if transpose:
+        b = b.t()
+    return torch.matmul(a, b)
+
+# --- Backend Logic ---
+async def dut_matmul_async(dut, a: torch.Tensor, b: torch.Tensor, bias=None):
+    # Leverage the similar API pattern for a stability check
+    eps = backend_epsilon()
+    
+    # Quantization logic
+    a_q = a.clamp(-128, 127).to(torch.int8)
+    b_q = b.clamp(-128, 127).to(torch.int8)
+
+    # Call hardware
+    c = await mock_hardware_matmul(dut, a_q, b_q, transpose=True, is_torch=True)
+    
+    if bias is not None:
+        c = c + bias.round().to(torch.int32)
+    
+    # Use epsilon in a dummy check to demonstrate reuse
+    if c.abs().max() < eps:
+        return torch.zeros_like(c)
+        
+    return c.to(torch.int32)
+
+def dut_matmul_sync(dut, a, b, bias=None):
+    """Synchronous wrapper  torch.compile expects a normal function."""
+    return asyncio.run(dut_matmul_async(dut, a, b, bias))
+
+def make_backend(dut):
+    """
+    Returns a *registered* backend that has the DUT baked in.
+    The FX graph is the first argument.
+    """
+    @register_backend(name="tpu_net_test")
+    def _backend(gm: torch.fx.GraphModule, example_inputs):
+        # ---- replace every linear ----
+        for node in list(gm.graph.nodes):
+            if node.target == torch.ops.aten.linear.default:
+                x, weight, bias = node.args
+                with gm.graph.inserting_before(node):
+                    new_node = gm.graph.call_function(
+                        dut_matmul_sync,
+                        args=(dut, x, weight, bias),
+                    )
+                node.replace_all_uses_with(new_node)
+                gm.graph.erase_node(node)
+
+        gm.recompile()
+        # Let Inductor compile the rest
+        return compile_fx(gm, example_inputs)
+
+    return _backend
+
+# --- Test Case ---
+def test_custom_backend_graph_break():
+    """
+    Test that torch._dynamo.register_backend correctly handles a custom backend
+    that replaces nn.Linear with async quantized matmuls, checking for graph breaks.
+    """
+    # Setup
+    dut = "mock_dut"  # Dummy device identifier
+    make_backend(dut) # Register the backend
+
+    # Define a simple model
+    class SimpleModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(10, 5)
+        
+        def forward(self, x):
+            return self.linear(x)
+
+    model = SimpleModel()
+    model.eval()
+    
+    # Input data
+    x = torch.randn(2, 10)
+    
+    # Compile using the custom backend
+    # Note: We expect this to compile without graph breaks related to the backend replacement
+    try:
+        compiled_model = torch.compile(model, backend="tpu_net_test", fullgraph=True)
+        
+        # Run inference
+        result = compiled_model(x)
+        
+        # Basic assertion to ensure execution
+        assert result.shape == (2, 5), f"Expected shape (2, 5), got {result.shape}"
+        assert result.dtype == torch.int32, f"Expected dtype torch.int32, got {result.dtype}"
+        
+        print("Test Passed: Custom backend compiled and executed successfully.")
+        
+    except Exception as e:
+        print(f"Test Failed: Graph break or compilation error occurred: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_custom_backend_graph_break()

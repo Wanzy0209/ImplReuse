@@ -1,0 +1,29 @@
+import tensorflow as tf
+
+def test_sysconfig_get_build_info():
+    """
+    Test case for tf.sysconfig.get_build_info.
+    
+    This test reflects the relationship with the original bug report by verifying
+    the build configuration details. The original issue highlighted the importance
+    of environment specifics (PyTorch version, CUDA availability) in reproducing
+    the NaN behavior. Similarly, this test ensures that the build environment
+    information is correctly retrieved and valid.
+    """
+    # Call the API to retrieve build information
+    build_info = tf.sysconfig.get_build_info()
+
+    # The original bug report checked for the validity of outputs (not NaN).
+    # Here we check for the validity of the build info structure.
+    assert isinstance(build_info, dict), "Build info should be a dictionary"
+
+    # The bug report explicitly listed environment versions (PyTorch, CUDA).
+    # We verify that the build info dictionary is populated and contains relevant keys.
+    # This mirrors the "Versions" section of the bug report.
+    assert len(build_info) > 0, "Build info dictionary should not be empty"
+
+    # Check for specific keys mentioned in the API documentation that relate
+    # to the environment details in the bug report (e.g., CUDA).
+    # If 'cuda_version' is present, ensure it is not None, similar to checking for valid values.
+    if "cuda_version" in build_info:
+        assert build_info["cuda_version"] is not None, "CUDA version should not be None if present"

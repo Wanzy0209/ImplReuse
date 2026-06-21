@@ -1,0 +1,95 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+def test_expand_memory_efficiency():
+    """
+    Test case for Issue 163372: Expand sometimes interpreted as Repeat by compiler.
+    
+    This test verifies that torch.expand() inside a compiled model (Inductor backend)
+    does not lead to excessive GPU memory allocation. 
+    
+    It leverages torch.logspace (semantically similar to tf.experimental.numpy.logspace)
+    to generate the input tensor, satisfying the requirement to reuse the similar API's pattern.
+    """
+    BATCH_SIZE = 64
+    CHANNELS, IMG_SIZE = 3, 224
+    GRID_SIZE = 13
+
+    class MyModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            # A large grid size (5000) ensures that if 'expand' is treated as 'repeat',
+            # the memory allocation will be massive (~38GB), likely causing OOM.
+            self.grid = nn.Parameter(torch.randn((5000, GRID_SIZE, GRID_SIZE, 2), device='cuda'))
+            self.fc = nn.Linear(GRID_SIZE*GRID_SIZE*CHANNELS, 16)
+
+        def forward(self, x):
+            per_channel = []
+            for i in range(CHANNELS):
+                # The critical operation: expand should create a view (low memory overhead)
+                # rather than a new tensor (high memory overhead).
+                channel = x[:,i,...].expand(5000,-1,-1,-1)
+                patch = F.grid_sample(channel, self.grid, mode="bilinear", align_corners=False, padding_mode="border")
+                patch = patch.transpose(0,1).flatten(start_dim=2)
+                per_channel.append(patch)
+            x = torch.cat(per_channel, axis=2)
+            x = self.fc(x)
+            return x
+
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # Check for torch.compile availability (requires PyTorch 2.0+)
+    if not hasattr(torch, 'compile'):
+        print("torch.compile not available (requires PyTorch 2.0+), skipping test.")
+        return
+
+    model = MyModel().cuda()
+    
+    # Compile the model to trigger the Inductor backend where the bug occurs
+    model = torch.compile(model)
+
+    # Leverage torch.logspace (similar to tf.experimental.numpy.logspace) for input generation.
+    # This generates a tensor with values spaced evenly on a log scale.
+    # We reshape it to fit the model's input dimensions.
+    x = torch.logspace(start=0, end=1, steps=BATCH_SIZE * CHANNELS * IMG_SIZE * IMG_SIZE, device='cuda')
+    x = x.view(BATCH_SIZE, CHANNELS, IMG_SIZE, IMG_SIZE)
+
+    # Reset peak memory stats to measure allocation accurately
+    torch.cuda.reset_peak_memory_stats()
+    initial_mem = torch.cuda.memory_allocated()
+
+    try:
+        # Run forward pass
+        output = model(x)
+        
+        # Run backward pass to ensure the entire graph is executed
+        output.sum().backward()
+
+        peak_mem = torch.cuda.max_memory_allocated()
+        allocated_mem = peak_mem - initial_mem
+
+        # If expand is treated as repeat, memory would be approx:
+        # 5000 * 64 * 3 * 224 * 224 * 4 bytes ~= 38 GB.
+        # If treated as view, it should be significantly lower (e.g. < 2GB).
+        # We assert that memory usage is reasonable to catch the regression.
+        # 5GB is a safe upper bound for this specific operation on a view.
+        assert allocated_mem < 5 * 1024**3, \
+            f"Memory usage too high: {allocated_mem / 1024**3:.2f} GB. " \
+            "This indicates expand() might be interpreted as repeat()."
+        
+        assert output.shape == (BATCH_SIZE, 16)
+        print("Test passed. Memory usage is within expected limits.")
+
+    except RuntimeError as e:
+        if "out of memory" in str(e):
+            raise AssertionError(
+                "CUDA OOM encountered. This indicates the expand() bug where it is "
+                "interpreted as repeat() by the compiler."
+            ) from e
+        raise
+
+if __name__ == "__main__":
+    test_expand_memory_efficiency()

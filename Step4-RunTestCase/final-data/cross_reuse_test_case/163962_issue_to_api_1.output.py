@@ -1,0 +1,44 @@
+import torch
+import pytest
+
+def test_torch_linalg_solve_mps_assert():
+    """
+    Test case for Issue 163962: Internal assert failed when using Tensorly on MPS.
+    
+    The bug manifests as a RuntimeError (Internal assert failed) when performing
+    linear algebra operations (specifically linalg.solve) on the MPS device.
+    This test isolates the underlying API call to verify the fix.
+    """
+    # Skip if MPS is not available
+    if not torch.backends.mps.is_available():
+        pytest.skip("MPS backend not available, skipping test")
+
+    # Setup inputs similar to the context of the bug (tensor decomposition)
+    # We create a square matrix A and a vector b to solve Ax = b
+    # Using a size that might trigger internal layout issues (e.g., 12x12 as in the issue)
+    n = 12
+    A = torch.randn(n, n, device="mps")
+    b = torch.randn(n, device="mps")
+
+    # Ensure A is invertible by making it positive definite
+    A = A @ A.T + 1e-3 * torch.eye(n, device="mps")
+
+    # The original bug report indicates an internal assert failure.
+    # We expect this to run without error now.
+    try:
+        x = torch.linalg.solve(A, b)
+        
+        # Basic sanity checks
+        assert x.shape == b.shape, "Output shape mismatch"
+        assert torch.isfinite(x).all(), "Output contains NaN or Inf"
+        
+        # Verify the solution (residual check)
+        residual = torch.linalg.norm(A @ x - b)
+        assert residual < 1e-4, f"Solution verification failed with residual {residual}"
+
+    except RuntimeError as e:
+        if "Internal assert failed" in str(e):
+            pytest.fail(f"Bug reproduced: Internal assert failed on MPS: {e}")
+        else:
+            # Re-raise other RuntimeErrors
+            raise

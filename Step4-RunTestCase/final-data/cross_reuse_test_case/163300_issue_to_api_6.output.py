@@ -1,0 +1,100 @@
+import torch
+import torch.nn as nn
+import sys
+
+# Handle missing module for older PyTorch versions
+try:
+    from torch.nn.attention.flex_attention import flex_attention
+    from torch.nn.attention import SDPBackend
+except ModuleNotFoundError:
+    print("Skipping test: torch.nn.attention module not found. This test requires PyTorch >= 2.4.")
+    sys.exit(0)
+
+# Test case for Issue 163300: Inductor failure with custom score_mod
+# The bug manifests when torch.compile attempts to lower a module containing
+# flex_attention with a score_mod function that performs complex indexing
+# on buffers and inputs.
+
+class FlexAttentionCPB(nn.Module):
+    def __init__(self, N: int, R: int, H: int = 6, hidden: int = 32):
+        super().__init__()
+        self.mlp = nn.Sequential(nn.Linear(2, hidden), nn.GELU(), nn.Linear(hidden, H, bias=False))
+        self.gamma = nn.Parameter(torch.zeros(H))
+        self.H = H
+        self.init_tables(N, R)
+        self.register_buffer("r_cutoff", torch.tensor(R, dtype=torch.long), persistent=False)
+
+    def init_tables(self, N: int, R: int):
+        # Continuous position bias logic (SwinV2 style)
+        P = N - R
+        S = int(P**0.5)
+        assert S * S == P
+
+        rng = torch.arange(-(S - 1), S, dtype=torch.float32)
+        dY, dX = torch.meshgrid(rng, rng, indexing="ij")
+        rel = torch.stack([dY / max(S - 1, 1), dX / max(S - 1, 1)], dim=-1).reshape(-1, 2)
+        rel_table = torch.sign(rel) * torch.log1p(rel.abs())
+        self.register_buffer("rel_table", rel_table, persistent=False)
+
+        yy, xx = torch.arange(S), torch.arange(S)
+        Y, X = torch.meshgrid(yy, xx, indexing="ij")
+        flat = torch.stack([Y, X], 0).flatten(1)
+        d = flat[:, :, None] - flat[:, None, :]
+        d = d.permute(1, 2, 0).contiguous()
+        d[:, :, 0] += S - 1; d[:, :, 1] += S - 1
+        d[:, :, 0] *= 2 * S - 1
+        l_idx = d.sum(-1).to(torch.long)
+
+        idx = torch.full((N, N), 0, dtype=torch.long)
+        idx[R:, R:] = l_idx
+        self.register_buffer("idx_table", idx, persistent=False)
+
+    def _score_mod(self, mu: torch.Tensor):
+        bt = self.mlp(self.rel_table)
+        idx = self.idx_table
+        mu_q, mu_k = mu.unbind(2)
+        gam_sig = torch.sigmoid(self.gamma)
+
+        def score_mod(score, b, h, q, kv):
+            # Dynamic indexing based on loop variables b, h, q, kv
+            # This pattern triggers the FlexibleLayout to FixedLayout conversion error
+            has_bias = (q >= self.r_cutoff) & (kv >= self.r_cutoff)
+            l2 = idx[q, kv]
+            bias = bt[l2, h]
+            w_gate = gam_sig[h] * (mu_q[b, h, q] + mu_k[b, h, kv])
+            return score + has_bias.to(score.dtype) * w_gate * bias
+
+        return score_mod
+
+    def forward(self, q, k, v, mu):
+        return flex_attention(q, k, v, score_mod=self._score_mod(mu))
+
+def test_flex_attention_compile_custom_score_mod():
+    """
+    Reproduces the Inductor failure with custom score_mod.
+    """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Use small dimensions for testing
+    B, N, R, d, H = 2, 18, 2, 32, 4
+    
+    mod = FlexAttentionCPB(N, R, H).to(device)
+    
+    # The bug occurs specifically when compiling with dynamic=False
+    mod = torch.compile(mod, dynamic=False)
+
+    q = torch.randn(B, H, N, d, device=device)
+    k = torch.randn_like(q)
+    v = torch.randn_like(q)
+    mu = torch.randn(B, H, 2, N, device=device)
+
+    # Using FLASH_ATTENTION backend and autocast as in the original report
+    with torch.nn.attention.sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            out = mod(q, k, v, mu)
+            
+    # Verify output shape is correct
+    assert out.shape == (B, H, N, d), f"Expected shape {(B, H, N, d)}, got {out.shape}"
+    print("Test passed: torch.compile succeeded with custom score_mod.")
+
+if __name__ == "__main__":
+    test_flex_attention_compile_custom_score_mod()

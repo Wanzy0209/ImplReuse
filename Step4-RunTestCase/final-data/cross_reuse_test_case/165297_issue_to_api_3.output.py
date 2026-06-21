@@ -1,0 +1,48 @@
+import torch
+import torch.nn as nn
+
+def test_hardswish_channels_last_bfloat16():
+    """
+    Test case for torch.nn.Hardswish adapted from the MaxPool2d bug report (Issue 165297).
+    Verifies that Hardswish does not produce NaNs or Infs when processing large
+    bfloat16 tensors with channels_last memory format on CUDA.
+    """
+    # Check for CUDA availability
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        return
+
+    device = torch.device("cuda")
+
+    # Large input tensor dimensions matching the original bug report
+    N, C, H, W = 84, 64, 512, 960
+    
+    # Create input tensor with bfloat16 dtype
+    x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+
+    # Convert to NHWC channels_last layout
+    x = x.to(memory_format=torch.channels_last)
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+    print(f"Input stride: {x.stride()}")
+
+    # Instantiate the similar API: Hardswish
+    layer = nn.Hardswish().to(device)
+    
+    # Run the operation
+    y = layer(x)
+
+    # Check for NaNs and Infs
+    has_nan = torch.isnan(y).any().item()
+    has_inf = torch.isinf(y).any().item()
+
+    print(f"Output contains NaN? {has_nan}")
+    print(f"Output contains Inf? {has_inf}")
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    # Assertions to validate the output
+    assert not has_nan, "Detected NaNs in Hardswish output with channels_last + bfloat16!"
+    assert not has_inf, "Detected Infs in Hardswish output with channels_last + bfloat16!"
+
+if __name__ == "__main__":
+    test_hardswish_channels_last_bfloat16()

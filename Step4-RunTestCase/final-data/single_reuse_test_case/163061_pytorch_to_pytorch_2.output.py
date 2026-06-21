@@ -1,0 +1,75 @@
+import torch
+
+# Handle missing triton dependency gracefully
+try:
+    import triton
+    import triton.language as tl
+    HAS_TRITON = True
+except ImportError:
+    HAS_TRITON = False
+    print("Warning: 'triton' module not found. Skipping Triton-specific tests.")
+
+def torch_add(x: torch.Tensor, y: torch.Tensor):
+    return x + y
+
+# Adapted function using the similar API torch.prod
+def torch_prod_op(x: torch.Tensor, y: torch.Tensor):
+    # Using torch.prod on the sum of x and y to utilize both inputs
+    return torch.prod(x + y)
+
+if HAS_TRITON:
+    @triton.jit
+    def add_kernel(x_ptr,
+                   y_ptr,
+                   output_ptr,
+                   n_elements,
+                   BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    def triton_add(x: torch.Tensor, y: torch.Tensor):
+        output = torch.empty_like(x)
+        n_elements = output.numel()
+        grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+        add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        return output
+
+def main():
+    # Check for CUDA availability to ensure the test can run
+    if not torch.cuda.is_available():
+        print("Warning: CUDA device not found. Skipping test.")
+        return
+
+    x = torch.randn(4096, 4096, device='cuda')
+    y = torch.randn(4096, 4096, device='cuda')
+    
+    # Warmup
+    torch_add(x, y)
+    torch_prod_op(x, y)
+    
+    if HAS_TRITON:
+        triton_add(x, y)
+
+    for _ in range(10):
+        res_add = torch_add(x, y)
+        res_prod = torch_prod_op(x, y)
+        
+        # Basic assertions to verify execution and device placement
+        assert res_add.device.type == 'cuda'
+        assert res_prod.device.type == 'cuda'
+        
+        if HAS_TRITON:
+            res_triton = triton_add(x, y)
+            assert res_triton.device.type == 'cuda'
+        
+        # Verify torch.prod result is a scalar (or 0-d tensor) as expected
+        assert res_prod.ndim == 0
+
+if __name__ == "__main__":
+    main()

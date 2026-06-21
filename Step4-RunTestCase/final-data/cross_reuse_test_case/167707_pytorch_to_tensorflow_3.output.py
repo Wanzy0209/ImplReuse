@@ -1,0 +1,50 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Adapted from the PyTorch reproduction case for Issue 167707.
+# The original bug involves saving a trace file which ends up broken/corrupt.
+# For the similar API tf.compat.v1.space_to_depth, we verify that the 
+# tensor transformation produces the correct output and is not "broken".
+
+# Configuration parameters (analogous to worker_name, use_gzip in the original)
+block_size = 2
+data_format = "NHWC"
+
+# Setup input data (analogous to x = torch.randn(...))
+# Input shape [Batch, Height, Width, Channels] must be divisible by block_size
+# We use a 4x4 input to allow a block_size of 2.
+input_shape = [1, 4, 4, 1]
+x = tf.constant(np.arange(16).reshape(input_shape), dtype=tf.float32)
+
+# Execute the operation (analogous to the profiler running and saving)
+# In the original, the bug is in the 'saving' phase. Here we check the 'result' phase.
+try:
+    y = tf.compat.v1.space_to_depth(
+        x, 
+        block_size=block_size, 
+        data_format=data_format,
+        name="space_to_depth_test"
+    )
+
+    # Verification (analogous to checking if the saved trace is valid)
+    # Expected shape: [1, 4/2, 4/2, 1*2*2] -> [1, 2, 2, 4]
+    expected_shape = [1, 2, 2, 4]
+    
+    # Check if the output shape is correct (not broken)
+    assert list(y.shape) == expected_shape, \
+        f"Shape mismatch: expected {expected_shape}, got {list(y.shape)}"
+
+    # Check if the output values are correct (not broken)
+    # The top-left 2x2 block [[0, 1], [4, 5]] should become [0, 1, 4, 5] in the channel dimension
+    expected_output = tf.constant([[[[0, 1, 4, 5], [2, 3, 6, 7]],
+                                    [[8, 9, 12, 13], [10, 11, 14, 15]]]], dtype=tf.float32)
+    
+    diff = tf.reduce_sum(tf.abs(y - expected_output))
+    assert diff.numpy() == 0.0, f"Output values are incorrect. Difference: {diff.numpy()}"
+
+    print("Test passed: tf.compat.v1.space_to_depth output is valid.")
+
+except Exception as e:
+    print(f"Test failed: {e}")
+    raise

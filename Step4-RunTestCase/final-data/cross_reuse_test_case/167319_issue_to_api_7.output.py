@@ -1,0 +1,40 @@
+import unittest
+import torch
+from torch.optim import AdamW
+from omegaconf import OmegaConf
+
+class TestAdamWBetasValidation(unittest.TestCase):
+    def test_betas_parameter_type_validation(self):
+        """
+        Test that AdamW validates the 'betas' parameter type.
+        It should accept tuple or list, but reject OmegaConf ListConfig
+        to prevent unexpected serialization behavior.
+        """
+        # Leverage torch.backends.cuda.is_built to ensure the test runs
+        # on the appropriate device, mirroring the pattern of checking
+        # environment capabilities before component initialization.
+        device = 'cuda' if torch.backends.cuda.is_built() else 'cpu'
+
+        # Create a config with nested structure (from bug report)
+        cfg = OmegaConf.create({
+            'model': {'betas': [0.9, 0.999]},
+            'data': {'batch_size': 32},
+        })
+
+        model = torch.nn.Linear(10, 1).to(device)
+
+        # 1. Valid inputs: list and tuple should work
+        try:
+            AdamW(model.parameters(), lr=1e-3, betas=[0.9, 0.999])
+            AdamW(model.parameters(), lr=1e-3, betas=(0.9, 0.999))
+        except Exception as e:
+            self.fail(f"Valid betas types raised an exception: {e}")
+
+        # 2. Invalid input: OmegaConf ListConfig should raise TypeError
+        # This addresses the bug where ListConfig was accepted and caused
+        # serialization issues due to retained parent references.
+        with self.assertRaises(TypeError):
+            AdamW(model.parameters(), lr=1e-3, betas=cfg.model.betas)
+
+if __name__ == '__main__':
+    unittest.main()

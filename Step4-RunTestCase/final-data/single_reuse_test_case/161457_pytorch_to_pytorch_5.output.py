@@ -1,0 +1,42 @@
+import torch
+import unittest
+
+class TestTorchAnyCorrectness(unittest.TestCase):
+    def test_torch_any_bfloat16_compile(self):
+        """
+        Test torch.any correctness under torch.compile with bfloat16,
+        adapted from the meta-llama accuracy issue context.
+        """
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available")
+
+        # Check if torch.compile is available (introduced in PyTorch 2.0)
+        if not hasattr(torch, 'compile'):
+            self.skipTest("torch.compile not available (requires PyTorch 2.0+)")
+
+        # Reproduce the conditions from the bug report: bfloat16 and CUDA
+        device = "cuda"
+        dtype = torch.bfloat16
+
+        # Create a tensor with mixed values to test the 'any' operation
+        # Using a shape similar to the input_ids in the original bug (1, 1000)
+        input_tensor = torch.randn(1, 1000, device=device, dtype=dtype)
+        # Explicitly set some elements to zero to ensure the 'any' logic is tested
+        input_tensor[0, :10] = 0.0
+
+        # Define the function using torch.any
+        def run_any(tensor):
+            return torch.any(tensor)
+
+        # Eager execution
+        eager_res = run_any(input_tensor)
+
+        # Compiled execution using the inductor backend (as implicated in the bug)
+        compiled_run_any = torch.compile(run_any, backend="inductor")
+        compiled_res = compiled_run_any(input_tensor)
+        
+        # Assert that the compiled result matches the eager result
+        self.assertEqual(eager_res, compiled_res)
+
+if __name__ == "__main__":
+    unittest.main()

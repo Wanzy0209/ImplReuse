@@ -1,0 +1,40 @@
+import numpy as np
+import torch
+
+
+def test_round_deterministic():
+    # Adapted input: using arange like the original, but adding 0.5 to ensure rounding actually occurs
+    # Original inputs were integers, which would make torch.round a no-op.
+    base_data = torch.arange(24, dtype=torch.float32).reshape([2, 3, 4]) + 0.5
+    
+    # Calculate ground truth for the forward pass
+    # PyTorch rounds to the nearest even number for .5 cases
+    gt_res = torch.round(base_data).cpu().numpy()
+    
+    # Gradient for torch.round is zero everywhere
+    gt_input_grad = np.zeros((2, 3, 4), dtype=np.float32)
+
+    for i in range(1000):
+        torch.cuda.empty_cache()
+        
+        # Setup inputs on CUDA
+        inputs = (torch.arange(24, dtype=torch.float32).reshape([2, 3, 4]) + 0.5).cuda()
+        inputs.requires_grad = True
+
+        # Adapted call site: torch.round takes only the input tensor
+        res = torch.round(inputs)
+        
+        # Backward pass to check gradient determinism
+        res.backward(torch.ones_like(res))
+
+        print(f"Test {i + 1}/1000")
+        
+        # Assert forward pass determinism
+        np.testing.assert_allclose(res.cpu().detach().numpy(), gt_res)
+        
+        # Assert gradient determinism (should be zero)
+        np.testing.assert_allclose(inputs.grad.cpu().numpy(), gt_input_grad)
+
+
+if __name__ == "__main__":
+    test_round_deterministic()

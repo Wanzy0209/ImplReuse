@@ -1,0 +1,17 @@
+import torch
+
+print(torch.__version__, flush=True)
+
+# Adapted test case for torch.nn.functional.multilabel_soft_margin_loss
+# based on the inputs that caused a heap-buffer-overflow in max_unpool1d.
+# This checks if multilabel_soft_margin_loss handles mismatched types/shapes robustly.
+
+input_args = [
+    torch.empty((5, 7, 4, 3, 7, 6), dtype=torch.int8), # input
+    torch.empty((4, 9, 2), dtype=torch.int32),        # target
+    (),                                               # weight (invalid type)
+    False                                             # size_average
+]
+input_kwargs = {}
+
+torch.nn.functional.multilabel_soft_margin_loss(*input_args, **input_kwargs)

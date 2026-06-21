@@ -1,0 +1,76 @@
+import tensorflow as tf
+import time
+import numpy as np
+
+def test_tf_keras_activations_linear_performance_and_correctness():
+    """
+    Test case for tf.keras.activations.linear inspired by Issue 165738.
+    
+    The original issue reported a severe performance regression (500x slower) 
+    when using tl.sqrt_rn on Intel XPU with fp16 data types.
+    
+    This test adapts that logic to verify that tf.keras.activations.linear 
+    (a pass-through operation) maintains high performance and correctness 
+    when processing large tensors of float16 data, ensuring no similar 
+    regression occurs in this API.
+    """
+    # Check for GPU availability to mimic the hardware-specific nature of the original bug
+    # Handle compatibility for older TensorFlow versions (e.g., 1.x) where list_physical_devices is missing
+    try:
+        gpus = tf.config.list_physical_devices('GPU')
+    except AttributeError:
+        try:
+            gpus = tf.test.is_gpu_available()
+        except AttributeError:
+            gpus = False
+    
+    device_name = '/GPU:0' if gpus else '/CPU:0'
+    
+    print(f"Running test on device: {device_name}")
+
+    with tf.device(device_name):
+        # Mimic the data type from the original issue ('*fp16')
+        dtype = tf.float16
+        
+        # Mimic the large scale hinted in the original issue (size_hints={'x': 1073741824})
+        # We use a slightly smaller size for general test stability, but large enough 
+        # to expose performance bottlenecks.
+        tensor_size = 100 * 1024 * 1024  # 100M elements
+        x = tf.random.normal([tensor_size], dtype=dtype)
+        
+        # 1. Correctness Check
+        # tf.keras.activations.linear is defined as returning the input unmodified.
+        # We verify this fundamental property.
+        y = tf.keras.activations.linear(x)
+        
+        # Assert that the output is identical to the input
+        assert tf.reduce_all(tf.equal(x, y)).numpy(), \
+            "tf.keras.activations.linear failed correctness check: output != input"
+            
+        # 2. Performance Check
+        # The original issue highlighted a 500x slowdown. We perform a basic benchmark
+        # to ensure the operation completes in a reasonable time for a pass-through.
+        
+        # Warm-up run
+        _ = tf.keras.activations.linear(x)
+        
+        # Timed run
+        start_time = time.time()
+        for _ in range(10):
+            y = tf.keras.activations.linear(x)
+        # Ensure operation is executed
+        _ = y.numpy()
+        end_time = time.time()
+        
+        avg_duration = (end_time - start_time) / 10
+        print(f"Average execution time for linear activation: {avg_duration:.6f}s")
+        
+        # Assertion: A simple pass-through on 100M elements should be very fast.
+        # We set a generous threshold (e.g., 0.1s) to catch severe regressions 
+        # similar to the 500x slowdown reported in the original issue.
+        # Note: Thresholds may vary by hardware, but 0.1s is reasonable for memory bandwidth bound ops.
+        assert avg_duration < 0.1, \
+            f"Performance regression detected: {avg_duration:.6f}s is slower than expected threshold."
+
+if __name__ == "__main__":
+    test_tf_keras_activations_linear_performance_and_correctness()

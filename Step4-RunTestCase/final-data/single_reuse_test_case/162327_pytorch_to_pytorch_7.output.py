@@ -1,0 +1,17 @@
+import torch
+
+print(torch.__version__, flush=True)
+
+# Adapted input from the bug report
+# The original bug involved a 6D int8 tensor
+input_tensor = torch.empty((5, 7, 4, 3, 7, 6), dtype=torch.int8)
+
+# Call the similar API: torch.full_like
+# Arguments: (input, fill_value)
+# We use 0 as the fill value
+output = torch.full_like(input_tensor, 0)
+
+# Basic assertion to ensure it ran
+assert output.shape == input_tensor.shape
+assert output.dtype == input_tensor.dtype
+print("Test passed.")

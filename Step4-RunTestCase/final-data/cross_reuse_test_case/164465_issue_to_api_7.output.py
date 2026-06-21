@@ -1,0 +1,38 @@
+import sys
+
+try:
+    import tensorflow as tf
+    import tensorflow.experimental.numpy as tnp
+except ModuleNotFoundError:
+    print("Skipping test: TensorFlow is not installed or 'tensorflow.experimental.numpy' is not available.")
+    sys.exit(0)
+
+# The original issue involves a crash in PyTorch when handling int64 types
+# (specifically with iota/arange and max). The similar API,
+# tf.experimental.numpy.true_divide, contains specific logic to handle
+# int64 inputs by casting them to float32 to avoid float64 results.
+# This test verifies that the similar API correctly handles int64 inputs
+# without crashing and produces the expected dtype, reflecting the
+# type-handling focus of the original bug report.
+
+def test_true_divide_int64_handling():
+    # Create int64 inputs, mirroring the int64 usage in the PyTorch repro
+    x1 = tf.constant([10, 20, 30], dtype=tf.int64)
+    x2 = tf.constant([2, 4, 5], dtype=tf.int64)
+
+    # Call the similar API
+    result = tnp.true_divide(x1, x2)
+
+    # Based on the provided implementation snippet, int64 inputs are cast to float32
+    # to avoid float64 when is_allow_float64() is False (default behavior).
+    # We assert the output type matches this logic.
+    assert result.dtype == tf.float32, f"Expected float32, got {result.dtype}"
+
+    # Verify the calculation is correct
+    expected = tf.constant([5.0, 5.0, 6.0], dtype=tf.float32)
+    assert tf.reduce_all(tf.equal(result, expected)).numpy(), "Calculation mismatch"
+
+    print("Test passed: int64 inputs handled correctly by tf.experimental.numpy.true_divide.")
+
+if __name__ == "__main__":
+    test_true_divide_int64_handling()

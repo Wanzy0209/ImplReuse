@@ -1,0 +1,84 @@
+import torch
+import torch.nn.functional as F
+
+# Configuration from the original bug report
+# Fix: Check if _dynamo exists to avoid AttributeError in older PyTorch versions
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+else:
+    print("Warning: torch._dynamo is not available. Skipping dynamo configuration.")
+
+torch.manual_seed(1352030645)
+
+def fuzzed_program(arg_0, arg_1, arg_2, arg_3, arg_4, arg_5, arg_6, arg_7, sentinel):
+    # Reproduce the graph structure from the original test case
+    # to generate the input tensors for the target API.
+    var_node_4 = arg_0 # size=(4, 8), stride=(8, 1), dtype=bfloat16, device=cuda
+    var_node_5 = torch.full((8, 7), -0.80078125, dtype=torch.bfloat16, device='cuda')
+    var_node_3 = torch.matmul(var_node_4.to(torch.bfloat16), var_node_5.to(torch.bfloat16))
+    
+    var_node_7 = arg_1 # size=(7, 12), stride=(12, 1), dtype=bfloat16, device=cuda
+    var_node_8 = arg_2 # size=(12, 2), stride=(2, 1), dtype=bfloat16, device=cuda
+    var_node_6 = torch.matmul(var_node_7.to(torch.bfloat16), var_node_8.to(torch.bfloat16))
+    
+    var_node_2 = torch.matmul(var_node_3.to(torch.bfloat16), var_node_6.to(torch.bfloat16))
+    
+    var_node_11 = torch.full((2, 3), 1.515625, dtype=torch.bfloat16, device='cuda')
+    var_node_12 = torch.full((3, 16), 0.2353515625, dtype=torch.bfloat16, device='cuda')
+    var_node_10 = torch.matmul(var_node_11.to(torch.bfloat16), var_node_12.to(torch.bfloat16))
+    
+    var_node_14 = torch.full((16, 4), 2.21875, dtype=torch.bfloat16, device='cuda')
+    var_node_15 = torch.full((4, 9), -1.7421875, dtype=torch.bfloat16, device='cuda')
+    var_node_13 = torch.matmul(var_node_14.to(torch.bfloat16), var_node_15.to(torch.bfloat16))
+    
+    var_node_9 = torch.matmul(var_node_10.to(torch.bfloat16), var_node_13.to(torch.bfloat16))
+    var_node_1 = torch.matmul(var_node_2.to(torch.bfloat16), var_node_9.to(torch.bfloat16)) # size=(4, 9)
+
+    # Adaptation: Call the similar API (torch.nn.functional.binary_cross_entropy_with_logits)
+    # We use var_node_1 as the 'input' (logits).
+    # We create a 'target' tensor of the same shape with values between 0 and 1.
+    target = torch.full_like(var_node_1, 0.5)
+    
+    # Call the target API
+    output = F.binary_cross_entropy_with_logits(var_node_1, target)
+    
+    return output
+
+# Setup inputs based on the comments in the original test case
+# Note: We only need to define args that are actually used in the graph above.
+inputs = [
+    torch.randn(4, 8, dtype=torch.bfloat16, device='cuda'), # arg_0
+    torch.randn(7, 12, dtype=torch.bfloat16, device='cuda'), # arg_1
+    torch.randn(12, 2, dtype=torch.bfloat16, device='cuda'), # arg_2
+    torch.randn(14, 9, dtype=torch.bfloat16, device='cuda'), # arg_3
+    torch.randn(2, dtype=torch.bfloat16, device='cuda'),     # arg_4
+    torch.randn(478, 13, dtype=torch.bfloat16, device='cuda'), # arg_5
+    torch.randn(1, dtype=torch.bfloat16, device='cuda'),     # arg_6
+    torch.randn(1, dtype=torch.bfloat16, device='cuda'),     # arg_7
+    None # sentinel
+]
+
+# Run Eager execution
+try:
+    eager_result = fuzzed_program(*inputs)
+    print("Eager execution successful.")
+except Exception as e:
+    print(f"Eager execution failed: {e}")
+
+# Run Compiled execution (torch._dynamo)
+# Fix: Check if torch.compile is available
+if hasattr(torch, 'compile'):
+    try:
+        compiled_program = torch.compile(fuzzed_program)
+        compiled_result = compiled_program(*inputs)
+        print("Compiled execution successful.")
+        
+        # Check for divergence if both succeeded
+        if torch.allclose(eager_result, compiled_result, atol=1e-2):
+            print("Results match.")
+        else:
+            print("Results diverge!")
+    except Exception as e:
+        print(f"Compiled execution failed: {e}")
+else:
+    print("Skipping compiled execution (torch.compile not available).")

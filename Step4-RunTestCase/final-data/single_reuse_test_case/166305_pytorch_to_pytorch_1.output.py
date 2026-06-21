@@ -1,0 +1,61 @@
+import os
+import torch
+import torch.distributed as dist
+
+# Handle the optional import of torch._dynamo to prevent ModuleNotFoundError
+try:
+    import torch._dynamo as dynamo
+    # Reproduce the configuration from the bug report
+    dynamo.config.optimize_ddp = True
+except ImportError:
+    # torch._dynamo might not be available in all PyTorch versions/builds
+    # We proceed without this specific config if the module is missing
+    pass
+
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+
+# Initialize process group
+backend = "nccl" if dist.is_nccl_available() else "gloo"
+dist.init_process_group(backend=backend)
+
+# The custom autograd function that triggered the original bug
+class SimplistDoubleFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        return x * 2
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        return grad_out * 2
+
+# A simple module that uses torch.distributed.reduce
+class ReduceModel(torch.nn.Module):
+    def forward(self, x):
+        # Apply the custom function
+        y = SimplistDoubleFn.apply(x)
+        
+        # Perform a distributed reduce operation to rank 0
+        # This tests the similar API torch.distributed.reduce
+        dist.reduce(y, dst=0)
+        return y
+
+def main():
+    device = torch.device(f"cuda:{LOCAL_RANK}" if torch.cuda.is_available() else "cpu")
+    model = ReduceModel().to(device)
+    
+    # Compile the model
+    model = torch.compile(model)
+    
+    # Create input
+    x = torch.rand(2, 3, 256, 256, device=device)
+    
+    # Run forward pass
+    out = model(x)
+    
+    if LOCAL_RANK == 0:
+        print("Test passed: torch.distributed.reduce executed successfully inside torch.compile.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

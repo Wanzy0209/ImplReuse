@@ -1,0 +1,76 @@
+import torch
+from torch._dynamo.functional_export import _dynamo_graph_capture_for_export
+from torch._functorch.aot_autograd import aot_export_joint_with_descriptors
+from torch._guards import tracing, TracingContext
+from contextlib import ExitStack
+
+def test_aot_export_joint_with_descriptors_with_kwargs():
+    """
+    Test case to verify that aot_export_joint_with_descriptors correctly handles
+    keyword arguments (kwargs).
+
+    This test leverages the pattern of tf.keras.tree.map_structure_up_to by
+    treating the model's input signature (args + kwargs) as a structure that
+    must be preserved through the export process. Just as map_structure_up_to
+    applies a function while respecting the input tree structure, this test
+    ensures the AOT export process respects the argument structure (positional
+    and keyword) and produces the correct result.
+    """
+    class ModuleWithKwargs(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(3, 2)
+
+        def forward(self, x, scale=1.0):
+            return self.linear(x) * scale
+
+    model = ModuleWithKwargs()
+
+    # Define inputs and kwargs
+    inputs = (torch.randn(4, 3),)
+    kwargs = {"scale": torch.randn(1)}
+
+    # Helper function to perform the graph capture and export
+    def run_export(model, inputs, kwargs):
+        if kwargs is None:
+            kwargs = {}
+        
+        # Step 1: Capture the graph using Dynamo
+        with torch._dynamo.config.patch(install_free_tensors=True):
+            gm = _dynamo_graph_capture_for_export(model)(*inputs, **kwargs)
+            fake_mode = gm.meta.get("fake_mode", None)
+
+        # Step 2: Export with descriptors using AOT
+        # This step mirrors the 'map' operation where we apply the export
+        # logic to the structured inputs (args + kwargs).
+        with tracing(TracingContext(fake_mode)):
+            with ExitStack() as stack:
+                joint_with_descriptors = aot_export_joint_with_descriptors(
+                    stack,
+                    gm,
+                    inputs,
+                    kwargs=kwargs,
+                )
+                return joint_with_descriptors.graph_module
+
+    # Execute the export process
+    exported_gm = run_export(model, inputs, kwargs)
+
+    # Verification:
+    # Calculate the expected output manually
+    # The logic is linear(x) * scale
+    with torch.no_grad():
+        expected_output = model.linear(inputs[0]) * kwargs["scale"]
+        
+        # Run the exported graph module with the original structure
+        actual_output = exported_gm(*inputs, **kwargs)
+
+        # Assert that the structure and values are preserved correctly
+        assert torch.allclose(actual_output, expected_output), \
+            f"Output mismatch. Expected {expected_output}, but got {actual_output}. " \
+            "The export process may not be correctly handling kwargs."
+
+    print("Test passed: aot_export_joint_with_descriptors works correctly with kwargs.")
+
+if __name__ == "__main__":
+    test_aot_export_joint_with_descriptors_with_kwargs()

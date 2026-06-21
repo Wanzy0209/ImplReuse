@@ -1,0 +1,55 @@
+import torch
+import sys
+
+# Replicate the configuration from the original bug report
+# Use try-except to handle environments where these internal configs are not available
+try:
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+    torch._inductor.config.emulate_precision_casts = True
+except AttributeError:
+    print("Warning: torch._dynamo or torch._inductor attributes not found. Skipping specific config.")
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+    t0 = arg0
+    t1 = torch.tanh(t0)
+    t2 = arg1
+    t3 = arg2
+    t4 = t2 * t3
+    t5 = t1.clone(); t5.fill_(t4.item())
+    t6 = arg3
+    t7 = arg4
+    t8 = arg5
+    t9 = torch.cat([t6, t6, t7, t8], dim=2)
+    
+    # Original API: t10 = t9.std(dim=2)
+    # Adaptation: Replace torch.std with torch.ones, matching the output shape and dtype
+    t10 = torch.ones((256, 88), dtype=torch.float16, device='cuda')
+    
+    t11 = torch.nn.functional.embedding(torch.clamp(t5, 0, t10.size(0) - 1).to(torch.long), t10)
+    output = t11 + sentinel
+    return output
+
+# Setup inputs
+arg0 = torch.randint(0, 1000, [47], dtype=torch.int64, device='cuda')
+arg1 = torch.randint(0, 1000, [], dtype=torch.int64, device='cuda')
+arg2 = torch.randint(0, 1000, [], dtype=torch.int64, device='cuda')
+arg3 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True)
+arg4 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True)
+arg5 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True)
+sentinel = torch.tensor(0.0, dtype=torch.float16, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    # Test Eager Mode
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+
+    # Test Compiled Mode
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ')
+    
+    # Verify consistency
+    assert torch.allclose(out_eager, out_compiled)

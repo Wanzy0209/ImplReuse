@@ -1,0 +1,63 @@
+import torch
+import tensorflow as tf
+import threading
+import time
+
+def test_tf_data_optimization_gil_release():
+    """
+    Test case for tf.data.experimental.OptimizationOptions.
+    
+    This test verifies that using OptimizationOptions (similar to torch.compile)
+    does not hold the Global Interpreter Lock (GIL) during execution,
+    allowing concurrent Python threads to run.
+    
+    This addresses the concern raised in PyTorch Issue #163061 where
+    torch.compile kernels were found to hold the GIL.
+    """
+    # Create a dataset with sufficient data to ensure execution time
+    dataset = tf.data.Dataset.from_tensor_slices(tf.range(10000))
+    
+    # Define a simple transformation
+    def increment(x):
+        return x + 1
+    
+    dataset = dataset.map(increment)
+    
+    # Apply OptimizationOptions (The Similar API)
+    # This mirrors the use of @torch.compile in the original bug report
+    options = tf.data.Options()
+    options.experimental_optimization.apply_default_optimizations = True
+    # Enable specific optimizations to ensure the optimization path is active
+    options.experimental_optimization.filter_fusion = True
+    dataset = dataset.with_options(options)
+    
+    # Variables to track GIL contention
+    main_thread_counter = 0
+    worker_finished = False
+    
+    def worker():
+        nonlocal worker_finished
+        # Consume the dataset. This triggers the optimized execution graph.
+        for _ in dataset:
+            pass
+        worker_finished = True
+        
+    # Start the dataset iteration in a separate thread
+    t = threading.Thread(target=worker)
+    t.start()
+    
+    # The main thread attempts to execute a CPU-bound loop.
+    # If the GIL is held by the worker (TF operations), this loop will be blocked.
+    # If the GIL is released (expected behavior), this loop will run concurrently.
+    while not worker_finished:
+        main_thread_counter += 1
+        # Safety break to prevent infinite loops in case of unexpected behavior
+        if main_thread_counter > 10000000:
+            break
+            
+    t.join()
+    
+    # Assert that the main thread was able to run.
+    # A low counter indicates the main thread was starved of the GIL.
+    assert main_thread_counter > 100, \
+        f"Main thread counter ({main_thread_counter}) is too low, suggesting GIL contention."

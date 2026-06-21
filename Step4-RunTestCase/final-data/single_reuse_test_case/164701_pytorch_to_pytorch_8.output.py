@@ -1,0 +1,76 @@
+import os
+import pickle
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_recv_object_list(rank, world_size):
+    setup(rank, world_size)
+
+    if rank == 0:
+        # Sender: Simulating the generation of "new_events"
+        # We send multiple batches to test state updates
+        for i in range(5):
+            # Create a list of objects (tensors and strings) to send
+            new_events = [
+                torch.tensor([i, i + 1, i + 2]), 
+                f"event_id_{i}"
+            ]
+            
+            # Manual implementation of send_object_list using pickle and standard send/recv
+            # 1. Serialize the object list
+            serialized = pickle.dumps(new_events)
+            # 2. Send the size of the serialized data first so receiver knows buffer size
+            size_tensor = torch.tensor([len(serialized)], dtype=torch.long)
+            dist.send(size_tensor, dst=1)
+            # 3. Send the serialized data as a byte tensor
+            data_tensor = torch.ByteTensor(list(serialized))
+            dist.send(data_tensor, dst=1)
+            
+    elif rank == 1:
+        # Receiver: Simulating the "state" update
+        # Initialize the state list (analogous to the state tensor in the original bug)
+        # The list must be pre-sized to match the number of objects being received
+        state = [None, None]
+
+        for i in range(5):
+            # Manual implementation of recv_object_list
+            # 1. Receive the size of the incoming data
+            size_tensor = torch.empty(1, dtype=torch.long)
+            dist.recv(size_tensor, src=0)
+            size = size_tensor.item()
+            
+            # 2. Receive the data into a buffer
+            data_tensor = torch.empty(size, dtype=torch.uint8)
+            dist.recv(data_tensor, src=0)
+            
+            # 3. Deserialize the data
+            received_list = pickle.loads(data_tensor.numpy().tobytes())
+            
+            # 4. Update the state list in-place to mimic recv_object_list behavior
+            state[:] = received_list
+
+            # Verification: Check that the state was updated correctly with the new events
+            # This mimics the assertion in the original bug that checked the state tensor contents
+            assert isinstance(state[0], torch.Tensor), f"Expected Tensor, got {type(state[0])}"
+            assert torch.equal(state[0], torch.tensor([i, i + 1, i + 2])), \
+                f"Tensor mismatch at iteration {i}. Expected {torch.tensor([i, i+1, i+2])}, got {state[0]}"
+            
+            assert state[1] == f"event_id_{i}", \
+                f"String mismatch at iteration {i}. Expected event_id_{i}, got {state[1]}"
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use spawn to launch processes for distributed testing
+    mp.spawn(test_recv_object_list, args=(world_size,), nprocs=world_size, join=True)

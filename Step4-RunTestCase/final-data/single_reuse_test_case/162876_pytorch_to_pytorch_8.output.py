@@ -1,0 +1,21 @@
+import torch
+import torch.nn.functional as F
+
+# Adapted from the original test case for torch.aminmax
+# Original: torch.aminmax(torch.tensor([1, -3, 5]))
+# Similar API: torch.nn.functional.cosine_similarity
+
+# Define input tensors (cosine_similarity requires two inputs)
+input1 = torch.tensor([1.0, -3.0, 5.0])
+input2 = torch.tensor([1.0, -3.0, 5.0])
+
+# Call the similar API
+# Note: cosine_similarity returns a Tensor, not a named tuple like aminmax
+result = F.cosine_similarity(input1, input2, dim=0)
+
+# Verify the result
+# The original issue involved a TypeError when trying to instantiate the return type.
+# Here we verify that the API returns the expected Tensor type and value.
+assert isinstance(result, torch.Tensor)
+# For identical vectors, cosine similarity should be 1.0
+assert torch.allclose(result, torch.tensor(1.0))

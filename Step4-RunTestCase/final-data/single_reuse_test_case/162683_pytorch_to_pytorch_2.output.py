@@ -1,0 +1,34 @@
+import torch
+import time
+
+torch.manual_seed(0)
+# Adapted shapes: original had pairs for matmul (A, B), 
+# repeat_interleave requires a single input tensor.
+shapes = [
+     (1, 12, 10, 64),
+     (1, 12, 10, 10),
+]
+
+def benchmark_repeat_interleave(input_shape, repeats, dim, dtype=torch.float16, device="cpu", repeat=500):
+    A = torch.empty(input_shape, dtype=dtype, device=device).uniform_(0,1) * 2 - 1
+    # warm up
+    for _ in range(5000):
+        _ = torch.repeat_interleave(A, repeats=repeats, dim=dim)
+    # run
+    times = []
+    for i in range(repeat):
+        start = time.time()
+        _ = torch.repeat_interleave(A, repeats=repeats, dim=dim)
+        end = time.time()
+        if i > 100:
+            times.append(round((end - start) * 1000 * 1000))
+    times.sort()
+    print(times)
+    avg_time_ms = sum(times) / len(times)
+    return avg_time_ms
+
+if __name__ == "__main__":
+    # Using dim=0 and repeats=2 as concrete parameters for the benchmark
+    for shape in shapes:
+        t = benchmark_repeat_interleave(shape, repeats=2, dim=0)
+        print(f"repeat_interleave({shape}, repeats=2, dim=0)  ->  {t:.3f} us")

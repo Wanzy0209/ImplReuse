@@ -1,0 +1,44 @@
+import torch
+import torch.nn as nn
+import torch.nn.utils.prune as prune
+from collections import namedtuple
+
+def test_ln_structured_namedtuple(self):
+    """
+    Test torch.nn.utils.prune.ln_structured with a module that accepts NamedTuple inputs.
+    This adapts the original bug context (NamedTuple inputs) to the similar API (pruning).
+    """
+    Point = namedtuple('Point', 'x y')
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            # Define a layer with parameters to prune
+            self.linear = nn.Linear(3, 3)
+
+        def forward(self, p: Point):
+            # Module logic that unpacks a NamedTuple
+            return self.linear(p.x + p.y)
+
+    model = M()
+    inp = Point(torch.ones(3), torch.ones(3))
+
+    # Verify baseline functionality
+    print("Output before pruning:", model(inp))
+
+    # Call the similar API: torch.nn.utils.prune.ln_structured
+    # Note: Unlike torch.export.export, ln_structured modifies the module in place
+    # and does not take the model input 'inp' or a 'strict' argument.
+    # We verify that pruning works correctly on the module structure.
+    prune.ln_structured(model.linear, name='weight', amount=0.5, n=2, dim=0)
+
+    # Verify functionality after pruning
+    output = model(inp)
+    print("Output after pruning:", output)
+
+    # Assertion to ensure the operation completed and returned a tensor
+    self.assertTrue(torch.is_tensor(output))
+    
+    # Verify that the mask was applied (parameter should be a PrunedParameter or similar proxy)
+    # In PyTorch pruning, the original parameter is replaced or masked.
+    self.assertTrue(hasattr(model.linear, 'weight_mask'))

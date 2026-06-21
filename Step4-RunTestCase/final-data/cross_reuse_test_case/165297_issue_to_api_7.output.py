@@ -1,0 +1,70 @@
+import torch
+import torch.nn as nn
+
+def test_upsampling_bilinear_channels_last():
+    """
+    Test case for torch.nn.UpsamplingBilinear2d based on the bug report 
+    for MaxPool2d (Issue 165297).
+    
+    The original bug reported NaNs/Illegal Memory Access when using 
+    channels_last memory format with bfloat16/float32 on large tensors.
+    This test checks if UpsamplingBilinear2d exhibits similar behavior.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        return
+
+    device = torch.device("cuda")
+    
+    # Clear cache to ensure maximum available memory
+    torch.cuda.empty_cache()
+    
+    # Dimensions from the original bug report that triggered the issue
+    # Reduced N from 84 to 16 to avoid CUDA out of memory errors on GPUs 
+    # with limited memory (approx 24GB) when other memory is already allocated.
+    N, C, H, W = 16, 64, 512, 960
+    
+    # Case 1: bfloat16 + channels_last (Original bug: produced NaNs)
+    x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+    
+    # Convert to NHWC channels_last layout
+    x_cl = x.to(memory_format=torch.channels_last)
+    
+    # Create a contiguous version to compare against (the "fix" in the original bug)
+    x_cont = x_cl.contiguous()
+    
+    print(f"Input tensor: contiguous={x_cl.is_contiguous()}, channels_last={x_cl.is_contiguous(memory_format=torch.channels_last)}")
+    print(f"Input stride: {x_cl.stride()}")
+
+    # Use the Similar API: UpsamplingBilinear2d
+    # Using scale_factor=2 to ensure the output remains large
+    upsample = nn.UpsamplingBilinear2d(scale_factor=2).to(device)
+    
+    # Run on channels_last input
+    y_cl = upsample(x_cl)
+    
+    # Run on contiguous input for comparison
+    y_cont = upsample(x_cont)
+
+    # Check for NaNs and Infs in the channels_last output
+    has_nan = torch.isnan(y_cl).any().item()
+    has_inf = torch.isinf(y_cl).any().item()
+    
+    print(f"Output contains NaN? {has_nan}")
+    print(f"Output contains Inf? {has_inf}")
+    
+    # Assertions
+    # 1. The primary symptom of the original bug was NaNs
+    assert not has_nan, "UpsamplingBilinear2d produced NaNs with channels_last + bfloat16"
+    assert not has_inf, "UpsamplingBilinear2d produced Infs with channels_last + bfloat16"
+    
+    # 2. Verify that the channels_last output matches the contiguous output
+    # (The original bug was fixed by making the tensor contiguous, implying results should match)
+    # We use a tolerance suitable for bfloat16
+    assert torch.allclose(y_cl, y_cont, rtol=1e-2, atol=1e-2), \
+        "Mismatch between channels_last and contiguous output for UpsamplingBilinear2d"
+
+    print("Test passed: No NaNs/Infs detected and outputs match.")
+
+if __name__ == "__main__":
+    test_upsampling_bilinear_channels_last()

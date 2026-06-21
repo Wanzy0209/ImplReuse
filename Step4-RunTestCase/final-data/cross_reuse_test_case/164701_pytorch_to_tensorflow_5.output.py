@@ -1,0 +1,107 @@
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use TF1 graph mode and QueueRunners
+tf.compat.v1.disable_eager_execution()
+
+def test_queue_runner_state_update():
+    """
+    Adapted test case for tf.compat.v1.train.add_queue_runner.
+    
+    Original PyTorch Bug Context:
+    The original test verified that a state tensor update (sliding window) 
+    did not corrupt memory or leave stale data (non-zero values where zeros were expected)
+    when compiled. It involved a race condition/miscompilation between reading 
+    and writing state in the same kernel.
+
+    TensorFlow Adaptation:
+    We adapt this to test the thread-safety and state consistency of a Queue 
+    managed by a QueueRunner. The 'state' is the Queue. The 'new events' are 
+    enqueued data. We verify that the data retrieved (state read) matches 
+    what was enqueued (state write), ensuring no corruption occurs during 
+    the asynchronous producer-consumer interaction.
+    """
+
+    # 1. Setup the "State" (A FIFO Queue acting as the buffer)
+    # Capacity matches the PyTorch state tensor size (2048)
+    queue_capacity = 2048
+    # Data shape matches the PyTorch row size (1024)
+    data_shape = tf.TensorShape([1024])
+    
+    state_queue = tf.compat.v1.FIFOQueue(
+        capacity=queue_capacity,
+        dtypes=[tf.float32],
+        shapes=[data_shape]
+    )
+
+    # 2. Define "New Events" (Data to be enqueued)
+    # We create a constant tensor representing a new row of data
+    new_event_val = 1.0
+    new_event_tensor = tf.constant(
+        np.ones((1024,), dtype=np.float32) * new_event_val
+    )
+
+    # 3. Define the Enqueue Operation
+    enqueue_op = state_queue.enqueue(new_event_tensor)
+
+    # 4. Create the QueueRunner
+    # The QueueRunner will manage a thread that executes the enqueue_op
+    qr = tf.compat.v1.train.QueueRunner(state_queue, [enqueue_op])
+
+    # --- API UNDER TEST ---
+    # Add the QueueRunner to the default graph collection
+    tf.compat.v1.train.add_queue_runner(qr)
+    # ----------------------
+
+    # 5. Define the Dequeue Operation (Reading the state)
+    dequeue_op = state_queue.dequeue()
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables (if any) and start the queue runners
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord, sess=sess)
+
+        # 6. Verification Loop
+        # The original test looped to catch a race condition. 
+        # We loop here to verify the consistency of the queue state over multiple operations.
+        num_attempts = 10
+        
+        print(f"Starting test with {num_attempts} attempts...")
+        
+        for attempt in range(1, num_attempts + 1):
+            # In the PyTorch script, we reset state to zeros and add 2 events.
+            # Here, we enqueue 2 events into the queue.
+            # We run the enqueue_op directly to control the flow, 
+            # simulating the "update" step.
+            sess.run(enqueue_op)
+            sess.run(enqueue_op)
+
+            # Verify the state (Dequeue)
+            # We expect to get the values we just enqueued.
+            # The PyTorch test checked for zeros (absence of old data).
+            # Here we check for the presence of the correct new data.
+            out1 = sess.run(dequeue_op)
+            out2 = sess.run(dequeue_op)
+
+            # Assertions
+            # Check that the data is not zero (it should be 1.0)
+            assert not np.allclose(out1, 0.0), \
+                f"Attempt {attempt}: Dequeued data is unexpectedly zero (corruption/missing data)."
+            assert not np.allclose(out2, 0.0), \
+                f"Attempt {attempt}: Dequeued data is unexpectedly zero (corruption/missing data)."
+            
+            # Check that the data is exactly what we put in
+            assert np.allclose(out1, new_event_val), \
+                f"Attempt {attempt}: Data mismatch. Expected {new_event_val}, got {out1[0]}"
+            assert np.allclose(out2, new_event_val), \
+                f"Attempt {attempt}: Data mismatch. Expected {new_event_val}, got {out2[0]}"
+
+            print(f"Attempt {attempt}: State consistency verified.")
+
+        # Cleanup
+        coord.request_stop()
+        coord.join(threads)
+        print("Test completed successfully.")
+
+if __name__ == "__main__":
+    test_queue_runner_state_update()

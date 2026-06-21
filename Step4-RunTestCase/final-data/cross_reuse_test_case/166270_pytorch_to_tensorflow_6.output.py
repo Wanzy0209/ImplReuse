@@ -1,0 +1,57 @@
+import torch
+import tensorflow as tf
+
+# Ensure reproducibility
+tf.random.set_seed(1061983224)
+
+# Adapt the logic to use the SGD optimizer (based on the provided snippet)
+# The snippet shows tf.keras.optimizer_v1.SGD, so we use the standard SGD optimizer.
+optimizer = tf.keras.optimizers.SGD(learning_rate=0.01, momentum=0.0, nesterov=False)
+
+# Sentinel variable to ensure gradient computation (similar to the original sentinel tensor)
+sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+def fuzzed_program(arg_0):
+    # Replicate the tensor manipulation logic from the original bug report
+    # var_node_4 = arg_0 # size=(4,), dtype=bool
+    var_node_3 = tf.split(arg_0, 4, axis=0)[0] # size=(1,), dtype=bool (torch.chunk)
+    var_node_2 = tf.squeeze(var_node_3)        # size=(), dtype=bool (torch.squeeze)
+    var_node_1 = tf.stack([var_node_2], axis=0) # size=(1,), dtype=bool (torch.stack)
+    var_node_0 = tf.reshape(var_node_1, [1])    # size=(1,), dtype=bool (torch.reshape)
+    
+    # Cast to float for multiplication with sentinel
+    var_node_0_float = tf.cast(var_node_0, tf.float32)
+    
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0_float * sentinel
+    
+    # Apply optimizer to update sentinel based on the result (simulating a training step)
+    # This exercises the SGD optimizer with the specific tensor shapes
+    with tf.GradientTape() as tape:
+        loss = result * sentinel
+    grads = tape.gradient(loss, [sentinel])
+    optimizer.apply_gradients(zip(grads, [sentinel]))
+    
+    return result
+
+# Create the input tensor
+# Original: torch.as_strided(torch.randint(0, 2, (4,), dtype=torch.int8).bool(), (4,), (1,))
+# We create a simple boolean tensor of size (4,)
+arg_0 = tf.constant([True, False, True, False], dtype=tf.bool)
+
+# Run eager execution
+print('Running eager execution...')
+try:
+    result_original = fuzzed_program(arg_0)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# Run compiled execution (tf.function is the TF equivalent of torch.compile)
+print('Running compiled execution...')
+try:
+    compiled_program = tf.function(fuzzed_program)
+    result_compiled = compiled_program(arg_0)
+    print(' compile success')
+except Exception as e:
+    print(f' compile failed: {e}')

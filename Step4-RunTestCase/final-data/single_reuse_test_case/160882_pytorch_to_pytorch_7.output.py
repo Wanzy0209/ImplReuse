@@ -1,0 +1,37 @@
+import torch
+
+def f(input: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+    # Using torch.quantile with a specific dimension to mimic the sensitivity 
+    # of the original torch.complex operation to input shapes.
+    return torch.quantile(input, q, dim=1)
+
+B, F, T = 1, 641, 39
+
+# Source inputs
+src = torch.randn(B, F, T)
+q = torch.tensor(0.5)
+
+# Mismatched inputs (permuted dimensions)
+src_mismatch = src.permute(0, 2, 1)
+
+# Check if torch.compile is available (requires PyTorch 2.0+)
+# If not, fall back to eager execution to avoid AttributeError
+if hasattr(torch, 'compile'):
+    compiled = torch.compile(f, fullgraph=True)
+else:
+    print("torch.compile is not available (requires PyTorch 2.0+). Running in eager mode.")
+    compiled = f
+
+# First run with original shape
+try:
+    _ = compiled(src, q)
+    print("First run successful.")
+except Exception as e:
+    print(f"First run failed: {e}")
+
+# Second run with permuted shape (potential crash site)
+try:
+    _ = compiled(src_mismatch, q)
+    print("Second run successful.")
+except Exception as e:
+    print(f"Second run failed: {e}")

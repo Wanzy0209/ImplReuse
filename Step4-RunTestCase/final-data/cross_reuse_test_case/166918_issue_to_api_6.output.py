@@ -1,0 +1,80 @@
+import unittest
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import tempfile
+import os
+from torch.distributed._functional_collectives import broadcast
+
+# Configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+
+def run_test(rank, world_size, tempfile_name):
+    """
+    Worker function to initialize the process group and execute the compiled function.
+    This reproduces the logic from the original bug report.
+    """
+    # Initialize process group using file method for testing
+    dist.init_process_group(
+        backend="nccl",
+        init_method=f"file://{tempfile_name}",
+        rank=rank,
+        world_size=world_size
+    )
+    torch.cuda.set_device(rank)
+
+    @torch.compile(dynamic=True)
+    def example_compile_with_cond(rank):
+        """
+        torch.cond version - most compile-friendly approach
+        Replaces if-else with torch.cond for better compilation
+        """
+        rank = rank.item()
+        # Using torch.cond for compile-friendly conditional execution
+        # torch.cond requires a tensor predicate
+        pred = torch.tensor(rank == 0)
+
+        # NOTE: Cannot use requires_grad=True inside torch.cond lambdas
+        tensor = torch.cond(
+            pred,
+            lambda: torch.tensor([1, 2, 3, 4, 5], dtype=torch.float32, device="cuda"),
+            lambda: torch.zeros(5, dtype=torch.float32, device="cuda")
+        )
+        return broadcast(tensor, src=0, group=dist.group.WORLD)
+
+    try:
+        # Execute the compiled function
+        rank_tensor = torch.tensor([rank], device="cuda")
+        result = example_compile_with_cond(rank_tensor)
+
+        # Verify the result
+        # Rank 0 creates [1, 2, 3, 4, 5], others create zeros.
+        # Broadcast sends Rank 0's tensor to everyone.
+        expected = torch.tensor([1, 2, 3, 4, 5], dtype=torch.float32, device="cuda")
+        assert torch.equal(result, expected), f"Rank {rank} failed: expected {expected}, got {result}"
+        
+    finally:
+        # Clean up
+        dist.destroy_process_group()
+
+class TestTorchCondSegfault(unittest.TestCase):
+    def test_distributed_cond_with_compile(self):
+        """
+        Test case to reproduce the segmentation fault in torch.cond
+        when used with torch.compile and distributed collectives.
+        """
+        world_size = 2
+        # Use a temporary file for process group initialization
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            tempfile_name = f.name
+        
+        try:
+            # Spawn processes to run the test
+            mp.spawn(run_test, args=(world_size, tempfile_name), nprocs=world_size, join=True)
+        finally:
+            # Clean up the temporary file
+            if os.path.exists(tempfile_name):
+                os.remove(tempfile_name)
+
+if __name__ == '__main__':
+    unittest.main()

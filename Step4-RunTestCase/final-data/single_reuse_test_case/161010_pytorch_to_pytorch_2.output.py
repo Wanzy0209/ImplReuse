@@ -1,0 +1,28 @@
+import torch
+
+# Setup input tensor
+A = torch.rand(5, 5, device="cuda" if torch.cuda.is_available() else "cpu")
+
+def f(A, count):
+    # Adaptation: Use torch.prod instead of linalg.qr and solve_triangular
+    a = torch.prod(A, dim=0)
+    
+    # Check from the original bug: stride preservation with clone
+    if a.stride() == a.clone(memory_format=torch.preserve_format).stride():
+        return count + 1
+    return count
+
+# Eager execution
+res1 = f(A, torch.zeros(1))
+print(f"Eager result: {res1}")
+
+# Check if torch.compile is available (requires PyTorch 2.0+)
+if hasattr(torch, 'compile'):
+    # Compiled execution
+    res2 = torch.compile(f)(A, torch.zeros(1))
+    print(f"Compiled result: {res2}")
+
+    # Assertion to verify behavior consistency
+    assert torch.equal(res1, res2), "torch.compile doesn't preserve stride with clone(memory_format=torch.preserve_format) for torch.prod"
+else:
+    print("torch.compile is not available in this environment (requires PyTorch >= 2.0). Skipping compiled execution check.")

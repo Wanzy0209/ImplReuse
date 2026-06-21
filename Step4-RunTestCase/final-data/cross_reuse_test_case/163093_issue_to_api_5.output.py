@@ -1,0 +1,69 @@
+import tensorflow as tf
+import numpy as np
+
+def test_get_strategy_type_consistency():
+    """
+    Test case for tf.distribute.get_strategy inspired by the PyTorch 
+    ReduceLROnPlateau recompilation bug (Issue 163093).
+    
+    The PyTorch bug involves a type mismatch (Tensor vs Float) in the 
+    optimizer's param_groups causing recompilation. Similarly, this test
+    verifies that tf.distribute.get_strategy maintains type consistency
+    (always returning a Strategy object) regardless of the context
+    (inside or outside a strategy scope), preventing potential type errors
+    in downstream code.
+    """
+    
+    # 1. Check default strategy type consistency
+    # Similar to checking the initial state of the optimizer
+    default_strategy = tf.distribute.get_strategy()
+    # Fix: Changed tf.distribute.StrategyBase to tf.distribute.Strategy
+    assert isinstance(default_strategy, tf.distribute.Strategy), \
+        f"Default strategy should be Strategy, got {type(default_strategy)}"
+    
+    # 2. Simulate a loop similar to the training steps in the original bug report
+    # We alternate between scopes to check if the returned strategy type remains consistent
+    strategy = tf.distribute.MirroredStrategy()
+    
+    # Define a sequence of operations to simulate steps
+    steps = ['enter_scope', 'check', 'exit_scope', 'check']
+    
+    for i, step in enumerate(steps):
+        if step == 'enter_scope':
+            # Enter the distribution scope
+            scope = strategy.scope()
+            scope.__enter__()
+            
+        elif step == 'check':
+            # Retrieve the current strategy
+            current_strategy = tf.distribute.get_strategy()
+            
+            # Verify it is a Strategy instance (Type Consistency Check)
+            # Fix: Changed tf.distribute.StrategyBase to tf.distribute.Strategy
+            assert isinstance(current_strategy, tf.distribute.Strategy), \
+                f"Step {i}: Expected Strategy, got {type(current_strategy)}"
+            
+            # If we are inside the scope, verify it matches the created strategy
+            # This mirrors checking if 'lr' is the expected tensor
+            if step == 'check' and steps[i-1] == 'enter_scope':
+                assert current_strategy is strategy, \
+                    f"Step {i}: Expected the active MirroredStrategy, got {current_strategy}"
+            else:
+                # If we are outside, verify it is the default strategy
+                # Note: In TF, exiting a scope might revert to default or previous depending on nesting
+                # Here we check the type is valid
+                pass
+                
+        elif step == 'exit_scope':
+            # Exit the distribution scope
+            scope.__exit__(None, None, None)
+
+    # Final check: ensure we are back to a valid strategy state
+    final_strategy = tf.distribute.get_strategy()
+    # Fix: Changed tf.distribute.StrategyBase to tf.distribute.Strategy
+    assert isinstance(final_strategy, tf.distribute.Strategy), \
+        f"Final strategy should be Strategy, got {type(final_strategy)}"
+
+if __name__ == "__main__":
+    test_get_strategy_type_consistency()
+    print("Test passed: tf.distribute.get_strategy maintains type consistency.")

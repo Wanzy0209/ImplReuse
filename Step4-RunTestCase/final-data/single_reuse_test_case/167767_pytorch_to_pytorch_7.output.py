@@ -1,0 +1,30 @@
+import torch
+
+# Check for MPS availability to ensure the test runs on the correct backend
+if not torch.backends.mps.is_available():
+    print("MPS device not available. Skipping test.")
+else:
+    # Test Case 1: Basic tril_indices
+    # Analogous to the original b.clamp(min=1e-7)
+    print("Test 1: Basic tril_indices")
+    indices = torch.tril_indices(3, 3, device='mps')
+    print(indices)
+    # Verify against CPU reference
+    expected = torch.tril_indices(3, 3)
+    assert torch.equal(indices.cpu(), expected), "Basic tril_indices failed on MPS"
+
+    # Test Case 2: tril_indices with offset
+    # Analogous to the original b.clamp(min=1e-7, max=None)
+    print("\nTest 2: tril_indices with offset")
+    indices = torch.tril_indices(3, 3, offset=1, device='mps')
+    print(indices)
+    expected = torch.tril_indices(3, 3, offset=1)
+    assert torch.equal(indices.cpu(), expected), "tril_indices with offset failed on MPS"
+
+    # Test Case 3: tril_indices with different dimensions
+    # Analogous to the original b.clamp(min=1e-7, max=torch.inf)
+    print("\nTest 3: tril_indices with different dimensions")
+    indices = torch.tril_indices(4, 5, device='mps')
+    print(indices)
+    expected = torch.tril_indices(4, 5)
+    assert torch.equal(indices.cpu(), expected), "tril_indices with different dimensions failed on MPS"

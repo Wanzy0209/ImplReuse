@@ -1,0 +1,25 @@
+import torch
+import torch.nn.functional as F
+
+# Check if torch.compile is available (requires PyTorch 2.0+)
+if not hasattr(torch, 'compile'):
+    print("torch.compile not available (requires PyTorch 2.0+), skipping test.")
+# Setup similar to the bug report (float16 on CUDA)
+# Note: This test requires a CUDA device to run, matching the original issue context.
+elif torch.cuda.is_available():
+    input_tensor = torch.randn((1024, 1024), device="cuda", dtype=torch.float16)
+
+    @torch.compile
+    def compiled_relu_inplace(x):
+        # Using the similar API: torch.nn.functional.relu_
+        # The original bug involved torch.compile failing to handle specific arguments (out_dtype).
+        # This test verifies that torch.compile handles the similar API (relu_) correctly.
+        return F.relu_(x)
+
+    # Execute the compiled function
+    compiled_relu_inplace(input_tensor)
+
+    # Assertion to verify the operation was performed correctly
+    assert torch.all(input_tensor >= 0), "In-place ReLU should result in all non-negative values"
+else:
+    print("CUDA not available, skipping test.")

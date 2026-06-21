@@ -1,0 +1,87 @@
+import torch
+import torch.distributed as dist
+import os
+
+# Setup for single-process distributed run to ensure the test is runnable
+# without external launchers.
+def setup_distributed():
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test")
+        return False
+    
+    if not dist.is_available():
+        print("Distributed not available, skipping test")
+        return False
+
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
+    
+    # Initialize NCCL for CUDA tensors
+    try:
+        dist.init_process_group(backend='nccl', rank=0, world_size=1)
+        torch.cuda.set_device(0)
+        return True
+    except Exception as e:
+        print(f"Distributed setup failed: {e}")
+        return False
+
+if not setup_distributed():
+    exit(0)
+
+# Fix: Check if torch._dynamo is available before accessing it
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+else:
+    print("torch._dynamo not available, skipping dynamo configuration")
+
+torch.manual_seed(1215252001)
+
+def fuzzed_program(arg_0, arg_1, arg_2):
+    var_node_4 = arg_0 # size=(9, 1, 15, 4), stride=(60, 60, 0, 1), dtype=int32, device=cuda
+    var_node_3 = torch.squeeze(var_node_4) # size=(9, 15, 4), stride=(60, 4, 1), dtype=int32, device=cuda
+    var_node_2 = torch.chunk(var_node_3, 4, dim=2)[0] # size=(9, 15, 1), stride=(1, 1, 1), dtype=int32, device=cuda
+    var_node_1 = torch.squeeze(var_node_2) # size=(9, 15), stride=(0, 1), dtype=int32, device=cuda
+    var_node_7 = arg_1 # size=(20, 15), stride=(15, 1), dtype=int64, device=cuda
+    var_node_8 = arg_2 # size=(18, 15), stride=(15, 1), dtype=int64, device=cuda
+    _input_size_var_node_6 = var_node_7.size(0)
+    _index_var_node_6 = torch.randint(0, _input_size_var_node_6, (18, 15), device=var_node_7.device)
+    var_node_6 = torch.gather(var_node_7, 0, _index_var_node_6) # size=(18, 15), stride=(0, 0), dtype=int64, device=cuda
+    var_node_5 = torch.chunk(var_node_6, 2, dim=0)[0] # size=(9, 15), stride=(0, 1), dtype=int64, device=cuda
+    var_node_0 = torch.mul(var_node_1, var_node_5) # size=(9, 15), stride=(0, 1), dtype=int64, device=cuda
+    
+    # Adaptation: Use torch.distributed.reduce instead of the sentinel logic
+    # We clone the tensor because reduce is in-place, and we want to return a result
+    # similar to the original structure.
+    result = var_node_0.clone()
+    # With world_size=1, dst=0, this is a valid call.
+    dist.reduce(result, dst=0)
+    
+    return result
+
+arg_0 = torch.as_strided(torch.randint(5, 30, (484,)).to(torch.int32), (9, 1, 15, 4), (60, 60, 0, 1)).cuda()
+arg_1 = torch.as_strided(torch.randint(5, 30, (300,)).to(torch.int64), (20, 15), (15, 1)).cuda()
+arg_2 = torch.as_strided(torch.randint(5, 30, (270,)).to(torch.int64), (18, 15), (15, 1)).cuda()
+
+args = (arg_0, arg_1, arg_2)
+
+# Test Eager mode
+try:
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# Test Compiled mode
+# Fix: Check if torch.compile is available
+if hasattr(torch, 'compile'):
+    try:
+        compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+        result_compiled = compiled_program(*args)
+        print(' compile success')
+    except Exception as e:
+        print(f' compile failed: {e}')
+else:
+    print(" torch.compile not available, skipping compiled test")
+
+# Cleanup
+dist.destroy_process_group()

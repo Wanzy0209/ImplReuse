@@ -1,0 +1,58 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import threading
+import time
+import os
+
+def run_gather_object_test(rank, world_size):
+    """
+    Test function to verify GIL behavior of torch.distributed.gather_object.
+    Adapted from the original torch_compile GIL bug report.
+    """
+    # Initialize the distributed process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Helper to check if GIL is released
+    # If GIL is released, this thread will increment the counter
+    # while the main thread is blocked in gather_object.
+    counter = {'value': 0, 'stop': False}
+
+    def worker():
+        while not counter['stop']:
+            counter['value'] += 1
+            time.sleep(0.001)
+
+    t = threading.Thread(target=worker)
+    t.start()
+
+    # Adapted call site: Loop calling the API
+    # Original: for _ in range(10): torch_compile_add(x, y)
+    # Adapted: for _ in range(10): dist.gather_object(...)
+    # Fix: Increased loop count to 100 to ensure the GIL release is observable
+    # and the counter has sufficient time to reach the assertion threshold.
+    for _ in range(100):
+        obj = {"rank": rank, "data": list(range(100))}
+        gather_list = [None] * world_size if rank == 0 else None
+        dist.gather_object(obj, gather_list, dst=0)
+
+    counter['stop'] = True
+    t.join()
+
+    if rank == 0:
+        print(f"Final GIL monitor counter value: {counter['value']}")
+        # If the counter is high, it implies the GIL was released during the operation.
+        # If it's very low (e.g. < 10), the GIL was likely held.
+        # Note: This is a heuristic check.
+        assert counter['value'] > 100, "GIL appears to be held during gather_object"
+
+    dist.destroy_process_group()
+
+def main():
+    world_size = 2
+    mp.spawn(run_gather_object_test, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()

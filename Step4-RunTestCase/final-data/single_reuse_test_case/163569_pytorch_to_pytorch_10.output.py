@@ -1,0 +1,65 @@
+import torch
+import torch.nn as nn
+import torch.nn.utils as utils
+
+# Replicate the configuration from the original bug report
+# Added safety checks for attributes that might not exist in all PyTorch versions
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+if hasattr(torch, '_inductor'):
+    torch._inductor.config.emulate_precision_casts = True
+
+# Define a model that applies spectral normalization to a Conv1d layer
+class SpectralConv1dModel(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size):
+        super().__init__()
+        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size)
+        # Apply spectral normalization to the 'weight' parameter of the convolution
+        utils.spectral_norm(self.conv, name='weight')
+
+    def forward(self, x):
+        return self.conv(x)
+
+def run_test():
+    # Input tensor dimensions matching the original bug's t4 tensor
+    # size=(17, 64, 358), dtype=float32, device=cuda
+    input_tensor = torch.rand([17, 64, 358], dtype=torch.float32, device='cuda', requires_grad=True)
+
+    # Initialize model with dimensions matching the original bug's conv1d call
+    # in_channels=64, out_channels=261, kernel_size=1
+    model = SpectralConv1dModel(in_channels=64, out_channels=261, kernel_size=1).cuda()
+
+    # 1. Eager Execution
+    out_eager = model(input_tensor)
+    loss_eager = out_eager.sum()
+    loss_eager.backward()
+    print('Eager Success! ')
+
+    # 2. Compiled Execution
+    compiled_model = torch.compile(model, fullgraph=True, dynamic=True)
+    
+    # Reset gradients for a fair comparison
+    model.zero_grad()
+    if input_tensor.grad is not None:
+        input_tensor.grad.zero_()
+
+    out_compiled = compiled_model(input_tensor)
+    loss_compiled = out_compiled.sum()
+    loss_compiled.backward()
+    print('Compile Success! ')
+
+    # 3. Verification
+    # Check if outputs are close
+    assert torch.allclose(out_eager, out_compiled, atol=1e-4), "Output mismatch between eager and compiled"
+    # Check if gradients are close
+    assert torch.allclose(model.conv.weight.grad, compiled_model.conv.weight.grad, atol=1e-4), "Weight gradient mismatch"
+    
+    print("Test Passed: Outputs and Gradients match.")
+
+if __name__ == '__main__':
+    if torch.cuda.is_available():
+        run_test()
+    else:
+        print("CUDA is not available. Skipping test.")

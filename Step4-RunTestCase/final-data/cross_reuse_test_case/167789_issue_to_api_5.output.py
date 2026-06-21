@@ -1,0 +1,36 @@
+import sys
+import torch
+from torch.library import Library
+
+# Define a custom library and operator to leverage the torch.library API context
+lib = Library("test_recursion_lib", "DEF")
+lib.define("recursive_step(Tensor x, int n) -> Tensor")
+
+# Implement the recursive logic as a custom operator
+def recursive_step_impl(x, n):
+    if n == 0:
+        return x
+    # Recursively call the custom operator
+    return torch.ops.test_recursion_lib.recursive_step(x, n - 1) + 1
+
+# Register the implementation
+lib.impl("recursive_step", recursive_step_impl)
+
+# Set recursion limit high to avoid RecursionError in Python
+sys.setrecursionlimit(10000000)
+
+# Define the outer function to be compiled
+@torch.compile(backend="eager")
+def outer(x):
+    # Call the custom operator which performs recursion
+    return torch.ops.test_recursion_lib.recursive_step(x, 1000)
+
+# Run the test
+input_tensor = torch.ones(3)
+result = outer(input_tensor)
+
+# Verify the result is correct (1000 added to ones)
+expected = torch.ones(3) + 1000
+assert torch.allclose(result, expected), f"Expected {expected}, but got {result}"
+
+print("Test passed: torch.compile respects recursion limit with custom library operators.")

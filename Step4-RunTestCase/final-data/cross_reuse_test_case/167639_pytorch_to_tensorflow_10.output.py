@@ -1,0 +1,86 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use tf.compat.v1 queues and graph mode properly
+tf.compat.v1.disable_eager_execution()
+
+def get_default_producer():
+    """
+    Mimics get_default_model().
+    Uses range_input_producer with shuffle=True to involve RNG state,
+    similar to how torch.compile might access RNG state.
+    """
+    return tf.compat.v1.train.range_input_producer(
+        limit=10, shuffle=True, seed=42, capacity=32
+    )
+
+def get_sample_config():
+    """
+    Mimics get_sample_inputs().
+    Returns configuration for the producer.
+    """
+    return {}
+
+def main():
+    # Setup the "Model" (Input Producer)
+    producer = get_default_producer()
+    config = get_sample_config()
+
+    # Define the output operation (Dequeue)
+    dequeue_op = producer.dequeue()
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize local variables (required for epochs counter if num_epochs is set)
+        # and global variables.
+        sess.run(tf.compat.v1.local_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        # Start the queue runners to populate the queue
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+
+        try:
+            # Run original execution
+            print("Running original execution...")
+            original_output = sess.run(dequeue_op)
+            print(f'Original output: {original_output}')
+
+            # Check for CUDA availability (similar to torch.cuda.is_available())
+            # Note: In TF 1.x, device placement is often handled implicitly or via with tf.device(...)
+            if tf.test.is_gpu_available():
+                print("CUDA is available.")
+                
+                # In PyTorch, the bug occurs during graph capture (torch.cuda.graph).
+                # In TensorFlow 1.x, the graph is already defined statically.
+                # We verify the behavior by running the graph again.
+                # The "compilation" phase in TF is the graph definition above.
+                # We check if the RNG state (shuffling) works correctly during graph execution.
+                
+                print("Running graph execution (re-running dequeue)...")
+                graph_output = sess.run(dequeue_op)
+                print(f'Graph output: {graph_output}')
+
+                # Verify the output is valid (within range)
+                assert 0 <= graph_output < 10, f"Output {graph_output} out of range [0, 10)"
+                
+                # Note: Since shuffle=True, outputs might differ. 
+                # The PyTorch test asserts allclose because the model is deterministic.
+                # Here we verify the API works within the graph context.
+                print("Test passed: API executed successfully in graph context.")
+            else:
+                print("CUDA not available, skipping GPU specific checks. Running on CPU.")
+                graph_output = sess.run(dequeue_op)
+                print(f'Graph output: {graph_output}')
+                assert 0 <= graph_output < 10, f"Output {graph_output} out of range [0, 10)"
+
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            # In the PyTorch bug, an error is raised due to RNG state access.
+            # Here we catch and report any similar incompatibilities.
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    main()

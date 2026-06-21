@@ -1,0 +1,108 @@
+import torch
+import tensorflow as tf
+from tensorflow.python.tpu.tpu import PaddingSpec
+
+# Verify the API exists and has expected values
+assert PaddingSpec.AUTO == 0
+assert PaddingSpec.POWER_OF_TWO == 1
+
+def pad_to_spec(tensor, spec):
+    """
+    Pads the tensor based on the PaddingSpec policy.
+    This leverages the similar API to handle dynamic shapes,
+    addressing the root cause of the original bug (shape mismatches).
+    """
+    if spec == PaddingSpec.POWER_OF_TWO:
+        # Calculate next power of 2 for the first dimension
+        current_size = tf.shape(tensor)[0]
+        # Avoid log(0)
+        current_size = tf.maximum(current_size, 1)
+        next_pow2 = tf.cast(tf.pow(2.0, tf.math.ceil(tf.math.log(tf.cast(current_size, tf.float32)) / tf.math.log(2.0))), tf.int32)
+        
+        padding_needed = next_pow2 - current_size
+        paddings = [[0, padding_needed]] + [[0, 0]] * (tensor.shape.rank - 1)
+        return tf.pad(tensor, paddings)
+    elif spec == PaddingSpec.AUTO:
+        # For AUTO, we simulate padding to a fixed max size (e.g., 16, based on the bug's final concat size)
+        # to ensure compatibility across replicas.
+        max_size = 16
+        current_size = tf.shape(tensor)[0]
+        padding_needed = max_size - current_size
+        # Ensure non-negative padding
+        padding_needed = tf.maximum(padding_needed, 0)
+        paddings = [[0, padding_needed]] + [[0, 0]] * (tensor.shape.rank - 1)
+        return tf.pad(tensor, paddings)
+    return tensor
+
+def fuzzed_program_tf(arg_0, spec):
+    """
+    TensorFlow version of the fuzzed program logic.
+    Preserves the original bug reproduction logic (chunk/squeeze/cat)
+    but applies padding via PaddingSpec to handle shapes.
+    """
+    # Apply padding based on the spec
+    var_node_3 = pad_to_spec(arg_0, spec)
+    
+    # Replicate torch.chunk(var_node_3, 4, dim=0)[0]
+    # tf.split returns a list, we take the first element
+    var_node_2 = tf.split(var_node_3, 4, axis=0)[0]
+    
+    # Replicate torch.squeeze
+    # Note: In the original bug, var_node_9 was (6,1) -> squeeze -> (6,)
+    # Here we just ensure the operation is present.
+    var_node_8 = tf.squeeze(var_node_2, axis=-1) if var_node_2.shape[-1] == 1 else var_node_2
+    
+    # Replicate torch.cat
+    # We concatenate the chunk with itself to simulate the cat operation in the bug
+    var_node_0 = tf.concat([var_node_2, var_node_8], axis=0)
+    
+    return var_node_0
+
+# Test Case
+def test_padding_spec_divergence():
+    # Create a tensor similar to the bug report (size 12)
+    # Using bool dtype as in the original bug
+    arg_0 = tf.cast(tf.random.uniform((12,), minval=0, maxval=2, dtype=tf.int32), tf.bool)
+    
+    # Test with POWER_OF_TWO spec
+    spec = PaddingSpec.POWER_OF_TWO
+    
+    # Eager execution
+    result_eager = fuzzed_program_tf(arg_0, spec)
+    
+    # Compiled execution (Graph mode) - analogous to torch.compile
+    compiled_program = tf.function(fuzzed_program_tf)
+    result_compiled = compiled_program(arg_0, spec)
+    
+    # Check for divergence (Eager vs Compile)
+    # If the shapes or values differ, it indicates a bug similar to the PyTorch issue
+    assert tf.reduce_all(tf.equal(result_eager, result_compiled)).numpy(), \
+        f"Eager and Compiled results diverged! Eager shape: {result_eager.shape}, Compiled shape: {result_compiled.shape}"
+        
+    # Check shape expectations
+    # Original size 12. Next power of 2 is 16.
+    # Chunk 16 into 4 -> size 4.
+    # Concat [4, 4] -> size 8.
+    expected_shape = tf.TensorShape([8])
+    assert result_eager.shape == expected_shape, \
+        f"Unexpected shape {result_eager.shape}, expected {expected_shape}"
+
+    print(" Test passed: No eager/compile divergence with PaddingSpec.POWER_OF_TWO")
+
+    # Test with AUTO spec
+    spec_auto = PaddingSpec.AUTO
+    result_eager_auto = fuzzed_program_tf(arg_0, spec_auto)
+    result_compiled_auto = tf.function(fuzzed_program_tf)(arg_0, spec_auto)
+    
+    assert tf.reduce_all(tf.equal(result_eager_auto, result_compiled_auto)).numpy(), \
+        "Divergence with PaddingSpec.AUTO"
+        
+    # Original size 12. AUTO pads to 16.
+    # Chunk 16 into 4 -> size 4.
+    # Concat [4, 4] -> size 8.
+    assert result_eager_auto.shape == expected_shape
+    
+    print(" Test passed: No eager/compile divergence with PaddingSpec.AUTO")
+
+if __name__ == "__main__":
+    test_padding_spec_divergence()

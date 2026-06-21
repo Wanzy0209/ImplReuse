@@ -1,0 +1,38 @@
+import torch
+from torch.distributions import constraints, Distribution
+
+# Define a custom distribution to test the similar API: 
+# torch.distributions.constraints.dependent_property
+class CustomUniform(Distribution):
+    def __init__(self, low, high):
+        self.low = low
+        self.high = high
+        # Initialize base distribution
+        super().__init__(batch_shape=torch.Size(), event_shape=torch.Size())
+
+    # Use the dependent_property decorator as specified in the API info
+    @constraints.dependent_property(is_discrete=False, event_dim=0)
+    def support(self):
+        return constraints.interval(self.low, self.high)
+
+# Setup test parameters
+low_val = 0.0
+high_val = 1.0
+
+# Instantiate the distribution
+dist = CustomUniform(torch.tensor(low_val), torch.tensor(high_val))
+
+# Execute: Access the property to ensure the decorator works correctly
+support_constraint = dist.support
+
+# Verification: Check that the constraint is applied correctly
+assert isinstance(support_constraint, constraints.interval), \
+    f"Expected constraints.interval, got {type(support_constraint)}"
+
+# Verification: Check static attributes provided to the decorator
+assert support_constraint.is_discrete == False, \
+    "is_discrete attribute should be False"
+assert support_constraint.event_dim == 0, \
+    "event_dim attribute should be 0"
+
+print("Test passed: torch.distributions.constraints.dependent_property works as expected.")

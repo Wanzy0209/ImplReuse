@@ -1,0 +1,47 @@
+"""
+Test case for torch.all within a torch.compiled model.
+Adapted from the context of Issue 161904 regarding pipeline parallel schedules.
+"""
+
+import torch
+import torch.nn as nn
+
+class SimpleModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(32, 32)
+
+    def forward(self, x):
+        x = self.linear(x)
+        # Using torch.all to verify a condition on the tensor
+        # This mimics logic that might be present in pipeline schedules or model checks
+        check = torch.all(x > -1000)
+        return x, check
+
+def main() -> None:
+    # Reproduce the context of using torch.compile
+    model = SimpleModel()
+    
+    # Apply torch.compile as in the original bug report
+    # Fix: Check if torch.compile is available (requires PyTorch 2.0+)
+    if hasattr(torch, 'compile'):
+        compiled_model = torch.compile(model)
+    else:
+        print("Warning: torch.compile is not available in this PyTorch version. Running uncompiled model.")
+        compiled_model = model
+    
+    # Create dummy input
+    input_tensor = torch.randn(8, 32)
+    
+    # Run the compiled model
+    output, result = compiled_model(input_tensor)
+    
+    # Assertions to verify correctness
+    assert output.shape == (8, 32), "Output shape mismatch"
+    assert result.shape == (), "torch.all should return a scalar tensor"
+    assert result.item() == True, "Expected all values to be greater than -1000"
+    
+    print("Test passed: torch.all works correctly")
+
+if __name__ == "__main__":
+    main()

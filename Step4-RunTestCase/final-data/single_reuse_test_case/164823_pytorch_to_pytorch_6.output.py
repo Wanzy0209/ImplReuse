@@ -1,0 +1,42 @@
+import torch
+import torch.nn as nn
+
+class TestModel(nn.Module):
+    def forward(self, x):
+        # Replicate the sparse conversion pattern from the original bug report
+        x_sparse = x.to_sparse()
+        
+        # Prepare initial guess for lobpcg
+        # k=2 for minimal computation
+        k = 2
+        X_init = torch.randn(x.size(0), k, device=x.device, dtype=x.dtype)
+        
+        # Call the similar API: torch.lobpcg
+        # lobpcg finds eigenvalues of a symmetric matrix
+        eigenvalues, _ = torch.lobpcg(x_sparse, k=k, X=X_init)
+        
+        return eigenvalues
+
+# Create a symmetric positive definite matrix (required for lobpcg)
+# A = X @ X.T + I
+dense_input = torch.randn(10, 10)
+spd_matrix = dense_input @ dense_input.T + torch.eye(10)
+
+model = TestModel()
+
+# Test Eager
+print("Testing Eager...")
+try:
+    eager_out = model(spd_matrix)
+    print("Eager output:", eager_out)
+except Exception as e:
+    print(f"Eager failed: {e}")
+
+# Test Compiled
+print("\nTesting Compiled...")
+try:
+    compiled_model = torch.compile(model)
+    compiled_out = compiled_model(spd_matrix)
+    print("Compiled output:", compiled_out)
+except Exception as e:
+    print(f"Compiled failed: {e}")

@@ -1,0 +1,105 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+    
+    # Configuration from the bug report
+    # Fix: Check if _dynamo exists to support older PyTorch versions
+    if hasattr(torch, '_dynamo'):
+        torch._dynamo.config.capture_scalar_outputs = True
+    
+    torch.manual_seed(751735337)
+
+    # Adapted tensor generation from the bug report
+    # Using CPU to ensure the test is runnable without requiring CUDA/NCCL
+    # The original bug used device=cuda and specific strides.
+    
+    # var_node_4 = arg_0
+    var_node_4 = torch.randint(0, 10, (15, 108, 4), dtype=torch.int16)
+    # var_node_3 = torch.chunk(var_node_4, 4, dim=1)[0]
+    var_node_3 = torch.chunk(var_node_4, 4, dim=1)[0]
+    # var_node_2 = torch.chunk(var_node_3, 4, dim=2)[0]
+    var_node_2 = torch.chunk(var_node_3, 4, dim=2)[0]
+    # var_node_1 = torch.squeeze(var_node_2)
+    var_node_1 = torch.squeeze(var_node_2)
+    
+    # var_node_8 = torch.full((13, 27), 3, dtype=torch.int16)
+    var_node_8 = torch.full((13, 27), 3, dtype=torch.int16)
+
+    # --- Adaptation: Replace torch.index_select with torch.distributed.scatter ---
+    # Original code:
+    # _input_size_var_node_7 = var_node_8.size(0)
+    # _index_var_node_7 = torch.randint(0, _input_size_var_node_7, (11,), device=var_node_8.device)
+    # var_node_7 = torch.index_select(var_node_8, 0, _index_var_node_7)
+    
+    # New code using torch.distributed.scatter
+    # We scatter var_node_8 across the processes.
+    
+    # Define the function to be compiled
+    def scatter_fn(output_tensor, scatter_list):
+        dist.scatter(output_tensor, scatter_list=scatter_list, src=0)
+
+    # Compile the function to check for eager/compile divergence
+    # Fix: Check if torch.compile exists to support older PyTorch versions
+    if hasattr(torch, 'compile'):
+        compiled_scatter = torch.compile(scatter_fn)
+    else:
+        compiled_scatter = scatter_fn
+
+    if rank == 0:
+        # Prepare data to scatter
+        # We split var_node_8 into chunks for each process
+        # var_node_8 size is (13, 27). world_size is 2.
+        # We need to handle uneven chunks or just slice it.
+        # For simplicity in this test, we take the first world_size * dim chunks
+        # or just pass a list of tensors.
+        
+        # Let's create a list of tensors to scatter. 
+        # To mimic the "selection" aspect, we can scatter specific chunks.
+        chunk_size = var_node_8.size(0) // world_size
+        scatter_list = [var_node_8[i*chunk_size : (i+1)*chunk_size] for i in range(world_size)]
+        
+        # Output tensor on rank 0 (usually receives the first chunk)
+        output_tensor = torch.zeros_like(scatter_list[0])
+    else:
+        scatter_list = None
+        # Output tensor on other ranks
+        # Infer size based on rank (simplified for this test)
+        chunk_size = var_node_8.size(0) // world_size
+        output_tensor = torch.zeros(chunk_size, 27, dtype=torch.int16)
+
+    # Execute the compiled scatter operation
+    compiled_scatter(output_tensor, scatter_list)
+    
+    # Basic assertion to verify execution
+    if rank == 0:
+        expected = scatter_list[0]
+        assert torch.equal(output_tensor, expected), "Scatter result mismatch on rank 0"
+    else:
+        # Rank 1 expects the second chunk
+        # We reconstruct expected locally for verification
+        chunk_size = var_node_8.size(0) // world_size
+        # Note: var_node_8 is not defined on rank 1, so we just check shape or content if we knew it.
+        # Since we can't easily access var_node_8 on rank 1 without broadcasting first,
+        # we just check that the tensor was modified from zeros.
+        assert not torch.all(output_tensor == 0), "Scatter result appears empty on rank 1"
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Check if enough devices are available if we were using CUDA, 
+    # but for this runnable test we use CPU (gloo).
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

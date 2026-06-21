@@ -1,0 +1,68 @@
+import tensorflow as tf
+
+# Wrapper over the tf.io.serialize_tensor operation.
+# This class mirrors the structure of MPSSoftshrink from the original bug report,
+# adapting the logic to use the similar API (tf.io.serialize_tensor).
+class TFSerializationLayer(tf.keras.layers.Layer):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def call(self, inputs):
+        # Using the similar API: tf.io.serialize_tensor
+        return tf.io.serialize_tensor(inputs)
+
+# Wrapper over the Sequential layer, using the custom serialization layer.
+# This mirrors the CustomMPSSoftshrinkModel structure from the issue.
+class CustomSerializationModel(tf.keras.Sequential):
+    def __init__(
+        self,
+        input_size: int = 784,
+        lin1_size: int = 256,
+        lin2_size: int = 256,
+        lin3_size: int = 256,
+        output_size: int = 10,
+    ):
+        super().__init__()
+        # Define the model structure
+        self.add(tf.keras.layers.Dense(lin1_size, input_shape=(input_size,)))
+        self.add(tf.keras.layers.Dense(lin2_size))
+        self.add(tf.keras.layers.Dense(lin3_size))
+        self.add(tf.keras.layers.Dense(output_size))
+        # Add the custom serialization layer at the end
+        self.add(TFSerializationLayer())
+
+def test_serialize_tensor_custom_layer():
+    # Check for GPU availability to mirror the mps check in the original bug
+    # Handle compatibility for both TF 2.x and TF 1.x environments
+    try:
+        gpus = tf.config.list_physical_devices('GPU')
+        device_name = '/GPU:0' if gpus else '/CPU:0'
+    except AttributeError:
+        # Fallback for TensorFlow 1.x or older versions
+        try:
+            is_gpu_available = tf.test.is_gpu_available()
+            device_name = '/GPU:0' if is_gpu_available else '/CPU:0'
+        except Exception:
+            # Default to CPU if detection fails
+            device_name = '/CPU:0'
+    
+    print(f"Running test on device: {device_name}")
+
+    # Create dummy input
+    batch_size = 32
+    x = tf.random.normal((batch_size, 784))
+
+    # Run on specific device, mirroring mps_device usage
+    with tf.device(device_name):
+        model = CustomSerializationModel()
+        output = model(x)
+
+    # Assertions
+    # serialize_tensor converts a tensor to a serialized TensorProto string.
+    # For a batch of tensors, it returns a 1D tensor of strings.
+    assert output.dtype == tf.string, f"Expected dtype string, got {output.dtype}"
+    assert output.shape == (batch_size,), f"Expected shape ({batch_size},), got {output.shape}"
+    print("Test passed: Custom serialization layer executed successfully.")
+
+if __name__ == "__main__":
+    test_serialize_tensor_custom_layer()

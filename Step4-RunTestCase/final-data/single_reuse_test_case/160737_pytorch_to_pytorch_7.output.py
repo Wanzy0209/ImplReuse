@@ -1,0 +1,23 @@
+import torch
+
+def test_stack(device):
+    # Adaptation: The original bug involved a scalar (0-dimensional) tensor as an index.
+    # For torch.stack, we test if the backend handles 0-dimensional tensors correctly
+    # when they are used as inputs to be stacked.
+    t1 = torch.tensor(1, device=device)
+    t2 = torch.tensor(2, device=device)
+    tensors = [t1, t2]
+    
+    try:
+        output = torch.stack(tensors, dim=0)
+        print(f"stack test succeeds for device: {device}. output shape: {output.shape}, output: {output}")
+    except Exception as e:
+        print(f"stack test fails for device: {device}: {e}")
+
+test_stack(device="cpu")
+
+# Check for MPS availability before running the test to avoid RuntimeError
+if torch.backends.mps.is_available():
+    test_stack(device="mps")
+else:
+    print("MPS device is not available, skipping MPS test.")

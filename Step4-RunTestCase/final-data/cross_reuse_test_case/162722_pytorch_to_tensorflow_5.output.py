@@ -1,0 +1,180 @@
+import tensorflow as tf
+import numpy as np
+
+# Disable eager execution to use TF1 graph mode and QueueRunners
+tf.compat.v1.disable_eager_execution()
+
+def causal_attention(values, keys, query, mask, embed_size, heads):
+    """
+    TensorFlow implementation of CausalAttention.
+    """
+    head_dim = embed_size // heads
+    N = tf.shape(query)[0]
+    value_len = tf.shape(values)[1]
+    key_len = tf.shape(keys)[1]
+    query_len = tf.shape(query)[1]
+
+    # Reshape for multi-head attention
+    values = tf.reshape(values, [N, value_len, heads, head_dim])
+    keys = tf.reshape(keys, [N, key_len, heads, head_dim])
+    queries = tf.reshape(query, [N, query_len, heads, head_dim])
+
+    # Linear projections
+    # Note: In TF1 graph mode, layers create variables. We assume reuse or simple creation for this test.
+    values = tf.compat.v1.layers.dense(values, head_dim, use_bias=False, name='values')
+    keys = tf.compat.v1.layers.dense(keys, head_dim, use_bias=False, name='keys')
+    queries = tf.compat.v1.layers.dense(queries, head_dim, use_bias=False, name='queries')
+
+    # Energy calculation
+    energy = tf.einsum("nqhd,nkhd->nhqk", queries, keys)
+
+    # Masking
+    if mask is not None:
+        # Reshape mask to match energy dimensions for broadcasting
+        # mask shape: [N, key_len] -> [N, 1, 1, key_len]
+        # energy shape: [N, heads, query_len, key_len]
+        mask = tf.reshape(mask, [N, 1, 1, key_len])
+        
+        # Tile mask to explicitly match energy shape to avoid broadcasting errors in tf.where
+        # This resolves the "Dimension 1 in both shapes must be equal" error
+        mask = tf.tile(mask, [1, heads, query_len, 1])
+        
+        energy = tf.where(tf.equal(mask, 0), tf.fill(tf.shape(energy), -1e20), energy)
+
+    # Attention
+    attention = tf.nn.softmax(energy / tf.sqrt(tf.cast(embed_size, tf.float32)), axis=3)
+
+    # Output
+    out = tf.einsum("nhql,nlhd->nqhd", attention, values)
+    out = tf.reshape(out, [N, query_len, heads * head_dim])
+    
+    # Final linear layer
+    out = tf.compat.v1.layers.dense(out, embed_size, name='fc_out')
+    return out
+
+def causal_attention_block(x, mask, embed_size, heads, forward_expansion, dropout_rate):
+    """
+    TensorFlow implementation of CausalAttentionBlock.
+    """
+    # Attention
+    attention = causal_attention(x, x, x, mask, embed_size, heads)
+    
+    # Add & Norm
+    attention = tf.compat.v1.layers.layer_normalization(attention + x)
+    
+    # Feed Forward
+    forward = tf.compat.v1.layers.dense(attention, embed_size * forward_expansion, activation=tf.nn.relu)
+    forward = tf.compat.v1.layers.dense(forward, embed_size)
+    
+    # Add & Norm
+    out = tf.compat.v1.layers.layer_normalization(forward + attention)
+    return out
+
+def causal_attention_dnn(x, mask, input_size, embed_size, num_layers, heads, 
+                          forward_expansion, output_size, dropout_rate, max_length):
+    """
+    TensorFlow implementation of CausalAttentionDNN.
+    """
+    N, seq_length = tf.shape(x)[0], tf.shape(x)[1]
+    
+    # Embeddings
+    word_embedding = tf.compat.v1.get_variable("word_embedding", [input_size, embed_size])
+    position_embedding = tf.compat.v1.get_variable("position_embedding", [max_length, embed_size])
+    
+    positions = tf.tile(tf.expand_dims(tf.range(seq_length), 0), [N, 1])
+    
+    out = tf.nn.embedding_lookup(word_embedding, x) + tf.nn.embedding_lookup(position_embedding, positions)
+    out = tf.nn.dropout(out, rate=dropout_rate)
+    
+    # Transformer Blocks
+    for i in range(num_layers):
+        with tf.compat.v1.variable_scope(f"block_{i}"):
+            out = causal_attention_block(out, mask, embed_size, heads, forward_expansion, dropout_rate)
+            
+    # Final Output
+    out = tf.compat.v1.layers.dense(out, output_size, name='final_fc')
+    return out
+
+def test_queue_runner_consistency():
+    """
+    Test case adapted to use tf.compat.v1.train.add_queue_runner.
+    Verifies that the model runs consistently when fed via a QueueRunner.
+    """
+    # Parameters
+    batch_size = 2
+    seq_length = 10
+    input_size = 50
+    embed_size = 64
+    num_layers = 1
+    heads = 4
+    forward_expansion = 2
+    output_size = 10
+    dropout_rate = 0.0 # Set to 0 for deterministic testing
+    max_length = 10
+
+    # 1. Define Placeholders for feeding data into the queue
+    x_ph = tf.compat.v1.placeholder(tf.int32, shape=[batch_size, seq_length], name='x_input')
+    mask_ph = tf.compat.v1.placeholder(tf.float32, shape=[batch_size, seq_length], name='mask_input')
+
+    # 2. Create a Queue
+    # We use a FIFOQueue to ensure data is processed in order for consistency checks
+    queue = tf.compat.v1.FIFOQueue(
+        capacity=5, 
+        dtypes=[tf.int32, tf.float32], 
+        shapes=[[batch_size, seq_length], [batch_size, seq_length]],
+        name='input_queue'
+    )
+
+    # 3. Define Enqueue Operation
+    enqueue_op = queue.enqueue([x_ph, mask_ph])
+
+    # 4. Create and Add QueueRunner
+    # This is the API under test: tf.compat.v1.train.add_queue_runner
+    qr = tf.compat.v1.train.QueueRunner(queue, [enqueue_op])
+    tf.compat.v1.train.add_queue_runner(qr)
+
+    # 5. Dequeue data and run the model
+    x_batch, mask_batch = queue.dequeue()
+    
+    # Build the model graph using the dequeued tensors
+    model_output = causal_attention_dnn(
+        x_batch, mask_batch, input_size, embed_size, num_layers, heads,
+        forward_expansion, output_size, dropout_rate, max_length
+    )
+
+    # 6. Generate dummy data
+    np.random.seed(42)
+    dummy_x = np.random.randint(0, input_size, size=(batch_size, seq_length))
+    dummy_mask = np.ones((batch_size, seq_length))
+
+    # 7. Execute Session
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables
+        sess.run(tf.compat.v1.global_variables_initializer())
+        
+        # Start QueueRunner threads
+        coord = tf.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(sess=sess, coord=coord)
+        
+        try:
+            # Enqueue data twice
+            sess.run(enqueue_op, feed_dict={x_ph: dummy_x, mask_ph: dummy_mask})
+            sess.run(enqueue_op, feed_dict={x_ph: dummy_x, mask_ph: dummy_mask})
+            
+            # Run the model twice (dequeuing the same data)
+            # This checks for numerical consistency, similar to the original bug report
+            out1 = sess.run(model_output)
+            out2 = sess.run(model_output)
+            
+            # Assertion: The outputs should be identical because inputs and weights are static
+            # (assuming dropout is 0)
+            np.testing.assert_allclose(out1, out2, rtol=1e-5, atol=1e-5)
+            print("Test Passed: Numerical consistency verified with tf.compat.v1.train.add_queue_runner.")
+            
+        finally:
+            # Stop threads
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_queue_runner_consistency()

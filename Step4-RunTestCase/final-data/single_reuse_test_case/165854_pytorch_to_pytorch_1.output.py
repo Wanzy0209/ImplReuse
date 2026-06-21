@@ -1,0 +1,80 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+
+def cleanup():
+    dist.destroy_process_group()
+
+
+def run_with_size(compiled_reduce, N, device, dtype, rank):
+    """Run distributed reduce with a specific tensor size and captured buffer."""
+    print(f"  Rank {rank}: Running with N={N}")
+
+    # Create captured buffer that depends on dynamic N
+    # This mimics 'head_scale' in the original bug
+    scale = torch.randn(N, device=device, dtype=dtype)
+
+    # Run multiple iterations
+    for i in range(5):
+        tensor = torch.randn(N, device=device, dtype=dtype)
+        
+        # Call compiled function, passing the dynamic buffer
+        # This mimics passing score_mod which captured head_scale
+        compiled_reduce(tensor, scale)
+        
+        if rank == 0:
+            # Verify something? Just ensure it runs.
+            pass
+
+    print(f"  Rank {rank}:  Completed {i+1} iterations")
+
+
+def main(rank, world_size):
+    setup(rank, world_size)
+    device = f"cuda:{rank}" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16
+    torch.manual_seed(0)
+
+    # Test with different sizes - this makes N a dynamic dimension
+    sizes = [4, 8, 4, 16, 4]
+
+    # Define the function to be compiled
+    # It takes the tensor and the dynamic buffer (scale)
+    def reduce_func(tensor, scale):
+        # Use the buffer in the operation
+        # torch.distributed.reduce is the API under test
+        dist.reduce(tensor * scale, dst=0)
+        return tensor
+
+    # Fix: Check if torch.compile is available (requires PyTorch 2.0+)
+    # If not, run the function uncompiled to allow the test to proceed
+    if hasattr(torch, 'compile'):
+        compiled_reduce = torch.compile(reduce_func, fullgraph=True, dynamic=True)
+        compile_mode = "compiled"
+    else:
+        print(f"Rank {rank}: torch.compile not available (requires PyTorch 2.0+). Running uncompiled.")
+        compiled_reduce = reduce_func
+        compile_mode = "uncompiled"
+
+    print(f"Rank {rank}: Running distributed reduce with dynamic sizes on {device}, dtype={dtype}")
+    print(f"Rank {rank}: Testing sizes: {sizes} ({compile_mode})\n")
+
+    for iteration, N in enumerate(sizes, start=1):
+        print(f"Rank {rank}: Iteration {iteration}:")
+        run_with_size(compiled_reduce, N, device, dtype, rank)
+
+    cleanup()
+
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(main, args=(world_size,), nprocs=world_size, join=True)

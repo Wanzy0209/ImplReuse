@@ -1,0 +1,33 @@
+import torch
+import sys
+import tensorflow as tf
+# Import the internal module to verify state, as the API returns None
+from tensorflow.python.util import traceback_utils
+
+def test_enable_traceback_filtering():
+    """
+    Test that tf.debugging.enable_traceback_filtering correctly sets the
+    internal state. This mirrors the pattern of setting a global configuration
+    seen in the original PyTorch issue (torch.set_float32_matmul_precision),
+    but verifies the positive behavior (state change) rather than a negative side effect.
+    """
+    if sys.version_info >= (3, 7):
+        # Call the API (similar to torch.set_float32_matmul_precision in the original issue)
+        tf.debugging.enable_traceback_filtering()
+
+        # Verify the internal state is updated.
+        # In the PyTorch issue, internal state changes caused unwanted warnings.
+        # Here, we verify that the internal state change is the intended behavior.
+        assert traceback_utils._ENABLE_TRACEBACK_FILTERING.value is True, \
+            "Traceback filtering flag was not enabled."
+    else:
+        # Verify version constraint handling mentioned in the API documentation
+        try:
+            tf.debugging.enable_traceback_filtering()
+            assert False, "Expected RuntimeError for Python < 3.7"
+        except RuntimeError as e:
+            assert "Python 3.7" in str(e)
+
+if __name__ == '__main__':
+    test_enable_traceback_filtering()
+    print("Test passed.")

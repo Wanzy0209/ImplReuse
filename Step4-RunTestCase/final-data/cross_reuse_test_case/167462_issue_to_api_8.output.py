@@ -1,0 +1,48 @@
+import time
+import torch
+
+def test_topk_performance():
+    """
+    Test case for torch.topk speed regression.
+    Leverages torch.backends.cusparselt.version to check backend availability,
+    as performance characteristics may depend on the underlying sparse library version.
+    """
+    # Check CUDA availability
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        return
+
+    # Leverage the similar API: torch.backends.cusparselt.version
+    # This helps identify if the performance regression is related to specific backend versions.
+    cusparselt_version = torch.backends.cusparselt.version()
+    print(f"cuSPARSELt version: {cusparselt_version}")
+
+    # Original bug reproduction logic
+    BS, VOCAB, K = 128, 8000000, 1000
+    x = torch.randn((BS, VOCAB), device="cuda", dtype=torch.float16)
+    
+    # Warmup runs to avoid initialization overhead in measurements
+    for _ in range(10):
+        _ = x.topk(k=K, dim=-1)
+    
+    torch.cuda.synchronize()
+    
+    # Benchmark loop
+    walltime = []
+    for _ in range(100):
+        s = time.time()
+        _ = x.topk(k=K, dim=-1)
+        torch.cuda.synchronize()
+        e = time.time()
+        walltime.append(e - s)
+        
+    avg_latency = sum(walltime) / len(walltime)
+    print(f"Average topk latency: {1000 * avg_latency}ms")
+    
+    # Functional assertion to ensure correctness
+    values, indices = x.topk(k=K, dim=-1)
+    assert values.shape == (BS, K), f"Expected shape ({BS}, {K}), got {values.shape}"
+    assert indices.shape == (BS, K), f"Expected shape ({BS}, {K}), got {indices.shape}"
+
+if __name__ == "__main__":
+    test_topk_performance()

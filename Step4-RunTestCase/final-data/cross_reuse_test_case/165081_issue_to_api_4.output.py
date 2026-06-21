@@ -1,0 +1,61 @@
+import torch
+import torch.nn.functional as F
+
+# Fix: Handle cases where torch._dynamo might not be immediately available or missing
+try:
+    import torch._dynamo
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+except (AttributeError, ImportError):
+    print("Warning: torch._dynamo is not available in this environment.")
+    # If torch.compile is also missing, we should exit or skip, as the test cannot run.
+    if not hasattr(torch, 'compile'):
+        print("Skipping test: torch.compile is not available (requires PyTorch 2.0+).")
+        import sys
+        sys.exit(0)
+
+# Use the same seed as the original issue for reproducibility
+torch.manual_seed(52676)
+
+def test_hardtanh_dynamo_guard():
+    # Determine device (CUDA was used in the original issue)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    # Create inputs mimicking the fuzzer's style (matmul chains)
+    # Using float64 as in the original issue
+    arg_0 = torch.randn(9, 9, 9, dtype=torch.float64, device=device)
+    arg_1 = torch.randn(9, 9, 11, dtype=torch.float64, device=device)
+    
+    # Define the program using the similar API: torch.nn.functional.hardtanh_
+    def program(arg_0, arg_1):
+        # Perform matrix multiplications to build a graph
+        var_5 = torch.matmul(arg_0, arg_1)
+        
+        # Apply the similar API (in-place hardtanh)
+        # This replaces or integrates into the logic where the original bug occurred
+        F.hardtanh_(var_5, min_val=-1.0, max_val=1.0)
+        
+        # Continue with operations to ensure graph complexity
+        var_9 = torch.full((9, 11, 12), 1.5, dtype=torch.float64, device=device)
+        var_10 = torch.randn(9, 12, 8, dtype=torch.float64, device=device)
+        var_8 = torch.matmul(var_9, var_10)
+        
+        return torch.matmul(var_5, var_8)
+
+    # Compile the function with torch._dynamo
+    compiled_program = torch.compile(program, backend="eager")
+    
+    # Run in eager mode
+    result_eager = program(arg_0.clone(), arg_1.clone())
+    
+    # Run in compiled mode
+    result_compiled = compiled_program(arg_0.clone(), arg_1.clone())
+    
+    # Check for eager/compile divergence (the core issue in the bug report)
+    assert torch.allclose(result_eager, result_compiled), \
+        "Eager/Compile divergence detected with hardtanh_"
+    
+    print("Test passed: No divergence detected with hardtanh_ under dynamo.")
+
+if __name__ == "__main__":
+    test_hardtanh_dynamo_guard()

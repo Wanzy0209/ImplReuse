@@ -1,0 +1,48 @@
+import torch
+import unittest
+
+class TestTorchCompileComboKernels(unittest.TestCase):
+    def test_cumsum_with_combo_kernels(self):
+        """
+        Test case for Issue 162756: torch.compile fails with NameError 
+        when helper functions are required and combo_kernels enabled.
+        
+        This test adapts the availability check pattern from 
+        torch.backends.mkldnn.is_available to ensure the required 
+        CUDA backend and Inductor are present before running the test.
+        """
+        # Check CUDA availability
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is not available")
+
+        # Check for torch._inductor availability
+        if not hasattr(torch, '_inductor'):
+            self.skipTest("torch._inductor is not available")
+
+        # Reproduce the bug logic
+        torch._inductor.config.combo_kernels = True
+
+        @torch.compile
+        def fn(x, y, z):
+            return x.sum(1), y.mean(1), z.cumsum(1)
+
+        inps = (
+            torch.rand(16, 128, device="cuda"),
+            torch.rand(32, 128, device="cuda"),
+            torch.rand(32, 256, device="cuda"),
+        )
+
+        # The bug causes a NameError: '_triton_helper_fn_add0 is not defined'
+        # We assert that the function executes successfully.
+        try:
+            result = fn(*inps)
+            self.assertIsNotNone(result)
+            self.assertEqual(len(result), 3)
+        except NameError as e:
+            if "_triton_helper_fn" in str(e):
+                self.fail(f"Bug reproduced: {e}")
+            else:
+                raise
+
+if __name__ == "__main__":
+    unittest.main()

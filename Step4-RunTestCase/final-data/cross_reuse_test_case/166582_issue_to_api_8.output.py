@@ -1,0 +1,110 @@
+import torch
+import torch.nn as nn
+from torch._dynamo import register_backend
+from torch._inductor.compile_fx import compile_fx
+from torch.backends.cuda import cudnn_sdp_enabled
+
+# Mocking the external hardware dependency to make the test runnable
+def mock_hardware_matmul(dut, a, b, transpose=False, is_torch=False):
+    """
+    Simulates the hardware matmul operation.
+    In a real scenario, this would interact with the ASIC.
+    Here we perform a standard matmul but respect the type flow.
+    """
+    # Simulate int8 matmul behavior (simplified for test)
+    # We cast back to float for the sake of the test execution flow
+    # as the rest of the graph might expect float, or we handle the casting.
+    # The bug is about the graph break, not the numerical precision here.
+    return torch.matmul(a, b.t() if transpose else b).to(torch.float32)
+
+def dut_matmul_sync(dut, a, b, bias=None):
+    """
+    Synchronous wrapper for the custom matmul operation.
+    Includes the quantization logic described in the bug report.
+    """
+    # Quantization logic from the bug report
+    a_q = a.clamp(-128, 127).to(torch.int8)
+    b_q = b.clamp(-128, 127).to(torch.int8)
+
+    # Call the mocked hardware function
+    c = mock_hardware_matmul(dut, a_q, b_q, transpose=True, is_torch=True)
+    
+    if bias is not None:
+        # Bias addition logic
+        c = c + bias.round().to(torch.int32)
+    
+    # Return result, casting back to float for standard PyTorch compatibility in this test
+    return c.to(torch.float32)
+
+@register_backend(name="custom_tpu_backend")
+def custom_backend(gm: torch.fx.GraphModule, example_inputs):
+    """
+    Custom backend implementation that replaces nn.Linear with the custom matmul.
+    This logic is directly derived from the bug report.
+    """
+    print("\n=== FX graph received ===")
+    gm.graph.print_tabular()
+
+    # Replace every linear node
+    for node in list(gm.graph.nodes):
+        if node.target == torch.ops.aten.linear.default:
+            x, weight, bias = node.args
+            with gm.graph.inserting_before(node):
+                new_node = gm.graph.call_function(
+                    dut_matmul_sync,
+                    args=(None, x, weight, bias), # dut is None for the mock
+                )
+            node.replace_all_uses_with(new_node)
+            gm.graph.erase_node(node)
+
+    gm.recompile()
+    print("\n=== Modified graph ===")
+    gm.graph.print_tabular()
+
+    # Let Inductor compile the rest
+    return compile_fx(gm, example_inputs)
+
+def test_custom_backend_with_cuda_flag():
+    """
+    Test case for the Backend Compiler Graph Break issue.
+    Leverages torch.backends.cuda.cudnn_sdp_enabled to check environment state
+    while testing the custom backend registration and execution.
+    """
+    # Leverage the similar API to check the CUDA backend state
+    # This ensures we are aware of the SDP environment, similar to how
+    # one might check backend availability before running a specific kernel.
+    is_sdp_enabled = cudnn_sdp_enabled()
+    print(f"cuDNN SDP Enabled: {is_sdp_enabled}")
+
+    # Define a simple model with nn.Linear
+    class SimpleModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(10, 5)
+
+        def forward(self, x):
+            return self.linear(x)
+
+    model = SimpleModel()
+    input_tensor = torch.randn(2, 10)
+
+    # Compile the model using the registered custom backend
+    # The bug report indicates that graph breaks or compilation issues occur here.
+    try:
+        compiled_model = torch.compile(model, backend="custom_tpu_backend")
+        
+        # Run the compiled model
+        output = compiled_model(input_tensor)
+        
+        # Assertions to verify execution
+        assert output is not None, "Output is None"
+        assert output.shape == (2, 5), f"Expected shape (2, 5), got {output.shape}"
+        
+        print("Test Passed: Custom backend compiled and executed without graph break.")
+        
+    except Exception as e:
+        print(f"Test Failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_custom_backend_with_cuda_flag()

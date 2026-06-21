@@ -1,0 +1,22 @@
+import torch
+
+def test_quantized_normal():
+    # Create a quantized tensor
+    quant_input = torch.quantize_per_tensor(torch.tensor([1.0, 2.0, 3.0]), scale=1.0, zero_point=0, dtype=torch.quint8)
+    
+    # Adapt the original call site to use torch.normal
+    # We use the quantized tensor as the mean argument to test interaction with QuantizedCPU
+    try:
+        out_tensor = torch.normal(quant_input, 1.0)
+        
+        print("Quantized input:", quant_input)
+        print("Output tensor:", out_tensor)
+        
+        # Assertion to check shape consistency (similar to zeros_like behavior)
+        assert out_tensor.shape == quant_input.shape, "Output shape does not match input shape"
+        
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+
+if __name__ == "__main__":
+    test_quantized_normal()

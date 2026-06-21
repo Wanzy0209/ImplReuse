@@ -1,0 +1,75 @@
+import torch
+import sys
+
+# Replicate the configuration from the bug report
+# Added checks to handle environments where these internal modules might not be exposed
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+if hasattr(torch, '_inductor'):
+    torch._inductor.config.emulate_precision_casts = True
+
+# Adapted function using torch.prod instead of flex_attention
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10):
+    t0 = arg0
+    t1 = arg1
+    t2 = arg2
+    
+    # Original: t3 = flex_attention(t0, t1, t2)
+    # Adapted: t3 = torch.prod(t0, dim=2)
+    # Note: flex_attention output is (27, 26, 62, 122). 
+    # torch.prod(t0, dim=2) output is (27, 26, 122).
+    # We will proceed with the new shape.
+    t3 = torch.prod(t0, dim=2)
+    
+    t4 = arg3
+    t5 = arg4
+    t6 = arg5
+    
+    # Original: t7 = flex_attention(t4, t5, t6)
+    # Adapted: t7 = torch.prod(t4, dim=2)
+    t7 = torch.prod(t4, dim=2)
+    
+    # Original: t8 = flex_attention(t3, t7, t7)
+    # t3 and t7 are now (27, 26, 122). 
+    # We can perform a prod on these as well, or just add them.
+    # Let's perform another prod to test the API further.
+    # t8 = torch.prod(t3 + t7, dim=1)
+    # Or simply return the results to verify correctness.
+    
+    return t3, t7
+
+# Generate inputs based on the bug report
+# Note: The bug report uses 'cuda'. We should check for it or fallback to cpu for the test to be runnable everywhere.
+# However, the bug is specific to CUDA (OOM). I will assume CUDA is available or use 'cpu' if not, 
+# but usually these tests are meant for the environment where the bug occurred.
+# I'll use 'cuda' but wrap it in a check or just assume it as per the prompt's context.
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+arg0 = torch.rand([27, 26, 62, 122], dtype=torch.float32, device=device, requires_grad=True)
+arg1 = torch.rand([27, 26, 124, 122], dtype=torch.float32, device=device, requires_grad=True)
+arg2 = torch.rand([27, 26, 124, 122], dtype=torch.float32, device=device, requires_grad=True)
+arg3 = torch.rand([27, 26, 124, 122], dtype=torch.float32, device=device, requires_grad=True)
+arg4 = torch.rand([27, 26, 248, 122], dtype=torch.float32, device=device, requires_grad=True)
+arg5 = torch.rand([27, 26, 248, 122], dtype=torch.float32, device=device, requires_grad=True)
+arg6 = torch.rand([27, 26, 31, 122], dtype=torch.float32, device=device, requires_grad=True)
+arg7 = torch.rand([27, 26, 124, 122], dtype=torch.float32, device=device, requires_grad=True)
+arg8 = torch.rand([27, 26, 31, 122], dtype=torch.float32, device=device, requires_grad=True)
+arg9 = torch.rand([27, 26, 124, 122], dtype=torch.float32, device=device, requires_grad=True)
+arg10 = torch.rand([27, 26, 124, 122], dtype=torch.float32, device=device, requires_grad=True)
+
+# Run eager
+out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+
+# Check if torch.compile is available before running
+if not hasattr(torch, 'compile'):
+    print("torch.compile is not available. Skipping compiled execution.")
+else:
+    # Run compiled
+    compiled_foo = torch.compile(foo)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+
+    # Verify
+    for e, c in zip(out_eager, out_compiled):
+        assert torch.allclose(e, c), "Divergence between eager and compiled"

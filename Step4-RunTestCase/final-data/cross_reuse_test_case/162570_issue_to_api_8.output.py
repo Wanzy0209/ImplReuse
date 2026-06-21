@@ -1,0 +1,96 @@
+import torch
+import torch.nn as nn
+import numpy as np
+import tempfile
+import os
+
+# Fix: Handle missing onnxruntime dependency gracefully
+try:
+    import onnxruntime as ort
+except ImportError:
+    ort = None
+
+def verify_onnx_export(model, torch_inputs, input_names, output_names, rtol=1e-5, atol=1e-5):
+    """
+    Helper function to export a model to ONNX, run inference, and verify results.
+    This pattern mirrors the serialization/export logic found in similar API implementations.
+    """
+    if ort is None:
+        raise ImportError("onnxruntime is not installed. Skipping ONNX verification.")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        onnx_path = os.path.join(tmpdir, "model.onnx")
+        
+        # Export the model
+        torch.onnx.export(
+            model, 
+            tuple(torch_inputs), 
+            onnx_path, 
+            input_names=input_names, 
+            output_names=output_names
+        )
+        
+        # Run inference with PyTorch
+        torch_results = model(*torch_inputs)
+        if isinstance(torch_results, torch.Tensor):
+            torch_results = [torch_results]
+        
+        # Run inference with ONNX Runtime
+        sess = ort.InferenceSession(onnx_path)
+        ort_inputs = {name: inp.numpy() for name, inp in zip(input_names, torch_inputs)}
+        ort_results = sess.run(output_names, ort_inputs)
+        
+        # Compare results
+        for t_res, o_res in zip(torch_results, ort_results):
+            np.testing.assert_allclose(t_res.numpy(), o_res, rtol=rtol, atol=atol,
+                                       err_msg="PyTorch and ONNX Runtime outputs differ")
+
+def test_atan2_zero_input():
+    """
+    Test that torch.atan2(0, 0) exports to ONNX correctly.
+    Bug: ONNX decomposition produces NaN, PyTorch produces 0.
+    """
+    class Atan2Net(nn.Module):
+        def forward(self, x, y):
+            return torch.atan2(x, y)
+
+    net = Atan2Net()
+    # Edge case: both inputs are zero
+    x = torch.tensor([0.0])
+    y = torch.tensor([0.0])
+    
+    verify_onnx_export(net, [x, y], ["x", "y"], ["output"])
+
+def test_angle_zero_input():
+    """
+    Test that torch.angle(0+0j) exports to ONNX correctly.
+    Bug: Decomposes to atan2(0, 0), which produces NaN in ONNX vs 0 in PyTorch.
+    """
+    class AngleNet(nn.Module):
+        def forward(self, x):
+            return torch.angle(x)
+
+    net = AngleNet()
+    # Edge case: complex zero
+    x = torch.tensor([0.0 + 0.0j])
+    
+    verify_onnx_export(net, [x], ["x"], ["output"])
+
+if __name__ == "__main__":
+    print("Running test_atan2_zero_input...")
+    try:
+        test_atan2_zero_input()
+        print("PASSED")
+    except AssertionError as e:
+        print(f"FAILED: {e}")
+    except ImportError as e:
+        print(f"SKIPPED: {e}")
+
+    print("\nRunning test_angle_zero_input...")
+    try:
+        test_angle_zero_input()
+        print("PASSED")
+    except AssertionError as e:
+        print(f"FAILED: {e}")
+    except ImportError as e:
+        print(f"SKIPPED: {e}")

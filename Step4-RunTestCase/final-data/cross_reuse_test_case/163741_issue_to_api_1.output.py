@@ -1,0 +1,72 @@
+import tensorflow as tf
+# Fixed import: Use 'from' to import the submodule from the tensorflow package
+from tensorflow.experimental import dtensor
+import os
+import tempfile
+import gc
+import shutil
+
+def test_dtensor_checkpoint_resource_cleanup():
+    """
+    Test case adapted from PyTorch Issue 163741 logic.
+    
+    Original Bug: Unexpected CUDA context persistence after dist.destroy_process_group.
+    Adaptation: Verify that DTensorCheckpoint and its associated Mesh resources
+    are properly released after deletion, preventing resource leaks or context locks.
+    """
+    
+    # Setup: Create a temporary directory for checkpointing
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        # 1. Initialize Distributed Context (Analogous to dist.init_process_group)
+        # Create a mesh. In the original bug, this corresponds to the NCCL process group.
+        mesh = dtensor.create_mesh(
+            [("batch", 1)], 
+            devices=dtensor.default_device()
+        )
+
+        # Create a trackable object (the model/state to save)
+        model = tf.Module()
+        model.v = tf.Variable([1.0, 2.0, 3.0], dtype=tf.float32)
+
+        # 2. Use the API (Analogous to doing work/barrier)
+        # Initialize the DTensorCheckpoint with the mesh and root
+        checkpoint = dtensor.DTensorCheckpoint(mesh=mesh, root=model)
+        
+        # Perform a save operation
+        save_path = checkpoint.save(temp_dir)
+        assert save_path is not None, "Checkpoint save failed"
+        print(f"Checkpoint saved to: {save_path}")
+
+        # 3. Cleanup (Analogous to dist.destroy_process_group)
+        # Explicitly destroy the checkpoint and the mesh to release resources
+        del checkpoint
+        del model
+        del mesh
+        
+        # Force garbage collection to mimic the finalization of the process group
+        gc.collect()
+
+        # 4. Verification (Analogous to observing nvidia-smi/sleep)
+        # To verify no unexpected context persists, we attempt to re-initialize the mesh.
+        # If resources were not released, this might fail or show increased memory usage.
+        print("Attempting to re-initialize mesh to verify cleanup...")
+        new_mesh = dtensor.create_mesh(
+            [("batch", 1)], 
+            devices=dtensor.default_device()
+        )
+        
+        # If we reach here, the cleanup was successful enough to allow re-initialization
+        del new_mesh
+        print("Test Passed: Resources were cleaned up successfully.")
+
+    except Exception as e:
+        raise AssertionError(f"Resource cleanup test failed: {e}")
+    finally:
+        # Clean up temporary files
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+
+if __name__ == "__main__":
+    test_dtensor_checkpoint_resource_cleanup()

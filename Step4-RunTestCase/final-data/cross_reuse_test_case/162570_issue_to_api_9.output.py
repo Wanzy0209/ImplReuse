@@ -1,0 +1,97 @@
+import unittest
+import torch
+import torch.nn as nn
+import numpy as np
+import os
+
+# Handle missing onnxruntime dependency
+try:
+    import onnxruntime as ort
+    ONNX_RUNTIME_AVAILABLE = True
+except ImportError:
+    ONNX_RUNTIME_AVAILABLE = False
+
+@unittest.skipIf(not ONNX_RUNTIME_AVAILABLE, "onnxruntime is not installed")
+class TestAtan2OnnxConsistency(unittest.TestCase):
+    """
+    Test to verify that torch.atan2 and torch.angle produce consistent results
+    between PyTorch runtime and ONNX export, specifically for the (0, 0) input case.
+    """
+
+    def tearDown(self):
+        # Clean up exported files
+        for f in ["atan2_model.onnx", "angle_model.onnx"]:
+            if os.path.exists(f):
+                os.remove(f)
+
+    def test_atan2_zero_inputs(self):
+        """
+        Test that torch.atan2(0, 0) exports to ONNX correctly.
+        PyTorch returns 0, ONNX decomposition should also return 0, not NaN.
+        """
+        class Atan2Net(nn.Module):
+            def forward(self, x, y):
+                return torch.atan2(x, y)
+
+        model = Atan2Net()
+        x = torch.tensor([0.0])
+        y = torch.tensor([0.0])
+        
+        # PyTorch result
+        torch_result = model(x, y)
+        
+        # Export to ONNX
+        onnx_path = "atan2_model.onnx"
+        torch.onnx.export(
+            model, (x, y), onnx_path, 
+            input_names=["x", "y"], 
+            output_names=["output"],
+            opset_version=14
+        )
+        
+        # ONNX Runtime result
+        sess = ort.InferenceSession(onnx_path)
+        ort_result = sess.run(["output"], {"x": x.numpy(), "y": y.numpy()})[0]
+        
+        # Assert results are equal
+        np.testing.assert_allclose(torch_result.numpy(), ort_result, rtol=1e-5, atol=1e-5)
+        # Explicitly check for 0.0 to ensure no NaN
+        self.assertEqual(torch_result.item(), 0.0)
+        self.assertEqual(ort_result[0], 0.0)
+
+    def test_angle_zero_complex(self):
+        """
+        Test that torch.angle(0+0j) exports to ONNX correctly.
+        torch.angle decomposes to atan2(imag, real).
+        """
+        class AngleNet(nn.Module):
+            def forward(self, x):
+                return torch.angle(x)
+
+        model = AngleNet()
+        # Input is complex 0+0j
+        x = torch.tensor([0.0 + 0.0j])
+        
+        # PyTorch result
+        torch_result = model(x)
+        
+        # Export to ONNX
+        onnx_path = "angle_model.onnx"
+        torch.onnx.export(
+            model, (x,), onnx_path, 
+            input_names=["x"], 
+            output_names=["output"],
+            opset_version=14
+        )
+        
+        # ONNX Runtime result
+        sess = ort.InferenceSession(onnx_path)
+        ort_result = sess.run(["output"], {"x": x.numpy()})[0]
+        
+        # Assert results are equal
+        np.testing.assert_allclose(torch_result.numpy(), ort_result, rtol=1e-5, atol=1e-5)
+        self.assertEqual(torch_result.item(), 0.0)
+        self.assertEqual(ort_result[0], 0.0)
+
+if __name__ == "__main__":
+    unittest.main()

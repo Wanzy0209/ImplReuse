@@ -1,0 +1,22 @@
+import torch
+import pytest
+
+def test_lu_factor_singular_matrix_error():
+    """
+    Test that torch.linalg.lu_factor raises a RuntimeError for singular matrices.
+    This test adapts the logic from the bug report and incorporates type handling
+    similar to tf.keras.backend.cast_to_floatx to ensure the tensor is in the
+    default floating point type.
+    """
+    # Singular matrix: rows are linearly dependent (determinant is 0)
+    matrix_data = [[1.0, 2.0], [2.0, 4.0]]
+
+    # Leverage the pattern from the similar API (cast_to_floatx) to ensure
+    # the tensor is cast to the default float type before processing.
+    # This ensures consistency across different default dtype settings.
+    t = torch.tensor(matrix_data, dtype=torch.get_default_dtype())
+
+    # The expected behavior (observed on CPU) is a RuntimeError.
+    # The bug report indicates MPS does not raise this error.
+    with pytest.raises(RuntimeError, match="U\\[2,2\\] is zero"):
+        torch.linalg.lu_factor(t)
