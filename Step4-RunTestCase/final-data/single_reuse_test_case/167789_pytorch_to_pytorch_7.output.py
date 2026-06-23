@@ -1,0 +1,56 @@
+import sys
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+# Fix: Handle missing torch.compile for older PyTorch versions
+if not hasattr(torch, "compile"):
+    # Mock torch.compile as an identity function (pass-through)
+    # This mimics backend="eager" behavior where the function runs normally
+    torch.compile = lambda func, **kwargs: func
+
+def fn(x, n):
+    if n == 0:
+        return x
+    return fn(x, n - 1) + 1
+
+@torch.compile(backend="eager")
+def outer(x):
+    return fn(x, 1000)
+
+def run(rank, world_size):
+    # Initialize the distributed environment
+    dist.init_process_group(
+        backend="gloo",
+        init_method="tcp://127.0.0.1:29500",
+        rank=rank,
+        world_size=world_size
+    )
+
+    # Set recursion limit as per the bug report context
+    sys.setrecursionlimit(10000)
+
+    if rank == 0:
+        # Call the compiled function (tests the recursion limit behavior)
+        result = outer(torch.ones(3))
+        
+        # Adaptation: Use the similar API (torch.distributed.send_object_list)
+        # to send the result of the compiled recursive function.
+        dist.send_object_list([result], dst=1)
+    elif rank == 1:
+        obj_list = [None]
+        dist.recv_object_list(obj_list, src=0)
+        
+        # Verify the received object matches the expected result
+        # fn(ones(3), 1000) -> ones(3) + 1000
+        expected = torch.ones(3) + 1000
+        assert torch.equal(obj_list[0], expected), "Received object does not match expected result"
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Use multiprocessing to simulate a distributed environment
+    # This is required for torch.distributed APIs to be runnable
+    world_size = 2
+    mp.spawn(run, args=(world_size,), nprocs=world_size)

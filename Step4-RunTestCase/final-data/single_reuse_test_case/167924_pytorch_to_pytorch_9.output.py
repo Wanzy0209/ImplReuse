@@ -1,0 +1,37 @@
+import torch
+
+def test_zeros_repeat_interleave_mps():
+    """
+    Test case to verify behavior of torch.zeros with repeat_interleave 
+    on a sliced tensor using the MPS backend, adapted from the original 
+    bug report involving torch.arange.
+    """
+    if not torch.backends.mps.is_available():
+        print("MPS device not available, skipping test.")
+        return
+
+    # Setup inputs
+    counts = torch.tensor([0, 1, 0], device="mps")
+    
+    # Replace torch.arange(2, device="mps") with torch.zeros(2, device="mps")
+    data = torch.zeros(2, device="mps")
+    
+    # Perform the operation that caused the crash in the original issue.
+    # counts[1:3] creates a non-contiguous/sliced tensor.
+    try:
+        result = data.repeat_interleave(counts[1:3], dim=0)
+        
+        # Verify the result is correct if no crash occurs.
+        # counts[1:3] is [1, 0]. 
+        # data is [0, 0].
+        # Expected result: [0] (first element repeated 1 time, second 0 times).
+        expected = torch.tensor([0], device="mps")
+        assert torch.equal(result, expected), f"Expected {expected}, but got {result}"
+        print("Test passed.")
+        
+    except RuntimeError as e:
+        print(f"Test failed with RuntimeError: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_zeros_repeat_interleave_mps()

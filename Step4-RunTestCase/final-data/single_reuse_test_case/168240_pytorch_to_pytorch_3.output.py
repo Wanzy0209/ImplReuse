@@ -1,0 +1,32 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_new_group(rank, world_size):
+    # Setup distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Adapted from: ep = torch.export.export(model, (x,))
+    # Action: Create a new distributed group containing all ranks
+    ranks = list(range(world_size))
+    group = dist.new_group(ranks=ranks)
+
+    # Adapted from: torch.testing.assert_close(model(x), ep.module()(x))
+    # Assertion: Verify the group was created correctly and has the expected size
+    assert group is not None, "Failed to create new group"
+    # Fix: Use get_world_size with the group argument instead of the non-existent get_group_size
+    group_size = dist.get_world_size(group=group)
+    assert group_size == world_size, f"Expected group size {world_size}, but got {group_size}"
+
+    # Cleanup
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Run the test in multiple processes
+    mp.spawn(test_new_group, args=(world_size,), nprocs=world_size, join=True)

@@ -1,0 +1,39 @@
+import sys
+from unittest import mock
+
+# Mock torchvision.datasets to bypass the import chain that triggers
+# the urllib3/OpenSSL version mismatch error in the environment.
+# The test only uses torchvision.models, so this is safe.
+sys.modules['torchvision.datasets'] = mock.MagicMock()
+
+import torch
+import torchvision
+
+# Setup from the original bug report
+model = torchvision.models.mobilenet_v2(weights=None)
+x = torch.rand((1, 3, 224, 224))
+
+# Adaptation: Use torch.library.opcheck to verify the operators used by the model.
+# Since torch.export.export produced incorrect results, we check if the underlying 
+# operators are registered correctly (e.g., schema, mutability, fake kernel).
+
+# Extract the first convolutional layer to test its operator
+# MobileNetV2 features[0] is a ConvBNReLU block, [0] is the Conv2d layer
+conv_layer = model.features[0][0]
+
+# Define the operator overload
+op = torch.ops.aten.conv2d.default
+
+# Prepare arguments matching the operator schema
+# Note: MobileNetV2 Conv2d layers typically have bias=False
+args = (x, conv_layer.weight, conv_layer.bias)
+kwargs = {
+    "stride": conv_layer.stride,
+    "padding": conv_layer.padding,
+    "dilation": conv_layer.dilation,
+    "groups": conv_layer.groups
+}
+
+# Verify the operator registration and metadata
+# This will raise an exception if the operator is not registered correctly
+torch.library.opcheck(op, args, kwargs)
