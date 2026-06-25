@@ -1,0 +1,126 @@
+Issue ID: 162722
+Title: Severe Numerical Inconsistency with torch.compile() on Transformer Model
+Bug Description:
+### 🐛 Describe the bug
+
+ Description
+When using torch.compile() on a custom Transformer-based model, we observe severe numerical inconsistencies that render the compiled model unusable. The differences are far beyond expected Triton RNG variations and indicate a fundamental issue with the compilation process.
+
+code:
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+class CausalAttention(nn.Module):
+    def __init__(self, embed_size, heads):
+        super(CausalAttention, self).__init__()
+        self.embed_size = embed_size
+        self.heads = heads
+        self.head_dim = embed_size // heads
+        assert self.head_dim * heads == embed_size, "Embed size needs to be divisible by heads"
+        self.values = nn.Linear(self.head_dim, self.head_dim, bias=False)
+        self.keys = nn.Linear(self.head_dim, self.head_dim, bias=False)
+        self.queries = nn.Linear(self.head_dim, self.head_dim, bias=False)
+        self.fc_out = nn.Linear(heads * self.head_dim, embed_size)
+    def forward(self, values, keys, query, mask):
+        N = query.shape[0]
+        value_len, key_len, query_len = values.shape[1], keys.shape[1], query.shape[1]
+        values = values.reshape(N, value_len, self.heads, self.head_dim)
+        keys = keys.reshape(N, key_len, self.heads, self.head_dim)
+        queries = query.reshape(N, query_len, self.heads, self.head_dim)
+        values = self.values(values)
+        keys = self.keys(keys)
+        queries = self.queries(queries)
+...
+
+Original API Under Test: nn.CrossEntropyLoss
+Replacement set rank: 10
+Similarity Type: Replacement set
+Replacements:
+- torch.abs -> torch.abs (score=0.9999415874481201)
+- torch.arange -> torch.arange (score=0.995810866355896)
+- torch.argmax -> torch.argmax (score=0.9979654550552368)
+- torch.backends.cudnn.benchmark -> torch.backends.cudnn.benchmark (score=0.9922658205032349)
+- torch.einsum -> torch.einsum (score=0.9948212504386902)
+- torch.manual_seed -> torch.manual_seed (score=0.9955167770385742)
+- torch.max -> torch.max (score=0.9945634603500366)
+- torch.mean -> torch.mean (score=0.987402081489563)
+- torch.norm -> torch.norm (score=0.9990717768669128)
+- torch.ones -> torch.ones (score=0.9985892176628113)
+- torch.randint -> torch.randint (score=0.997569739818573)
+- torch.sum -> torch.sum (score=0.9951378107070923)
+- torch.tril -> torch.tril (score=0.9861100912094116)
+
+Original Test Case:
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+class CausalAttention(nn.Module):
+    def __init__(self, embed_size, heads):
+        super(CausalAttention, self).__init__()
+        self.embed_size = embed_size
+        self.heads = heads
+        self.head_dim = embed_size // heads
+        assert self.head_dim * heads == embed_size, "Embed size needs to be divisible by heads"
+        self.values = nn.Linear(self.head_dim, self.head_dim, bias=False)
+        self.keys = nn.Linear(self.head_dim, self.head_dim, bias=False)
+        self.queries = nn.Linear(self.head_dim, self.head_dim, bias=False)
+        self.fc_out = nn.Linear(heads * self.head_dim, embed_size)
+    def forward(self, values, keys, query, mask):
+        N = query.shape[0]
+        value_len, key_len, query_len = values.shape[1], keys.shape[1], query.shape[1]
+        values = values.reshape(N, value_len, self.heads, self.head_dim)
+        keys = keys.reshape(N, key_len, self.heads, self.head_dim)
+        queries = query.reshape(N, query_len, self.heads, self.head_dim)
+        values = self.values(values)
+        keys = self.keys(keys)
+        queries = self.queries(queries)
+        energy = torch.einsum("nqhd,nkhd->nhqk", [queries, keys])
+        if mask is not None:
+            energy = energy.masked_fill(mask == 0, float("-1e20"))
+        attention = torch.softmax(energy / (self.embed_size ** (1 / 2)), dim=3)
+        out = torch.einsum("nhql,nlhd->nqhd", [attention, values]).reshape(
+            N, query_len, self.heads * self.head_dim
+        )
+        out = self.fc_out(out)
+        return out
+class CausalAttentionDNN(nn.Module):
+    def __init__(self, input_size, embed_size, num_layers, heads, forward_expansion, output_size, dropout, max_length):
+        super(CausalAttentionDNN, self).__init__()
+        self.embed_size = embed_size
+        self.word_embedding = nn.Embedding(input_size, embed_size)
+        self.position_embedding = nn.Embedding(max_length, embed_size)
+        self.layers = nn.ModuleList(
+            [
+                CausalAttentionBlock(
+                    embed_size,
+                    heads,
+                    forward_expansion,
+                    dropout,
+                )
+                for _ in range(num_layers)
+            ]
+        )
+        self.fc = nn.Linear(embed_size, output_size)
+        self.dropout = nn.Dropout(dropout)
+    def forward(self, x, mask):
+        N, seq_length = x.shape
+        positions = torch.arange(0, seq_length).expand(N, seq_length).to(x.device)
+        out = self.dropout(self.word_embedding(x) + self.position_embedding(positions))
+        for layer in self.layers:
+            out = layer(out, out, out, mask)
+        out = self.fc(out)
+        return out
+class CausalAttentionBlock(nn.Module):
+    def __init__(self, embed_size, heads, forward_expansion, dropout):
+        super(CausalAttentionBlock, self).__init__()
+        self.attention = CausalAttention(embed_size, heads)
+        self.norm1 = nn.LayerNorm(emb
+...
+
+Please modify the original test case by replacing each listed source API with its corresponding replacement API from this set, preserving the original bug reproduction logic.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

@@ -1,0 +1,80 @@
+Issue ID: 159991
+Title: [DTensor] Decide / Document RNG semantics
+Bug Description:
+Following the work in https://github.com/pytorch/pytorch/pull/159933, DTensor will utilize a 'generator' passed as kwarg to random ops instead of using its own built-in generator.  
+
+This exposed a question of semantics, which I want to hear opinions on before implementing and documenting the behavior.
+
+**Question**
+If a user passes their own RNG to DTensor random ops, should the state-offset advancement be visible to the user on that RNG object?
+
+My intuition is, yes: it is very surprising if the passed-in RNG object does not advance after being used.
+
+However, implementing it this way introduces another discrepancy.  DTensor _ALREADY_ does this deviation, on the default RNG.  Currently, DTensor keeps an alternate copy of the original default RNG, and only advances that copy.
+
+<details>
+  <summary>Example: test_init_with_user_generator</summary>
+Example:
+First, the test uses the passed-in RNG to sample twice in a row in a loop, and ensures that both loop iterations match the values from the default RNG which wsa seeded with the same value.  This part already works fine after #159933 lands.
+
+Then, it runs into trouble with trying to establish a sane UX if someone re-seeds the RNG, or if someone inspects the state of the passed-in RNG.
+
+```
+    def test_init_with_user_generator(self):
+        device_mesh = self.build_device_mesh()
+        torch.manual_seed(42)
+        rng = torch.Generator(device="cuda").manual_seed(42)
+        t1 = torch.distributed.tensor.empty(
+...
+
+Original API Under Test: nn.init
+Replacement set rank: 5
+Similarity Type: Replacement set
+Replacements:
+- nn.init -> Unknown replacement (score=0.9897586107254028)
+- rng.get_state -> Unknown replacement (score=0.9897586107254028)
+- rng.manual_seed -> Unknown replacement (score=0.9897586107254028)
+- t1.full_tensor -> Unknown replacement (score=0.9897586107254028)
+- t2.full_tensor -> Unknown replacement (score=0.9897586107254028)
+- torch.Generator -> Unknown replacement (score=0.9897586107254028)
+- torch.cuda.get_rng_state -> Unknown replacement (score=0.9897586107254028)
+- torch.distributed.tensor._random._rng_tracker._manual_seed -> Unknown replacement (score=0.9897586107254028)
+- torch.distributed.tensor.empty -> Unknown replacement (score=0.9897586107254028)
+- torch.distributed.tensor.empty,torch.nn.init.uniform_,torch.distributed.tensor._random._rng_tracker._manual_seed,torch.Generator -> Unknown replacement (score=0.9897586107254028)
+- torch.manual_seed -> torch.manual_seed (score=0.9959675073623657)
+- torch.nn.init.uniform_ -> Unknown replacement (score=0.9897586107254028)
+
+Original Test Case:
+def test_init_with_user_generator(self):
+        device_mesh = self.build_device_mesh()
+        torch.manual_seed(42)
+        rng = torch.Generator(device="cuda").manual_seed(42)
+        t1 = torch.distributed.tensor.empty(
+            (2, 3), device_mesh=device_mesh, placements=[Shard(0)]
+        )
+        t2 = torch.distributed.tensor.empty(
+            (2, 3), device_mesh=device_mesh, placements=[Shard(0)]
+        )
+        for i in range(2):
+            print(f"{i=}")
+            # run a second time, to make sure that `rng`'s offset-state is advancing on the second usage
+            torch.nn.init.uniform_(t1, 0.0, 1.0)
+            torch.nn.init.uniform_(t2, 0.0, 1.0, rng)
+            self.assertEqual(t1.full_tensor(), t2.full_tensor(), f"Failed at {i=}")
+
+        # Problem area:
+        # (1)
+        # torch.distributed.tensor._random._rng_tracker._manual_seed(55)
+        # torch.manual_seed(55)
+        # (2)
+        # rng.manual_seed(55)
+        torch.nn.init.uniform_(t1, 0.0, 1.0)
+        torch.nn.init.uniform_(t2, 0.0, 1.0, rng)
+        self.assertEqual(t1.full_tensor(), t2.full_tensor())
+
+Please modify the original test case by replacing each listed source API with its corresponding replacement API from this set, preserving the original bug reproduction logic.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

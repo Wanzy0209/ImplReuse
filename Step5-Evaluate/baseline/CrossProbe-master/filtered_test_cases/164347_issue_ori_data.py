@@ -1,0 +1,1 @@
+import requests; from bs4 import BeautifulSoup; url='https://download.pytorch.org/whl/cu126/torch'; r=requests.get(url); soup=BeautifulSoup(r.text,'html.parser'); print([a.get('href') for a in soup.find_all('a') if 'torch-2.8.0' in a.get('href')])

@@ -1,0 +1,1 @@
+import gc; import torch; # Reproduce by triggering PyCodegen with recursive closure

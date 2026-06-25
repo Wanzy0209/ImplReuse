@@ -1,0 +1,112 @@
+Issue ID: 163372
+Title: Expand sometimes interpreted as Repeat by compiler
+Bug Description:
+### 🐛 Describe the bug
+
+This sample code leads to a huge amount or RAM allocated on GPU.
+It seems like torch.expand() is interpreted as torch.repeat(), leading the compiled code to try to allocate much more memory than needed instead of seeing it as a View.
+
+Versions to reproduce:
+* It works when NOT compiled with torch 2.5.1 / 2.7.1 / 2.8.0
+* It works when compiled with torch 2.5.1
+* It doesn't work (=huge RAM allocated) when compiled with torch 2.7.1 / 2.8.0
+
+Ablation:
+* It only fails with the Inductor backend
+* It fails with all 3 modes (default/reduce-overhead/max-autotune)
+
+```
+import torch
+
+BATCH_SIZE = 64
+CHANNELS, IMG_SIZE = 3, 224
+GRID_SIZE = 13
+
+class MyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.grid = torch.nn.Parameter(torch.randn((5000, GRID_SIZE, GRID_SIZE, 2), device='cuda'))
+        self.fc = torch.nn.Linear(GRID_SIZE*GRID_SIZE*CHANNELS, 16)
+
+    def forward(self, x):
+        per_channel = []
+        for i in range(CHANNELS):
+            channel = x[:,i,...].expand(5000,-1,-1,-1)
+            patch = torch.nn.functional.grid_sample(channel, self.grid, mode="bilinear", align_corners=False, padding_mode="border")
+            patch = patch.transpose(0,1).flatten(start_dim=2)
+            per_channel.append(patch)
+        x = torch.cat(per_channel, axis=2)
+        x = self.fc(x)
+        return x
+
+def main():
+    model = MyModel()
+
+Original API Under Test: nn.Linear
+Replacement set rank: 2
+Similarity Type: Replacement set
+Replacements:
+- nn.Linear -> Unknown replacement (score=0.9862109422683716)
+- nn.Module -> Unknown replacement (score=0.9862109422683716)
+- nn.Parameter -> Unknown replacement (score=0.9862109422683716)
+- nn.functional -> Unknown replacement (score=0.9862109422683716)
+- torch.OutOfMemoryError -> Unknown replacement (score=0.9862109422683716)
+- torch.cat -> torch.cat (score=0.9993585348129272)
+- torch.compile -> torch.compile (score=0.9944814443588257)
+- torch.expand -> Unknown replacement (score=0.9862109422683716)
+- torch.expand,torch.compile -> Unknown replacement (score=0.9862109422683716)
+- torch.float32 -> Unknown replacement (score=0.9862109422683716)
+- torch.nn.Linear -> torch.nn.Linear (score=0.9989302158355713)
+- torch.nn.Module -> Unknown replacement (score=0.9862109422683716)
+- torch.nn.Parameter -> Unknown replacement (score=0.9862109422683716)
+- torch.nn.functional.grid_sample -> torch.nn.functional.grid_sample (score=0.9951446056365967)
+- torch.randn -> Unknown replacement (score=0.9880998134613037)
+- torch.repeat -> Unknown replacement (score=0.9862109422683716)
+- torch.sum -> torch.sum (score=0.9992177486419678)
+- x.backward -> Unknown replacement (score=0.9862109422683716)
+
+Original Test Case:
+import torch
+
+BATCH_SIZE = 64
+CHANNELS, IMG_SIZE = 3, 224
+GRID_SIZE = 13
+
+class MyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.grid = torch.nn.Parameter(torch.randn((5000, GRID_SIZE, GRID_SIZE, 2), device='cuda'))
+        self.fc = torch.nn.Linear(GRID_SIZE*GRID_SIZE*CHANNELS, 16)
+
+    def forward(self, x):
+        per_channel = []
+        for i in range(CHANNELS):
+            channel = x[:,i,...].expand(5000,-1,-1,-1)
+            patch = torch.nn.functional.grid_sample(channel, self.grid, mode="bilinear", align_corners=False, padding_mode="border")
+            patch = patch.transpose(0,1).flatten(start_dim=2)
+            per_channel.append(patch)
+        x = torch.cat(per_channel, axis=2)
+        x = self.fc(x)
+        return x
+
+def main():
+    model = MyModel()
+    model = model.cuda()
+    model = torch.compile(model)
+
+    for _ in range(10):
+        x = torch.randn((BATCH_SIZE, CHANNELS, IMG_SIZE, IMG_SIZE), device='cuda')
+        x = model(x)
+        x = torch.sum(x)
+        x.backward()
+
+
+if __name__ == "__main__":
+    main()
+
+Please modify the original test case by replacing each listed source API with its corresponding replacement API from this set, preserving the original bug reproduction logic.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

@@ -1,0 +1,98 @@
+Issue ID: 161186
+Title: Memory leak when custom autograd Function is used with AC due to early-stopping
+Bug Description:
+### 🐛 Describe the bug
+
+Originally reported by Alex Nichol in slack channel
+
+```python
+import torch
+import torch.utils.checkpoint
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary
+        return None
+
+
+def op_fn(inp):
+    return MyOp.apply(inp)[0]
+
+
+dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+for i in range(1000):
+    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+    full_out.sum().backward()
+    dummy_input.grad = None  # free gradient memory
+    print(i, torch.cuda.memory_allocated() / 1024**2, "MiB")
+```
+
+This leak happens when a custom autograd Function is the last operation in a checkpointed region (and the autograd Function saves an output for backward). It happens because AC raises an exception to exit the forward early prior to the proper clean up custom autograd Function needs to do when it saves tensors.
+
+Original API Under Test: MyOp.apply
+Replacement set rank: 3
+Similarity Type: Replacement set
+Replacements:
+- MyOp.apply -> Unknown replacement (score=0.9693848490715027)
+- ctx.save_for_backward -> Unknown replacement (score=0.9693848490715027)
+- nn.Parameter -> Unknown replacement (score=0.9693848490715027)
+- torch.Tensor -> Unknown replacement (score=0.9693848490715027)
+- torch.autograd.Function -> Unknown replacement (score=0.9693848490715027)
+- torch.cuda.memory_allocated -> Unknown replacement (score=0.9693848490715027)
+- torch.float32 -> Unknown replacement (score=0.9693848490715027)
+- torch.nn.Parameter -> Unknown replacement (score=0.9693848490715027)
+- torch.randn -> torch.randn (score=0.9858288168907166)
+- torch.utils.checkpoint -> Unknown replacement (score=0.9693848490715027)
+- torch.zeros -> torch.zeros (score=0.9993883371353149)
+
+Original Test Case:
+import torch
+import torch.utils.checkpoint
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary
+        return None
+
+
+def op_fn(inp):
+    return MyOp.apply(inp)[0]
+
+
+dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+for i in range(1000):
+    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+    full_out.sum().backward()
+    dummy_input.grad = None  # free gradient memory
+    print(i, torch.cuda.memory_allocated() / 1024**2, "MiB")
+
+Please modify the original test case by replacing each listed source API with its corresponding replacement API from this set, preserving the original bug reproduction logic.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

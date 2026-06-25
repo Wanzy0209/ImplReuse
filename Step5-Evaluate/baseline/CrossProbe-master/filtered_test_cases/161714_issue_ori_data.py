@@ -1,0 +1,1 @@
+import torch; # Test case from test_max_autotune.py needed

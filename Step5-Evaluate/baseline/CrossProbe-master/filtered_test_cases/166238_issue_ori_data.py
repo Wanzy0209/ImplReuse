@@ -1,0 +1,1 @@
+import collections; import torch; torch._dynamo.optimize()(lambda: collections.defaultdict(list))()

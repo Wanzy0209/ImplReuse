@@ -1,0 +1,114 @@
+Issue ID: 166513
+Title: Severe Memory Leak in Dataloader on Windows when using a long-live/infinite iterator
+Bug Description:
+### 🐛 Describe the bug
+
+# Description
+There appears to be a significant and consistent memory leak in the PyTorch `DataLoader` on the Windows platform. The leak occurs specifically when the DataLoader's iterator is kept alive for a large number of steps (e.g., in an "infinite" sampling loop for step-based training).
+
+The key characteristics of this bug are:
+* System RAM continuously increases until the program crashes or the system becomes unresponsive.
+* The leak occurs even when `num_workers=0`, indicating it is not a multiprocessing-related issue.
+* The leak occurs even when pin_memory=False, indicating it is not related to CUDA pinned memory.
+* With pin_memory=True: The Shared GPU Memory (as reported by Windows Task Manager) continuously increases, even if no tensors are ever moved to a CUDA device. This eventually leads to a CUDA out of memory error, while the dedicated GPU memory remains unused.
+* Explicitly calling gc.collect() does not free the leaked memory, suggesting the leak is happening in a lower-level, native (C++) component, not in Python's managed memory.
+* The leak is independent of the underlying I/O library, as it has been reproduced with both `OpenCV (cv2)` and `torchvision.io.read_image`.
+* Crucially, a standard, finite-epoch training loop (for epoch in ...: for batch in dataloader: ...) does not leak memory.
+
+This evidence strongly suggests that the DataLoaderIterator object accumulates native resources during its lifetime that are only released upon it
+...
+
+Original API Under Test: DataLoader,DataLoaderIterator
+Replacement set rank: 6
+Similarity Type: Replacement set
+Replacements:
+- torch.from_numpy -> torch.from_numpy (score=0.9965037107467651)
+
+Original Test Case:
+import torch
+from torch.utils.data import Sampler, DataLoader, Dataset
+import itertools
+import random
+import gc
+import cv2
+import numpy as np
+from pathlib import Path
+
+IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".ppm", ".bmp", ".pgm", ".tif", ".tiff", ".webp")
+
+def is_image_file(filename: str | Path) -> bool:
+    filename = Path(filename)
+    return filename.suffix.lower() in IMG_EXTENSIONS
+
+def read_image(path: str | Path, as_tensor: bool = False) -> torch.Tensor | np.ndarray:
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image = image.astype(np.float32) / 255.0
+    if as_tensor:
+        return torch.from_numpy(image).permute(2, 0, 1)
+    return image
+
+def read_mask(path: str | Path, as_tensor: bool = False) -> torch.Tensor | np.ndarray:
+    mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    mask = mask.astype(np.int8)
+    if as_tensor:
+        mask = torch.from_numpy(mask)
+    return mask
+
+class SegDataset(Dataset):
+    """Maks dataset for segmentation."""
+    
+    def __init__(
+        self, 
+        image_dir: str | Path,
+        mask_dir: str | Path, 
+    ):
+        super().__init__()
+        self.image_dir = Path(image_dir)
+        self.mask_dir = Path(mask_dir)
+
+        image_paths = list(self.image_dir.glob("*"))
+        self.image_paths = [i for i in image_paths if is_image_file(i)]
+
+        self.mask_paths = []
+        for img_p in self.image_paths:
+            file_name = os.path.splitext(os.path.basename(img_p))[0]
+            self.mask_paths.append(os.path.join(self.mask_dir, file_name + ".png"))
+    
+    def __getitem__(self, index):
+        image_path = self.image_paths[index]
+        image = read_image(image_path, as_tensor=True)
+
+        mask_path = self.mask_paths[index]
+        mask = read_mask(mask_path, as_tensor=True)
+        
+        return {"image": image, "mask": mask.long()}
+    
+    def __len__(self):
+        return len(self.image_paths)
+
+
+class InfiniteSampler(Sampler):
+    
+    def __init__(self, data_source: Dataset, shuffle: bool = True):
+        self.data_source = data_source
+        self.shuffle = shuffle
+        self.num_samples = len(self.data_source)
+        self.start_index = 0
+
+    def __iter__(self):
+        while True:
+            indices = list(range(self.num_samples))
+            if self.shuffle:
+                random.shuffle(indices)
+            yield from indices
+
+    def __len__(self):
+        return self.num_samples
+
+Please modify the original test case by replacing each listed source API with its corresponding replacement API from this set, preserving the original bug reproduction logic.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

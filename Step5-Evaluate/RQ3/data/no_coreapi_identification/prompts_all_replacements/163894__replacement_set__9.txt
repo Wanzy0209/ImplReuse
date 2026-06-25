@@ -1,0 +1,104 @@
+Issue ID: 163894
+Title: [Fuzzer][Eager/Compile Divergence] DDE _get_symint_hints(ph_arg.stride()) != real_stride:
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(9)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0 # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    var_node_5 = torch.full((1, 2), -66, dtype=torch.int32) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_6 = torch.full((1, 2), 77, dtype=torch.int64) # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    var_node_4 = torch.ops.aten.add(var_node_5, var_node_6) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_7 = torch.full((1, 2), -64, dtype=torch.int32) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_3 = torch.ops.aten.mul(var_node_4, var_node_7) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_9 = torch.full((3, 4), False, dtype=torch.bool) # size=(3, 4), stride=(4, 1), dtype=bool, device=cuda
+    var_node_8 = torch.nonzero(var_node_9) # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    var_node_2 = torch.ops.aten.add(var_node_3, var_node_8) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_0 = torch.ops.aten.div(var_node_1, var_node_2) # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor
+...
+
+Original API Under Test: e.remove_dynamo_frames
+Replacement set rank: 9
+Similarity Type: Replacement set
+Replacements:
+- e.remove_dynamo_frames -> Unknown replacement (score=0.9890808463096619)
+- exprs.node.shape_env.size_hint -> Unknown replacement (score=0.9890808463096619)
+- self._make_data_dependent_error -> Unknown replacement (score=0.9890808463096619)
+- torch._dynamo.config.capture_dynamic_output_shape_ops -> Unknown replacement (score=0.9890808463096619)
+- torch._dynamo.config.capture_scalar_outputs -> Unknown replacement (score=0.9890808463096619)
+- torch.bool -> Unknown replacement (score=0.9890808463096619)
+- torch.compile -> torch.compile (score=0.9941133260726929)
+- torch.compile,torch.ops.aten.div,torch.nonzero -> Unknown replacement (score=0.9890808463096619)
+- torch.full -> torch.full (score=0.9975618124008179)
+- torch.int32 -> Unknown replacement (score=0.9890808463096619)
+- torch.int64 -> Unknown replacement (score=0.9890808463096619)
+- torch.manual_seed -> torch.manual_seed (score=0.9956101179122925)
+- torch.ops.aten.add -> Unknown replacement (score=0.9890808463096619)
+- torch.ops.aten.div -> Unknown replacement (score=0.9890808463096619)
+- torch.ops.aten.mul -> Unknown replacement (score=0.9890808463096619)
+- torch.randint -> torch.randint (score=0.9976651072502136)
+- torch.tensor -> torch.tensor (score=0.9952937364578247)
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(9)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0 # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    var_node_5 = torch.full((1, 2), -66, dtype=torch.int32) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_6 = torch.full((1, 2), 77, dtype=torch.int64) # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    var_node_4 = torch.ops.aten.add(var_node_5, var_node_6) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_7 = torch.full((1, 2), -64, dtype=torch.int32) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_3 = torch.ops.aten.mul(var_node_4, var_node_7) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_9 = torch.full((3, 4), False, dtype=torch.bool) # size=(3, 4), stride=(4, 1), dtype=bool, device=cuda
+    var_node_8 = torch.nonzero(var_node_9) # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    var_node_2 = torch.ops.aten.add(var_node_3, var_node_8) # size=(1, 2), stride=(2, 1), dtype=int32, device=cuda
+    var_node_0 = torch.ops.aten.div(var_node_1, var_node_2) # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.randint(0, 3, (1, 2), dtype=torch.int64)
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+# Test compilation with unbacked operations - this should work!
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success with unbacked operations')
+
+# Compare results - shapes may differ due to data-dependent operations
+print(f'Eager result: {result_original}')
+print(f'Compiled result: {result_compiled}')
+if hasattr(result_original, 'shape') and hasattr(result_compiled, 'shape'):
+    print(f'Eager shape: {result_original.shape}')
+    print(f'Compiled shape: {result_compiled.shape}')
+
+Please modify the original test case by replacing each listed source API with its corresponding replacement API from this set, preserving the original bug reproduction logic.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

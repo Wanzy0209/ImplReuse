@@ -1,0 +1,103 @@
+Issue ID: 165911
+Title: Incorrect user code stack when using torch._dynamo.functional_export._dynamo_graph_capture_for_export
+Bug Description:
+### 🐛 Describe the bug
+
+Repro
+
+```python
+import torch
+
+def compute(x, w):
+    return torch.nn.functional.linear(x, w)
+
+def nop(x, w):
+    torch._check(x.shape[0] == 0)
+    return torch.empty_like(x)  # whatever the output size should be
+
+def chunked_compute(x, w):
+    sz = x.shape[0]
+    torch._check(sz <= 8)
+    out0 = torch.cond(sz > 0, compute, nop, (x[0:2], w))
+    out1 = torch.cond(sz > 2, compute, nop, (x[2:4], w))
+    out2 = torch.cond(sz > 4, compute, nop, (x[4:6], w))
+    out3 = torch.cond(sz > 6, compute, nop, (x[6:8], w))
+    return torch.cat([out0, out1, out2, out3])
+
+x, w = torch.randn(4, 16, requires_grad=True), torch.randn(16, 16, requires_grad=True)
+assert torch.equal(compute(x, w), chunked_compute(x, w))
+
+class Model(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = torch.nn.Linear(16, 16)
+
+    def forward(self, x):
+        return chunked_compute(x, self.linear.w)
+
+mod = torch._dynamo.functional_export._dynamo_graph_capture_for_export(Model())(x)
+breakpoint()
+
+```
+
+This errors with:
+
+Original API Under Test: e.with_traceback
+Replacement set rank: 4
+Similarity Type: Replacement set
+Replacements:
+- e.with_traceback -> Unknown replacement (score=0.982438325881958)
+- nn.Linear -> Unknown replacement (score=0.982438325881958)
+- nn.Module -> Unknown replacement (score=0.982438325881958)
+- nn.functional -> Unknown replacement (score=0.982438325881958)
+- self._export_root -> Unknown replacement (score=0.982438325881958)
+- torch._check -> Unknown replacement (score=0.982438325881958)
+- torch._dynamo.exc.Unsupported -> Unknown replacement (score=0.982438325881958)
+- torch.cat -> torch.cat (score=0.997350811958313)
+- torch.cond -> Unknown replacement (score=0.982438325881958)
+- torch.empty_like -> torch.empty_like (score=0.9876542091369629)
+- torch.equal -> torch.equal (score=0.9961585998535156)
+- torch.nn.Linear -> torch.nn.Linear (score=0.9981290102005005)
+- torch.nn.Module -> Unknown replacement (score=0.982438325881958)
+- torch.nn.functional.linear -> torch.nn.functional.linear (score=0.9926167130470276)
+- torch.randn -> torch.randn (score=0.9858288168907166)
+
+Original Test Case:
+import torch
+
+def compute(x, w):
+    return torch.nn.functional.linear(x, w)
+
+def nop(x, w):
+    torch._check(x.shape[0] == 0)
+    return torch.empty_like(x)  # whatever the output size should be
+
+def chunked_compute(x, w):
+    sz = x.shape[0]
+    torch._check(sz <= 8)
+    out0 = torch.cond(sz > 0, compute, nop, (x[0:2], w))
+    out1 = torch.cond(sz > 2, compute, nop, (x[2:4], w))
+    out2 = torch.cond(sz > 4, compute, nop, (x[4:6], w))
+    out3 = torch.cond(sz > 6, compute, nop, (x[6:8], w))
+    return torch.cat([out0, out1, out2, out3])
+
+x, w = torch.randn(4, 16, requires_grad=True), torch.randn(16, 16, requires_grad=True)
+assert torch.equal(compute(x, w), chunked_compute(x, w))
+
+class Model(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = torch.nn.Linear(16, 16)
+
+    def forward(self, x):
+        return chunked_compute(x, self.linear.w)
+
+mod = torch._dynamo.functional_export._dynamo_graph_capture_for_export(Model())(x)
+breakpoint()
+
+Please modify the original test case by replacing each listed source API with its corresponding replacement API from this set, preserving the original bug reproduction logic.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

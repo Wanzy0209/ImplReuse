@@ -1,0 +1,158 @@
+Issue ID: 161904
+Title: ZeroBubble and DualPipeV pipeline parallel schedules fail with torch.compiled model
+Bug Description:
+### 🐛 Describe the bug
+
+The ZeroBubble and DualPipeV schedules don't seem to be compatible with models that are `torch.compiled`. Following the TorchTitan code base, I reduced the problem into a minimal repro example:
+
+```py
+"""
+Run:
+
+torchrun --nproc_per_node=2 repro.py
+"""
+
+import torch
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.pipelining import PipelineStage
+from torch.distributed.pipelining.schedules import get_schedule_class
+import torch.nn as nn
+from torchtitan.distributed.pipeline_parallel import pipeline_module_split
+
+PP_DEGREE = 2
+SCHEDULE_NAME = "ZBVZeroBubble"  # or "DualPipeV"
+
+
+class Transformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.tok_embeddings = nn.Embedding(128, 32)
+        self.layers = torch.nn.ModuleDict()
+        for layer_id in range(4):
+            self.layers[str(layer_id)] = nn.Linear(32, 32, bias=False)
+        self.output = nn.Linear(32, 128, bias=False)
+
+    def forward(self, x):
+        x = self.tok_embeddings(x) if self.tok_embeddings else x
+        for layer in self.layers.values():
+            x = layer(x)
+        return self.output(x) if self.output else x
+
+
+def main() -> None:
+    local_rank = torch.distributed.get_node_local_rank()
+
+Original API Under Test: input_ids.clone
+Replacement set rank: 4
+Similarity Type: Replacement set
+Replacements:
+- input_ids.clone -> Unknown replacement (score=0.9891406893730164)
+- nn.Embedding -> Unknown replacement (score=0.9891406893730164)
+- nn.Linear -> Unknown replacement (score=0.9891406893730164)
+- nn.Module -> Unknown replacement (score=0.9891406893730164)
+- nn.ModuleDict -> Unknown replacement (score=0.9891406893730164)
+- nn.functional -> Unknown replacement (score=0.9891406893730164)
+- self.output -> Unknown replacement (score=0.9891406893730164)
+- torch.Tensor -> Unknown replacement (score=0.9891406893730164)
+- torch._functorch.config.donated_buffer -> Unknown replacement (score=0.9891406893730164)
+- torch.compiled -> Unknown replacement (score=0.9891406893730164)
+- torch.device -> torch.device (score=0.9941824078559875)
+- torch.distributed.device_mesh -> Unknown replacement (score=0.9891406893730164)
+- torch.distributed.get_node_local_rank -> Unknown replacement (score=0.9891406893730164)
+- torch.distributed.init_process_group -> torch.distributed.init_process_group (score=0.9948810338973999)
+- torch.distributed.pipelining -> Unknown replacement (score=0.9891406893730164)
+- torch.distributed.pipelining.schedules -> Unknown replacement (score=0.9891406893730164)
+- torch.distributed.pipelining.schedules.get_schedule_class,torch.compile -> Unknown replacement (score=0.9891406893730164)
+- torch.nn -> Unknown replacement (score=0.9891406893730164)
+- torch.nn.ModuleDict -> torch.nn.ModuleDict (score=0.9972754716873169)
+- torch.nn.functional.cross_entropy -> torch.nn.functional.cross_entropy (score=0.9975720643997192)
+- torch.randint -> torch.randint (score=0.9995843172073364)
+
+Original Test Case:
+"""
+Run:
+
+torchrun --nproc_per_node=2 repro.py
+"""
+
+import torch
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.pipelining import PipelineStage
+from torch.distributed.pipelining.schedules import get_schedule_class
+import torch.nn as nn
+from torchtitan.distributed.pipeline_parallel import pipeline_module_split
+
+PP_DEGREE = 2
+SCHEDULE_NAME = "ZBVZeroBubble"  # or "DualPipeV"
+
+
+class Transformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.tok_embeddings = nn.Embedding(128, 32)
+        self.layers = torch.nn.ModuleDict()
+        for layer_id in range(4):
+            self.layers[str(layer_id)] = nn.Linear(32, 32, bias=False)
+        self.output = nn.Linear(32, 128, bias=False)
+
+    def forward(self, x):
+        x = self.tok_embeddings(x) if self.tok_embeddings else x
+        for layer in self.layers.values():
+            x = layer(x)
+        return self.output(x) if self.output else x
+
+
+def main() -> None:
+    local_rank = torch.distributed.get_node_local_rank()
+    device = torch.device("cuda", local_rank)
+    torch.distributed.init_process_group("nccl")
+    mesh = init_device_mesh("cuda", (2,), mesh_dim_names=("pp",))
+
+    with torch.device("meta"):
+        model = Transformer()
+
+    pp_schedule, model_parts, has_first_stage, has_last_stage = pipeline_transformer(
+        model,
+        mesh,
+        device,
+        parallelize_transformer,
+        loss_fn,
+    )
+    for m in model_parts:
+        m.to_empty(device=device)
+        m.train()
+
+    input_ids = torch.randint(0, 128, (8, 4096), device=device)
+    labels = input_ids.clone()
+
+    losses: list[torch.Tensor] | None
+    targets, losses = (labels, []) if has_last_stage else (None, None)
+    if has_first_stage:
+        pp_schedule.step(
+            input_ids,
+            target=targets,
+            losses=losses,
+        )
+    else:
+        pp_schedule.step(
+            target=targets,
+            losses=losses,
+        )
+
+
+def pipeline_transformer(
+    model: nn.Module,
+    world_mesh,
+    device: torch.device,
+    parallelize_fn,
+    loss_fn,
+):
+    pp_mesh = world_mesh["pp"]
+    module_names_per_stage = [
+
+Please modify the original test case by replacing each listed source API with its corresponding replacement API from this set, preserving the original bug reproduction logic.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

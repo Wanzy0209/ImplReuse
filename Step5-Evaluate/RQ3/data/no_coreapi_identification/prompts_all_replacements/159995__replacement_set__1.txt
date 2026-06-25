@@ -1,0 +1,104 @@
+Issue ID: 159995
+Title: torch._inductor.aoti_compile_and_packagefails with CUDA kernels inside of atorch.cond
+Bug Description:
+### 🐛 Describe the bug
+
+### Issue
+
+A model that uses torch.cond to choose between two CUDA kernels runs fine eager, but `torch._inductor.aoti_load_package` fails to execute the exported model correctly.
+
+### Repro:
+```python
+# main.py
+import torch
+import os
+from torch.utils.cpp_extension import load
+
+op = load(name="add_extension", sources=[os.path.join(os.path.dirname(__file__), "op.cu")], verbose=True)
+
+torch.library.define("myops::add_one", "(Tensor x) -> Tensor")
+torch.library.define("myops::add_two", "(Tensor x) -> Tensor")
+torch.library.impl("myops::add_one", "CUDA", op.add_one)
+torch.library.impl("myops::add_two", "CUDA", op.add_two)
+
+@torch.library.register_fake("myops::add_one")
+def _(x): return torch.empty_like(x)
+
+@torch.library.register_fake("myops::add_two")
+def _(x): return torch.empty_like(x)
+
+class M(torch.nn.Module):
+    def forward(self, x):
+        # return torch.ops.myops.add_one(x) works totally fine
+        return torch.cond(x.shape[0] < 5, torch.ops.myops.add_one, torch.ops.myops.add_two, (x,))
+
+model = M()
+
+exported = torch.export.export(model, (torch.zeros(3, device="cuda"),), dynamic_shapes={"x": {0: torch.export.Dim("batch", min=1, max=128)}})
+torch._inductor.aoti_compile_and_package(exported, package_path="model.pt2")
+aoti_model = torch._inductor.aoti_load_package("model.pt2")
+result = aoti_model(torch.zeros(6, device="cuda"))
+print(f"{result = }")
+```
+```cuda
+
+Original API Under Test: nn.Module
+Replacement set rank: 1
+Similarity Type: Replacement set
+Replacements:
+- nn.Module -> Unknown replacement (score=0.9849840402603149)
+- ntorch._inductor.aoti_compile_and_package -> Unknown replacement (score=0.9849840402603149)
+- torch._inductor.aoti_compile_and_package,torch._inductor.aoti_load_package,torch.cond -> Unknown replacement (score=0.9849840402603149)
+- torch._inductor.aoti_compile_and_packagefails -> Unknown replacement (score=0.9849840402603149)
+- torch._inductor.aoti_load_package -> Unknown replacement (score=0.9849840402603149)
+- torch.cond -> Unknown replacement (score=0.9849840402603149)
+- torch.empty_like -> torch.empty_like (score=0.9998841285705566)
+- torch.export.Dim -> Unknown replacement (score=0.9849840402603149)
+- torch.export.export -> torch.export.export (score=0.9959222674369812)
+- torch.library.define -> torch.library.define (score=0.9963679909706116)
+- torch.library.impl -> torch.library.impl (score=0.9958217144012451)
+- torch.library.register_fake -> torch.library.register_fake (score=0.997563362121582)
+- torch.nn.Module -> Unknown replacement (score=0.9849840402603149)
+- torch.ops.myops.add_one -> Unknown replacement (score=0.9849840402603149)
+- torch.ops.myops.add_two -> Unknown replacement (score=0.9849840402603149)
+- torch.utils.cpp_extension -> Unknown replacement (score=0.9849840402603149)
+- torch.zeros -> torch.zeros (score=0.9999656677246094)
+
+Original Test Case:
+# main.py
+import torch
+import os
+from torch.utils.cpp_extension import load
+
+op = load(name="add_extension", sources=[os.path.join(os.path.dirname(__file__), "op.cu")], verbose=True)
+
+torch.library.define("myops::add_one", "(Tensor x) -> Tensor")
+torch.library.define("myops::add_two", "(Tensor x) -> Tensor")
+torch.library.impl("myops::add_one", "CUDA", op.add_one)
+torch.library.impl("myops::add_two", "CUDA", op.add_two)
+
+@torch.library.register_fake("myops::add_one")
+def _(x): return torch.empty_like(x)
+
+@torch.library.register_fake("myops::add_two")
+def _(x): return torch.empty_like(x)
+
+class M(torch.nn.Module):
+    def forward(self, x):
+        # return torch.ops.myops.add_one(x) works totally fine
+        return torch.cond(x.shape[0] < 5, torch.ops.myops.add_one, torch.ops.myops.add_two, (x,))
+
+model = M()
+
+exported = torch.export.export(model, (torch.zeros(3, device="cuda"),), dynamic_shapes={"x": {0: torch.export.Dim("batch", min=1, max=128)}})
+torch._inductor.aoti_compile_and_package(exported, package_path="model.pt2")
+aoti_model = torch._inductor.aoti_load_package("model.pt2")
+result = aoti_model(torch.zeros(6, device="cuda"))
+print(f"{result = }")
+
+Please modify the original test case by replacing each listed source API with its corresponding replacement API from this set, preserving the original bug reproduction logic.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

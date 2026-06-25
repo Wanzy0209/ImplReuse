@@ -1,0 +1,96 @@
+Issue ID: 163093
+Title: [lr_scheduler]ReduceLROnPlateau._reduce_lrtriggers recompilation with tensor lr
+Bug Description:
+### 🐛 Describe the bug
+
+`ReduceLROnPlateau._reduce_lr` sets `param_group["lr"]` to a float, [triggering recompilation](https://docs.pytorch.org/tutorials/recipes/compiling_optimizer_lr_scheduler.html) if the optimizer uses a tensor LR:
+```python
+for i, param_group in enumerate(self.optimizer.param_groups):
+    old_lr = float(param_group["lr"])
+    new_lr = max(old_lr * self.factor, self.min_lrs[i])
+    if old_lr - new_lr > self.eps:
+        param_group["lr"] = new_lr
+```
+
+Here's a reproduction:
+```python
+import torch
+from torch import optim, nn
+
+torch._logging.set_logs(recompiles=True)
+device = "cuda"
+model = nn.Linear(1, 1).to(device)
+
+lr = torch.tensor(0.1)
+opt = optim.Adam(model.parameters(), lr=lr)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5, patience=1, min_lr=0.001)
+
+# From https://docs.pytorch.org/tutorials/recipes/compiling_optimizer_lr_scheduler.html
+@torch.compile(fullgraph=False)
+def fn(metric):
+    opt.step()
+    scheduler.step(metric)
+
+total_steps = 8
+fake_metrics = torch.linspace(1.0, 0.0, total_steps, device=device)
+fake_metrics[3:6] = fake_metrics[3]
+
+for metric in fake_metrics:
+    fn(metric)
+
+# W0912 20:46:20.358000 89262 torch/_logging/_internal.py:1199] [0/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+# V0912 20:46:20.564000 89262 torch/_dynamo/guards.py:4295] [2/1] [__recompiles] Recompiling function step in /workspace/pytorch/torch/optim/adam.py:213
+# V0912 20:46:20.564000 89262 torch/_dynamo/
+...
+
+Original API Under Test: nn.Linear
+Replacement set rank: 6
+Similarity Type: Replacement set
+Replacements:
+- nn.Linear -> Unknown replacement (score=0.9844893217086792)
+- ntorch._logging.set_logs -> Unknown replacement (score=0.9844893217086792)
+- opt.step -> Unknown replacement (score=0.9844893217086792)
+- scheduler.step -> Unknown replacement (score=0.9844893217086792)
+- self.get_lr -> Unknown replacement (score=0.9844893217086792)
+- torch._logging.set_logs -> Unknown replacement (score=0.9844893217086792)
+- torch.autograd.profiler.record_function -> Unknown replacement (score=0.9844893217086792)
+- torch.compile -> torch.compile (score=0.9942690134048462)
+- torch.linspace -> torch.linspace (score=0.998831033706665)
+- torch.tensor -> torch.tensor (score=0.9954932928085327)
+
+Original Test Case:
+import torch
+from torch import optim, nn
+
+torch._logging.set_logs(recompiles=True)
+device = "cuda"
+model = nn.Linear(1, 1).to(device)
+
+lr = torch.tensor(0.1)
+opt = optim.Adam(model.parameters(), lr=lr)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5, patience=1, min_lr=0.001)
+
+# From https://docs.pytorch.org/tutorials/recipes/compiling_optimizer_lr_scheduler.html
+@torch.compile(fullgraph=False)
+def fn(metric):
+    opt.step()
+    scheduler.step(metric)
+
+total_steps = 8
+fake_metrics = torch.linspace(1.0, 0.0, total_steps, device=device)
+fake_metrics[3:6] = fake_metrics[3]
+
+for metric in fake_metrics:
+    fn(metric)
+
+# W0912 20:46:20.358000 89262 torch/_logging/_internal.py:1199] [0/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+# V0912 20:46:20.564000 89262 torch/_dynamo/guards.py:4295] [2/1] [__recompiles] Recompiling function step in /workspace/pytorch/torch/optim/adam.py:213
+# V0912 20:46:20.564000 89262 torch/_dynamo/guards.py:4295] [2/1] [__recompiles]     triggered by the following guard failure(s):
+# V0912 20:46:20.564000 89262 torch/_dynamo/guards.py:4295] [2/1] [__recompiles]     - 2/0: expected type of 'self.param_groups[0]['lr']' to be a tensor type, ' but found <class 'float'>
+
+Please modify the original test case by replacing each listed source API with its corresponding replacement API from this set, preserving the original bug reproduction logic.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.
