@@ -1,0 +1,148 @@
+Issue ID: 165297
+Title: [BUG] MaxPool2d with channels_last + bfloat16 on CUDA produces NaNs for large tensors
+Bug Description:
+### 🐛 Describe the bug
+
+# Description
+When using torch.nn.MaxPool2d on large tensors with memory_format=torch.channels_last on GPU, the output can contain NaN values or even cause an illegal memory access error, depending on dtype and the memory content. This happens even when the input has no NaN/Inf. Changing to contiguous (NCHW) memory format before MaxPool fixes the issue.
+
+# Steps to Reproduce
+```python
+import torch
+import torch.nn as nn
+
+device = torch.device("cuda")
+
+def test_maxpool_nan():
+    # Large input tensor
+    N, C, H, W = 84, 64, 512, 960
+    # Case 1: bfloat16 + channels_last  => NaN
+    x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+
+    # Case 2: float32 + channels_last => illegal memory access
+    # x = torch.randn(N, C, H, W, device=device)  # default float32
+
+
+    # Convert to NHWC channels_last layout
+    x = x.to(memory_format=torch.channels_last)
+
+    # Uncommenting the line below avoids NaNs
+    # x = x.contiguous()
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+    print(f"Input stride: {x.stride()}")
+
+    pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1).to(device)
+    y = pool(x)
+
+    print(f"Output contains NaN? {torch.isnan(y).any().item()}")
+    print(f"Output contains Inf? {torch.isinf(y).any().item()}")
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    if torch.isnan(y).any():
+        print("Detected NaNs in MaxPool out
+...
+
+Original API Under Test: torch.nn.MaxPool2d
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.nn.with_space_to_batch
+Similarity score: 0.9877916574478149
+
+Similar API information:
+# Extracted call chain for tf.nn.with_space_to_batch
+
+# --- tensorflow.python.ops.nn_ops.with_space_to_batch ---
+def with_space_to_batch(
+    input,  # pylint: disable=redefined-builtin
+    dilation_rate,
+    padding,
+    op,
+    filter_shape=None,
+    spatial_dims=None,
+    data_format=None):
+  """Performs `op` on the space-to-batch representation of `input`.
+
+  This has the effect of transforming sliding window operations into the
+  corresponding "atrous" operation in which the input is sampled at the
+  specified `dilation_rate`.
+
+  In the special case that `dilation_rate` is uniformly 1, this simply returns:
+
+    op(input, num_spatial_dims, padding)
+
+  Otherwise, it returns:
+
+    batch_to_space_nd(
+      op(space_to_batch_nd(input, adjusted_dilation_rate, adjusted_paddings),
+         num_spatial_dims,
+         "VALID")
+      adjusted_dilation_rate,
+      adjusted_crops),
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+device = torch.device("cuda")
+
+def test_maxpool_nan():
+    # Large input tensor
+    N, C, H, W = 84, 64, 512, 960
+    # Case 1: bfloat16 + channels_last  => NaN
+    x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+
+    # Case 2: float32 + channels_last => illegal memory access
+    # x = torch.randn(N, C, H, W, device=device)  # default float32
+
+
+    # Convert to NHWC channels_last layout
+    x = x.to(memory_format=torch.channels_last)
+
+    # Uncommenting the line below avoids NaNs
+    # x = x.contiguous()
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+    print(f"Input stride: {x.stride()}")
+
+    pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1).to(device)
+    y = pool(x)
+
+    print(f"Output contains NaN? {torch.isnan(y).any().item()}")
+    print(f"Output contains Inf? {torch.isinf(y).any().item()}")
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    if torch.isnan(y).any():
+        print("Detected NaNs in MaxPool output!")
+
+test_maxpool_nan()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- nn.MaxPool2d -> torch.nn.Hardswish (score=0.9858721494674683, source_group=issue_to_api)
+- torch.bfloat16 -> torch.nn.Hardswish (score=0.9858721494674683, source_group=issue_to_api)
+- torch.channels_last -> torch.nn.Hardswish (score=0.9858721494674683, source_group=issue_to_api)
+- torch.device -> tf.compat.v1.metrics.sparse_precision_at_k (score=0.9941824078559875, source_group=pytorch_to_tensorflow)
+- torch.isinf -> torch.bincount (score=0.9962310791015625, source_group=pytorch_to_pytorch)
+- torch.isnan -> torch.unbind (score=0.9962118268013, source_group=pytorch_to_pytorch)
+- torch.nn -> torch.nn.Hardswish (score=0.9858721494674683, source_group=issue_to_api)
+- torch.randn -> tf.feature_column.crossed_column (score=0.986714243888855, source_group=issue_to_api)
+- x.stride -> torch.nn.Hardswish (score=0.9858721494674683, source_group=issue_to_api)
+- x.to -> torch.nn.Hardswish (score=0.9858721494674683, source_group=issue_to_api)
+- y.min -> torch.nn.Hardswish (score=0.9858721494674683, source_group=issue_to_api)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

@@ -1,0 +1,132 @@
+Issue ID: 166290
+Title: [Fuzzer][Eager/Compile Divergence] IndexError: list index out of range
+Bug Description:
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(974450504)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0 # size=(17, 30, 17, 3), stride=(1530, 51, 3, 1), dtype=bool, device=cuda
+    var_node_2 = torch.chunk(var_node_3, 3, dim=3)[0] # size=(17, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda
+    var_node_5 = torch.full((17,), 3, dtype=torch.int64) # size=(17,), stride=(1,), dtype=int64, device=cuda
+    var_node_6 = arg_1 # size=(15,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_4 = var_node_5.size(0)
+    _index_var_node_4 = torch.randint(0, _input_size_var_node_4, (15,), device=var_node_5.device)
+    var_node_4 = torch.gather(var_node_5, 0, _index_var_node_4) # size=(15,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_1 = var_node_2.size(0)
+    _index_var_node_1 = torch.randint(0, _input_size_var_node_1, (15,), device=var_node_2.device)
+    var_node_1 = torch.index_select(var_node_2, 0, _index_var_node_1) # size=(15, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda
+    var_node_0 = torch.squeeze(var_node_1) # size=(15, 30, 17), stride=(510, 17, 1), dtype=bool, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+...
+
+Original API Under Test: torch.squeeze
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.squeeze
+Similarity score: 1.0
+
+Similar API information:
+# Extracted call chain for torch.squeeze
+
+# --- torch._inductor.lowering.squeeze ---
+def squeeze(x, dim=None):
+    assert isinstance(x, TensorBox)
+    if dim is None:
+        return TensorBox(SqueezeView.create(x.data))
+
+    dim = (
+        V.graph.sizevars.evaluate_static_shape(dim)
+        if isinstance(dim, (int, sympy.Expr))
+        else tuple(V.graph.sizevars.evaluate_static_shape(d) for d in dim)
+    )
+    dim = canonicalize_dims(len(x.get_size()), dim)  # type: ignore[call-overload]
+    dims = OrderedSet((dim,) if not isinstance(dim, tuple) else dim)
+
+    new_shape = []
+    for d, s in enumerate(x.get_size()):
+        if not (
+            d in dims
+            and V.graph.sizevars.evaluate_expr(sympy.Eq(s, 1), size_oblivious=True)
+        ):
+            new_shape.append(s)
+
+    # squeeze does nothing if the size isn't 1
+    return view(x, new_shape) if new_shape != x.get_size() else x
+
+# --- torch.utils._ordered_set.OrderedSet ---
+class OrderedSet(MutableSet[T], Reversible[T]):
+    """
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(974450504)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0 # size=(17, 30, 17, 3), stride=(1530, 51, 3, 1), dtype=bool, device=cuda
+    var_node_2 = torch.chunk(var_node_3, 3, dim=3)[0] # size=(17, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda
+    var_node_5 = torch.full((17,), 3, dtype=torch.int64) # size=(17,), stride=(1,), dtype=int64, device=cuda
+    var_node_6 = arg_1 # size=(15,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_4 = var_node_5.size(0)
+    _index_var_node_4 = torch.randint(0, _input_size_var_node_4, (15,), device=var_node_5.device)
+    var_node_4 = torch.gather(var_node_5, 0, _index_var_node_4) # size=(15,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_1 = var_node_2.size(0)
+    _index_var_node_1 = torch.randint(0, _input_size_var_node_1, (15,), device=var_node_2.device)
+    var_node_1 = torch.index_select(var_node_2, 0, _index_var_node_1) # size=(15, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda
+    var_node_0 = torch.squeeze(var_node_1) # size=(15, 30, 17), stride=(510, 17, 1), dtype=bool, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(0, 2, (26010,), dtype=torch.int8).bool(), (17, 30, 17, 3), (1530, 51, 3, 1))
+arg_1 = torch.as_strided(torch.randint(5, 30, (15,)).to(torch.int64), (15,), (1,))
+
+args = (arg_0, arg_1) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+The API torch.squeeze is identified as same-library similar to the original PyTorch API torch.squeeze.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- torch.as_strided -> torch.bmm (score=0.9951089024543762, source_group=pytorch_to_pytorch)
+- torch.chunk -> torch.nn.functional.pdist (score=0.9955260753631592, source_group=pytorch_to_pytorch)
+- torch.compile -> torch.all (score=0.9942798018455505, source_group=pytorch_to_pytorch)
+- torch.full -> torch.amax (score=0.9984740614891052, source_group=pytorch_to_pytorch)
+- torch.gather -> torch.round (score=0.9975846409797668, source_group=pytorch_to_pytorch)
+- torch.index_select -> torch.cummax (score=0.9965593814849854, source_group=pytorch_to_pytorch)
+- torch.manual_seed -> torch.isinf (score=0.9959675073623657, source_group=pytorch_to_pytorch)
+- torch.randint -> torch.full (score=0.9988011717796326, source_group=pytorch_to_pytorch)
+- torch.tensor -> tf.keras.ops.diag (score=0.9954932928085327, source_group=pytorch_to_tensorflow)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

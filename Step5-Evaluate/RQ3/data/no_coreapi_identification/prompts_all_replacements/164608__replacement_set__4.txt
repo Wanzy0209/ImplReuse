@@ -1,0 +1,175 @@
+Issue ID: 164608
+Title: Dynamo cache bug create_block_mask
+Bug Description:
+# Summary
+
+If we don't reset between runs for compiled create block mask we get garbage q_num_blocks:
+Repro:
+``` py
+from functools import partial
+
+import torch
+from torch.nn.attention.flex_attention import create_block_mask
+
+
+def _score_mode_fn_visibility(batch, head, q_idx, kv_idx, lower_bound, upper_bound):
+    return (kv_idx >= lower_bound[q_idx]) & (kv_idx <= upper_bound[q_idx])
+
+
+def create_attn_visibility(batch_size, seq_len):
+    start = [x * seq_len for x in range(batch_size)]
+    end = [x + (seq_len - 1) for x in start]
+    attn_visibility = torch.tensor([start, end], dtype=torch.int32, device="cuda")
+    return attn_visibility.view(2, -1)
+
+
+def create_block_mask_eager(attn_visibility, kv_seqlen=None):
+    _, num_tokens = attn_visibility.view(2, -1).shape
+    return create_block_mask(
+        partial(
+            _score_mode_fn_visibility,
+            lower_bound=attn_visibility.view(2, -1)[0],
+            upper_bound=attn_visibility.view(2, -1)[1],
+        ),
+        1,
+        None,
+        num_tokens,
+        num_tokens if kv_seqlen is None else kv_seqlen,
+        device=attn_visibility.device,
+    )
+
+
+def create_block_mask_compiled(attn_visibility, kv_seqlen=None):
+    _, num_tokens = attn_visibility.view(2, -1).shape
+
+Original API Under Test: torch.nn.attention.flex_attention.create_block_mask
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+Similarity score: 0.9850437641143799
+
+Similar API information:
+# Extracted call chain for torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+
+# --- torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed ---
+def fp16_bf16_reduction_math_sdp_allowed():
+    r"""
+    .. warning:: This flag is beta and subject to change.
+
+    Returns whether fp16/bf16 reduction in math scaled dot product attention is enabled or not.
+    """
+    return torch._C._get_math_sdp_allow_fp16_bf16_reduction()
+
+Original Test Case:
+from functools import partial
+
+import torch
+from torch.nn.attention.flex_attention import create_block_mask
+
+
+def _score_mode_fn_visibility(batch, head, q_idx, kv_idx, lower_bound, upper_bound):
+    return (kv_idx >= lower_bound[q_idx]) & (kv_idx <= upper_bound[q_idx])
+
+
+def create_attn_visibility(batch_size, seq_len):
+    start = [x * seq_len for x in range(batch_size)]
+    end = [x + (seq_len - 1) for x in start]
+    attn_visibility = torch.tensor([start, end], dtype=torch.int32, device="cuda")
+    return attn_visibility.view(2, -1)
+
+
+def create_block_mask_eager(attn_visibility, kv_seqlen=None):
+    _, num_tokens = attn_visibility.view(2, -1).shape
+    return create_block_mask(
+        partial(
+            _score_mode_fn_visibility,
+            lower_bound=attn_visibility.view(2, -1)[0],
+            upper_bound=attn_visibility.view(2, -1)[1],
+        ),
+        1,
+        None,
+        num_tokens,
+        num_tokens if kv_seqlen is None else kv_seqlen,
+        device=attn_visibility.device,
+    )
+
+
+def create_block_mask_compiled(attn_visibility, kv_seqlen=None):
+    _, num_tokens = attn_visibility.view(2, -1).shape
+    cbm_compiled = torch.compile(create_block_mask)
+    return cbm_compiled(
+        partial(
+            _score_mode_fn_visibility,
+            lower_bound=attn_visibility.view(2, -1)[0],
+            upper_bound=attn_visibility.view(2, -1)[1],
+        ),
+        1,
+        None,
+        num_tokens,
+        num_tokens if kv_seqlen is None else kv_seqlen,
+        device=attn_visibility.device,
+    )
+
+
+def test_parametrization_issue():
+    torch.set_default_device("cuda")
+    torch.set_default_dtype(torch.bfloat16)
+    torch.cuda.manual_seed(10007)
+
+    seq_len = 1024
+    batch_sizes = [1, 2]
+
+    print("STEP 1: Establish ground truth with eager")
+    ground_truth = {}
+    for batch_size in batch_sizes:
+        attn_visibility = create_attn_visibility(batch_size, seq_len)
+        kv_seqlen = batch_size * seq_len
+        eager_mask = create_block_mask_eager(attn_visibility, kv_seqlen)
+        ground_truth[batch_size] = eager_mask
+        print(f"  batch_size={batch_size}: q_num_blocks={eager_mask.q_num_blocks}")
+
+    print("\nSTEP 2: Test eager in parametrization order")
+    for batch_size in batch_sizes:
+        attn_visibility = create_attn_visibility(batch_size, seq_len)
+        kv_seqlen = batch_size * seq_len
+        eager_mask = create_block_mask_eager(attn_visibility, kv_seqlen)
+        ground_truth_mask = ground_truth[batch_size]
+
+        q_match = torch.equal(eager_mask.q_num_blocks, ground_truth_mask.q_num_blocks)
+        kv_match = torch.equal(
+            eager_mask.kv_num_blocks, ground_truth_mask.kv_num_blocks
+        )
+
+        status = "✅" if q_match and kv_match else "❌"
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- attn_visibility.view -> torch.library.get_ctx (score=0.9835042357444763, source_group=issue_to_api)
+- functools.reduce -> torch.library.get_ctx (score=0.9835042357444763, source_group=issue_to_api)
+- nn.attention -> torch.library.get_ctx (score=0.9835042357444763, source_group=issue_to_api)
+- torch._dynamo.reset -> torch.library.get_ctx (score=0.9835042357444763, source_group=issue_to_api)
+- torch.bfloat16 -> torch.library.get_ctx (score=0.9835042357444763, source_group=issue_to_api)
+- torch.compile -> torch.library.impl_abstract (score=0.9943459033966064, source_group=pytorch_to_pytorch)
+- torch.cuda.manual_seed -> torch.library.get_ctx (score=0.9835042357444763, source_group=issue_to_api)
+- torch.equal -> torch.randn_like (score=0.9961585998535156, source_group=pytorch_to_pytorch)
+- torch.int32 -> torch.library.get_ctx (score=0.9835042357444763, source_group=issue_to_api)
+- torch.nn.attention.flex_attention -> torch.library.get_ctx (score=0.9835042357444763, source_group=issue_to_api)
+- torch.set_default_device -> torch.library.get_ctx (score=0.9835042357444763, source_group=issue_to_api)
+- torch.set_default_dtype -> tf.keras.backend.std (score=0.993170976638794, source_group=pytorch_to_tensorflow)
+- torch.tensor -> tf.experimental.numpy.diag (score=0.9954932928085327, source_group=pytorch_to_tensorflow)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.
