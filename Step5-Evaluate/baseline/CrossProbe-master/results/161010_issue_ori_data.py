@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import tensorflow.experimental.numpy as tnp
 
@@ -45,4 +44,3 @@ print(res1)
 # TF: tf.function(f) is the equivalent of compiling a function
 res2 = tf.function(f)(A, count_init)
 print(res2)
-```

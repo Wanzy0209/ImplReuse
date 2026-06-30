@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.experimental import dtensor
 from tensorflow.python.distribute.cross_device_ops_test import make_collective
@@ -35,4 +34,3 @@ def test_strided_shard_bug(self):
     # In TF DTensor, the tensor object itself represents the distributed tensor.
     # We print the pid and the tensor representation.
     print(f"pid={pid} dtensor_local={dtensor_sharded}")
-```

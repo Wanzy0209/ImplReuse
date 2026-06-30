@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch._dynamo.backends.common.aot_autograd and functorch.compile.nop
@@ -43,4 +42,3 @@ if __name__ == "__main__":
     # Conversion: torch.randn -> tf.random.normal
     x = tf.random.normal(shape=(4,))
     mod(x)
-```

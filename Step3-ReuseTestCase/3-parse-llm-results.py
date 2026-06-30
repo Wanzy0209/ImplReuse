@@ -13,7 +13,7 @@ from typing import List, Optional
 
 
 SCRIPT_DIR = Path(__file__).parent
-DEFAULT_RESPONSE_DIR = SCRIPT_DIR / "llm_responses" / "llm_io"
+DEFAULT_RESPONSE_DIR = SCRIPT_DIR / "llm_responses_old" / "llm_io"
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "test_cases"
 
 

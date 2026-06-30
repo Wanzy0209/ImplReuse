@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 SCRIPT_DIR = Path(__file__).parent
 DEFAULT_PROMPT_DIR = SCRIPT_DIR / "prompts"
-DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "llm_responses"
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "llm_responses_old"
 DEFAULT_IO_SUBDIR = "llm_io"
 
 

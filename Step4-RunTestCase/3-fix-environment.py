@@ -328,7 +328,7 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # Create LLM IO directory
-    io_dir = args.output_dir / "llm_responses" / DEFAULT_IO_SUBDIR
+    io_dir = args.output_dir / "llm_responses_old" / DEFAULT_IO_SUBDIR
     io_dir.mkdir(parents=True, exist_ok=True)
 
     # Process cross-framework test cases
