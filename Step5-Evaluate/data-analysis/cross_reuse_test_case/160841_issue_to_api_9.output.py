@@ -1,0 +1,50 @@
+import tensorflow as tf
+import tensorflow.experimental.numpy as tnp
+import numpy as np
+
+def test_tf_experimental_numpy_abs_type_safety():
+    """
+    Test case for tf.experimental.numpy.abs focusing on type handling and precision.
+    
+    This test is derived from Issue #160841 where automatic dtype handling ('auto')
+    led to garbage output on MacOS/MPS. The test verifies that tf.experimental.numpy.abs
+    handles type conversions (specifically complex to float) and precision-sensitive
+    types (like float16) correctly without producing garbage (NaNs/Infs).
+    """
+    
+    # 1. Test with Complex Numbers (Type Promotion)
+    # The API documentation highlights that abs converts complex numbers to float32/float64.
+    # We verify this conversion is accurate and does not result in garbage data.
+    input_complex = tf.constant([[-1.0 + 2.0j, 3.0 - 4.0j], [0.0 + 1.0j, -5.0 + 0.0j]], dtype=tf.complex64)
+    
+    # Perform the operation
+    output_complex = tnp.abs(input_complex)
+    
+    # Assertions to prevent "garbage" output (NaNs or Infs)
+    assert not tf.reduce_any(tf.math.is_nan(output_complex)), "Complex abs produced NaNs"
+    assert not tf.reduce_any(tf.math.is_inf(output_complex)), "Complex abs produced Infs"
+    
+    # Verify mathematical correctness
+    # |a + bj| = sqrt(a^2 + b^2)
+    expected_complex = np.array([[np.sqrt(5), 5.0], [1.0, 5.0]])
+    np.testing.assert_allclose(output_complex.numpy(), expected_complex, rtol=1e-5)
+    
+    # 2. Test with Float16 (Precision Sensitivity)
+    # The original bug involved precision issues with float16 on specific hardware.
+    # We ensure abs handles float16 inputs robustly.
+    input_fp16 = tf.constant([-1.5, 2.5, -3.5, 0.0], dtype=tf.float16)
+    
+    output_fp16 = tnp.abs(input_fp16)
+    
+    # Check for garbage
+    assert not tf.reduce_any(tf.math.is_nan(output_fp16)), "Float16 abs produced NaNs"
+    assert not tf.reduce_any(tf.math.is_inf(output_fp16)), "Float16 abs produced Infs"
+    
+    # Verify correctness
+    expected_fp16 = np.array([1.5, 2.5, 3.5, 0.0])
+    np.testing.assert_allclose(output_fp16.numpy(), expected_fp16, rtol=1e-3)
+
+    print("Test passed: tf.experimental.numpy.abs handles type conversions and precision correctly.")
+
+if __name__ == "__main__":
+    test_tf_experimental_numpy_abs_type_safety()

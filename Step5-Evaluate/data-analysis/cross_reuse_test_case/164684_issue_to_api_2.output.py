@@ -1,0 +1,83 @@
+import torch
+import sys
+
+# Handle missing torch._dynamo gracefully
+HAS_DYNAMO = False
+try:
+    import torch._dynamo
+    HAS_DYNAMO = True
+except ModuleNotFoundError:
+    pass
+
+# This test case reproduces the eager/compile divergence bug for torch.mul
+# when operating on a SymBool (result of .item() on a dynamic tensor) and a FakeTensor.
+# The logic is adapted to verify the behavior of the multiplication operation
+# in a context similar to serialization/tracing patterns where scalar extraction
+# interacts with tensor operations.
+
+def test_mul_symbool_faketensor():
+    """
+    Tests that torch.mul handles SymBool * FakeTensor correctly during compilation.
+    This reproduces the issue where .item() returns a SymBool in dynamo tracing,
+    causing a TypeError when multiplied with a FakeTensor.
+    """
+    if not HAS_DYNAMO:
+        print("Skipping test: torch._dynamo is not available in this environment.")
+        return
+
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+    torch.manual_seed(19990)
+
+    # Sentinel tensor to ensure gradient computation is involved
+    sentinel = torch.tensor(1.0, requires_grad=True)
+
+    # Input tensor: size=(1,), dtype=bool
+    arg_0 = torch.randint(0, 2, (1,), dtype=torch.bool) > 0
+
+    def mul_op(arg, scalar_mult):
+        # Mimics the pattern of extracting a scalar and using it in an op
+        squeezed = torch.squeeze(arg) # size=(), dtype=bool
+        scalar_val = squeezed.item()  # dtype=bool (SymBool in tracing)
+        
+        # The operation causing the bug: SymBool * Tensor
+        result = scalar_val * scalar_mult
+        
+        if result.is_complex():
+            result = result.real
+        return result
+
+    # 1. Test in Eager Mode
+    try:
+        result_eager = mul_op(arg_0, sentinel)
+        print(" Eager mode success")
+        assert result_eager is not None
+    except Exception as e:
+        print(f" Eager mode failed: {e}")
+        raise
+
+    # 2. Test in Compiled Mode (torch.compile)
+    # This is expected to fail with the bug:
+    # TypeError: unsupported operand type(s) for *: 'SymBool' and 'FakeTensor'
+    compiled_mul_op = torch.compile(mul_op, fullgraph=True, dynamic=True)
+    
+    try:
+        result_compiled = compiled_mul_op(arg_0, sentinel)
+        print(" Compile mode success")
+        # If we reach here, the bug is likely fixed or not triggered.
+        # We check if results match.
+        assert torch.allclose(result_eager, result_compiled)
+    except TypeError as e:
+        if "SymBool" in str(e) and "FakeTensor" in str(e):
+            print(f" Compile mode failed with expected bug: {e}")
+            # Re-raise to indicate the bug exists
+            raise
+        else:
+            print(f" Compile mode failed with unexpected error: {e}")
+            raise
+    except Exception as e:
+        print(f" Compile mode failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_mul_symbool_faketensor()

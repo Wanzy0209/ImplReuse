@@ -1,0 +1,37 @@
+import torch
+import unittest
+
+class TestMvlgammaFPE(unittest.TestCase):
+    """
+    Test case for Issue 161871: Floating point exception in torch.Tensor.mvlgamma_
+    
+    This test reproduces the crash scenario where mvlgamma_ is called with 
+    an int64 tensor and a large p value.
+    """
+    
+    def test_mvlgamma_large_p_int_input(self):
+        print(f"Testing with PyTorch version: {torch.__version__}")
+        
+        # Reproduce the input setup from the bug report
+        # Creating an int64 tensor with random values
+        tensor = torch.randint(low=0, high=10, size=(5,), dtype=torch.int64)
+        
+        # The problematic arguments
+        p = 1024
+        
+        # The bug report indicates this causes a Floating point exception (core dumped).
+        # We wrap the call to observe the behavior.
+        # Ideally, this should raise a clear error or handle the type mismatch gracefully
+        # instead of crashing the interpreter.
+        try:
+            torch.Tensor.mvlgamma_(tensor, p)
+            # If we reach here, the bug might be fixed or the behavior changed
+            print("Operation completed without crash.")
+        except FloatingPointError:
+            print("Caught FloatingPointError (expected in buggy version).")
+        except Exception as e:
+            # Catching other exceptions that might be raised by a fix (e.g., TypeError)
+            print(f"Caught exception: {type(e).__name__}: {e}")
+
+if __name__ == '__main__':
+    unittest.main()

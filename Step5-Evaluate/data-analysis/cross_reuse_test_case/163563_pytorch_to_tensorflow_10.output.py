@@ -1,0 +1,90 @@
+import sys
+import torch
+
+# Handle environment/dependency issues gracefully
+try:
+    import tensorflow as tf
+except ImportError as e:
+    print(f"Error importing TensorFlow: {e}")
+    print("Skipping test due to missing dependencies or environment issues (e.g., GLIBC version mismatch).")
+    sys.exit(0)
+
+# Check for GPU availability to match the PyTorch 'cuda' requirement
+gpus = tf.config.list_physical_devices('GPU')
+device_name = '/GPU:0' if gpus else '/CPU:0'
+if not gpus:
+    print("Warning: No GPU found. Test might be slow or behave differently.")
+
+# Configuration from the bug report
+# We use the similar API (range_input_producer) to define the input range/limit
+def get_input_limit():
+    # The API produces integers from 0 to limit-1.
+    # We use the limit to parameterize our large tensor generation.
+    limit = 5699097
+    # In a real pipeline, we would dequeue from the queue returned by this API.
+    # Here, we use the limit to drive the OOM reproduction logic.
+    return limit
+
+def heavy_computation(limit):
+    # Replicating the logic from the PyTorch bug report
+    # arg0: size=(5699097, 6, 1), dtype=bfloat16
+    arg0 = tf.random.uniform([limit, 6, 1], dtype=tf.bfloat16)
+    # t1 = torch.sigmoid(t0)
+    t1 = tf.sigmoid(arg0)
+
+    # arg1: size=(5699097, 6, 256), dtype=bfloat16
+    arg1 = tf.random.uniform([limit, 6, 256], dtype=tf.bfloat16)
+    # t3 = torch.sigmoid(t2)
+    t3 = tf.sigmoid(arg1)
+
+    # arg2: size=(5699097, 256, 1), dtype=bfloat16
+    arg2 = tf.random.uniform([limit, 256, 1], dtype=tf.bfloat16)
+    # t5 = torch.exp(t4)
+    t5 = tf.exp(arg2)
+
+    # t6 = torch.baddbmm(t1, t3, t5)
+    # baddbmm computes batch1 * batch2 + input
+    # t3 shape: [B, 6, 256], t5 shape: [B, 256, 1] -> matmul result: [B, 6, 1]
+    matmul_res = tf.matmul(t3, t5)
+    t6 = t1 + matmul_res
+
+    # t7 = t6.reshape((193, 386, 459))
+    t7 = tf.reshape(t6, (193, 386, 459))
+    
+    return t7
+
+def run_test():
+    # Use the similar API to determine the scale of the test
+    limit = get_input_limit()
+
+    # 1. Eager Execution
+    print("Running Eager Execution...")
+    try:
+        with tf.device(device_name):
+            out_eager = heavy_computation(limit)
+            # Force execution
+            _ = out_eager.numpy()
+        print('Eager Success! ')
+    except tf.errors.ResourceExhaustedError as e:
+        print(f'Eager OOM: {e}')
+    except Exception as e:
+        print(f'Eager Error: {e}')
+
+    # 2. Graph Execution (tf.function) - Similar to torch.compile
+    print("\nRunning Graph Execution (tf.function)...")
+    try:
+        # Compile the function
+        compiled_heavy_computation = tf.function(heavy_computation)
+
+        with tf.device(device_name):
+            out_compiled = compiled_heavy_computation(limit)
+            # Force execution
+            _ = out_compiled.numpy()
+        print('Compile Success! ')
+    except tf.errors.ResourceExhaustedError as e:
+        print(f'Compile OOM: {e}')
+    except Exception as e:
+        print(f'Compile Error: {e}')
+
+if __name__ == '__main__':
+    run_test()

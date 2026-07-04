@@ -1,0 +1,47 @@
+import tensorflow as tf
+import time
+
+# Mimicking the seed setup from the original issue
+# Using tf.set_random_seed for compatibility with TF1/v1 API context
+tf.set_random_seed(0)
+
+# Mimicking the shapes list with scenarios for the API under test
+# Since global_step doesn't have shapes, we use different initial values as scenarios
+scenarios = [
+    (10, "Scenario A"),
+    (100, "Scenario B"),
+]
+
+def benchmark_global_step(initial_value, name, repeat=500):
+    # Setup inputs for the API
+    # In the original, tensors were created with specific shapes and dtypes.
+    # Here, we create the Variable required by global_step.
+    global_step_tensor = tf.Variable(initial_value, trainable=False, name='global_step')
+
+    # Warm up
+    # The original ran 5000 iterations of matmul
+    for _ in range(5000):
+        # Call the API under test
+        # Passing None for session as we are likely in eager mode (TF2 default)
+        _ = tf.compat.v1.train.global_step(None, global_step_tensor)
+
+    # Run
+    times = []
+    for i in range(repeat):
+        start = time.time()
+        _ = tf.compat.v1.train.global_step(None, global_step_tensor)
+        end = time.time()
+        if i > 100:
+            # Original logic: convert to microseconds
+            times.append(round((end - start) * 1000 * 1000))
+    
+    times.sort()
+    print(times)
+    avg_time_us = sum(times) / len(times)
+    return avg_time_us
+
+if __name__ == "__main__":
+    for val, name in scenarios:
+        t = benchmark_global_step(val, name)
+        # Mimicking the output format of the original test case
+        print(f"{name} (init={val}) -> {t:.3f} us")

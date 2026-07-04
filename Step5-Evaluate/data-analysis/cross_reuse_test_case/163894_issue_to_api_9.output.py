@@ -1,0 +1,86 @@
+import sys
+
+# Attempt to import dependencies. If they fail due to environment issues (like GLIBCXX),
+# skip the test gracefully.
+try:
+    import torch
+    import tensorflow as tf
+except ImportError as e:
+    print(f"Skipping test due to import error: {e}")
+    print("This is likely a system environment issue (e.g., missing GLIBCXX_3.4.29 for TensorFlow/Protobuf).")
+    sys.exit(0)
+
+# Leverage the similar API: tf.compat.v1.enable_v2_behavior
+# This ensures TensorFlow 2.x behaviors (eager execution) are enabled,
+# providing a context to test for eager/compile divergence similar to the PyTorch issue.
+tf.compat.v1.enable_v2_behavior()
+
+def fuzzed_program(arg_0, sentinel):
+    # var_node_1 = arg_0 # size=(1, 2), stride=(2, 1), dtype=int64, device=cuda
+    var_node_1 = arg_0
+
+    # var_node_5 = torch.full((1, 2), -66, dtype=torch.int32)
+    var_node_5 = tf.fill([1, 2], tf.constant(-66, dtype=tf.int32))
+
+    # var_node_6 = torch.full((1, 2), 77, dtype=torch.int64)
+    var_node_6 = tf.fill([1, 2], tf.constant(77, dtype=tf.int64))
+
+    # var_node_4 = torch.ops.aten.add(var_node_5, var_node_6)
+    # PyTorch promotes int32 + int64 to int64. TF does the same.
+    var_node_4 = tf.add(var_node_5, var_node_6)
+
+    # var_node_7 = torch.full((1, 2), -64, dtype=torch.int32)
+    var_node_7 = tf.fill([1, 2], tf.constant(-64, dtype=tf.int32))
+
+    # var_node_3 = torch.ops.aten.mul(var_node_4, var_node_7)
+    var_node_3 = tf.multiply(var_node_4, var_node_7)
+
+    # var_node_9 = torch.full((3, 4), False, dtype=torch.bool)
+    var_node_9 = tf.fill([3, 4], False)
+
+    # var_node_8 = torch.nonzero(var_node_9)
+    # tf.where returns indices of True values. Since var_node_9 is all False,
+    # the result is an empty tensor of shape (0, 2).
+    var_node_8 = tf.where(var_node_9)
+
+    # var_node_2 = torch.ops.aten.add(var_node_3, var_node_8)
+    # Broadcasting (1, 2) + (0, 2) -> (1, 2)
+    var_node_2 = tf.add(var_node_3, var_node_8)
+
+    # var_node_0 = torch.ops.aten.div(var_node_1, var_node_2)
+    # The original bug comment indicates var_node_0 is int64, implying floor division.
+    var_node_0 = tf.math.floordiv(var_node_1, var_node_2)
+
+    # Ensure gradient computation by multiplying with sentinel
+    result = tf.multiply(var_node_0, sentinel)
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+# arg_0 = torch.randint(0, 3, (1, 2), dtype=torch.int64)
+arg_0 = tf.random.uniform((1, 2), minval=0, maxval=3, dtype=tf.int64)
+
+# Test Eager Execution
+with tf.GradientTape() as tape:
+    result_eager = fuzzed_program(arg_0, sentinel)
+print(' eager success')
+
+# Test Compiled Execution (tf.function)
+# This is the TensorFlow equivalent of torch.compile
+compiled_program = tf.function(fuzzed_program)
+with tf.GradientTape() as tape:
+    result_compiled = compiled_program(arg_0, sentinel)
+print(' compile success')
+
+# Compare results
+print(f'Eager result: {result_eager}')
+print(f'Compiled result: {result_compiled}')
+
+# Check for divergence
+if tf.reduce_all(tf.equal(result_eager, result_compiled)).numpy():
+    print(' No divergence detected between eager and compiled modes.')
+else:
+    print(' Divergence detected!')
+    print(f'Eager shape: {result_eager.shape}')
+    print(f'Compiled shape: {result_compiled.shape}')

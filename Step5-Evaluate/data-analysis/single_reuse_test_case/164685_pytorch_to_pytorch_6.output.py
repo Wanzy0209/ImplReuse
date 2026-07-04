@@ -1,0 +1,52 @@
+import torch
+
+# Replicate the configuration from the bug report
+# Use try-except to handle environments where torch._dynamo is not exposed
+try:
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+except AttributeError:
+    pass
+
+torch.manual_seed(19989)
+
+def fuzzed_program(arg_0, sentinel):
+    # Adapt the logic to use torch.lobpcg
+    # Use arg_0 to determine the size of the matrix to introduce dynamic behavior
+    # Ensure the size is valid for lobpcg (at least 2x2)
+    n = max(2, abs(int(arg_0)) % 10 + 2)
+
+    # Create a symmetric positive definite matrix A
+    # We use float32 as it's common for lobpcg
+    A = torch.randn(n, n, dtype=torch.float32)
+    A = A @ A.T + torch.eye(n) * 0.1
+
+    # Call the similar API: torch.lobpcg
+    # We request 1 eigenvalue
+    eigenvalues, _ = torch.lobpcg(A, k=1)
+
+    # Mimic the original logic of multiplying by sentinel and handling complex numbers
+    result = eigenvalues * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+# arg_0 is an int32 scalar, similar to the original bug report
+arg_0 = torch.tensor(torch.randn(()), dtype=torch.int32).item()
+
+args = (arg_0,) + (sentinel,)
+
+# Run eager
+result_original = fuzzed_program(*args)
+print(' eager success')
+
+# Run compiled
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print(' compile success')
+
+# Verify results match
+assert torch.allclose(result_original, result_compiled), "Eager and compiled results diverged!"

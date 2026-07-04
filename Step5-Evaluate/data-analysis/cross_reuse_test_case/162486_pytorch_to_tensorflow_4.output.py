@@ -1,0 +1,50 @@
+import tensorflow as tf
+import numpy as np
+
+def test_limit_epochs(device: str = '/CPU:0'):
+    """
+    Test case adapted for tf.compat.v1.train.limit_epochs.
+    Verifies that the API correctly limits the number of times a tensor 
+    can be evaluated, mimicking the data splitting/limiting logic 
+    of the original PyTorch bug report within a specific device context.
+    """
+    
+    # Mimic the device setup from the original bug report
+    with tf.device(device):
+        # Create data tensors (mimicking x and y from PyTorch TestDataset)
+        x = tf.constant(np.random.randn(100, 3), dtype=tf.float32)
+        y = tf.constant(np.random.randn(100, 2), dtype=tf.float32)
+
+        # Apply the similar API: limit_epochs
+        # This limits the tensor to be returned 'num_epochs' times before raising OutOfRange
+        num_epochs = 2
+        limited_x = tf.compat.v1.train.limit_epochs(x, num_epochs=num_epochs)
+        limited_y = tf.compat.v1.train.limit_epochs(y, num_epochs=num_epochs)
+
+        # Initialize local variables (required by limit_epochs)
+        init_op = tf.compat.v1.local_variables_initializer()
+
+        with tf.compat.v1.Session() as sess:
+            sess.run(init_op)
+
+            # Verify it works for the specified number of epochs
+            for i in range(num_epochs):
+                res_x, res_y = sess.run([limited_x, limited_y])
+                assert res_x.shape == (100, 3), f"Epoch {i+1}: Shape mismatch for x"
+                assert res_y.shape == (100, 2), f"Epoch {i+1}: Shape mismatch for y"
+
+            # Verify it raises OutOfRange after the limit (mimicking the end of a split/epoch)
+            try:
+                _ = sess.run(limited_x)
+                raise AssertionError(f"Expected OutOfRangeError on device {device} but got result.")
+            except tf.errors.OutOfRangeError:
+                print(f"Device {device} worked correctly.")
+
+# Check for GPU availability
+# Use tf.test.is_gpu_available() for compatibility with TF1.x / compat.v1 environments
+# where tf.config.list_physical_devices might not be available.
+if tf.test.is_gpu_available():
+    test_limit_epochs(device='/GPU:0')
+else:
+    print("GPU not available, testing on CPU.")
+    test_limit_epochs(device='/CPU:0')

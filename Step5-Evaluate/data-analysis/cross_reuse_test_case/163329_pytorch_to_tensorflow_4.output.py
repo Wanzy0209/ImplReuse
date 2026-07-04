@@ -1,0 +1,80 @@
+import tensorflow as tf
+import numpy as np
+
+# Ensure TF v1 compatibility mode is active for this API
+tf.compat.v1.disable_eager_execution()
+
+def test_string_input_producer_behavior():
+    """
+    Adapted test case for tf.compat.v1.train.string_input_producer.
+    
+    Original Logic (PyTorch):
+    1. Load Model.
+    2. Compile (optimize).
+    3. Run Inference (multiple steps).
+    4. Verify behavior (check for recompiles).
+    
+    Adapted Logic (TensorFlow):
+    1. Setup Input Data (Load).
+    2. Create Input Producer (Setup pipeline).
+    3. Run Session (multiple epochs/steps).
+    4. Verify behavior (check data integrity and epoch limits).
+    """
+    
+    # 1. Setup: Define input data (analogous to loading the pipeline/model)
+    filenames = ["image1.jpg", "image2.jpg", "image3.jpg"]
+    filename_tensor = tf.convert_to_tensor(filenames, dtype=tf.string)
+
+    # 2. API Call: Create the string input producer
+    # Analogous to pipe.transformer.compile_repeated_blocks() in terms of setting up the execution graph.
+    # We set num_epochs=2 to test repeated execution (similar to multiple inference steps).
+    # We set shuffle=True and seed=0 to match the deterministic nature of the original test's generator.
+    queue = tf.compat.v1.train.string_input_producer(
+        filename_tensor,
+        num_epochs=2,
+        shuffle=True,
+        seed=0,
+        capacity=32
+    )
+
+    # Define an operation to read from the queue (analogous to the inference step)
+    reader_op = queue.dequeue()
+
+    results = []
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize local variables (crucial for num_epochs to work)
+        sess.run(tf.compat.v1.local_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
+
+        # Start the queue runners (analogous to starting the compiled model execution)
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord)
+
+        try:
+            # 3. Execution: Run the loop
+            # We expect 3 files * 2 epochs = 6 items.
+            # This mimics the 'num_inference_steps' loop in the original bug report.
+            for _ in range(6):
+                val = sess.run(reader_op)
+                results.append(val.decode('utf-8'))
+                print(f"Processed: {val.decode('utf-8')}")
+                
+        except tf.errors.OutOfRangeError:
+            print("Epoch limit reached (expected behavior).")
+        finally:
+            # Stop the threads
+            coord.request_stop()
+            coord.join(threads)
+
+    # 4. Verification
+    # Verify that we processed the correct number of items
+    assert len(results) == 6, f"Expected 6 results (3 files * 2 epochs), got {len(results)}"
+    
+    # Verify that all unique files were processed
+    assert set(results) == set(filenames), "Output set does not match input set"
+    
+    print("Test passed: string_input_producer handled epochs and shuffling correctly.")
+
+if __name__ == "__main__":
+    test_string_input_producer_behavior()

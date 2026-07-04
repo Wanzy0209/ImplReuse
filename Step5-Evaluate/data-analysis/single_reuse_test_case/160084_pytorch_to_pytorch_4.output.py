@@ -1,0 +1,48 @@
+import torch
+import pytest
+
+def test_torch_all_compile_inductor():
+    """
+    Test case for torch.all compiled with torch.compile (backend="inductor").
+    Adapted from Issue 160084 to verify similar API behavior under the same conditions.
+    """
+    # The original bug is specific to CUDA
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available, skipping CUDA-specific regression test")
+
+    class AllModel(torch.nn.Module):
+        def __init__(self, a=0, b=0):
+            super().__init__()
+            self.a = torch.nn.Parameter(torch.tensor(a).float())
+            self.b = torch.nn.Parameter(torch.tensor(b).float())
+            self.first_batch = True
+
+        def forward(self, x=None):
+            # Retain control flow from the original bug report
+            if self.first_batch:
+                # print(f"Model dtype: {self.a.dtype}, {self.b.dtype}. Input dtype: {x.dtype}")
+                self.first_batch = False
+            
+            # Adapted to use torch.all instead of arithmetic operations
+            # Checking if all elements in x are greater than parameter a
+            return torch.all(x > self.a)
+   
+    model = AllModel()
+    torch_device = "cuda"
+    
+    # Compile with the inductor backend, which triggered the regression in the original issue
+    model.forward = torch.compile(model.forward, backend="inductor")
+    
+    inputs = torch.randn(4, 10).to(torch_device)
+    
+    # Run the model. 
+    # Original bug raised: RuntimeError: opt_ready_stream && opt_parent_stream INTERNAL ASSERT FAILED
+    try:
+        result = model(inputs)
+        # Basic assertion to ensure execution and correct return type
+        assert isinstance(result, torch.Tensor)
+    except RuntimeError as e:
+        if "opt_ready_stream && opt_parent_stream" in str(e):
+            pytest.fail(f"Regression detected: {e}")
+        else:
+            raise

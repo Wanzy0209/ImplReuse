@@ -1,0 +1,31 @@
+import torch
+import pytest
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
+def test_torch_mm_out_dtype_with_compile():
+    """
+    Test that torch.mm handles the out_dtype argument correctly under torch.compile.
+    
+    This test is based on Issue 163275, where torch.compile failed to handle 
+    the out_dtype argument for torch.mm, while torch.bmm succeeded.
+    
+    The test verifies that:
+    1. The compiled function executes without raising a TypeError.
+    2. The output tensor respects the specified out_dtype (similar to how 
+       tf.keras.backend.set_value enforces specific dtypes during assignment).
+    """
+    # Setup inputs with float16 dtype
+    A = torch.rand((1024, 1024), device="cuda", dtype=torch.float16)
+    B = torch.rand((1024, 1024), device="cuda", dtype=torch.float16)
+
+    # Define the compiled function using torch.mm with out_dtype
+    @torch.compile
+    def linear(weight, input):
+        return torch.mm(input, weight, out_dtype=torch.float32)
+
+    # Execute the function. 
+    # In the bug report, this raised: TypeError: meta_mm() takes 2 positional arguments but 3 were given
+    result = linear(A, B)
+
+    # Assert that the output dtype is correctly set to float32
+    assert result.dtype == torch.float32, f"Expected torch.float32, but got {result.dtype}"

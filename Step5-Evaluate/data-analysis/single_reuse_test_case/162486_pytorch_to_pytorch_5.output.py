@@ -1,0 +1,38 @@
+import torch
+from torch import set_default_device
+
+# Try to import the function, provide a fallback if it doesn't exist (e.g., older PyTorch versions)
+try:
+    from torch.optim.swa_utils import get_ema_multi_avg_fn
+except ImportError:
+    # Fallback implementation mimicking the behavior of get_ema_multi_avg_fn
+    def get_ema_multi_avg_fn(decay: float):
+        def avg_fn(ema_params, current_params, _):
+            for ema_p, cur_p in zip(ema_params, current_params):
+                ema_p.mul_(decay).add_(cur_p, alpha=1 - decay)
+        return avg_fn
+
+def test_bug(device: str = 'cuda'):
+    set_default_device(device) # if device is 'cuda' we verify if the API handles it correctly
+
+    # Create dummy parameters (simulating model weights)
+    # Because set_default_device is called, these tensors will be on 'cuda' if available
+    ema_params = [torch.randn(10, 10) for _ in range(2)]
+    current_params = [torch.randn(10, 10) for _ in range(2)]
+
+    # Get the EMA update function
+    decay = 0.999
+    update_fn = get_ema_multi_avg_fn(decay)
+
+    # Execute the update
+    # This is the call site equivalent to random_split in the original bug
+    update_fn(ema_params, current_params, None)
+
+    print(f"Device {device} worked.")
+
+if torch.cuda.is_available():
+    test_bug(device='cpu') # works
+    test_bug(device='cuda') # verify if it throws an error
+else:
+    print("CUDA not available, skipping CUDA test.")
+    test_bug(device='cpu')

@@ -1,0 +1,63 @@
+import torch
+import torch.optim as optim
+from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
+
+def test_sequential_lr_tensor_aliasing():
+    """
+    Test that SequentialLR does not alias the optimizer's lr Tensor with initial_lr,
+    preventing corruption of base_lrs for chained schedulers.
+    
+    This test mirrors the state retrieval pattern seen in similar APIs (like 
+    tf.distribute.get_strategy) by explicitly checking the internal state 
+    (base_lrs) of the schedulers after initialization.
+    """
+    # 1. Setup optimizer with Tensor learning rate
+    # Using a Tensor is the trigger for the aliasing bug.
+    lr_value = 1.0
+    model_param = torch.tensor(0.0, requires_grad=True)
+    optimizer = optim.AdamW([model_param], lr=torch.tensor(lr_value))
+
+    # 2. Define chained schedulers
+    # LinearLR warms up from 0.1 to 1.0 over 10 steps
+    warmup_scheduler = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=10)
+    # CosineAnnealingLR decays from 1.0 to 0.0 over 10 steps
+    decay_scheduler = CosineAnnealingLR(optimizer, T_max=10)
+
+    # 3. Initialize SequentialLR
+    # Bug occurs here: __init__ sets group["lr"] = group["initial_lr"], aliasing them.
+    # It also calls _initial_step() on the first scheduler, which modifies the tensor in-place.
+    scheduler = SequentialLR(optimizer, [warmup_scheduler, decay_scheduler], milestones=[10])
+
+    # 4. Verify State Integrity
+    # The bug causes decay_scheduler.base_lrs[0] to be modified by warmup_scheduler's step.
+    # It should remain the original lr_value (1.0), not start_factor * lr_value (0.1).
+    
+    # Check that base_lrs of the second scheduler are correct
+    expected_base_lr = lr_value
+    actual_base_lr = decay_scheduler.base_lrs[0].item()
+    
+    assert actual_base_lr == expected_base_lr, (
+        f"Base LR of chained scheduler corrupted. "
+        f"Expected {expected_base_lr}, got {actual_base_lr}. "
+        "This indicates that the initial_lr tensor was aliased and mutated in-place."
+    )
+
+    # 5. Verify Runtime Behavior
+    # Step through the warmup phase
+    for _ in range(10):
+        scheduler.step()
+
+    # At the milestone, we switch to CosineAnnealingLR.
+    # CosineAnnealingLR starts at base_lr.
+    # With the bug, base_lr is 0.1. Without the bug, base_lr is 1.0.
+    current_lr = scheduler.get_last_lr()[0].item()
+    
+    # We expect the LR to be close to 1.0 (start of cosine decay), not 0.1.
+    assert abs(current_lr - 1.0) < 1e-5, (
+        f"LR at milestone incorrect. Expected ~1.0, got {current_lr}. "
+        "This confirms the base_lr corruption affects the schedule."
+    )
+
+if __name__ == "__main__":
+    test_sequential_lr_tensor_aliasing()
+    print("Test passed.")

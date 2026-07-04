@@ -1,0 +1,51 @@
+import torch
+import torch.distributed as dist
+import os
+
+# Setup minimal distributed environment
+# Note: This requires a CUDA-enabled environment and NCCL backend
+os.environ['MASTER_ADDR'] = 'localhost'
+os.environ['MASTER_PORT'] = '29500'
+
+if not dist.is_initialized():
+    try:
+        dist.init_process_group(backend='nccl', rank=0, world_size=1)
+    except Exception as e:
+        print(f"Skipping distributed test as NCCL might not be available or configured: {e}")
+        exit(0)
+
+# Eager execution
+# Original API: torch.utils.checkpoint.checkpoint(...)
+# Similar API: torch.distributed.new_group(...)
+try:
+    eager_group = dist.new_group()
+    print(f"Eager execution created group: {eager_group}")
+except Exception as e:
+    print(f"Eager execution failed: {e}")
+    exit(0)
+
+# Graph capture
+g = torch.cuda.CUDAGraph()
+try:
+    with torch.cuda.graph(g):
+        # Attempt to capture the similar API call
+        graph_group = dist.new_group()
+    
+    # Replay
+    g.replay()
+    
+    # Verification
+    # Since new_group creates a new object, we verify execution reached here.
+    # Note: Depending on implementation, this might raise an error during capture or replay,
+    # similar to the original bug report.
+    print("Graph capture and replay successful for torch.distributed.new_group")
+    
+except RuntimeError as e:
+    # This is the expected behavior if the API does not support CUDA graph capture,
+    # similar to the original bug report.
+    print(f"RuntimeError during graph capture/replay (expected if not supported): {e}")
+except Exception as e:
+    print(f"Unexpected error: {e}")
+
+if dist.is_initialized():
+    dist.destroy_process_group()

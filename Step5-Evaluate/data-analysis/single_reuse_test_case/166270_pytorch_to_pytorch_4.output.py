@@ -1,0 +1,54 @@
+import torch
+import torch.fx
+
+# Configuration from the original bug report
+# Fix: Handle cases where torch._dynamo might not be available or accessible
+try:
+    torch._dynamo.config.capture_scalar_outputs = True
+except AttributeError:
+    pass
+
+torch.manual_seed(1061983224)
+
+# Adaptation: Use torch.fx.wrap to wrap torch.squeeze.
+# This tests if torch.fx.wrap correctly handles the function in a compiled context,
+# potentially bypassing the eager/compile divergence by treating it as a leaf node.
+torch.fx.wrap(torch.squeeze)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_4 = arg_0
+    var_node_3 = torch.chunk(var_node_4, 4, dim=0)[0]
+    
+    # Call site for the wrapped API
+    var_node_2 = torch.squeeze(var_node_3)
+    
+    var_node_1 = torch.stack([var_node_2], dim=0)
+    var_node_0 = torch.reshape(var_node_1, [1])
+    
+    # Ensure gradient computation
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+# Input tensor construction
+arg_0 = torch.as_strided(torch.randint(0, 2, (4,), dtype=torch.int8).bool(), (4,), (1,))
+
+args = (arg_0,) + (sentinel,)
+
+# Test Eager mode
+result_original = fuzzed_program(*args)
+print(' eager success')
+
+# Test Compiled mode
+# The original bug caused an assertion error here. 
+# We verify that torch.fx.wrap allows the compilation to proceed or behaves as expected.
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print(' compile success')
+
+# Verify that results match
+assert torch.equal(result_original, result_compiled), "Results differ between eager and compiled modes"

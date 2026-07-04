@@ -1,0 +1,58 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+# Fix: Handle environments where torch.compile is not available (PyTorch < 2.0)
+# We mock it to act as a pass-through function to preserve the test logic.
+if not hasattr(torch, 'compile'):
+    torch.compile = lambda func, **kwargs: func
+
+
+class Config:
+    def __repr__(self):
+        return "Config()"
+
+
+def forward(x, obj_list):
+    # Adapted to use the similar API: torch.distributed.recv_object_list
+    # This receives the user-defined object into the list
+    dist.recv_object_list(obj_list)
+    
+    # Calling repr() on the received user-defined object
+    # This triggers the original bug context (tracing repr on user objects)
+    return x * len(repr(obj_list[0]))
+
+
+def worker(rank, world_size):
+    # Initialize distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    if rank == 0:
+        # Rank 0 acts as the sender
+        config = Config()
+        # Send the user-defined object
+        dist.send_object_list([config], dst=1)
+    else:
+        # Rank 1 acts as the receiver and runs the compiled function
+        x = torch.randn(2, 2)
+        obj_list = [None]  # Placeholder to receive the object
+        
+        # Compile the function containing the similar API and the repr call
+        compiled = torch.compile(forward, fullgraph=True)
+        
+        try:
+            output = compiled(x, obj_list)
+            print(f"Rank {rank} output: {output}")
+        except Exception as e:
+            print(f"Rank {rank} failed with error: {e}")
+
+    dist.destroy_process_group()
+
+
+if __name__ == "__main__":
+    world_size = 2
+    # Spawn processes to ensure the test case is runnable
+    mp.spawn(worker, args=(world_size,), nprocs=world_size, join=True)

@@ -1,0 +1,40 @@
+import torch
+import pytest
+
+def test_fill_diagonal_dynamic_shapes():
+    """
+    Test case for Issue 162271: Tensor.fill_diagonal_ doesn't support dynamic shapes.
+    
+    This test preserves the original bug reproduction logic (using torch.compile with dynamic=True)
+    while leveraging the semantic pattern of the similar API (tf.keras.config.enable_traceback_filtering).
+    The similar API checks a condition (Python version) and raises a RuntimeError if unmet.
+    Here, we check the condition (dynamic=True) and expect a RuntimeError, 
+    while verifying success with dynamic=False.
+    """
+    
+    # Case 1: dynamic=True (Analogous to the failing condition in the similar API)
+    # Expected: RuntimeError due to symbolic sizes/strides
+    @torch.compile(dynamic=True)
+    def f_dynamic(x):
+        x.fill_diagonal_(True)
+        return x
+
+    x_dynamic = torch.zeros(4, 4)
+    
+    # The bug report indicates a RuntimeError is raised when storage_offset() is called on symbolic tensors.
+    # We assert this behavior to document the bug.
+    with pytest.raises(RuntimeError, match="Cannot call storage_offset"):
+        f_dynamic(x_dynamic)
+
+    # Case 2: dynamic=False (Analogous to the passing condition in the similar API)
+    # Expected: Success
+    @torch.compile(dynamic=False)
+    def f_static(x):
+        x.fill_diagonal_(True)
+        return x
+
+    x_static = torch.zeros(4, 4)
+    result = f_static(x_static)
+    
+    # Verify the operation completed correctly
+    assert torch.all(result.diag() == True)

@@ -1,0 +1,34 @@
+import torch as th
+import torch.nn as nn
+
+# Check if the jagged layout is available in the current PyTorch version
+# This handles the AttributeError for environments without torch.jagged support.
+if hasattr(th, 'jagged'):
+    # Setup from the bug report
+    x = th.nested.nested_tensor([th.ones(3, 2, 3), th.ones(4, 2, 3)], layout=th.jagged)
+
+    # Adaptation for torch.nn.ModuleDict
+    # We verify that ModuleDict can handle modules processing the jagged tensor
+    # defined in the bug report context.
+    class TestModule(nn.Module):
+        def __init__(self):
+            super().__init__()
+            # Using ModuleDict as the container
+            self.layers = nn.ModuleDict({
+                "identity": nn.Identity()
+            })
+
+        def forward(self, tensor):
+            return self.layers["identity"](tensor)
+
+    model = TestModule()
+
+    # Original call site was th.cat([x, x]) which crashed.
+    # We replace it with a call to the ModuleDict-based model.
+    output = model(x)
+
+    # Verify the output matches the input
+    assert th.equal(output, x)
+    print("Test passed: ModuleDict handles jagged tensor input correctly.")
+else:
+    print("Test skipped: torch.jagged is not available in this PyTorch version.")

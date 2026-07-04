@@ -1,0 +1,72 @@
+import torch
+
+# Configuration from the original bug report
+# Fix: Handle cases where torch._dynamo is not available (PyTorch < 2.0)
+try:
+    torch._dynamo.config.capture_scalar_outputs = True
+except AttributeError:
+    print("Warning: torch._dynamo not found. Skipping dynamo configuration.")
+
+def fuzzed_program(arg_0, arg_1, arg_2, arg_3, sentinel):
+    # Setup tensors similar to the original report
+    var_node_3 = torch.full((12,), False, dtype=torch.bool)
+    
+    # Original: var_node_2 = torch.chunk(var_node_3, 4, dim=0)[0]
+    # Adaptation: Select the first 3 elements (indices 0, 1, 2) using index_select
+    var_node_2 = torch.index_select(var_node_3, 0, torch.arange(3, dtype=torch.long))
+
+    var_node_6 = arg_0
+    var_node_7 = arg_1
+    _input_size_var_node_5 = var_node_6.size(0)
+    _index_var_node_5 = torch.randint(0, _input_size_var_node_5, (10,), device=var_node_6.device)
+    var_node_5 = torch.gather(var_node_6, 0, _index_var_node_5)
+    
+    # Original: var_node_4 = torch.chunk(var_node_5, 2, dim=0)[0]
+    # Adaptation: Select the first 5 elements (indices 0, 1, 2, 3, 4) using index_select
+    var_node_4 = torch.index_select(var_node_5, 0, torch.arange(5, dtype=torch.long))
+
+    var_node_10 = arg_2
+    
+    # Original: var_node_9 = torch.chunk(var_node_10, 4, dim=1)[0]
+    # Adaptation: Select the first column (index 0) along dim 1 using index_select
+    var_node_9 = torch.index_select(var_node_10, 1, torch.tensor([0], dtype=torch.long))
+    
+    var_node_8 = torch.squeeze(var_node_9)
+    var_node_1 = torch.cat([var_node_2, var_node_4, var_node_8], dim=0)
+    var_node_11 = arg_3
+    var_node_0 = torch.cat([var_node_1, var_node_11], dim=0)
+    
+    # Ensure gradient computation
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+# Input arguments (using as_strided to mimic non-contiguous memory layouts)
+arg_0 = torch.as_strided(torch.randint(0, 2, (12,), dtype=torch.int8).bool(), (12,), (1,))
+arg_1 = torch.as_strided(torch.randint(5, 30, (10,)).to(torch.int64), (10,), (1,))
+arg_2 = torch.as_strided(torch.randint(0, 2, (24,), dtype=torch.int8).bool(), (6, 4), (4, 1))
+arg_3 = torch.as_strided(torch.randint(0, 2, (2,), dtype=torch.int8).bool(), (2,), (1,))
+
+args = (arg_0, arg_1, arg_2, arg_3) + (sentinel,)
+
+# Run Eager Mode
+result_original = fuzzed_program(*args)
+print(' eager success')
+
+# Run Compiled Mode
+# Fix: Wrap compilation in try-except to handle missing torch.compile
+try:
+    compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+    result_compiled = compiled_program(*args)
+    print(' compile success')
+
+    # Verify results match
+    assert torch.allclose(result_original, result_compiled), "Divergence between eager and compiled modes!"
+    print(' test passed')
+except AttributeError as e:
+    print(f"Skipping compiled mode: {e}")
+    print("Test requires PyTorch 2.0+")

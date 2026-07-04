@@ -1,0 +1,13 @@
+import torch
+import torch.nn.functional as F
+
+# Create sample tensors for anchor, positive, and negative
+anchor = torch.randn(5, 7, requires_grad=True)
+positive = torch.randn(5, 7, requires_grad=True)
+negative = torch.randn(5, 7, requires_grad=True)
+
+# Compute triplet margin loss with distance
+output = F.triplet_margin_with_distance_loss(anchor, positive, negative)
+
+# Verify the output is a scalar tensor (default reduction is 'mean')
+assert output.dim() == 0

@@ -1,0 +1,45 @@
+import torch
+import torch.distributed as dist
+import os
+
+def reduce_func(tensor, dst):
+    # Wrapper for the distributed reduce operation
+    dist.reduce(tensor, dst=dst)
+    return tensor
+
+def main():
+    # Initialize distributed process group
+    # Note: This test requires a distributed environment (e.g., torchrun).
+    # For Intel XPU, the backend is typically 'ccl'.
+    if not dist.is_initialized():
+        rank = int(os.environ.get("RANK", 0))
+        world_size = int(os.environ.get("WORLD_SIZE", 1))
+        if world_size > 1:
+            try:
+                dist.init_process_group(backend="ccl")
+            except Exception as e:
+                print(f"Failed to initialize process group: {e}")
+                return
+        else:
+            print("Skipping test: WORLD_SIZE must be > 1 for distributed reduce.")
+            return
+
+    # Create tensors on XPU
+    x = torch.randn(128).to("xpu")
+    
+    # Eager mode execution
+    print("Running eager mode...")
+    # We clone to ensure we have a fresh tensor for the compiled run later
+    x_eager = x.clone()
+    reduce_func(x_eager, dst=0)
+    print("eager mode passed")
+
+    # Compiled mode execution
+    print("Running torch.compile mode...")
+    reduce_compiled = torch.compile(reduce_func)
+    x_compiled = x.clone()
+    reduce_compiled(x_compiled, dst=0)
+    print("torch.compile passed")
+
+if __name__ == "__main__":
+    main()

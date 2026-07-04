@@ -1,0 +1,28 @@
+import torch
+
+
+def f(A):
+    # Adapted from original: print layout to check consistency
+    print(A.layout)
+
+    # Adapted call site: torch.symeig
+    # Note: symeig requires a symmetric/Hermitian matrix
+    return torch.symeig(A, eigenvectors=True)
+
+
+# Create a symmetric matrix (required for symeig)
+A = torch.tensor([[1.0, 2.0], [2.0, 1.0]])
+
+# Test normal execution
+print("Normal execution:")
+print(f(A))  # works fine
+
+# Test vjp (the context of the bug)
+print("\nVJP execution:")
+try:
+    # vjp returns (primals_out, vjp_fn)
+    # We access [1] to get the vjp function, triggering the forward pass
+    vjp_fn = torch.func.vjp(f, A)[1]
+    print("VJP setup successful")
+except Exception as e:
+    print(f"VJP failed with error: {e}")

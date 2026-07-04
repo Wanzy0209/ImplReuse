@@ -1,0 +1,72 @@
+import torch
+import numpy as np
+import sys
+
+try:
+    import tensorflow as tf
+except ImportError as e:
+    # Handle the GLIBC/Protobuf import error gracefully
+    print(f"Test skipped: Unable to import TensorFlow due to environment dependency issues (e.g., GLIBC version).")
+    print(f"Original Error: {e}")
+    sys.exit(0)
+
+def test_tf_keras_exp_divergence():
+    """
+    Test case adapted from PyTorch Issue 164725.
+    Original Issue: Divergence between eager and compiled execution when calling .item() 
+    on a scalar tensor resulting from masked_select and squeeze.
+    
+    This test adapts the logic to TensorFlow, replacing torch.Tensor.item with 
+    tf.keras.backend.exp to verify consistent behavior in eager and graph modes.
+    """
+    
+    # Sentinel variable to ensure operations are tracked
+    sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+    def logic():
+        # Replicate tensor setup from the PyTorch issue
+        # var_node_4 = torch.full((6,), True, dtype=torch.bool)
+        var_node_4 = tf.fill([6], True)
+        
+        # var_node_3 = torch.reshape(var_node_4, [2, 3])
+        var_node_3 = tf.reshape(var_node_4, [2, 3])
+        
+        # _x_ms = torch.arange(max(1, 1), device=var_node_3.device).to(var_node_3.dtype)
+        # torch.arange(1) -> [0]. to(bool) -> [False].
+        _x_ms = tf.cast(tf.range(1), dtype=tf.bool)
+        
+        # _mask_ms = torch.zeros_like(_x_ms, dtype=torch.bool)
+        # _mask_ms[:1] = True
+        # Since _x_ms is size 1, this makes the mask [True]
+        _mask_ms = tf.fill(_x_ms.shape, True)
+        
+        # var_node_2 = torch.masked_select(_x_ms, _mask_ms)
+        var_node_2 = tf.boolean_mask(_x_ms, _mask_ms)
+        
+        # var_node_1 = torch.squeeze(var_node_2)
+        # Results in a scalar bool tensor
+        var_node_1 = tf.squeeze(var_node_2)
+        
+        # Original PyTorch code: var_node_0 = var_node_1.item()
+        # Adaptation: Use the similar API (tf.keras.backend.exp) on the scalar tensor.
+        # Note: tf.exp on bool casts to float (True->1.0, False->0.0).
+        var_node_0 = tf.keras.backend.exp(var_node_1)
+        
+        # Ensure gradient computation by multiplying with sentinel
+        result = var_node_0 * sentinel
+        return result
+
+    # 1. Eager execution
+    result_eager = logic()
+    
+    # 2. Compiled execution (tf.function equivalent to torch.compile)
+    compiled_logic = tf.function(logic)
+    result_compiled = compiled_logic()
+    
+    # 3. Assertion
+    # Check if results are close enough to rule out divergence
+    np.testing.assert_allclose(result_eager.numpy(), result_compiled.numpy())
+    print(' Test passed: No divergence between eager and compiled execution for tf.keras.backend.exp')
+
+if __name__ == "__main__":
+    test_tf_keras_exp_divergence()

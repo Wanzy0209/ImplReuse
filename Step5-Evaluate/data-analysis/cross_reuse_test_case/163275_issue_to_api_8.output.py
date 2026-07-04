@@ -1,0 +1,30 @@
+import torch
+import pytest
+
+def test_torch_compile_mm_out_dtype():
+    """
+    Test case for Issue 163275.
+    Verifies that torch.compile correctly handles the 'out_dtype' argument 
+    in torch.mm, similar to how wrapper functions handle specific keyword arguments.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available, skipping test")
+
+    # Setup inputs matching the bug report
+    A = torch.rand((1024, 1024), device="cuda", dtype=torch.float16)
+    B = torch.rand((1024, 1024), device="cuda", dtype=torch.float16)
+
+    # Define the compiled function using the API under test
+    @torch.compile
+    def linear(weight, input):
+        # The usage pattern here reflects passing a specific type-casting argument
+        # (out_dtype) to the operation, analogous to passing specific config 
+        # arguments in the similar API (tf.compat.v1.assert_none_equal).
+        return torch.mm(input, weight, out_dtype=torch.float32)
+
+    # Execute the function. This should not raise a TypeError.
+    result = linear(A, B)
+
+    # Assertion to verify the semantic correctness of the operation
+    assert result.dtype == torch.float32, "Output dtype should be float32 as requested by out_dtype"
+    assert result.shape == (1024, 1024), "Output shape should match matrix multiplication result"

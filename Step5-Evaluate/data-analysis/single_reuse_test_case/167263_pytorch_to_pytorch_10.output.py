@@ -1,0 +1,40 @@
+import torch
+import torch.nn as nn
+
+B, H, W, C = 20, 2, 2, 128
+
+x = torch.randn(B, H, W, C, requires_grad=True)
+linear = nn.Linear(C, C, bias=False)
+
+values = linear(x)
+values.retain_grad()
+
+values_view = values.view(B, H * W, C)
+values_view.retain_grad()
+
+
+def log_grad(name):
+    def hook(grad):
+        print(f"{name} hook - shape: {grad.shape}, stride: {grad.stride()}")
+        return grad
+
+    return hook
+
+
+print("forward strides", values_view.shape, values_view.stride())
+values_view.register_hook(log_grad("values_view"))
+
+# Adaptation: Replace torch.einsum with torch.isnan.
+# Since torch.isnan is non-differentiable, we use it in a multiplication
+# to allow gradients to flow back to values_view, enabling stride checking.
+# The gradient of values_view will effectively be the mask created by isnan.
+mask = torch.isnan(values_view).float()
+result = (values_view * mask).sum()
+
+result.backward(torch.ones_like(result))
+
+# Verify that the gradient stride matches the input stride
+# (This assertion checks for the bug described in the issue)
+if values_view.grad is not None:
+    assert values_view.grad.stride() == values_view.stride(), \
+        f"Gradient stride mismatch: {values_view.grad.stride()} vs {values_view.stride()}"

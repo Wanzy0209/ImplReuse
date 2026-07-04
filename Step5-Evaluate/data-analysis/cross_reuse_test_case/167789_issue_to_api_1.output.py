@@ -1,0 +1,57 @@
+import sys
+import torch
+import unittest
+
+# Define the recursive function from the bug report
+def fn(x, n):
+    if n == 0:
+        return x
+    return fn(x, n - 1) + 1
+
+class TestDynamoRecursionLimit(unittest.TestCase):
+    def test_recursion_limit_with_backend_check(self):
+        """
+        Test that sys.setrecursionlimit affects torch.compile (dynamo) execution.
+        This test also leverages torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+        to check backend state consistency, reflecting the issue-to-API relationship
+        regarding C-level state access.
+        """
+        # Leverage the similar API to check a C-level backend configuration.
+        # This mirrors the nature of the bug, which involves C-level recursion state.
+        try:
+            # We assume CUDA is available for this API to be relevant, 
+            # but we handle cases where it might not be.
+            if torch.cuda.is_available():
+                sdp_allowed = torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
+                print(f"SDP FP16/BF16 reduction allowed: {sdp_allowed}")
+            else:
+                print("CUDA not available, skipping backend specific check.")
+        except Exception as e:
+            print(f"Error accessing backend API: {e}")
+
+        # Preserve the original bug reproduction logic
+        # Set a very high recursion limit
+        original_limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(10000000)
+
+        try:
+            @torch.compile(backend="eager")
+            def outer(x):
+                return fn(x, 1000)
+
+            input_tensor = torch.ones(3)
+            # This should not raise RecursionError if the fix is applied
+            result = outer(input_tensor)
+            
+            # Verify the computation is correct
+            expected = input_tensor + 1000
+            self.assertTrue(torch.allclose(result, expected), "Computation result mismatch")
+
+        except RecursionError:
+            self.fail("RecursionError raised despite sys.setrecursionlimit being set high.")
+        finally:
+            # Restore original recursion limit
+            sys.setrecursionlimit(original_limit)
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,76 @@
+import torch
+
+def test_mh_inductor_complex_view():
+    """
+    Test case for Issue 163243: .mH compile problem with inductor.
+    
+    This test reproduces the bug where using .mH (Hermitian transpose) inside 
+    a torch.compile block with the 'inductor' backend causes a stride error 
+    when viewing ComplexFloat as Float.
+    
+    It leverages the functional gradient pattern (torch.autograd.grad), which 
+    is semantically similar to the provided similar API 'tf.gradients', 
+    to verify the gradient flow through the complex view operations.
+    """
+    
+    # Check for PyTorch 2.0+ availability
+    if not hasattr(torch, "compile"):
+        print("Skipping test: torch.compile is not available (requires PyTorch 2.0+).")
+        return
+    
+    def compute_gradients(A):
+        n = 8
+        # Setup Identity matrix
+        I0 = torch.eye(n, dtype=A.dtype, device=A.device)
+        I = I0.unsqueeze(0).expand(A.shape[0], n, n).contiguous()
+
+        # The problematic operation: .mH returns a view of the tensor.
+        # Inductor fails to handle the stride of this view correctly for complex types.
+        A_herm = A.mH
+        matmul_res = A @ A_herm
+        A_new = I + 0.5 * matmul_res
+
+        # Cholesky decomposition
+        R = torch.linalg.cholesky(A_new, upper=True)
+        loss = R.abs().sum()
+
+        # Using torch.autograd.grad (functional API) which is semantically
+        # similar to tf.gradients(loss, variables).
+        # This ensures we test the gradient flow through the compiled graph.
+        grads = torch.autograd.grad(outputs=loss, inputs=A)[0]
+        return loss, grads
+
+    # Setup inputs
+    n = 8
+    dtype = torch.complex64
+    A = torch.randn(4, n, n, dtype=dtype, requires_grad=True)
+    A = A.clone(memory_format=torch.contiguous_format)
+
+    # Compile with the 'inductor' backend (the specific backend causing the issue)
+    compiled_fn = torch.compile(compute_gradients, backend="inductor")
+
+    # Run the compiled function
+    try:
+        loss, grads = compiled_fn(A)
+        
+        # Assertions to verify correctness
+        assert loss is not None, "Loss computation failed"
+        assert grads is not None, "Gradient computation failed"
+        assert grads.shape == A.shape, f"Gradient shape mismatch: {grads.shape} vs {A.shape}"
+        assert grads.dtype == dtype, f"Gradient dtype mismatch: {grads.dtype} vs {dtype}"
+        
+        print("Test Passed: Inductor compilation with .mH view and functional gradients succeeded.")
+        
+    except RuntimeError as e:
+        if "stride(-1) must be 1" in str(e):
+            print(f"Test Failed: Encountered the known stride bug: {e}")
+            raise
+        else:
+            print(f"Test Failed with unexpected RuntimeError: {e}")
+            raise
+    except Exception as e:
+        print(f"Test Failed with unexpected error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_mh_inductor_complex_view()

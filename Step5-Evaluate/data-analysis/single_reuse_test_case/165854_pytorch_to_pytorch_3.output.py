@@ -1,0 +1,83 @@
+import torch
+from torch import Tensor
+from torch.library import Library, impl
+
+# Define a custom library and operator to mimic the behavior of flex_attention
+# that involves dynamic buffers.
+lib = Library("test_dyn", "DEF")
+
+# Define an operator that takes an input tensor and a buffer.
+# The buffer size is expected to match the 'head' dimension (dim 1) of the input.
+lib.define("dynamic_buffer_op(Tensor x, Tensor buffer) -> Tensor")
+
+# --- Using the Compatible API: torch.library.register_fake ---
+# This registers the "fake" or "meta" implementation for the operator.
+# This is crucial for torch.compile to understand the output shapes given dynamic inputs.
+# Note: impl_abstract was introduced in PyTorch 2.1. For older versions (2.0.x),
+# we use register_fake.
+@torch.library.register_fake("test_dyn::dynamic_buffer_op")
+def abstract_dynamic_buffer_op(x: Tensor, buffer: Tensor) -> Tensor:
+    # In the context of the bug, the buffer size depends on a dynamic dimension (H).
+    # We check if the buffer size matches the input's head dimension.
+    # During tracing with dynamic=True, x.size(1) will be a SymInt.
+    # This test verifies that register_fake can handle these symbolic comparisons.
+    if buffer.size(0) != x.size(1):
+        raise ValueError(
+            f"Buffer size {buffer.size(0)} does not match head dimension {x.size(1)}"
+        )
+    # The output shape is the same as the input shape
+    return x.new_empty(x.size())
+
+# Register a concrete implementation for execution
+@impl("test_dyn::dynamic_buffer_op", "CompositeExplicitAutograd")
+def concrete_dynamic_buffer_op(x: Tensor, buffer: Tensor) -> Tensor:
+    # Simulate the operation: scale the input by the buffer
+    # x: [B, H, S, D], buffer: [H]
+    # Reshape buffer to [1, H, 1, 1] for broadcasting
+    scale = buffer.view(1, -1, 1, 1)
+    return x * scale
+
+def run_with_head_count(compiled_fn, H, device, dtype):
+    """Run the custom op with a specific head count, creating a buffer sized by H."""
+    B, S, D = 2, 256, 64
+
+    # Create captured buffer that depends on dynamic H
+    head_scale = torch.randn(H, device=device, dtype=dtype, requires_grad=True)
+
+    print(f"  Running with H={H}, head_scale.shape={head_scale.shape}")
+
+    # Run multiple iterations
+    for i in range(2):
+        x = torch.randn(B, H, S, D, device=device, dtype=dtype, requires_grad=True)
+        
+        # Call the compiled function wrapping our custom op
+        outputs = compiled_fn(x, head_scale)
+        loss = outputs.sum()
+        loss.backward()
+
+    print(f"   Completed {i+1} iterations")
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16
+    torch.manual_seed(0)
+
+    # Test with different head counts - this makes H a dynamic dimension
+    head_counts = [4, 8, 4, 16, 4]
+
+    # Compile a function that uses our custom operator
+    # This relies on the register_fake registered above
+    def wrapper(x, buffer):
+        return torch.ops.test_dyn.dynamic_buffer_op(x, buffer)
+
+    compiled_fn = torch.compile(wrapper, fullgraph=True, dynamic=True)
+
+    print(f"Running custom op with dynamic head counts on {device}, dtype={dtype}")
+    print(f"Testing head counts: {head_counts}\n")
+
+    for iteration, H in enumerate(head_counts, start=1):
+        print(f"Iteration {iteration}:")
+        run_with_head_count(compiled_fn, H, device, dtype)
+
+if __name__ == "__main__":
+    main()

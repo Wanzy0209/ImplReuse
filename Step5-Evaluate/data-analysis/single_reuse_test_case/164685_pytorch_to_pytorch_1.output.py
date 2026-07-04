@@ -1,0 +1,98 @@
+import torch
+import torch.distributed as dist
+import os
+
+# Replicate the configuration from the original bug report
+# Added check to handle environments where torch._dynamo is not available
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+else:
+    print("Warning: torch._dynamo not found. Skipping dynamo configuration.")
+
+def setup():
+    """Initialize the distributed process group."""
+    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+        # Use 'gloo' for CPU or 'nccl' for GPU. Defaulting to gloo for broader compatibility in tests.
+        backend = 'nccl' if torch.cuda.is_available() else 'gloo'
+        dist.init_process_group(backend=backend)
+    else:
+        # Allow running without torchrun for syntax checking, though distributed ops will be skipped.
+        pass
+
+def cleanup():
+    """Destroy the distributed process group."""
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+def fuzzed_program_distributed(arg_0, sentinel):
+    """
+    Adapted program to test torch.distributed.reduce.
+    Mimics the data types and operations from the original bug report.
+    """
+    # var_node_2 = -6 # dtype=int64
+    # var_node_3 = arg_0 # dtype=int32
+    # var_node_1 = var_node_2 * var_node_3 # dtype=int32
+    # We perform arithmetic on the tensor argument
+    var_node_1 = arg_0 * -6
+
+    # var_node_5 = torch.full((), 1, dtype=torch.int64)
+    # var_node_4 = var_node_5.item() # dtype=int64
+    # var_node_0 = var_node_1 / var_node_4 # dtype=int64
+    # Simulating division by a scalar item
+    scalar_val = torch.full((), 1, dtype=torch.int64).item()
+    var_node_0 = var_node_1 / scalar_val
+
+    # --- Call the Similar API ---
+    # torch.distributed.reduce requires a tensor and a destination rank
+    if dist.is_initialized():
+        # We reduce var_node_0 to rank 0. 
+        # Note: var_node_0 is a tensor, potentially scalar-like.
+        dist.reduce(var_node_0, dst=0)
+    # ----------------------------
+
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+if __name__ == "__main__":
+    setup()
+
+    # Sentinel tensor to ensure gradient computation
+    sentinel = torch.tensor(1.0, requires_grad=True)
+
+    # Argument: int32 tensor (mimicking arg_0 from bug)
+    # Original used .item() making it a scalar, but reduce needs a tensor.
+    # We use a scalar tensor (size ()) to maintain similarity.
+    arg_0 = torch.tensor(5, dtype=torch.int32)
+
+    if dist.is_initialized():
+        rank = dist.get_rank()
+        
+        # Test Eager Mode
+        print(f"[Rank {rank}] Testing Eager mode...")
+        try:
+            # Clone arg_0 because reduce is in-place usually or modifies buffer
+            result_original = fuzzed_program_distributed(arg_0.clone(), sentinel)
+            print(f"[Rank {rank}]  eager success")
+        except Exception as e:
+            print(f"[Rank {rank}]  eager failed: {e}")
+
+        # Test Compiled Mode
+        print(f"[Rank {rank}] Testing Compiled mode...")
+        try:
+            if not hasattr(torch, 'compile'):
+                raise AttributeError("torch.compile is not available in this version of PyTorch")
+            
+            compiled_program = torch.compile(fuzzed_program_distributed, fullgraph=True, dynamic=True)
+            result_compiled = compiled_program(arg_0.clone(), sentinel)
+            print(f"[Rank {rank}]  compile success")
+        except Exception as e:
+            print(f"[Rank {rank}]  compile failed: {e}")
+    else:
+        print("Distributed environment not initialized. Skipping execution.")
+        print("To run this test, use: torchrun --nproc_per_node=<N> <script_name>")
+
+    cleanup()

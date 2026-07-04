@@ -1,0 +1,39 @@
+import torch
+
+# Reproduce the configuration from the original bug report
+# which seems to interact with how dynamo/inductor handles scalars and configs.
+# Check if _dynamo exists to handle different PyTorch versions/environments
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+else:
+    print("Warning: torch._dynamo is not available. Skipping configuration.")
+
+def foo(arg0):
+    # Use the similar API: torch.svd (torch.linalg.svd)
+    # The original bug involved a scalar input (t1.item()) and in-place modification.
+    # Here we test if torch.svd, which relies on torch._dynamo.config internally
+    # (as seen in the similar API code), compiles correctly.
+    u, s, v = torch.linalg.svd(arg0)
+    return u, s, v
+
+# Create input compatible with SVD (requires at least 2D)
+# Using CUDA to match the original bug's device context
+arg0 = torch.randn([2, 2], dtype=torch.float32, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    # Eager execution
+    u_eager, s_eager, v_eager = foo(arg0)
+    # Perform backward pass to ensure gradients are handled
+    (u_eager.sum() + s_eager.sum() + v_eager.sum()).backward()
+    print('Eager Success! ')
+
+    # Compiled execution
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    u_compiled, s_compiled, v_compiled = compiled_foo(arg0)
+    (u_compiled.sum() + s_compiled.sum() + v_compiled.sum()).backward()
+    print('Compile Success! ')
+
+    # Verify results match
+    assert torch.allclose(u_eager, u_compiled, atol=1e-4)
+    assert torch.allclose(s_eager, s_compiled, atol=1e-4)
+    assert torch.allclose(v_eager, v_compiled, atol=1e-4)

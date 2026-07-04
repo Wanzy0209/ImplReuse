@@ -1,0 +1,84 @@
+import sys
+
+# Handle environment incompatibility (e.g., missing libstdc++ or protobuf issues)
+try:
+    import torch
+    import tensorflow as tf
+    import numpy as np
+except ImportError as e:
+    print(f"Skipping test: Missing dependencies or environment incompatibility.\nError: {e}")
+    sys.exit(0)
+
+def test_saturate_cast_matmul_context():
+    """
+    Test case adapted from PyTorch Issue 165105 (Matmul decomposition DDE).
+    Verifies tf.dtypes.saturate_cast behavior on float16 tensors derived
+    from the original matmul chain, checking for Eager vs Graph divergence.
+    """
+    # Replicate the tensor creation logic from the PyTorch snippet
+    # Using float16 as per the original bug report
+    dtype = tf.float16
+
+    # var_node_4 = torch.full((14,), 1.2255859375, dtype=torch.float16)
+    var_node_4 = tf.fill([14], tf.constant(1.2255859375, dtype=dtype))
+
+    # var_node_6 = arg_0 (size=(14, 6)) -> Mock with ones
+    var_node_6 = tf.fill([14, 6], tf.constant(1.0, dtype=dtype))
+
+    # var_node_9 = torch.full((6, 13), 1.3154296875, dtype=torch.float16)
+    var_node_9 = tf.fill([6, 13], tf.constant(1.3154296875, dtype=dtype))
+
+    # var_node_10 = arg_1 (size=(13, 1)) -> Mock with ones
+    var_node_10 = tf.fill([13, 1], tf.constant(1.0, dtype=dtype))
+
+    # var_node_8 = torch.matmul(var_node_9, var_node_10)
+    var_node_8 = tf.matmul(var_node_9, var_node_10)
+
+    # var_node_12 = arg_2 (size=(1, 10)) -> Mock with ones
+    var_node_12 = tf.fill([1, 10], tf.constant(1.0, dtype=dtype))
+
+    # var_node_13 = torch.full((10, 416), 0.1331787109375, dtype=torch.float16)
+    var_node_13 = tf.fill([10, 416], tf.constant(0.1331787109375, dtype=dtype))
+
+    # var_node_11 = torch.matmul(var_node_12, var_node_13)
+    var_node_11 = tf.matmul(var_node_12, var_node_13)
+
+    # var_node_7 = torch.matmul(var_node_8, var_node_11)
+    var_node_7 = tf.matmul(var_node_8, var_node_11)
+
+    # var_node_5 = torch.matmul(var_node_6, var_node_7)
+    var_node_5 = tf.matmul(var_node_6, var_node_7)
+
+    # var_node_3 = torch.matmul(var_node_4, var_node_5)
+    var_node_3 = tf.matmul(var_node_4, var_node_5)
+
+    # --- Test the Similar API: tf.dtypes.saturate_cast ---
+    # The original bug involves divergence between Eager and Compiled modes.
+    # We test saturate_cast in both contexts.
+
+    # 1. Eager Execution
+    # Cast to float16 (verifies API stability on existing type) and int8 (tests saturation logic)
+    eager_cast_fp16 = tf.dtypes.saturate_cast(var_node_3, tf.float16)
+    eager_cast_int8 = tf.dtypes.saturate_cast(var_node_3, tf.int8)
+
+    # 2. Compiled Execution (Graph Mode)
+    @tf.function
+    def compiled_cast(tensor, target_dtype):
+        return tf.dtypes.saturate_cast(tensor, target_dtype)
+
+    compiled_cast_fp16 = compiled_cast(var_node_3, tf.float16)
+    compiled_cast_int8 = compiled_cast(var_node_3, tf.int8)
+
+    # 3. Assertions
+    # Check for divergence in float16
+    assert np.allclose(eager_cast_fp16.numpy(), compiled_cast_fp16.numpy()), \
+        "Divergence detected: tf.dtypes.saturate_cast (float16) differs between Eager and Graph modes."
+
+    # Check for divergence in int8
+    assert np.array_equal(eager_cast_int8.numpy(), compiled_cast_int8.numpy()), \
+        "Divergence detected: tf.dtypes.saturate_cast (int8) differs between Eager and Graph modes."
+
+    print("Test Passed: tf.dtypes.saturate_cast behaves consistently in Eager and Graph modes.")
+
+if __name__ == "__main__":
+    test_saturate_cast_matmul_context()

@@ -1,0 +1,40 @@
+import torch
+import unittest
+
+class TestCosCompositeExplicitAutograd(unittest.TestCase):
+    def test_cos_returns_correct_shape_with_cpu_fallback(self):
+        """
+        Test that torch.cos returns a tensor with the correct shape
+        when run through cpu_fallback on a custom backend.
+        
+        This test is based on the bug report for torch.abs (Issue 165549),
+        where CompositeExplicitAutograd operations returned empty tensors
+        (shape [0]) instead of the correct shape.
+        """
+        # Check if the custom backend is available
+        # Use getattr to safely check for the attribute, defaulting to False if missing
+        if not getattr(torch, 'has_privateuse1', False):
+            self.skipTest("PrivateUse1 backend is not available or registered")
+
+        device = 'privateuse1'
+        
+        # Create a tensor on the custom device
+        t = torch.randn(4, 4, device=device)
+
+        # The bug: Operations like cos return empty tensors (shape [0])
+        # when run through cpu_fallback.
+        result = torch.cos(t)
+
+        # Verify the shape matches the input and is not empty
+        self.assertEqual(result.shape, t.shape, 
+                         "torch.cos returned incorrect shape via cpu_fallback")
+        self.assertNotEqual(result.shape, torch.Size([0]), 
+                            "torch.cos returned empty tensor (shape [0])")
+
+        # Verify the values are computed correctly (comparing against CPU implementation)
+        expected = torch.cos(t.cpu()).to(device)
+        self.assertTrue(torch.allclose(result, expected), 
+                        "torch.cos values do not match expected CPU fallback values")
+
+if __name__ == '__main__':
+    unittest.main()

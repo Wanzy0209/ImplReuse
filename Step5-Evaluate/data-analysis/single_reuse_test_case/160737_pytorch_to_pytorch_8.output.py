@@ -1,0 +1,27 @@
+import torch
+
+def test_empty_strided(device):
+    # Test case 1: Creating a standard 2D tensor
+    size = [2, 3]
+    stride = [3, 1]
+    try:
+        output = torch.empty_strided(size, stride, device=device)
+        assert output.shape == torch.Size([2, 3])
+        print(f"empty_strided test (2D) succeeds for device: {device}. output shape: {output.shape}")
+    except Exception as e:
+        print(f"empty_strided test (2D) fails for device: {device}: {e}")
+
+    # Test case 2: Creating a scalar (0-dimensional) tensor
+    # This adapts the "scalar tensor" aspect of the original bug report
+    # to verify if empty_strided handles 0-dimensional sizes and strides correctly.
+    scalar_size = []
+    scalar_stride = []
+    try:
+        scalar_output = torch.empty_strided(scalar_size, scalar_stride, device=device)
+        assert scalar_output.shape == torch.Size([])
+        print(f"empty_strided test (0D) succeeds for device: {device}. output shape: {scalar_output.shape}")
+    except Exception as e:
+        print(f"empty_strided test (0D) fails for device: {device}: {e}")
+
+test_empty_strided(device="cpu")
+test_empty_strided(device="mps")

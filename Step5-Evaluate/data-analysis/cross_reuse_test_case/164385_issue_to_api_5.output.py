@@ -1,0 +1,59 @@
+import torch
+import pytest
+
+def test_gather_with_complex_floor_div_indices():
+    """
+    Test torch.gather with indices derived from the complex FloorDiv logic
+    reported in Issue 164385.
+    
+    The original issue involved a symbolic FloorDiv expression:
+    FloorDiv((24*s37 + 672)*(((s14*s46)//2016)) + 21, 22)
+    
+    This test adapts that logic to generate indices for torch.gather,
+    ensuring the API handles the arithmetic pattern correctly.
+    """
+    # Setup symbolic-like inputs as concrete tensors
+    # Values chosen to ensure the resulting index is valid for the test tensor
+    s14 = torch.tensor(2016)  # s14 // 2016 = 1
+    s37 = torch.tensor(-28)   # 24*(-28) + 672 = 0
+    s46 = torch.tensor(1)     # s14 * s46 = 2016
+
+    # Reproduce the FloorDiv logic from the bug report using torch.div
+    # Expression: ((24*s37 + 672) * ((s14*s46)//2016) + 21) // 22
+    
+    # Inner FloorDiv: (s14*s46)//2016
+    inner_expr = torch.div(s14 * s46, 2016, rounding_mode='floor')
+    
+    # Middle expression: (24*s37 + 672) * inner_expr
+    middle_expr = (24 * s37 + 672) * inner_expr
+    
+    # Numerator: middle_expr + 21
+    numerator = middle_expr + 21
+    
+    # Final FloorDiv: numerator // 22
+    # Calculation: (0 * 1 + 21) // 22 = 0
+    index_val = torch.div(numerator, 22, rounding_mode='floor')
+    
+    # Verify the arithmetic logic
+    assert index_val.item() == 0, "FloorDiv logic calculation failed"
+
+    # Leverage the similar API: torch.gather
+    # Create a source tensor
+    src = torch.arange(10).reshape(2, 5).float()
+    
+    # Create an index tensor for gathering along dim 0
+    # We use the calculated index_val to populate the index tensor
+    index = torch.full((1, 5), index_val.item(), dtype=torch.long)
+    
+    # Perform gather
+    result = torch.gather(src, 0, index)
+    
+    # Expected result: the first row of src (since index is 0)
+    expected = src[0:1, :]
+    
+    # Assert correctness
+    assert torch.equal(result, expected), "torch.gather failed with FloorDiv-derived indices"
+
+if __name__ == "__main__":
+    test_gather_with_complex_floor_div_indices()
+    print("Test passed.")

@@ -1,0 +1,43 @@
+import torch
+
+# Check for torch._dynamo availability (requires PyTorch 2.0+)
+if not hasattr(torch, '_dynamo'):
+    print("torch._dynamo not available (requires PyTorch 2.0+), skipping test.")
+    exit()
+
+# Replicate environment settings from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch.manual_seed(70609)
+
+# Check for CUDA availability as the original bug was device-specific
+if not torch.cuda.is_available():
+    print("CUDA not available, skipping test.")
+    exit()
+
+# Adapt inputs for torch.nn.functional.prelu based on the original tensor properties
+# Original context involved float16 tensors on CUDA.
+# prelu(input, weight) requires:
+# - input: Tensor
+# - weight: Tensor (scalar or 1D). If input is N-D (N>=2), weight must have size input.shape[1].
+
+# Creating an input tensor similar to var_node_6 in the original report (14, 6)
+input_tensor = torch.full((14, 6), 1.2255859375, dtype=torch.float16, device='cuda')
+
+# Creating a weight tensor matching the channel dimension (6)
+weight_tensor = torch.full((6,), 0.5, dtype=torch.float16, device='cuda')
+
+def test_prelu_divergence(x, w):
+    # Replacing the original torch.matmul call site with torch.nn.functional.prelu
+    return torch.nn.functional.prelu(x, w)
+
+# Execute in Eager mode
+eager_result = test_prelu_divergence(input_tensor, weight_tensor)
+
+# Execute in Compiled mode (torch._dynamo)
+compiled_fn = torch.compile(test_prelu_divergence)
+compiled_result = compiled_fn(input_tensor, weight_tensor)
+
+# Verify results match to check for eager/compile divergence
+assert torch.allclose(eager_result, compiled_result), "Divergence detected between eager and compiled execution"
+print("Test passed: No divergence found.")

@@ -1,0 +1,83 @@
+import torch
+import torch.distributed as dist
+import threading
+import time
+import os
+import tempfile
+
+def gil_monitor(counter, stop_event):
+    """
+    Background thread to monitor GIL availability.
+    If GIL is released by the main thread, this thread will run frequently.
+    If GIL is held, this thread will be blocked.
+    """
+    while not stop_event.is_set():
+        counter[0] += 1
+        time.sleep(0.0001)
+
+def main():
+    # Initialize distributed environment for a single process to test the API
+    # Using a temporary file for the init_method to ensure it works locally
+    with tempfile.NamedTemporaryFile(delete=False) as f:
+        store_file = f.name
+
+    try:
+        dist.init_process_group(
+            backend="gloo",
+            init_method=f"file://{store_file}",
+            rank=0,
+            world_size=1
+        )
+
+        # Setup GIL monitoring
+        counter = [0]
+        stop_event = threading.Event()
+        monitor_thread = threading.Thread(target=gil_monitor, args=(counter, stop_event))
+        monitor_thread.start()
+
+        # Warmup to get baseline counter rate
+        time.sleep(0.1)
+        baseline_rate = counter[0] / 0.1
+        counter[0] = 0
+
+        print(f"Baseline GIL release rate: {baseline_rate:.2f} ticks/sec")
+
+        # Prepare data for the similar API
+        # Using a large list of tensors to ensure the operation takes measurable time
+        object_list = [torch.randn(4096, 4096) for _ in range(5)]
+
+        # --- Original Call Site Adaptation ---
+        # Original: torch.compile_add(x, y)
+        # Adapted: torch.distributed.broadcast_object_list(...)
+        
+        print("Testing torch.distributed.broadcast_object_list...")
+        start_time = time.time()
+        
+        # Run the API multiple times to observe behavior, similar to the original script
+        for _ in range(5):
+            dist.broadcast_object_list(object_list, src=0)
+        
+        duration = time.time() - start_time
+        
+        # Stop monitoring and analyze
+        stop_event.set()
+        monitor_thread.join()
+
+        ticks_during_call = counter[0]
+        expected_ticks_if_gil_released = baseline_rate * duration
+
+        print(f"Duration: {duration:.4f}s")
+        print(f"Ticks during call: {ticks_during_call}")
+        print(f"Expected ticks (if GIL released): {expected_ticks_if_gil_released:.2f}")
+
+        # Note: broadcast_object_list involves pickling (Python level) which holds GIL,
+        # and communication (C++ level) which might release it.
+        # This test helps visualize the blocking behavior compared to pure CUDA kernels.
+
+    finally:
+        dist.destroy_process_group()
+        if os.path.exists(store_file):
+            os.remove(store_file)
+
+if __name__ == "__main__":
+    main()

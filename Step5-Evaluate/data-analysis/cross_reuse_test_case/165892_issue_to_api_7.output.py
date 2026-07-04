@@ -1,0 +1,50 @@
+import torch
+
+def test_isfinite_compile():
+    """
+    Test case for torch.isfinite under torch.compile, adapted from the 
+    torch.bmm out_dtype bug report (Issue 165892).
+    
+    The original issue involved torch.compile failing with specific dtype arguments
+    on CUDA. This test verifies that torch.isfinite, which has explicit dtype 
+    handling logic in its reference implementation, works correctly under 
+    torch.compile with float16 inputs on CUDA.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # Check if torch.compile is available (requires PyTorch 2.0+)
+    if not hasattr(torch, "compile"):
+        print("torch.compile not available (requires PyTorch 2.0+), skipping test.")
+        return
+
+    # Setup similar to the bug report: float16 on CUDA
+    A = torch.rand((1, 1024, 1024), device="cuda", dtype=torch.float16)
+    
+    # Introduce non-finite values to test the API logic
+    A[0, 0, 0] = float('inf')
+    A[0, 1, 1] = float('nan')
+
+    @torch.compile
+    def check_isfinite(input):
+        # torch.isfinite handles dtype logic internally (returning bool)
+        # similar to how bmm handles out_dtype.
+        return torch.isfinite(input)
+
+    # Execute
+    result = check_isfinite(A)
+
+    # Assertions
+    # 1. Verify output dtype is correct (bool)
+    assert result.dtype == torch.bool, f"Expected torch.bool, got {result.dtype}"
+    
+    # 2. Verify logic correctness
+    assert not result[0, 0, 0], "Expected inf to be not finite"
+    assert not result[0, 1, 1], "Expected nan to be not finite"
+    assert result[0, 2, 2], "Expected random value to be finite"
+
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_isfinite_compile()

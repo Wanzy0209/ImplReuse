@@ -1,0 +1,38 @@
+import torch
+import torch.nn.functional as F
+import numpy as np
+
+# Determine the device to use
+# Note: torch.set_default_device was introduced in PyTorch 1.12.
+# For compatibility with older versions, we set the device explicitly during tensor creation.
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+    print("CUDA not available, falling back to CPU")
+
+# Define dimensions for conv_transpose3d
+batch, in_channels, out_channels = 16, 3, 64
+d, h, w = 32, 32, 32
+kernel_size = 3
+
+# Create inputs on the determined device
+x = torch.randn(batch, in_channels, d, h, w, dtype=torch.float, device=device)
+# Weight shape for conv_transpose3d is (in_channels, out_channels/groups, kD, kH, kW)
+weight = torch.randn(in_channels, out_channels, kernel_size, kernel_size, kernel_size, dtype=torch.float, device=device)
+
+# Call the similar API: torch.nn.functional.conv_transpose3d
+out = F.conv_transpose3d(x, weight)
+
+# Check properties similar to the bug report (Shape and Strides)
+print("Output shape:", out.shape)
+print("Output strides:", out.stride())
+
+# Calculate expected strides for a contiguous tensor of this shape
+expected_strides = torch.empty(out.shape, device=device).stride()
+print("Expected strides (contiguous):", expected_strides)
+
+# The original bug showed that einsum produced non-contiguous output (transposed strides)
+# when numpy and linear produced contiguous output. We verify that conv_transpose3d
+# produces contiguous output as expected.
+assert out.is_contiguous(), f"conv_transpose3d produced non-contiguous output. Strides: {out.stride()}, Expected: {expected_strides}"

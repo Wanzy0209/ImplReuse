@@ -1,0 +1,65 @@
+import torch
+import torch.utils.checkpoint
+
+# This test case is derived from Issue 161186.
+# It leverages the pattern from tf.compat.v1.no_regularizer (returning None)
+# within a custom autograd Function's backward pass to reproduce the memory leak
+# in torch.utils.checkpoint.checkpoint when use_reentrant=False.
+
+class NoGradientFunction(torch.autograd.Function):
+    """
+    A custom autograd function that mimics the behavior of a no-op or
+    'no_regularizer' by returning None in the backward pass.
+    """
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        # Create a large tensor to make memory leaks apparent
+        out = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        # Saving the output is necessary to trigger the specific cleanup issue
+        ctx.save_for_backward(inp, out)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Access saved tensors to ensure they are part of the graph
+        _ = ctx.saved_tensors
+        # Return None, similar to tf.compat.v1.no_regularizer
+        return None
+
+def test_checkpoint_memory_leak_with_no_op_backward():
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+    
+    # Capture initial memory
+    torch.cuda.empty_cache()
+    initial_mem = torch.cuda.memory_allocated()
+
+    # Run the checkpointed operation multiple times
+    for i in range(100):
+        # use_reentrant=False is required to trigger the early-stopping exception path
+        full_out = torch.utils.checkpoint.checkpoint(
+            NoGradientFunction.apply, 
+            dummy_input, 
+            use_reentrant=False
+        )
+        full_out.sum().backward()
+        dummy_input.grad = None
+
+    # Check final memory
+    final_mem = torch.cuda.memory_allocated()
+    mem_diff = final_mem - initial_mem
+    
+    # In the bug scenario, memory would grow significantly (e.g., > 100MB).
+    # We assert that the memory growth is within reasonable bounds.
+    # Note: Exact memory assertions can be flaky, but this demonstrates the test logic.
+    print(f"Memory growth: {mem_diff / 1024**2:.2f} MiB")
+    
+    # A simple assertion to ensure we aren't leaking massive amounts of memory
+    # (The bug would leak ~400MB in 100 iterations)
+    assert mem_diff < 50 * 1024**2, "Potential memory leak detected in checkpoint with custom autograd function."
+
+if __name__ == "__main__":
+    test_checkpoint_memory_leak_with_no_op_backward()

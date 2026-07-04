@@ -1,0 +1,32 @@
+import torch
+
+# Setup data from the original bug report
+dividend = torch.full((2, 3), torch.iinfo(torch.int64).min, dtype=torch.int64, device='cpu')
+divisor = torch.full((3,), -1, dtype=torch.int64, device='cpu')
+
+print("Dividend tensor:", dividend)
+print("Divisor tensor:", divisor)
+
+# Adapt the call site to use torch.as_tensor
+# torch.as_tensor is a constructor/conversion function, so we test it with the
+# problematic values to ensure it handles the edge cases without crashing.
+
+# Test converting the dividend tensor (containing INT64_MIN)
+result_dividend = torch.as_tensor(dividend)
+assert torch.equal(result_dividend, dividend), "Dividend tensor conversion failed"
+
+# Test converting the divisor tensor (containing -1)
+result_divisor = torch.as_tensor(divisor)
+assert torch.equal(result_divisor, divisor), "Divisor tensor conversion failed"
+
+# Test constructing a tensor from a list containing the problematic values
+# to ensure the underlying data handling is robust.
+data_list = [torch.iinfo(torch.int64).min, -1]
+result_list = torch.as_tensor(data_list, dtype=torch.int64)
+assert result_list[0].item() == torch.iinfo(torch.int64).min
+assert result_list[1].item() == -1
+
+print("Result (dividend):", result_dividend)
+print("Result (divisor):", result_divisor)
+print("Result (list):", result_list)
+print("Test passed: torch.as_tensor handles INT64_MIN and -1 correctly.")

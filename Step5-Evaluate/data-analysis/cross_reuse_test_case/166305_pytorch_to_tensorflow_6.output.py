@@ -1,0 +1,62 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Define custom gradient function (analogous to torch.autograd.Function)
+@tf.custom_gradient
+def simplist_double_fn(x):
+    def grad(dy):
+        return dy * 2
+    return x * 2, grad
+
+# Define a layer using the custom function and the target API
+class DoubleLayer(tf.keras.layers.Layer):
+    def call(self, x):
+        # Using the target API: tf.compat.v1.name_scope
+        with tf.compat.v1.name_scope("DoubleLayer"):
+            return simplist_double_fn(x)
+
+def main():
+    # Setup Distributed Strategy (analogous to DDP)
+    # MirroredStrategy is the standard TF equivalent for single-node multi-GPU DDP
+    strategy = tf.distribute.MirroredStrategy()
+
+    print(f"Number of devices: {strategy.num_replicas_in_sync}")
+
+    with strategy.scope():
+        # Build model
+        # Note: TensorFlow uses NHWC format, unlike PyTorch's NCHW
+        model = tf.keras.Sequential([
+            tf.keras.layers.Conv2D(3, 3, padding='same', input_shape=(256, 256, 3)),
+            DoubleLayer()
+        ])
+
+        optimizer = tf.keras.optimizers.SGD(learning_rate=1e-4)
+
+        # Compile the model logic (analogous to torch.compile)
+        # We use tf.function to ensure graph execution/compilation
+        @tf.function
+        def train_step(inputs):
+            with tf.GradientTape() as tape:
+                # Use name_scope in the forward pass to test interaction with graph compilation
+                with tf.compat.v1.name_scope("model_forward"):
+                    out = model(inputs, training=True)
+                    loss = tf.reduce_mean(tf.keras.losses.mse(out, inputs))
+
+            gradients = tape.gradient(loss, model.trainable_variables)
+            optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+            return loss
+
+        # Training loop
+        for it in range(3):
+            # Generate random input (Batch=2, H=256, W=256, C=3)
+            x = tf.random.normal((2, 256, 256, 3))
+            
+            loss = train_step(x)
+            
+            # Verify behavior: ensure loss is finite and execution completes
+            assert tf.math.is_finite(loss), "Loss is not finite"
+            print(f"iter={it+1} loss={loss.numpy():.6f}")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,27 @@
+import torch
+import torch.nn as nn
+
+# The original bug report highlights an issue where torch.nn.functional.pad fails 
+# on 4D input despite the error message claiming support for 4D and 5D inputs.
+# Here we test the similar API torch.nn.MaxUnpool3d, which is designed for 5D inputs 
+# (Batch, Channel, Depth, Height, Width). We verify that it correctly handles 
+# the input dimensions it claims to support.
+
+# Create a 5D input tensor (Batch=1, Channel=1, Depth=2, Height=2, Width=2)
+# This adapts the original (2,2,2,2) shape to the 5D requirement of MaxUnpool3d.
+input_tensor = torch.randn(1, 1, 2, 2, 2)
+
+# MaxUnpool3d requires indices from a MaxPool3d operation
+pool = nn.MaxPool3d(kernel_size=2, return_indices=True)
+pooled_output, indices = pool(input_tensor)
+
+# Initialize MaxUnpool3d
+unpool = nn.MaxUnpool3d(kernel_size=2)
+
+# Perform unpooling
+# This should work without raising a dimension-related NotImplementedError
+output = unpool(pooled_output, indices)
+
+# Verify the output shape matches the input shape
+assert output.shape == input_tensor.shape, f"Expected shape {input_tensor.shape}, but got {output.shape}"
+print("Test passed: MaxUnpool3d works correctly with 5D input.")

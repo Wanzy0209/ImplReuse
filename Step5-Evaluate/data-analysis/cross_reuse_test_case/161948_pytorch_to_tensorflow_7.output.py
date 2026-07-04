@@ -1,0 +1,44 @@
+import os
+import time
+import tensorflow as tf
+
+# List of threads to test
+threads_list = [1, 2, 4, 8, 16, 32, 48]
+
+# Size of the large tensors
+# Note: SVD is computationally expensive (O(n^3)).
+# 10000x10000 might be too large for a quick test, but we preserve the original logic.
+tensor_size = (10000, 10000)
+
+# Store results
+times = []
+
+# Benchmark for each thread count
+for threads in threads_list:
+    # Set TensorFlow threading configuration
+    # intra_op_parallelism_threads controls parallelism within individual ops (like SVD)
+    tf.config.threading.set_intra_op_parallelism_threads(threads)
+    
+    # Set environment variables (often respected by underlying BLAS libraries)
+    os.environ['OMP_NUM_THREADS'] = str(threads)
+    os.environ['MKL_NUM_THREADS'] = str(threads)
+    os.environ['OPENBLAS_NUM_THREADS'] = str(threads)
+
+    # Create random tensors
+    a = tf.random.normal(tensor_size)
+
+    # Warm up
+    # Run the specific API: tf.linalg.svd
+    _ = tf.linalg.svd(a)
+
+    # Time the operation
+    start_time = time.time()
+    # Run the specific API: tf.linalg.svd
+    s, u, v = tf.linalg.svd(a)
+    elapsed_time = time.time() - start_time
+
+    # Basic assertion to verify operation completed successfully
+    assert s.shape == (tensor_size[0],), "SVD output shape mismatch"
+
+    print(f"Threads: {threads}, Time: {elapsed_time:.4f} s")
+    times.append(elapsed_time)

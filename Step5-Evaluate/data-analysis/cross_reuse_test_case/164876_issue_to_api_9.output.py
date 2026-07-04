@@ -1,0 +1,82 @@
+import torch
+import unittest
+
+class TestUniqueCompileDivergence(unittest.TestCase):
+    def test_unique_matmul_shape_mismatch(self):
+        """
+        Test case for Issue 164876: Eager/Compile Divergence with torch.unique.
+        The issue involves a shape mismatch error during matmul after a unique operation
+        in compiled mode.
+        
+        This test also leverages torch.backends.nnpack.set_flags as a similar API
+        to ensure backend state consistency during the test.
+        """
+        # Leverage the similar API: torch.backends.nnpack.set_flags
+        # We capture and restore the original flags to ensure the test environment
+        # is clean and isolated, reflecting the pattern of state management seen in
+        # the similar API's implementation.
+        # Fix: Check if nnpack is available before accessing it
+        original_flags = None
+        if hasattr(torch.backends, 'nnpack'):
+            original_flags = torch.backends.nnpack.set_flags(False)
+
+        try:
+            # Configuration from the bug report
+            torch._dynamo.config.capture_scalar_outputs = True
+            torch._dynamo.config.capture_dynamic_output_shape_ops = True
+            torch.manual_seed(1012969)
+
+            # Check for CUDA availability as the bug is specific to CUDA
+            if not torch.cuda.is_available():
+                self.skipTest("CUDA not available")
+
+            def fuzzed_program(arg_0, arg_1, sentinel):
+                var_node_3 = arg_0
+                var_node_4 = arg_1
+                var_node_2 = torch.matmul(var_node_3.to(torch.float64), var_node_4.to(torch.float64))
+                
+                # The core of the issue: torch.unique interaction with dynamic shapes
+                _inp_unique_wide = torch.arange(1, device=var_node_2.device, dtype=torch.int64)
+                _uniq_wide = torch.unique(_inp_unique_wide)
+                var_node_1 = _uniq_wide.to(var_node_2.dtype)
+                
+                var_node_5 = torch.full((1, 18), 0.40330381448978797, dtype=torch.float64)
+                
+                # The divergence happens here: size mismatch in compiled mode
+                # Error: "The size of tensor a (u0) must match the size of tensor b (18)"
+                var_node_0 = torch.matmul(var_node_1.to(torch.float64), var_node_5.to(torch.float64))
+                
+                result = var_node_0 * sentinel
+                if result.is_complex():
+                    result = result.real
+                return result
+
+            sentinel = torch.tensor(1.0, requires_grad=True)
+            arg_0 = torch.as_strided(torch.randn(20).to(torch.float64), (2, 10), (10, 1))
+            arg_1 = torch.as_strided(torch.randn(30).to(torch.float64), (10, 3), (3, 1))
+
+            # Move to CUDA
+            arg_0 = arg_0.cuda()
+            arg_1 = arg_1.cuda()
+            sentinel = sentinel.cuda()
+
+            args = (arg_0, arg_1, sentinel)
+
+            # 1. Run in Eager mode
+            result_eager = fuzzed_program(*args)
+
+            # 2. Run in Compiled mode
+            compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+            result_compiled = compiled_program(*args)
+
+            # 3. Verify results match
+            self.assertTrue(torch.allclose(result_eager, result_compiled))
+
+        finally:
+            # Restore original flags using the similar API
+            # Fix: Only restore if flags were actually captured
+            if original_flags is not None:
+                torch.backends.nnpack.set_flags(original_flags[0])
+
+if __name__ == '__main__':
+    unittest.main()

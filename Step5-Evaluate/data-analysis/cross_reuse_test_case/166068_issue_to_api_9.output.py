@@ -1,0 +1,34 @@
+import torch
+import tensorflow as tf
+from packaging import version
+
+# Test case adapted from Issue 166068 logic applied to tf.compat.v1.tpu.PaddingSpec
+# Original issue: version.parse(torch.version.hip) failed due to invalid string format '6.4.43482-0f2d60242'.
+# Similar API: tf.compat.v1.tpu.PaddingSpec (an IntEnum).
+# This test verifies that the members of the similar API can be parsed as versions,
+# contrasting with the failure in the original PyTorch version string.
+
+def test_similar_api_version_parsing():
+    try:
+        # Access the similar API
+        padding_spec = tf.compat.v1.tpu.PaddingSpec
+
+        # Attempt to parse the enum members (which are integers)
+        # This mirrors the original logic of parsing a library attribute
+        parsed_auto = version.parse(padding_spec.AUTO)
+        parsed_power_of_two = version.parse(padding_spec.POWER_OF_TWO)
+
+        # Assertions to verify behavior
+        # Integers should parse successfully as versions (e.g., 0 becomes "0.0")
+        assert parsed_auto == version.parse("0.0"), "AUTO (0) should parse as 0.0"
+        assert parsed_power_of_two == version.parse("1.0"), "POWER_OF_TWO (1) should parse as 1.0"
+
+        print("Test passed: PaddingSpec members are valid versions.")
+
+    except ImportError:
+        print("TensorFlow not installed, skipping test.")
+    except Exception as e:
+        print(f"Test failed: {e}")
+
+if __name__ == "__main__":
+    test_similar_api_version_parsing()

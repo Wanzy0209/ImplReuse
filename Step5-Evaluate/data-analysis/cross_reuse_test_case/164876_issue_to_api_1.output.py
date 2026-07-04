@@ -1,0 +1,72 @@
+import torch
+import unittest
+import sys
+
+class TestUniqueCompileDivergence(unittest.TestCase):
+    """
+    Test case for Issue ID: 164876
+    Title: [Fuzzer][Eager/Compile Divergence] The size of tensor a (u0) must match the size of tensor b (18) at non-singleton dimension
+    
+    This test reproduces a bug where torch.compile fails to handle the symbolic dimension 
+    resulting from torch.unique correctly during a matmul operation, leading to a size mismatch error 
+    that does not occur in eager mode.
+    """
+    
+    def setUp(self):
+        # Check for torch._dynamo availability
+        if not hasattr(torch, '_dynamo'):
+            self.skipTest("torch._dynamo is not available. This test requires PyTorch 2.0+.")
+
+        # Reproduce the specific configuration from the bug report that triggers the issue
+        torch._dynamo.config.capture_scalar_outputs = True
+        torch._dynamo.config.capture_dynamic_output_shape_ops = True
+        
+        # Check for CUDA availability as the original bug was reported on CUDA
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if self.device.type == "cpu":
+            self.skipTest("Bug report specific to CUDA behavior")
+
+    def test_unique_matmul_dynamic_shape(self):
+        # Setup inputs based on the bug report
+        # _inp_unique_wide = torch.arange(1, device=var_node_2.device, dtype=torch.int64)
+        inp_unique = torch.arange(1, device=self.device, dtype=torch.int64)
+        
+        # var_node_5 = torch.full((1, 18), 0.40330381448978797, dtype=torch.float64)
+        tensor_b = torch.full((1, 18), 0.40330381448978797, dtype=torch.float64, device=self.device)
+
+        def func(x):
+            # var_node_1 = _uniq_wide.to(var_node_2.dtype)
+            # torch.unique returns a tensor of size (1,) in this specific case
+            uniq = torch.unique(x)
+            uniq_float = uniq.to(torch.float64)
+            
+            # var_node_0 = torch.matmul(var_node_1.to(torch.float64), var_node_5.to(torch.float64))
+            # Matmul operation: (1,) @ (1, 18) -> (18,)
+            # The bug occurs here if the compiler treats the size of 'uniq_float' as a symbolic variable 'u0'
+            # and fails to broadcast it against the static dimension 18.
+            return torch.matmul(uniq_float, tensor_b)
+
+        # 1. Run in Eager mode
+        try:
+            result_eager = func(inp_unique)
+        except Exception as e:
+            self.fail(f"Eager execution failed unexpectedly: {e}")
+
+        # 2. Run in Compiled mode
+        # fullgraph=True and dynamic=True are used to stress the symbolic shape handling
+        compiled_func = torch.compile(func, fullgraph=True, dynamic=True)
+        
+        try:
+            result_compiled = compiled_func(inp_unique)
+        except RuntimeError as e:
+            # This is the failure mode described in the bug report:
+            # "The size of tensor a (u0) must match the size of tensor b (18) at non-singleton dimension"
+            self.fail(f"Compiled execution failed with divergence error: {e}")
+
+        # 3. Verify results match
+        # If the bug is present, the execution might fail before reaching here.
+        # If the bug is fixed, results should be close.
+        torch.testing.assert_close(result_eager, result_compiled)
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,57 @@
+import tensorflow as tf
+import numpy as np
+
+def test_min_max_norm_uneven_axis():
+    """
+    Test case for tf.keras.constraints.MinMaxNorm inspired by 
+    Issue 168134: [DTensor] gaps in uneven strided shard.
+    
+    The original issue involved distributing a tensor [0, 1, 2, 3, 4] 
+    with an uneven split factor, resulting in incorrect local tensors 
+    (gaps/wrong values). This test verifies that MinMaxNorm correctly 
+    handles a similar uneven tensor shape along a specific axis, ensuring 
+    no values are skipped or miscalculated during the normalization process.
+    """
+    # Setup tensor similar to the bug report: [0, 1, 2, 3, 4]
+    # Reshaped to (5, 1) to allow axis selection, mimicking the unflatten logic
+    # suggested in the bug fix description: (5, ) -> unflatten -> (2, 3, ) -> ...
+    weights = np.array([0., 1., 2., 3., 4.]).reshape((5, 1))
+    
+    # Initialize constraint with axis=0 (corresponding to the split dimension in the bug)
+    # Using rate=1.0 for strict enforcement, similar to strict sharding logic.
+    constraint = tf.keras.constraints.MinMaxNorm(
+        min_value=0.0, 
+        max_value=1.0, 
+        axis=0, 
+        rate=1.0
+    )
+    
+    # Apply the constraint
+    result = constraint(weights)
+    
+    # Calculate expected result manually to verify correctness
+    # Norm of column vector [0, 1, 2, 3, 4] is sqrt(0^2 + 1^2 + 2^2 + 3^2 + 4^2) = sqrt(30)
+    norm = np.sqrt(30.0)
+    
+    # Since norm > max_value (1.0), we scale down.
+    # desired_norm = clip(norm, 0.0, 1.0) = 1.0
+    # scale = desired_norm / norm = 1.0 / sqrt(30)
+    scale = 1.0 / norm
+    expected = weights * scale
+    
+    # Fix: Use tf.keras.backend.get_value to retrieve the numpy array from the Tensor.
+    # This handles both eager execution and graph mode contexts.
+    result_val = tf.keras.backend.get_value(result)
+    
+    # Assert the result matches the expected calculation
+    # This ensures no "gaps" or incorrect values like in the original bug
+    np.testing.assert_allclose(result_val, expected, rtol=1e-5)
+    
+    # Explicitly check values that were problematic in the bug report
+    # Bug: rank0 got [0, 1, 3] (missing 4), rank1 got [2, 4] (wrong placement)
+    # Here we ensure the whole vector is processed correctly.
+    assert tf.keras.backend.get_value(result[0, 0]) == 0.0
+    assert tf.keras.backend.get_value(result[4, 0]) == 4.0 * scale
+
+if __name__ == "__main__":
+    test_min_max_norm_uneven_axis()

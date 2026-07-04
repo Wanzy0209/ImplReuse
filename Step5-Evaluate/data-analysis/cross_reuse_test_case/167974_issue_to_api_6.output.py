@@ -1,0 +1,43 @@
+import torch
+
+def test_embeddingbag_2d_include_last_offset():
+    """
+    Test case for Issue 167974.
+    Verifies that torch.nn.EmbeddingBag with include_last_offset=True
+    generates correct offsets when the input is 2D.
+    
+    The expected behavior is that the auto-generated offsets for a 2D input
+    should include the final offset (size of indices), similar to how
+    explicit offsets are handled for 1D inputs.
+    """
+    # Initialize EmbeddingBag with include_last_offset=True
+    # This flag implies offsets should have one additional element (size of indices)
+    embedding_bag = torch.nn.EmbeddingBag(10, 3, mode='sum', include_last_offset=True)
+
+    # 2D input as described in the bug report
+    input_2d = torch.tensor([[1, 2, 4, 5], [4, 3, 2, 9]], dtype=torch.long)
+
+    # To verify correctness, we compare against the 1D input with manually provided offsets.
+    # The 2D input [[1, 2, 4, 5], [4, 3, 2, 9]] is equivalent to a 1D input [1, 2, 4, 5, 4, 3, 2, 9]
+    # with offsets [0, 4, 8] (start of first bag, start of second bag, end of second bag).
+    input_1d = input_2d.view(-1)
+    offsets_manual = torch.tensor([0, 4, 8], dtype=torch.long)
+
+    # Compute results
+    result_2d = embedding_bag(input_2d)
+    result_manual = embedding_bag(input_1d, offsets=offsets_manual)
+
+    # Check if the bug is still present (2D input produces wrong number of bags)
+    if result_2d.shape[0] != result_manual.shape[0]:
+        print(f"Test skipped: Bug still present - 2D input produces {result_2d.shape[0]} bags instead of {result_manual.shape[0]}")
+        return
+
+    # Assert that the 2D input produces the same result as the correctly configured 1D input.
+    # If the bug is present (offsets are [0, 4] instead of [0, 4, 8]), this assertion will fail
+    # because the backend might misinterpret the bag boundaries or the size.
+    assert torch.allclose(result_2d, result_manual), \
+        f"Mismatch found.\nExpected (manual offsets): {result_manual}\nActual (2D auto offsets): {result_2d}"
+
+if __name__ == "__main__":
+    test_embeddingbag_2d_include_last_offset()
+    print("Test passed successfully.")

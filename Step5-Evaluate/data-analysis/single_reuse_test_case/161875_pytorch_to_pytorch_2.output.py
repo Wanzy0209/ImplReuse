@@ -1,0 +1,18 @@
+import torch
+
+# Adapt input for Conv2d: (Batch, Channels, Height, Width)
+input_data = torch.randn(1, 3, 32, 32)
+
+# Initialize LazyConv2d with the same extreme padding value
+lazy_conv2d = torch.nn.LazyConv2d(
+    out_channels=16, 
+    kernel_size=3, 
+    stride=1,
+    padding=9223372036854775803, 
+    bias=True
+)
+
+lazy_conv2d.to(device=torch.device('cpu'))
+
+# This line is expected to trigger the issue (Segmentation fault or Error)
+output = lazy_conv2d(input_data)

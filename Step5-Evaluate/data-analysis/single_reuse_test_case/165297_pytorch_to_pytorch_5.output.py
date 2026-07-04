@@ -1,0 +1,42 @@
+import torch
+import torch.nn as nn
+
+def test_avgpool1d_large_tensor():
+    """
+    Test case for torch.nn.AvgPool1d adapted from the MaxPool2d channels_last bug report.
+    Since channels_last is a 4D memory format, this test focuses on the large tensor
+    and bfloat16 aspects which might trigger similar underlying CUDA kernel issues.
+    """
+    device = torch.device("cuda")
+
+    # Adapted shape for 1D: (N, C, L)
+    # Original 2D shape was (84, 64, 512, 960). 
+    # We keep the total number of elements large to stress memory access.
+    N, C, L = 84, 64, 512 * 960
+    
+    # Case 1: bfloat16 on large tensor
+    x = torch.randn(N, C, L, dtype=torch.bfloat16, device=device)
+
+    # Note: memory_format=torch.channels_last is only supported for 4D tensors.
+    # We skip the conversion here as it is not applicable to AvgPool1d (3D input).
+    # x = x.to(memory_format=torch.channels_last) 
+
+    print(f"Input tensor: contiguous={x.is_contiguous()}")
+    print(f"Input shape: {x.shape}")
+
+    # Adapted call site: AvgPool1d instead of MaxPool2d
+    pool = nn.AvgPool1d(kernel_size=3, stride=2, padding=1).to(device)
+    y = pool(x)
+
+    print(f"Output contains NaN? {torch.isnan(y).any().item()}")
+    print(f"Output contains Inf? {torch.isinf(y).any().item()}")
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    if torch.isnan(y).any():
+        print("Detected NaNs in AvgPool1d output!")
+        # In a testing framework, this would be assert False
+    else:
+        print("No NaNs detected.")
+
+if __name__ == "__main__":
+    test_avgpool1d_large_tensor()

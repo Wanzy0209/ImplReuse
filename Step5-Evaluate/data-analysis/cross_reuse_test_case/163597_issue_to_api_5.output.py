@@ -1,0 +1,123 @@
+import torch
+import torch.nn.functional as F
+import math
+
+def required_space_to_batch_paddings(input_shape, block_shape, base_paddings=None):
+    """
+    Mimics the logic of tf.required_space_to_batch_paddings.
+    Calculates padding required to make block_shape divide input_shape.
+    
+    Args:
+        input_shape: List or Tensor of shape [N].
+        block_shape: List or Tensor of shape [N].
+        base_paddings: Optional List of [N, 2]. Minimum padding.
+        
+    Returns:
+        paddings: List of [N, 2] suitable for torch.nn.functional.pad.
+    """
+    paddings = []
+    if base_paddings is None:
+        base_paddings = [[0, 0] for _ in range(len(input_shape))]
+            
+    for i in range(len(input_shape)):
+        block = block_shape[i]
+        if block == 1:
+            paddings.append([base_paddings[i][0], 0])
+            continue
+            
+        # Calculate padding needed to satisfy:
+        # (input_shape[i] + paddings[i, 0] + paddings[i, 1]) % block_shape[i] == 0
+        current_input = input_shape[i]
+        
+        # Total padding needed modulo block
+        # We want (current_input + total_pad) % block == 0
+        # total_pad = (block - (current_input % block)) % block
+        
+        remainder = current_input % block
+        if remainder == 0:
+            total_pad = 0
+        else:
+            total_pad = block - remainder
+            
+        # Apply base padding and distribute the remainder
+        # Simplified distribution: add all to the end for this test
+        pad_start = base_paddings[i][0]
+        pad_end = total_pad + base_paddings[i][1]
+        
+        paddings.append([pad_start, pad_end])
+        
+    return paddings
+
+def test_sdpa_mps_non_contiguous_regression():
+    """
+    Test case for Issue 163597: SDPA MPS regression on 2.8.0.
+    
+    Leverages the logic of tf.required_space_to_batch_paddings to determine
+    input padding, then tests torch.nn.functional.scaled_dot_product_attention
+    with non-contiguous tensors on MPS.
+    """
+    if not torch.backends.mps.is_available():
+        print("MPS device not available. Skipping test.")
+        return
+
+    device = "mps"
+    
+    # Define base dimensions
+    batch_size, seq_len, num_heads, head_dim = 1, 8, 12, 64
+    
+    # Use the similar API logic to calculate padding for the sequence dimension
+    # to ensure specific shape properties before the transpose.
+    input_shape = [batch_size, seq_len, num_heads, head_dim]
+    block_shape = [1, 4, 1, 1] # Ensure seq_len is divisible by 4
+    
+    paddings = required_space_to_batch_paddings(input_shape, block_shape)
+    
+    # Create tensors
+    q = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device)
+    k = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device)
+    v = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device)
+    
+    # Apply padding calculated by the similar API logic
+    # torch.nn.functional.pad expects paddings in reverse order of dimensions
+    # (W_last, W_first, ..., L_last, L_first)
+    pad_list = []
+    for p in reversed(paddings):
+        pad_list.extend(p)
+        
+    q = F.pad(q, pad_list)
+    k = F.pad(k, pad_list)
+    v = F.pad(v, pad_list)
+    
+    # Transpose to make tensors non-contiguous (Original Bug Logic)
+    # SDPA expects (Batch, Heads, SeqLen, HeadDim)
+    q = q.transpose(1, 2)
+    k = k.transpose(1, 2)
+    v = v.transpose(1, 2)
+    
+    # Verify non-contiguity
+    assert not q.is_contiguous(), "Query tensor should be non-contiguous after transpose"
+
+    # Run SDPA on MPS
+    out_mps = F.scaled_dot_product_attention(q, k, v)
+    
+    # Run SDPA on CPU (Ground Truth)
+    # We move to CPU and ensure contiguous calculation for reference
+    q_cpu = q.cpu().contiguous()
+    k_cpu = k.cpu().contiguous()
+    v_cpu = v.cpu().contiguous()
+    out_cpu = F.scaled_dot_product_attention(q_cpu, k_cpu, v_cpu)
+    
+    # Calculate difference
+    diff_norm = torch.norm(out_mps.cpu() - out_cpu)
+    
+    print(f"Calculated Paddings (from similar API logic): {paddings}")
+    print(f"Output Shape: {out_mps.shape}")
+    print(f"Norm difference (MPS vs CPU): {diff_norm.item():.6f}")
+    
+    # Assert that the MPS implementation matches the CPU implementation
+    # The bug manifests as a large difference.
+    assert torch.allclose(out_mps.cpu(), out_cpu, atol=1e-4), \
+        f"SDPA MPS Regression detected for non-contiguous tensors. Norm diff: {diff_norm.item()}"
+
+if __name__ == "__main__":
+    test_sdpa_mps_non_contiguous_regression()

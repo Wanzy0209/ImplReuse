@@ -1,0 +1,110 @@
+import torch
+import torch.nn as nn
+import numpy as np
+import os
+import sys
+
+# Handle missing onnxruntime dependency gracefully
+try:
+    import onnxruntime as ort
+    ONNX_RUNTIME_AVAILABLE = True
+except ImportError:
+    ONNX_RUNTIME_AVAILABLE = False
+    print("Skipping tests: onnxruntime module not found.")
+
+def test_atan2_onnx_zero_input():
+    """
+    Test that torch.atan2(0, 0) exports to ONNX correctly.
+    PyTorch returns 0, but the ONNX decomposition was producing NaN.
+    """
+    if not ONNX_RUNTIME_AVAILABLE:
+        return
+
+    class Atan2Model(nn.Module):
+        def forward(self, x, y):
+            return torch.atan2(x, y)
+
+    model = Atan2Model()
+    x = torch.tensor([0.0])
+    y = torch.tensor([0.0])
+
+    # 1. Get PyTorch result
+    torch_result = model(x, y)
+    assert torch_result.item() == 0.0, "PyTorch atan2(0, 0) should be 0"
+
+    # 2. Export to ONNX
+    onnx_path = "atan2_zero_test.onnx"
+    try:
+        torch.onnx.export(
+            model, 
+            (x, y), 
+            onnx_path, 
+            input_names=["x", "y"], 
+            output_names=["output"],
+            opset_version=14 # Using a standard opset version
+        )
+
+        # 3. Run with ONNX Runtime
+        sess = ort.InferenceSession(onnx_path)
+        ort_result = sess.run(["output"], {"x": x.numpy(), "y": y.numpy()})[0]
+
+        # 4. Verify results match
+        # The bug was that ort_result would be [nan]
+        assert not np.isnan(ort_result[0]), f"ONNX result should not be NaN, got {ort_result[0]}"
+        assert np.allclose(torch_result.numpy(), ort_result), \
+            f"Results mismatch: Torch {torch_result.item()}, ONNX {ort_result[0]}"
+        
+        print("test_atan2_zero_input passed.")
+    finally:
+        if os.path.exists(onnx_path):
+            os.remove(onnx_path)
+
+def test_angle_onnx_zero_input():
+    """
+    Test that torch.angle(0+0j) exports to ONNX correctly.
+    torch.angle decomposes to atan2(imag, real), so it suffers from the same bug.
+    """
+    if not ONNX_RUNTIME_AVAILABLE:
+        return
+
+    class AngleModel(nn.Module):
+        def forward(self, x):
+            return torch.angle(x)
+
+    model = AngleModel()
+    # Input is 0 + 0j
+    x = torch.tensor([0.0 + 0.0j])
+
+    # 1. Get PyTorch result
+    torch_result = model(x)
+    assert torch_result.item() == 0.0, "PyTorch angle(0+0j) should be 0"
+
+    # 2. Export to ONNX
+    onnx_path = "angle_zero_test.onnx"
+    try:
+        torch.onnx.export(
+            model, 
+            x, 
+            onnx_path, 
+            input_names=["x"], 
+            output_names=["output"],
+            opset_version=14
+        )
+
+        # 3. Run with ONNX Runtime
+        sess = ort.InferenceSession(onnx_path)
+        ort_result = sess.run(["output"], {"x": x.numpy()})[0]
+
+        # 4. Verify results match
+        assert not np.isnan(ort_result[0]), f"ONNX result should not be NaN, got {ort_result[0]}"
+        assert np.allclose(torch_result.numpy(), ort_result), \
+            f"Results mismatch: Torch {torch_result.item()}, ONNX {ort_result[0]}"
+
+        print("test_angle_onnx_zero_input passed.")
+    finally:
+        if os.path.exists(onnx_path):
+            os.remove(onnx_path)
+
+if __name__ == "__main__":
+    test_atan2_onnx_zero_input()
+    test_angle_onnx_zero_input()

@@ -1,0 +1,98 @@
+import torch
+import torch.nn.functional as F
+import sys
+
+# Check if torch._dynamo is available to avoid AttributeError
+if not hasattr(torch, '_dynamo'):
+    print("Skipping test: torch._dynamo is not available in this PyTorch version.")
+    sys.exit(0)
+
+# Reproduce the specific configuration that triggers the bug
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+# Check for _inductor as well to be safe
+if hasattr(torch, '_inductor'):
+    torch._inductor.config.emulate_precision_casts = True
+else:
+    print("Warning: torch._inductor not available, skipping that config.")
+
+def test_conv1d_compile_divergence():
+    """
+    Test case for Issue 163569: torch.nn.functional.conv1d works in eager but fails compile.
+    
+    This test reproduces the logic found in the bug report, verifying that the 
+    eager and compiled execution paths produce consistent results for the 
+    conv1d operation under specific precision and dynamic shape configurations.
+    """
+
+    # The model logic extracted from the bug report
+    def conv1d_model(arg0, arg1, arg2):
+        # Operations leading up to the conv1d
+        t0 = arg0
+        t1 = t0.max(dim=0).values
+        t2 = t1.transpose(1, 0)
+        
+        t3 = arg1
+        t4 = torch.exp(t3)
+        
+        t5 = arg2
+        t6 = t5.transpose(2, 1)
+        
+        # The API under test: torch.nn.functional.conv1d
+        # Inputs: t4 (float32), t6 (float32)
+        t7 = F.conv1d(t4, t6, stride=1, padding=0)
+        
+        # Post-processing operations
+        t8 = t7.clone()
+        t8.zero_()
+        t9 = t2 * t7 * t8
+        return t9
+
+    # Setup inputs matching the bug report shapes and dtypes
+    # Note: The bug report mentions specific strides, but torch.rand creates contiguous tensors.
+    # The strides mentioned (1588446, 6086, 358, 1) match the default contiguous strides for this shape.
+    arg0 = torch.rand([2, 261, 17, 358], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+    arg1 = torch.rand([17, 64, 358], dtype=torch.float32, device='cuda', requires_grad=True)
+    arg2 = torch.rand([261, 1, 64], dtype=torch.float32, device='cuda', requires_grad=True)
+
+    # 1. Run Eager Mode
+    out_eager = conv1d_model(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    
+    # Save gradients for comparison
+    grad_eager_arg0 = arg0.grad.clone()
+    grad_eager_arg1 = arg1.grad.clone()
+    grad_eager_arg2 = arg2.grad.clone()
+
+    # Reset gradients
+    arg0.grad.zero_()
+    arg1.grad.zero_()
+    arg2.grad.zero_()
+
+    # 2. Run Compiled Mode
+    # Using fullgraph=True and dynamic=True as per the bug report
+    compiled_model = torch.compile(conv1d_model, fullgraph=True, dynamic=True)
+    out_compiled = compiled_model(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+
+    # 3. Assertions
+    # Check forward pass consistency
+    assert torch.allclose(out_eager, out_compiled, atol=1e-2, rtol=1e-2), \
+        f"Forward pass divergence detected.\nEager: {out_eager}\nCompiled: {out_compiled}"
+
+    # Check backward pass consistency
+    assert torch.allclose(grad_eager_arg0, arg0.grad, atol=1e-2), \
+        "Gradient divergence detected for arg0"
+    assert torch.allclose(grad_eager_arg1, arg1.grad, atol=1e-2), \
+        "Gradient divergence detected for arg1"
+    assert torch.allclose(grad_eager_arg2, arg2.grad, atol=1e-2), \
+        "Gradient divergence detected for arg2"
+
+    print("Test Passed: Eager and Compiled outputs match.")
+
+if __name__ == '__main__':
+    if not torch.cuda.is_available():
+        print("Skipping test: CUDA is not available.")
+        sys.exit(0)
+    test_conv1d_compile_divergence()

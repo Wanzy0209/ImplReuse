@@ -1,0 +1,52 @@
+import torch
+import torch.nn as nn
+
+# Check for CUDA availability, fallback to CPU if not present to ensure runnability
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(f"Using device: {device}")
+
+torch.manual_seed(1061983224)
+
+def fuzzed_program(arg_0, sentinel):
+    # Adaptation: Replace the squeeze/stack/reshape logic with torch.nn.LazyLinear
+    # The original input arg_0 is size (4,). LazyLinear expects at least 2D (Batch, Features).
+    # We unsqueeze to make it (4, 1) to serve as a batch of 1 feature vectors.
+    x = arg_0.unsqueeze(-1)
+    
+    # Instantiate LazyLinear. This triggers lazy initialization on the first forward pass.
+    # This is a common point of failure for torch.compile with dynamic shapes or specific strides.
+    layer = nn.LazyLinear(out_features=1)
+    
+    # FIX: Explicitly move the layer to the target device.
+    # LazyLinear initializes parameters on the first forward pass. If the module is not on the
+    # correct device, the weights will be initialized on CPU while the input is on CUDA,
+    # causing a device mismatch error.
+    layer.to(device)
+    
+    # Forward pass
+    out = layer(x)
+    
+    # Ensure gradient computation by multiplying with sentinel
+    result = out * sentinel
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True, device=device)
+
+# Create input with specific strides, similar to the original bug report
+# Original: size=(4,), stride=(1,), dtype=bool
+# We use float here because nn.Linear typically expects float inputs, 
+# but we maintain the specific stride configuration.
+base_tensor = torch.randint(0, 2, (4,), dtype=torch.float32, device=device)
+arg_0 = torch.as_strided(base_tensor, (4,), (1,))
+
+args = (arg_0, sentinel)
+
+# Run Eager
+result_original = fuzzed_program(*args)
+print(' eager success')
+
+# Run Compiled
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print(' compile success')

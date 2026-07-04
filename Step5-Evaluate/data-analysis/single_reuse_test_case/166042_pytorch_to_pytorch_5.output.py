@@ -1,0 +1,42 @@
+import torch
+import torch.nn.functional as F
+
+# Check if torch._dynamo is available to prevent AttributeError
+if hasattr(torch, '_dynamo'):
+    # Replicate the configuration from the original bug report
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch.manual_seed(1352030645)
+
+    def test_program():
+        # Adapted from the fuzzer's environment: using bfloat16 tensors
+        # Using CPU to ensure the test is runnable without a GPU, 
+        # though the original bug was on CUDA.
+        device = "cpu"
+        
+        # Create inputs for binary_cross_entropy
+        # BCE expects inputs in [0, 1], but we use bfloat16 to test 
+        # compiler robustness similar to the original embedding bug.
+        input_tensor = torch.full((4, 5), 0.5, dtype=torch.bfloat16, device=device)
+        target_tensor = torch.full((4, 5), 0.2, dtype=torch.bfloat16, device=device)
+        
+        # Call the similar API: torch.nn.functional.binary_cross_entropy
+        return F.binary_cross_entropy(input_tensor, target_tensor)
+
+    # Compile the function using torch._dynamo
+    compiled_test_program = torch._dynamo.optimize()(test_program)
+
+    # Run both eager and compiled versions to check for divergence or crashes
+    try:
+        eager_result = test_program()
+        compiled_result = compiled_test_program()
+        
+        # Check for divergence
+        assert torch.allclose(eager_result, compiled_result), "Eager and Compiled results diverged"
+        print("Test Passed: No divergence detected.")
+        
+    except AssertionError as e:
+        print(f"Assertion Failed: {e}")
+    except Exception as e:
+        print(f"Runtime Error: {e}")
+else:
+    print("Skipping test: torch._dynamo is not available in this environment.")

@@ -1,0 +1,50 @@
+import torch
+import sys
+
+# Reproduce the configuration from the bug report
+# Check if _dynamo exists to avoid AttributeError in older or different PyTorch builds
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+if hasattr(torch, '_inductor'):
+    torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    # Original: t3 = flex_attention(t0, t1, t2)
+    # Adaptation: Replace flex_attention with torch.any
+    # We use torch.any with a dimension to maintain tensor output shape for potential chaining
+    t0 = arg0
+    t1 = arg1
+    t2 = arg2
+    
+    # Applying torch.any to the tensors
+    # Checking if any values are greater than 0.5 to create a boolean mask
+    t3 = torch.any(t0 > 0.5, dim=-1)
+    t4 = torch.any(t1 > 0.5, dim=-1)
+    t5 = torch.any(t2 > 0.5, dim=-1)
+    
+    # Return the results
+    return t3, t4, t5
+
+# Create inputs matching the original bug report shapes
+# Using float32 on cuda
+arg0 = torch.rand([27, 26, 62, 122], dtype=torch.float32, device='cuda')
+arg1 = torch.rand([27, 26, 124, 122], dtype=torch.float32, device='cuda')
+arg2 = torch.rand([27, 26, 124, 122], dtype=torch.float32, device='cuda')
+
+# Run eager
+print("Running eager...")
+eager_out = foo(arg0, arg1, arg2)
+
+# Run compiled
+print("Running compiled...")
+compiled_foo = torch.compile(foo)
+compiled_out = compiled_foo(arg0, arg1, arg2)
+
+# Verify results match (Eager vs Compile divergence check)
+print("Verifying results...")
+for i, (e, c) in enumerate(zip(eager_out, compiled_out)):
+    assert torch.equal(e, c), f"Mismatch at output {i}: {e} vs {c}"
+
+print("Test passed.")

@@ -1,0 +1,73 @@
+import torch
+import torch.onnx
+import torch.profiler.itt as itt
+from torchvision.models import resnet50, ResNet50_Weights
+import onnx
+import tempfile
+import os
+
+def test_resnet50_onnx_dynamo_export_with_profiling():
+    """
+    Test case to reproduce the ONNX Dynamo export bug for ResNet50.
+    Leverages torch.profiler.itt.range_pop to profile the export operation.
+    """
+    # Create ResNet50 model with pretrained weights
+    weights = ResNet50_Weights.DEFAULT
+    model = resnet50(weights=weights)
+    model.eval()
+    
+    # Create dummy input tensor
+    dummy_input = torch.randn(1, 3, 224, 224)
+    
+    # Create a temporary file for the ONNX model
+    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp_file:
+        onnx_path = tmp_file.name
+
+    try:
+        # Leverage the similar API: torch.profiler.itt.range_pop
+        # We wrap the export operation in a profiling range to measure performance
+        itt.range_push("onnx_dynamo_export")
+        
+        # Export to ONNX using Dynamo (the bug trigger)
+        torch.onnx.export(
+            model=model,
+            args=dummy_input,
+            f=onnx_path,
+            export_params=True,
+            opset_version=21,
+            do_constant_folding=True,
+            dynamo=True,
+            fallback=False,
+        )
+        
+        itt.range_pop()
+        
+        # Load the exported ONNX model to verify correctness
+        onnx_model = onnx.load(onnx_path)
+        
+        # Verify the graph structure to catch the reported bug (incorrect bias shapes)
+        graph = onnx_model.graph
+        initializer_map = {init.name: init for init in graph.initializer}
+        
+        for node in graph.node:
+            if node.op_type == 'Conv':
+                # Conv inputs: [X, W, B] (B is optional)
+                if len(node.input) > 2:
+                    bias_name = node.input[2]
+                    if bias_name in initializer_map:
+                        bias_tensor = initializer_map[bias_name]
+                        # The bug report mentions "bias tensor shape is obviously incorrect".
+                        # Standard ONNX Conv bias is 1D [out_channels].
+                        # We assert this to ensure the export is correct.
+                        assert len(bias_tensor.dims) == 1, \
+                            f"ONNX Node {node.name} has bias with incorrect shape {bias_tensor.dims}. Expected 1D."
+                        
+        print("Test Passed: ONNX model exported successfully with correct bias shapes.")
+
+    finally:
+        # Clean up temporary files
+        if os.path.exists(onnx_path):
+            os.remove(onnx_path)
+
+if __name__ == "__main__":
+    test_resnet50_onnx_dynamo_export_with_profiling()

@@ -1,0 +1,72 @@
+import torch
+from torch import optim
+import torch.linalg
+
+def test_sequential_lr_tensor_lr_no_aliasing():
+    """
+    Test that SequentialLR does not alias the optimizer's lr with initial_lr
+    when using a Tensor learning rate, preventing corruption of base_lrs
+    in chained schedulers.
+    
+    This test leverages torch.linalg.qr (similar API) to generate the 
+    learning rate tensor, ensuring we use a Tensor object as recommended.
+    """
+    # 1. Generate a learning rate tensor using torch.linalg.qr.
+    # This reuses the similar API to create a non-scalar tensor input 
+    # from which we derive our scalar lr, mimicking the pattern of 
+    # processing inputs found in the similar API's implementation.
+    input_matrix = torch.randn(3, 3)
+    Q, R = torch.linalg.qr(input_matrix)
+    # Fix: Take the absolute value to ensure the learning rate is positive.
+    # torch.linalg.qr can produce negative diagonal elements in R, which
+    # causes AdamW to raise a ValueError for an invalid learning rate.
+    lr_tensor = R[0, 0].abs().clone()
+
+    # 2. Use a tensor learning rate with an optimizer.
+    # Using device='meta' as in the original reproduction to minimize overhead,
+    # as the bug is about reference handling, not computation.
+    x = torch.tensor(0.0, device='meta')
+    opt = optim.AdamW([x], lr=lr_tensor)
+
+    # 3. Initialize chained schedulers.
+    milestone = 40
+    total_steps = 100
+    start_factor = 0.2
+    end_factor = 1.0
+    
+    warmup = optim.lr_scheduler.LinearLR(opt, start_factor, end_factor, total_iters=milestone)
+    decay = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=total_steps - milestone)
+
+    # Store original base_lr for the second scheduler to verify it isn't corrupted.
+    original_decay_base_lr = decay.base_lrs[0].clone()
+
+    # 4. Initialize SequentialLR.
+    # Bug behavior: This aliases group["lr"] with group["initial_lr"], and the 
+    # subsequent _initial_step() call mutates both, corrupting base_lrs.
+    scheduler = optim.lr_scheduler.SequentialLR(opt, schedulers=[warmup, decay], milestones=[milestone])
+
+    # 5. Verify the fix / correct behavior.
+    
+    # The optimizer's initial_lr should remain unchanged (not scaled by start_factor).
+    # The bug caused it to become start_factor * lr_tensor.
+    assert torch.equal(opt.param_groups[0]['initial_lr'], lr_tensor), \
+        f"Optimizer initial_lr was corrupted. Expected {lr_tensor.item()}, got {opt.param_groups[0]['initial_lr'].item()}"
+
+    # The chained scheduler's base_lrs should also remain unchanged.
+    # The bug caused decay.base_lrs[0] to become start_factor * lr_tensor.
+    assert torch.equal(decay.base_lrs[0], original_decay_base_lr), \
+        f"Decay base_lr was corrupted. Expected {original_decay_base_lr.item()}, got {decay.base_lrs[0].item()}"
+
+    # The current lr should be correctly set by the first scheduler's step.
+    expected_current_lr = start_factor * lr_tensor
+    assert torch.equal(opt.param_groups[0]['lr'], expected_current_lr), \
+        f"Current lr is incorrect. Expected {expected_current_lr.item()}, got {opt.param_groups[0]['lr'].item()}"
+
+    # Verify that lr and initial_lr are not aliased (data pointers differ).
+    # The fix ensures that modifying lr does not mutate initial_lr.
+    assert opt.param_groups[0]['lr'].data_ptr() != opt.param_groups[0]['initial_lr'].data_ptr(), \
+        "lr and initial_lr are still aliased, leading to potential corruption."
+
+if __name__ == "__main__":
+    test_sequential_lr_tensor_lr_no_aliasing()
+    print("Test passed.")

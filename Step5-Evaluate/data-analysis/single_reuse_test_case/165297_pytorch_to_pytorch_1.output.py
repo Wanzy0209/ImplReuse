@@ -1,0 +1,51 @@
+import torch
+import torch.nn as nn
+
+def test_avgpool_channels_last():
+    """
+    Test case adapted from Issue 165297 to verify torch.nn.AvgPool2d.
+    Checks for NaNs or illegal memory access with large tensors,
+    channels_last memory format, and specific dtypes on CUDA.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        return
+
+    device = torch.device("cuda")
+    # Large input tensor dimensions from the original bug report
+    N, C, H, W = 84, 64, 512, 960
+
+    # Case 1: bfloat16 + channels_last
+    # Original bug: MaxPool2d produced NaNs
+    print("Testing AvgPool2d with bfloat16 + channels_last...")
+    x_bf16 = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+    x_bf16 = x_bf16.to(memory_format=torch.channels_last)
+
+    pool = nn.AvgPool2d(kernel_size=3, stride=2, padding=1).to(device)
+    y_bf16 = pool(x_bf16)
+
+    assert not torch.isnan(y_bf16).any(), "Detected NaNs in AvgPool2d output (bfloat16)"
+    assert not torch.isinf(y_bf16).any(), "Detected Infs in AvgPool2d output (bfloat16)"
+    print("  Passed: No NaNs or Infs detected.")
+
+    # Clean up memory to avoid OOM for the next large tensor allocation
+    del x_bf16, y_bf16, pool
+    torch.cuda.empty_cache()
+
+    # Case 2: float32 + channels_last
+    # Original bug: MaxPool2d caused illegal memory access
+    print("Testing AvgPool2d with float32 + channels_last...")
+    x_fp32 = torch.randn(N, C, H, W, device=device)
+    x_fp32 = x_fp32.to(memory_format=torch.channels_last)
+
+    pool_fp32 = nn.AvgPool2d(kernel_size=3, stride=2, padding=1).to(device)
+    y_fp32 = pool_fp32(x_fp32)
+
+    assert not torch.isnan(y_fp32).any(), "Detected NaNs in AvgPool2d output (float32)"
+    assert not torch.isinf(y_fp32).any(), "Detected Infs in AvgPool2d output (float32)"
+    print("  Passed: No NaNs or Infs detected.")
+
+    print("All tests passed.")
+
+if __name__ == "__main__":
+    test_avgpool_channels_last()

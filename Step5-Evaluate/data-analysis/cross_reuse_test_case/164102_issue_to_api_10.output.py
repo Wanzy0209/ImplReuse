@@ -1,0 +1,74 @@
+import torch
+import sys
+
+# Attempt to import internal modules required for specific configuration.
+# If they are not found, we skip the test as the environment does not support
+# the required features (likely an older PyTorch version or specific build).
+try:
+    import torch._dynamo
+    import torch._inductor
+except ModuleNotFoundError:
+    print("torch._dynamo or torch._inductor not found. Skipping test (requires PyTorch 2.x+).")
+    sys.exit(0)
+
+# Replicate the configuration environment from the bug report
+# which triggered the eager/compile divergence.
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def test_math_sdp_enabled_compile_divergence():
+    """
+    Test case for torch.backends.cuda.math_sdp_enabled based on Issue 164102.
+    
+    The original issue reported a "cannot determine truth value of Relational" error
+    during eager/compile divergence with torch.rms_norm. This test verifies that the
+    similar API, torch.backends.cuda.math_sdp_enabled, can be used within a compiled
+    function (torch.compile) without triggering similar boolean context errors or
+    divergence, given the same Dynamo/Inductor configuration.
+    """
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        return
+
+    # Define a function that uses the similar API in a control flow context.
+    # This mimics the pattern where backend flags might influence execution paths
+    # inside a compiled graph.
+    def func_with_backend_check(x):
+        # The API returns a boolean, but inside torch.compile, handling of
+        # external boolean checks needs to be stable to avoid graph breaks
+        # or "truth value" errors.
+        if torch.backends.cuda.math_sdp_enabled():
+            return x * 2.0
+        else:
+            return x * 1.0
+
+    # Compile the function using torch.compile (which uses torch._dynamo)
+    compiled_func = torch.compile(func_with_backend_check, dynamic=True)
+
+    # Create input tensor matching the dtype and device of the original bug report
+    input_tensor = torch.randn([10, 10], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+
+    try:
+        # Run the compiled function
+        result = compiled_func(input_tensor)
+        
+        # Perform a backward pass to ensure gradient flow works (similar to original test)
+        result.sum().backward()
+        
+        # Basic assertion to ensure execution completed
+        assert result is not None
+        assert input_tensor.grad is not None
+        
+        print("Test passed: torch.backends.cuda.math_sdp_enabled works correctly within torch.compile.")
+
+    except RuntimeError as e:
+        # Check for the specific error mentioned in the bug report
+        if "cannot determine truth value of Relational" in str(e):
+            print(f"Bug reproduced: {e}")
+            raise
+        else:
+            raise
+
+if __name__ == "__main__":
+    test_math_sdp_enabled_compile_divergence()

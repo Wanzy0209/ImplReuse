@@ -1,0 +1,42 @@
+import torch
+import sys
+import tensorflow as tf
+
+# Reusing the code pattern from the Similar API information (tf.experimental.numpy.trace / ag_logging.trace)
+def trace(*args):
+    """Traces argument information at compilation time."""
+    print(*args)
+
+# Reproducing the logic from the Issue: Recursive function
+def fn(x, n):
+    if n == 0:
+        return x
+    # Leveraging the similar API (trace) inside the recursion to observe execution
+    trace(f"Depth: {n}")
+    return fn(x, n - 1) + 1
+
+# Using tf.function as the TensorFlow equivalent of torch.compile
+@tf.function
+def outer(x):
+    return fn(x, 1000)
+
+# Setting the recursion limit as per the issue description
+sys.setrecursionlimit(10000000)
+
+# Test case execution
+def test_recursion_limit_with_trace():
+    """
+    Test to verify if sys.setrecursionlimit is respected during 
+    graph tracing/compilation when using a recursive function 
+    that leverages a trace utility.
+    """
+    try:
+        result = outer(tf.ones(3))
+        # If successful, the limit was respected or handled correctly
+        assert True, "Execution completed without RecursionError"
+    except RecursionError:
+        # If this fails, it reproduces the behavior described in the issue
+        assert False, "RecursionError hit despite high recursion limit"
+
+if __name__ == "__main__":
+    test_recursion_limit_with_trace()

@@ -1,0 +1,85 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_log1p_in_distributed_cond():
+    """
+    Test case for tf.keras.ops.log1p adapted from the torch.cond segmentation fault issue.
+    
+    This test preserves the original bug reproduction logic:
+    1. Distributed environment setup (MirroredStrategy).
+    2. Compilation context (@tf.function).
+    3. Conditional execution (tf.cond).
+    
+    It leverages the similar API (tf.keras.ops.log1p) within the conditional branches
+    to verify its behavior in this complex context, mirroring the usage of torch operations
+    in the original bug report.
+    """
+    
+    # Setup distributed environment (equivalent to dist.init_process_group)
+    # Using MirroredStrategy for local multi-GPU/CPU testing
+    strategy = tf.distribute.MirroredStrategy()
+
+    # Use tf.function to mimic torch.compile(dynamic=True)
+    @tf.function
+    def distributed_cond_with_log1p():
+        # Get replica context (equivalent to dist.get_rank())
+        replica_context = tf.distribute.get_replica_context()
+        replica_id = replica_context.replica_id_in_sync_group
+
+        # Define the condition (rank == 0)
+        # Mimics: pred = torch.tensor(rank == 0)
+        pred = tf.equal(replica_id, 0)
+
+        # Define branches using tf.keras.ops.log1p (the similar API)
+        # Mimics the lambda functions in torch.cond
+        def true_branch():
+            # Original: torch.tensor([1, 2, 3, 4, 5], dtype=torch.float32)
+            x = tf.constant([1.0, 2.0, 3.0, 4.0, 5.0])
+            # Apply the similar API
+            return tf.keras.ops.log1p(x)
+
+        def false_branch():
+            # Original: torch.zeros(5, dtype=torch.float32)
+            x = tf.zeros(5, dtype=tf.float32)
+            # Apply the similar API (log(1+0) = 0)
+            return tf.keras.ops.log1p(x)
+
+        # Use tf.cond to mimic torch.cond
+        # This structure tests the control flow + math operation interaction
+        result = tf.cond(pred, true_branch, false_branch)
+
+        # Mimic the collective aspect (broadcast/all-reduce)
+        # In TF, strategy.run handles distribution, but we return the result
+        # to verify the computation happened correctly on the specific device.
+        return result
+
+    # Execute the test within the strategy scope
+    with strategy.scope():
+        # Run the compiled function on all replicas
+        per_replica_results = strategy.run(distributed_cond_with_log1p)
+
+        # Gather results to verify correctness
+        results = strategy.experimental_local_results(per_replica_results)
+        
+        # Calculate expected values
+        # Rank 0: log1p([1, 2, 3, 4, 5])
+        expected_rank_0 = np.log1p([1.0, 2.0, 3.0, 4.0, 5.0])
+        # Rank > 0: log1p([0, 0, 0, 0, 0]) = [0, 0, 0, 0, 0]
+        expected_other = np.zeros(5)
+
+        # Assertions
+        # Check first replica (rank 0)
+        assert np.allclose(results[0].numpy(), expected_rank_0), \
+            f"Rank 0 result mismatch. Expected {expected_rank_0}, got {results[0].numpy()}"
+        
+        # Check other replicas if they exist
+        if len(results) > 1:
+            for i, res in enumerate(results[1:], start=1):
+                assert np.allclose(res.numpy(), expected_other), \
+                    f"Rank {i} result mismatch. Expected {expected_other}, got {res.numpy()}"
+
+    print("Test passed: tf.keras.ops.log1p works correctly within distributed conditional execution.")
+
+if __name__ == "__main__":
+    test_log1p_in_distributed_cond()

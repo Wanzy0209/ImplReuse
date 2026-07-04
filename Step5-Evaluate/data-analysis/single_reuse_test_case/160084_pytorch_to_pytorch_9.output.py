@@ -1,0 +1,65 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+class RegressionModel(torch.nn.Module):
+    def __init__(self, a=0, b=0):
+        super().__init__()
+        self.a = torch.nn.Parameter(torch.tensor(a).float())
+        self.b = torch.nn.Parameter(torch.tensor(b).float())
+        self.first_batch = True
+
+    def forward(self, x=None):
+        if self.first_batch:
+            # Original print statement from bug report
+            # print(f"Model dtype: {self.a.dtype}, {self.b.dtype}. Input dtype: {x.dtype}")
+            self.first_batch = False
+        return x * self.a + self.b
+
+def demo_broadcast(rank, world_size):
+    setup(rank, world_size)
+    
+    # Replicate the model setup from the bug report
+    model = RegressionModel()
+    
+    # Adaptation: Use torch.distributed.broadcast_object_list instead of torch.compile
+    # We will broadcast the model's parameters to verify the similar API.
+    # Note: broadcast_object_list works with picklable objects.
+    
+    # Create a list of objects to broadcast (the parameters)
+    # We detach and clone to ensure they are simple tensors for broadcasting
+    object_list = [model.a.data.clone(), model.b.data.clone()]
+
+    if rank == 0:
+        print(f"Rank {rank} broadcasting parameters: {[o.item() for o in object_list]}")
+
+    # The call to the similar API
+    dist.broadcast_object_list(object_list, src=0)
+
+    # Verify the broadcast on all ranks
+    print(f"Rank {rank} received parameters: {[o.item() for o in object_list]}")
+    
+    # Assertions to verify correctness
+    assert object_list[0].item() == 0.0, f"Expected 0.0, got {object_list[0].item()}"
+    assert object_list[1].item() == 0.0, f"Expected 0.0, got {object_list[1].item()}"
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Check if CUDA is available to respect the context of the original bug, 
+    # though we use gloo backend for portability in this snippet.
+    if torch.cuda.is_available():
+        print("CUDA is available, but using gloo backend for this distributed test.")
+        
+    mp.spawn(demo_broadcast, args=(world_size,), nprocs=world_size, join=True)

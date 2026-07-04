@@ -1,0 +1,168 @@
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+import io
+
+# Adapted VAE class from the original test case
+class VAE(nn.Module):
+    def __init__(self, input_dim, hidden_dim, latent_dim):
+        super(VAE, self).__init__()
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim), 
+            nn.ReLU(), 
+            nn.Linear(hidden_dim, hidden_dim), 
+            nn.ReLU()
+        )
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_var = nn.Linear(hidden_dim, latent_dim)
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim), 
+            nn.ReLU(), 
+            nn.Linear(hidden_dim, hidden_dim), 
+            nn.ReLU(), 
+            nn.Linear(hidden_dim, input_dim), 
+            nn.Sigmoid()
+        )
+
+    def encode(self, x):
+        h = self.encoder(x)
+        mu = self.fc_mu(h)
+        log_var = self.fc_var(h)
+        return (mu, log_var)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def decode(self, z):
+        return self.decoder(z)
+
+    def forward(self, x):
+        x = x.view(-1, self.input_dim)
+        (mu, log_var) = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        reconstruction = self.decode(z)
+        return (reconstruction, mu, log_var)
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize process group using gloo backend for CPU compatibility
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run(rank, world_size):
+    setup(rank, world_size)
+    
+    # Check for API availability and define fallbacks if necessary
+    # This handles environments where PyTorch < 1.8 is used
+    if not hasattr(dist, 'send_object_list'):
+        def send_fallback(obj_list, dst):
+            with io.BytesIO() as buffer:
+                torch.save(obj_list, buffer)
+                buffer.seek(0)
+                data = buffer.getvalue()
+            
+            # Convert bytes to tensor
+            data_tensor = torch.ByteTensor(data)
+            size_tensor = torch.tensor([data_tensor.numel()], dtype=torch.long)
+            
+            # Send size first
+            dist.send(size_tensor, dst=dst)
+            # Send data
+            dist.send(data_tensor, dst=dst)
+
+        def recv_fallback(obj_list, src):
+            # Receive size
+            size_tensor = torch.empty(1, dtype=torch.long)
+            dist.recv(size_tensor, src=src)
+            size = size_tensor.item()
+            
+            # Receive data
+            data_tensor = torch.empty(size, dtype=torch.uint8)
+            dist.recv(data_tensor, src=src)
+            
+            # Convert tensor to bytes and load
+            data = data_tensor.numpy().tobytes()
+            with io.BytesIO(data) as buffer:
+                loaded_list = torch.load(buffer)
+            
+            # Update the list in place
+            obj_list[:] = loaded_list
+        
+        send_fn = send_fallback
+        recv_fn = recv_fallback
+    else:
+        send_fn = dist.send_object_list
+        recv_fn = dist.recv_object_list
+    
+    # Define model parameters
+    input_dim = 784
+    hidden_dim = 400
+    latent_dim = 20
+    batch_size = 32
+
+    if rank == 0:
+        # Rank 0: Create model and inputs, then send them
+        model = VAE(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim)
+        model.eval()
+        
+        x = torch.randn(batch_size, input_dim)
+        
+        # We send a list containing the model and the input tensor
+        object_list = [model, x]
+        print(f"Rank {rank}: Sending model and input tensor...")
+        send_fn(object_list, dst=1)
+        
+    elif rank == 1:
+        # Rank 1: Receive the model and inputs
+        # The list must be pre-allocated with the correct size
+        recv_list = [None, None]
+        
+        print(f"Rank {rank}: Receiving model and input tensor...")
+        recv_fn(recv_list, src=0)
+        
+        recv_model = recv_list[0]
+        recv_input = recv_list[1]
+        
+        # Verify received objects
+        assert isinstance(recv_model, VAE), "Received object is not a VAE instance"
+        assert recv_input.shape == (batch_size, input_dim), f"Input shape mismatch: {recv_input.shape}"
+        
+        # Run the received model
+        with torch.no_grad():
+            output = recv_model(recv_input)
+            
+        # The VAE forward returns a tuple (reconstruction, mu, log_var)
+        assert isinstance(output, tuple), "Model output is not a tuple"
+        
+        reconstruction, mu, log_var = output
+        
+        # Verify shapes of the tuple elements
+        assert reconstruction.shape == (batch_size, input_dim), f"Reconstruction shape mismatch: {reconstruction.shape}"
+        assert mu.shape == (batch_size, latent_dim), f"Mu shape mismatch: {mu.shape}"
+        assert log_var.shape == (batch_size, latent_dim), f"Log_var shape mismatch: {log_var.shape}"
+        
+        # Test the behavior described in the bug report:
+        # Accessing .shape on the tuple should raise AttributeError
+        try:
+            _ = output.shape
+            assert False, "AttributeError expected when accessing .shape on a tuple"
+        except AttributeError:
+            print(f"Rank {rank}: Correctly caught AttributeError when accessing .shape on tuple output.")
+            
+        print(f"Rank {rank}: Test passed successfully.")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use multiprocessing to simulate distributed environment
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)

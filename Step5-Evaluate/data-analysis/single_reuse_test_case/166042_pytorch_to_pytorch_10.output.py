@@ -1,0 +1,51 @@
+import torch
+import torch.nn.functional as F
+
+# Replicate the environment configuration from the bug report
+# Check if _dynamo exists before trying to access its config to handle different PyTorch versions
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+torch.manual_seed(1352030645)
+
+def test_feature_alpha_dropout():
+    # The bug report specifically targets CUDA and bfloat16
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    device = "cuda"
+    
+    # Create input tensors with properties similar to the fuzzed program (bfloat16, CUDA)
+    # Using a shape (4, 9) which appears in the original fuzzed program's intermediate steps
+    input_tensor = torch.randn((4, 9), dtype=torch.bfloat16, device=device)
+
+    def run_model(x):
+        # Replace the original API call (embedding) with the similar API (feature_alpha_dropout)
+        # Using training=True to ensure the dropout logic is active
+        return F.feature_alpha_dropout(x, p=0.5, training=True)
+
+    # 1. Test Eager Execution
+    try:
+        eager_output = run_model(input_tensor)
+        print("Eager execution passed.")
+    except Exception as e:
+        print(f"Eager execution failed: {e}")
+        raise
+
+    # 2. Test Compiled Execution (torch._dynamo)
+    try:
+        compiled_model = torch.compile(run_model)
+        compiled_output = compiled_model(input_tensor)
+        print("Compiled execution passed.")
+    except Exception as e:
+        print(f"Compiled execution failed: {e}")
+        raise
+
+    # 3. Verify basic properties to ensure no divergence in shape or type
+    assert eager_output.shape == compiled_output.shape, \
+        f"Shape mismatch: Eager {eager_output.shape} vs Compiled {compiled_output.shape}"
+    assert eager_output.dtype == compiled_output.dtype, \
+        f"Dtype mismatch: Eager {eager_output.dtype} vs Compiled {compiled_output.dtype}"
+
+if __name__ == "__main__":
+    test_feature_alpha_dropout()

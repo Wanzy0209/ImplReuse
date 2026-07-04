@@ -1,0 +1,17 @@
+import torch
+import torch.nn as nn
+
+# Replicate the tensor shape from the bug report (4D input)
+input_tensor = torch.empty(2, 2, 2, 2)
+target_tensor = torch.empty(2, 2, 2, 2)
+
+# Use the similar API: torch.nn.MSELoss
+criterion = nn.MSELoss()
+
+# Execute the function
+output = criterion(input_tensor, target_tensor)
+
+# Verify the output is valid and scalar (default reduction is 'mean')
+assert output is not None
+assert output.dim() == 0
+print("Test passed: MSELoss works with 4D inputs.")

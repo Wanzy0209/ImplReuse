@@ -1,0 +1,43 @@
+import sys
+import torch
+
+def fn(x, n):
+    if n == 0:
+        return x
+    return fn(x, n - 1) + 1
+
+def test_recursion_limit_with_compile():
+    """
+    Test case to verify that sys.setrecursionlimit is respected by torch.compile.
+    This test leverages torch.backends.cuda.math_sdp_enabled to ensure that
+    the C-level state interaction (where the recursion limit fix resides) 
+    is active and consistent with other backend configurations.
+    """
+    # Leverage the similar API: Check backend math status
+    # This ensures we are interacting with the backend/C-state layer
+    # where the recursion limit fix is implemented.
+    if torch.cuda.is_available():
+        sdp_enabled = torch.backends.cuda.math_sdp_enabled()
+        print(f"Math SDP Enabled: {sdp_enabled}")
+
+    # Set recursion limit high to avoid RecursionError in compiled code
+    # This is the core logic from the bug report.
+    sys.setrecursionlimit(10000000)
+
+    @torch.compile(backend="eager")
+    def outer(x):
+        return fn(x, 1000)
+
+    # Execute the compiled function
+    # If the bug is present, this raises RecursionError.
+    # If the fix is applied, this succeeds.
+    input_tensor = torch.ones(3)
+    result = outer(input_tensor)
+    
+    # Verify correctness
+    expected = input_tensor + 1000
+    assert torch.equal(result, expected), "Output mismatch"
+    print("Test Passed: Recursion limit respected and output is correct.")
+
+if __name__ == "__main__":
+    test_recursion_limit_with_compile()

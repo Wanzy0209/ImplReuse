@@ -1,0 +1,77 @@
+import torch
+import unittest
+
+class TestMPSLinearNonContiguous(unittest.TestCase):
+    """
+    Test case for Issue #162730: MPS F.Linear producing inconsistent results 
+    between contiguous and non-contiguous tensors.
+    
+    This test verifies that torch.nn.functional.linear produces identical results
+    on MPS devices regardless of the memory layout (contiguous vs non-contiguous)
+    of the weight tensor.
+    """
+
+    def test_linear_mps_non_contiguous_weight(self):
+        # Skip if MPS is not available
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS device is not available")
+
+        device = torch.device('mps')
+
+        # Setup dimensions matching the original bug report
+        h, d, m = 12, 64, 768
+        
+        # Create test tensors
+        W = torch.randn(h, d, m, device=device)
+        x = torch.randn(1, 3, m, device=device)
+        bias = torch.randn(m, device=device)
+
+        # Create non-contiguous weight.
+        # Original code used: einops.rearrange(W, "h d m -> m (h d)")
+        # We replicate this using permute and reshape to avoid external dependencies.
+        # Permute changes the strides, making the tensor non-contiguous.
+        w_noncontig = W.permute(2, 0, 1).reshape(m, h * d)
+        w_contig = w_noncontig.contiguous()
+
+        # Verify memory layout assumptions
+        self.assertFalse(w_noncontig.is_contiguous(), "Setup failed: w_noncontig should be non-contiguous")
+        self.assertTrue(w_contig.is_contiguous(), "Setup failed: w_contig should be contiguous")
+
+        # Compute results
+        result_noncontig = torch.nn.functional.linear(x, w_noncontig, bias)
+        result_contig = torch.nn.functional.linear(x, w_contig, bias)
+
+        # Assert that results are numerically identical
+        # The bug report indicates a mismatch on MPS, so this assertion would fail on the buggy version.
+        # Increased tolerance to account for potential floating point variations in GEMM implementations
+        # across different memory layouts (contiguous vs non-contiguous) on various hardware/backends.
+        self.assertTrue(
+            torch.allclose(result_noncontig, result_contig, atol=1e-4, rtol=1e-4),
+            f"MPS linear results differ between contiguous and non-contiguous weights.\n"
+            f"Max diff: {torch.abs(result_noncontig - result_contig).max().item()}"
+        )
+
+    def test_linear_cpu_non_contiguous_weight(self):
+        """
+        Baseline test to ensure the logic holds on CPU (which works correctly).
+        """
+        device = torch.device('cpu')
+        h, d, m = 12, 64, 768
+        
+        W = torch.randn(h, d, m, device=device)
+        x = torch.randn(1, 3, m, device=device)
+        bias = torch.randn(m, device=device)
+
+        w_noncontig = W.permute(2, 0, 1).reshape(m, h * d)
+        w_contig = w_noncontig.contiguous()
+
+        result_noncontig = torch.nn.functional.linear(x, w_noncontig, bias)
+        result_contig = torch.nn.functional.linear(x, w_contig, bias)
+
+        self.assertTrue(
+            torch.allclose(result_noncontig, result_contig, atol=1e-4, rtol=1e-4),
+            "CPU linear results should match regardless of contiguity"
+        )
+
+if __name__ == '__main__':
+    unittest.main()

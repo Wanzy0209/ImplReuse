@@ -1,0 +1,96 @@
+import torch
+
+# Check for CUDA availability as the original bug report specifies device=cuda
+if not torch.cuda.is_available():
+    print("CUDA not available, skipping test.")
+    exit()
+
+# Check for torch.compile availability (PyTorch 2.0+)
+if not hasattr(torch, 'compile'):
+    print("torch.compile not available (PyTorch < 2.0), skipping test.")
+    exit()
+
+# Safely set dynamo config if available
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1166094474)
+
+def fuzzed_program(arg_0, arg_1, arg_2, arg_3, sentinel):
+    # Original: var_node_3 = torch.full((12,), False, dtype=torch.bool)
+    # Adaptation: Use torch.empty_strided to replicate the specific non-contiguous stride (97,) mentioned in the bug report comments.
+    var_node_3 = torch.empty_strided((12,), (97,), dtype=torch.bool, device='cuda').fill_(False)
+
+    # Original: var_node_2 = torch.chunk(var_node_3, 4, dim=0)[0]
+    # Adaptation: Replace torch.chunk with torch.empty_strided.
+    # Chunk size calculation: 12 / 4 = 3. Stride remains (97,).
+    var_node_2 = torch.empty_strided((3,), (97,), dtype=torch.bool, device='cuda').fill_(False)
+
+    var_node_6 = arg_0
+    var_node_7 = arg_1
+    _input_size_var_node_5 = var_node_6.size(0)
+    _index_var_node_5 = torch.randint(0, _input_size_var_node_5, (10,), device=var_node_6.device)
+    var_node_5 = torch.gather(var_node_6, 0, _index_var_node_5)
+
+    # Original: var_node_4 = torch.chunk(var_node_5, 2, dim=0)[0]
+    # Adaptation: Replace torch.chunk with torch.empty_strided.
+    # Chunk size calculation: 10 / 2 = 5. Stride remains (1,).
+    # We copy data from var_node_5 to maintain data consistency with the original program logic.
+    var_node_4 = torch.empty_strided((5,), (1,), dtype=torch.bool, device='cuda')
+    var_node_4.copy_(var_node_5[:5])
+
+    var_node_10 = arg_2
+    
+    # Original: var_node_9 = torch.chunk(var_node_10, 4, dim=1)[0]
+    # Adaptation: Replace torch.chunk with torch.empty_strided.
+    # Chunk size calculation: dim 1 is 4, chunks=4 -> size 1. Result size (6, 1). Stride remains (4, 1).
+    # We copy data from var_node_10 to maintain data consistency.
+    var_node_9 = torch.empty_strided((6, 1), (4, 1), dtype=torch.bool, device='cuda')
+    var_node_9.copy_(var_node_10[:, :1])
+
+    var_node_8 = torch.squeeze(var_node_9)
+    var_node_1 = torch.cat([var_node_2, var_node_4, var_node_8], dim=0)
+    var_node_11 = arg_3
+    var_node_0 = torch.cat([var_node_1, var_node_11], dim=0)
+
+    # Ensure gradient computation
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True, device='cuda')
+
+# Setup inputs using as_strided to match original shapes/strides
+arg_0 = torch.as_strided(torch.randint(0, 2, (12,), dtype=torch.int8).bool().cuda(), (12,), (1,))
+arg_1 = torch.as_strided(torch.randint(5, 30, (10,)).to(torch.int64).cuda(), (10,), (1,))
+arg_2 = torch.as_strided(torch.randint(0, 2, (24,), dtype=torch.int8).bool().cuda(), (6, 4), (4, 1))
+arg_3 = torch.as_strided(torch.randint(0, 2, (2,), dtype=torch.int8).bool().cuda(), (2,), (1,))
+
+args = (arg_0, arg_1, arg_2, arg_3, sentinel)
+
+# Test Eager Mode
+try:
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+    raise
+
+# Test Compiled Mode
+try:
+    compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+    result_compiled = compiled_program(*args)
+    print(' compile success')
+except Exception as e:
+    print(f' compile failed: {e}')
+    raise
+
+# Verify results match
+try:
+    assert torch.equal(result_original, result_compiled)
+    print(' results match')
+except AssertionError:
+    print(' results mismatch')
+    raise

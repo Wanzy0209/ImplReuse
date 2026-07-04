@@ -1,0 +1,27 @@
+import torch
+
+# Check if MPS is available before attempting to use it
+if not torch.backends.mps.is_available():
+    print("MPS device is not available. Skipping MPS test.")
+else:
+    torch.manual_seed(0)
+
+    # Adapted from AvgPool2d to MaxPool1d
+    # Original parameters: kernel_size=[1, 6], stride=[4, 9], ceil_mode=True, divisor_override=3
+    # Adapted parameters: kernel_size=6, stride=9, ceil_mode=True
+    # Note: divisor_override is removed as it is specific to AvgPool and not available in MaxPool1d.
+    # The input shape (4, 6, 7) is interpreted as (Batch, Channels, Length) for MaxPool1d.
+    model = torch.nn.MaxPool1d(kernel_size=6, stride=9, ceil_mode=True)
+
+    x = torch.randn(4, 6, 7)
+    out_cpu = model(x)
+    out_mps = model(x.to("mps"))
+
+    if not torch.allclose(out_cpu, out_mps.cpu(), atol=1e-2, rtol=1e-2):
+        print("Output does not match!")
+        print("CPU Output:")
+        print(out_cpu)
+        print("MPS Output:")
+        print(out_mps)
+    else:
+        print("Test passed.")

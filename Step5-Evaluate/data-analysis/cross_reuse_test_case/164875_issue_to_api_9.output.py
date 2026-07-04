@@ -1,0 +1,49 @@
+import torch
+import torch.nn.functional as F
+import sys
+
+# Check for PyTorch 2.0+ availability
+if not hasattr(torch, 'compile'):
+    print("Skipping test: torch.compile is not available (requires PyTorch 2.0+)")
+    sys.exit(0)
+
+# Configuration from the original bug report
+# Use hasattr to prevent AttributeError in older PyTorch versions
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(1014698)
+
+def fuzzed_program(arg_0, sentinel):
+    # Original logic used torch.add(var_node_1, var_node_2) which caused a divergence.
+    # We adapt this to use the similar API: torch.nn.functional.relu6.
+    # We apply it to arg_0 which has the problematic shape (20, 0).
+    var_node_0 = F.relu6(arg_0)
+
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+# Create the problematic input: size=(20, 0), stride=(1, 20), dtype=int64
+# This specific shape and stride combination triggered the issue in the original report.
+arg_0 = torch.as_strided(torch.randint(5, 30, (20,)).to(torch.int64), (20, 0), (1, 20))
+
+args = (arg_0, sentinel)
+
+# Run eager mode
+result_original = fuzzed_program(*args)
+print(' eager success')
+
+# Run compiled mode
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print(' compile success')
+
+# Verify results match to ensure no divergence
+assert torch.equal(result_original, result_compiled), "Divergence detected between eager and compiled modes"

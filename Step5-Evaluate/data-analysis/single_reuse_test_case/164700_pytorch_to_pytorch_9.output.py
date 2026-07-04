@@ -1,0 +1,67 @@
+import os
+import torch
+import torch.distributed as dist
+import torch.multiprocessing
+
+# The function logic from the original bug report
+def f(x, y):
+    y2 = torch.cat(
+        [
+            x[:, 1:],
+            y[:, None] + 32 * 2048,
+        ],
+        dim=1,
+    )
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    return (
+        torch.cat([x2, y3], dim=1)
+        + torch.arange(-2048, 0, device=x.device)[None, None, :]
+    ).reshape(1, 32 * 2048)
+
+def run_test(rank, world_size):
+    # Setup distributed environment
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Use 'gloo' backend for CPU compatibility to ensure the test runs without GPU
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Use CPU to ensure the test runs without requiring a CUDA device
+    device = "cpu"
+
+    # Create inputs
+    x = torch.zeros(1, 32, dtype=torch.int64, device=device)
+    y = torch.zeros(1, dtype=torch.int32, device=device)
+
+    # Execute the function logic
+    result = f(x, y)
+
+    # Adaptation: Replace torch.compile with torch.distributed.broadcast_object_list
+    # We broadcast the result of the function f to all processes.
+    if rank == 0:
+        object_list = [result]
+    else:
+        object_list = [None]
+
+    try:
+        torch.distributed.broadcast_object_list(object_list, src=0)
+        
+        # Verify the broadcasted object matches the expected result
+        if rank != 0:
+            assert torch.equal(object_list[0], result), "Broadcasted object does not match source"
+        
+        print(f"Rank {rank}: Test passed successfully.")
+    except Exception as e:
+        print(f"Rank {rank}: Test failed with error: {e}")
+    finally:
+        dist.destroy_process_group()
+
+def main():
+    world_size = 2
+    torch.multiprocessing.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()

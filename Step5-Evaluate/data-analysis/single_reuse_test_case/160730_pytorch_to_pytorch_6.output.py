@@ -1,0 +1,31 @@
+import torch
+import numpy as np
+
+# Configuration from the original bug report
+# Handle cases where torch._dynamo might not be available in certain PyTorch versions/builds
+try:
+    torch._dynamo.config.capture_scalar_outputs = True
+except AttributeError:
+    pass
+
+def foo(A):
+    # Adapted to use torch.lobpcg instead of torch.tan/torch.sin
+    # lobpcg requires a symmetric positive definite matrix
+    e, v = torch.lobpcg(A, k=5)
+    return e, v
+
+# Setup data
+torch.manual_seed(0)
+np.random.seed(0)
+
+# Create a symmetric positive definite matrix required by lobpcg
+n = 10
+X = torch.randn(n, n, dtype=torch.float32)
+A = X @ X.T
+
+cfoo = torch.compile(foo)
+eager_res = foo(A)
+compile_res = cfoo(A)
+
+# Verify results match to ensure no silent computation error occurs
+torch.testing.assert_close(eager_res, compile_res)

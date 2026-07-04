@@ -1,0 +1,36 @@
+import torch
+import numpy as np
+
+torch.manual_seed(0)
+
+# Handle cases where torch._inductor might not be available in certain environments
+try:
+    torch._inductor.config.fallback_random = True
+except AttributeError:
+    pass
+
+def foo(input, target):
+    # Adapted to use torch.nn.functional.binary_cross_entropy
+    bce = torch.nn.functional.binary_cross_entropy(
+        input,
+        target,
+        reduction='mean'
+    )
+    return bce
+
+np.random.seed(0)
+# Generate appropriate inputs for binary_cross_entropy
+# input: probabilities (0, 1), target: binary labels (0, 1)
+input_data = np.random.uniform(0, 1, size=(10, 10))
+target_data = np.random.randint(0, 2, size=(10, 10))
+
+cfoo = torch.compile(foo)
+
+# Convert to tensors
+input_tensor = torch.from_numpy(input_data)
+target_tensor = torch.from_numpy(target_data).float()
+
+eager_res = foo(input_tensor, target_tensor)
+compile_res = cfoo(input_tensor, target_tensor)
+
+torch.testing.assert_close(eager_res, compile_res)

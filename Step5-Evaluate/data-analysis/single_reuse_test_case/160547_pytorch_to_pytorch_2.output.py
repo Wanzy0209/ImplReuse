@@ -1,0 +1,31 @@
+import torch
+from collections import namedtuple
+import torch.library
+
+def test_opcheck_namedtuple():
+    Point = namedtuple('Point', 'x y')
+    
+    # Using a standard operator for the check
+    # Note: opcheck is typically used for custom ops, but works on standard ops
+    op = torch.ops.aten.add.Tensor
+    
+    inp = Point(torch.ones(3), torch.ones(3))
+    
+    # Test passing NamedTuple as args
+    # This mimics the failing case in torch.export.export
+    try:
+        result = torch.library.opcheck(op, inp)
+        print(f"opcheck with NamedTuple args succeeded: {result}")
+    except Exception as e:
+        print(f"opcheck with NamedTuple args failed: {e}")
+
+    # Test passing as kwargs (the workaround in the original bug)
+    inp_kwargs = {field: getattr(inp, field) for field in inp._fields}
+    try:
+        result = torch.library.opcheck(op, (), inp_kwargs)
+        print(f"opcheck with kwargs succeeded: {result}")
+    except Exception as e:
+        print(f"opcheck with kwargs failed: {e}")
+
+if __name__ == "__main__":
+    test_opcheck_namedtuple()

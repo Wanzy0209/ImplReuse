@@ -1,0 +1,29 @@
+import torch
+
+# Check for MPS availability to match the bug report's environment
+if torch.backends.mps.is_available():
+    # Create a matrix on MPS device
+    # Using arange to match the original test case's data generation style,
+    # but reshaping it for SVD which requires a matrix.
+    data = torch.arange(16, device="mps").reshape(4, 4).float()
+
+    # Mimic the slicing pattern from the bug report (counts[1:3])
+    # Here we slice the matrix to create a non-contiguous or smaller view
+    sliced_data = data[1:3]
+
+    # Call the similar API: torch.svd
+    # This tests if torch.svd handles sliced MPS tensors correctly
+    U, S, V = torch.svd(sliced_data)
+
+    # Assertions to verify correctness
+    assert U.shape == (2, 2), f"Expected U shape (2, 2), got {U.shape}"
+    assert S.shape == (2,), f"Expected S shape (2,), got {S.shape}"
+    assert V.shape == (2, 2), f"Expected V shape (2, 2), got {V.shape}"
+
+    # Verify the reconstruction property: U @ diag(S) @ V.T == A
+    reconstructed = U @ torch.diag(S) @ V.T
+    assert torch.allclose(reconstructed, sliced_data, atol=1e-4)
+
+    print("Test passed: torch.svd works with sliced MPS tensor.")
+else:
+    print("MPS device not available. Skipping test.")

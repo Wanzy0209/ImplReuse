@@ -1,0 +1,68 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Mimicking the configuration structure from the original bug report
+    class Config:
+        def __init__(self):
+            self.send_custom_data = True
+            self.send_tensor_data = False
+
+    config = Config()
+
+    if rank == 0:
+        # Sender
+        object_list = ["string_data", 123, 456.789]
+        dst = 1
+
+        # Adapted call site: Check for custom pre-pass (send_custom_data)
+        # In the original bug, this block was duplicated. Here we ensure it executes once.
+        if config.send_custom_data:
+            # Fix: Use standard dist.send for objects instead of non-existent send_object_list
+            dist.send(object_list, dst=dst)
+            print(f"Rank {rank} sent object_list: {object_list}")
+
+        # Simulating other operations (like remove_noop_ops or constant_folding)
+        # In the context of send_object_list, we might verify state or prepare other data.
+        # We do NOT duplicate the send_object_list call here to avoid the merge mistake.
+        
+        # Example of a different conditional operation
+        if config.send_tensor_data:
+            tensor_list = [torch.tensor([1, 2]), torch.tensor([3, 4])]
+            # Note: send_object_list handles pickling, but specific tensor sending 
+            # might use dist.send. This is just to show structural similarity.
+            pass
+
+    elif rank == 1:
+        # Receiver
+        src = 0
+        
+        # The receiver expects exactly one message. 
+        # If the sender had the merge mistake (double send), this would hang 
+        # waiting for the next recv or fail if not handled.
+        # Fix: Use standard dist.recv for objects instead of non-existent recv_object_list
+        object_list = dist.recv(src=src)
+        
+        expected_list = ["string_data", 123, 456.789]
+        assert object_list == expected_list, f"Expected {expected_list}, got {object_list}"
+        print(f"Rank {rank} received and verified object_list: {object_list}")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Start processes
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

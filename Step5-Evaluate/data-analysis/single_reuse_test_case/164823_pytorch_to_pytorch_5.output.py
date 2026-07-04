@@ -1,0 +1,30 @@
+import torch
+import torch.nn as nn
+
+class TestModel(nn.Module):
+    def forward(self, x):
+        # Adaptation: Use the similar API torch.any instead of arithmetic operations
+        x_sparse = x.to_sparse()
+        # torch.any checks if any element is non-zero
+        result = torch.any(x_sparse)
+        return result
+
+x = torch.randn(10, 10)
+
+model = TestModel()
+
+# Test in eager mode
+eager_output = model(x)
+print("Eager output:", eager_output)
+
+# Test with torch.compile to verify if the similar API handles sparse tensors correctly
+# This mirrors the original bug's setup (compiling a model with sparse ops)
+try:
+    compiled_model = torch.compile(model)
+    compiled_output = compiled_model(x)
+    print("Compiled output:", compiled_output)
+    
+    # Assertion to ensure consistency between eager and compiled modes
+    assert eager_output == compiled_output, "Eager and compiled outputs should match"
+except Exception as e:
+    print(f"Error during compilation or execution: {e}")

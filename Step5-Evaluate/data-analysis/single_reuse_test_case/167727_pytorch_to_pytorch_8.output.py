@@ -1,0 +1,16 @@
+import torch
+
+if torch.backends.mps.is_available():
+    # success case (small tensor)
+    a_small = torch.rand((64, 100), dtype=torch.complex64, device="mps")
+    torch.testing.assert_close(
+        torch.amax(a_small).cpu(),
+        torch.amax(a_small.cpu())
+    )
+
+    # potential failure case (large tensor)
+    a_large = torch.rand((64, 10000), dtype=torch.complex64, device="mps")
+    torch.testing.assert_close(
+        torch.amax(a_large).cpu(),
+        torch.amax(a_large.cpu())
+    )

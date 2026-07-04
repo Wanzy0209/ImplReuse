@@ -1,0 +1,43 @@
+import torch
+import torch.nn as nn
+import sys
+
+# Configure Inductor to use cpp_wrapper, which is the trigger for the bug
+# Handle missing torch._inductor gracefully (e.g., older PyTorch versions)
+try:
+    import torch._inductor.config as config
+    config.cpp_wrapper = True
+except ModuleNotFoundError:
+    print("Skipping test: torch._inductor module not found. This test requires PyTorch 2.0+.")
+    sys.exit(0)
+
+class AllCheckModule(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Compile the forward method
+        self.forward = torch.compile(self.forward)
+
+    def forward(self, x, threshold):
+        # Use torch.all with a scalar argument to potentially trigger the H2D/D2H issue
+        # described in the bug report regarding non-tensor arguments.
+        return torch.all(x > threshold)
+
+# Initialize and move to CUDA
+model = AllCheckModule().cuda()
+
+# Profile the execution to observe potential redundant H2D/D2H copies
+with torch.profiler.profile(
+    with_stack=True,
+    activities=[
+        torch.profiler.ProfilerActivity.CPU,
+        torch.profiler.ProfilerActivity.CUDA,
+    ]
+) as prof:
+    # Run inside a DeviceContext, which is part of the bug reproduction steps
+    with torch.device("cuda"):
+        for i in range(10):
+            x = torch.randn(32, 32).cuda()
+            # Pass a non-tensor argument (threshold)
+            res = model(x, 0.5)
+            # Use the result to avoid optimization away
+            _ = res.item()

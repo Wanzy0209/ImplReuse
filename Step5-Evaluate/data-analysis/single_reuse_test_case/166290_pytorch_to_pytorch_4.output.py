@@ -1,0 +1,64 @@
+import torch
+from torch.fx import wrap
+
+# Fix: Check if torch._dynamo exists to support older PyTorch versions or environments without it
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+else:
+    print("Warning: torch._dynamo is not available. Compilation test will be skipped.")
+
+torch.manual_seed(974450504)
+
+# Adaptation: Wrap the torch.squeeze function using torch.fx.wrap.
+# This tests the behavior of the similar API (torch.fx.wrap) in the context
+# of the original bug's operations.
+wrapped_squeeze = wrap(torch.squeeze)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0 # size=(17, 30, 17, 3), stride=(1530, 51, 3, 1), dtype=bool, device=cuda
+    var_node_2 = torch.chunk(var_node_3, 3, dim=3)[0] # size=(17, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda
+    var_node_5 = torch.full((17,), 3, dtype=torch.int64) # size=(17,), stride=(1,), dtype=int64, device=cuda
+    var_node_6 = arg_1 # size=(15,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_4 = var_node_5.size(0)
+    _index_var_node_4 = torch.randint(0, _input_size_var_node_4, (15,), device=var_node_5.device)
+    var_node_4 = torch.gather(var_node_5, 0, _index_var_node_4) # size=(15,), stride=(1,), dtype=int64, device=cuda
+    _input_size_var_node_1 = var_node_2.size(0)
+    _index_var_node_1 = torch.randint(0, _input_size_var_node_1, (15,), device=var_node_2.device)
+    var_node_1 = torch.index_select(var_node_2, 0, _index_var_node_1) # size=(15, 30, 17, 1), stride=(510, 17, 1, 1), dtype=bool, device=cuda
+    
+    # Original call: var_node_0 = torch.squeeze(var_node_1)
+    # Adapted call using the similar API:
+    var_node_0 = wrapped_squeeze(var_node_1) # size=(15, 30, 17), stride=(510, 17, 1), dtype=bool, device=cuda
+    
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(0, 2, (26010,), dtype=torch.int8).bool(), (17, 30, 17, 3), (1530, 51, 3, 1))
+arg_1 = torch.as_strided(torch.randint(5, 30, (15,)).to(torch.int64), (15,), (1,))
+
+args = (arg_0, arg_1) + (sentinel,)
+
+# Test Eager Execution
+try:
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# Test Compiled Execution
+# Fix: Guard compilation logic with availability check
+if hasattr(torch, '_dynamo'):
+    try:
+        compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+        result_compiled = compiled_program(*args)
+        print(' compile success')
+    except Exception as e:
+        print(f' compile failed: {e}')
+else:
+    print(' compile skipped: torch._dynamo not available')

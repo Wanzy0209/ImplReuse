@@ -1,0 +1,48 @@
+import torch
+import torch.nn.functional as F
+
+def verify_kl_div_behavior():
+    """
+    Test torch.nn.functional.kl_div behavior with different reduction modes
+    and log_target settings.
+    """
+    # Setup: Create random input (log-probabilities) and target (probabilities)
+    batch_size = 4
+    num_classes = 10
+    input = torch.randn(batch_size, num_classes, requires_grad=True)
+    target = torch.randn(batch_size, num_classes).softmax(dim=1)
+
+    # Test Case 1: Default reduction ('mean')
+    loss_mean = F.kl_div(input, target)
+    assert loss_mean.dim() == 0, "Loss with 'mean' reduction should be a scalar"
+    print(f"Test 1 Passed: Mean reduction loss = {loss_mean.item()}")
+
+    # Test Case 2: Batchmean reduction
+    loss_batchmean = F.kl_div(input, target, reduction='batchmean')
+    assert loss_batchmean.dim() == 0, "Loss with 'batchmean' reduction should be a scalar"
+    # Relationship check: batchmean = mean * num_classes
+    assert torch.allclose(loss_batchmean, loss_mean * num_classes), \
+        "Batchmean should equal mean * num_classes"
+    print(f"Test 2 Passed: Batchmean reduction loss = {loss_batchmean.item()}")
+
+    # Test Case 3: No reduction
+    loss_none = F.kl_div(input, target, reduction='none')
+    assert loss_none.shape == input.shape, "Loss with 'none' reduction should match input shape"
+    print(f"Test 3 Passed: No reduction shape = {loss_none.shape}")
+
+    # Test Case 4: log_target=True
+    target_log = torch.log(target)
+    loss_log_target = F.kl_div(input, target_log, log_target=True)
+    assert loss_log_target.dim() == 0, "Loss with log_target=True should be a scalar"
+    # Result should be identical to log_target=False if target is consistent
+    assert torch.allclose(loss_log_target, loss_mean), \
+        "Result should match when target is explicitly logged"
+    print(f"Test 4 Passed: log_target=True loss = {loss_log_target.item()}")
+
+def main():
+    print("Running torch.nn.functional.kl_div tests...")
+    verify_kl_div_behavior()
+    print("All tests passed.")
+
+if __name__ == "__main__":
+    main()

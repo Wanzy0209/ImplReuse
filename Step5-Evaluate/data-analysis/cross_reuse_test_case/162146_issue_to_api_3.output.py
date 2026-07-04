@@ -1,0 +1,45 @@
+import torch
+
+def test_compile_index_put_with_numel():
+    """
+    Reproduces Issue 162146 where index_put_ behaves incorrectly under torch.compile
+    when combined with in-place operations. Leverages torch.numel to verify
+    tensor size integrity within the compiled function.
+    """
+    # Check if torch.compile is available (requires PyTorch 2.0+)
+    if not hasattr(torch, 'compile'):
+        print("Skipping test: torch.compile is not available (requires PyTorch 2.0+)")
+        return
+
+    torch.manual_seed(2025)
+
+    def foo(x):
+        # Use torch.numel to ensure the compiler correctly tracks tensor size
+        # alongside the in-place mutations and index assignments.
+        # This acts as a sanity check for the tensor's metadata.
+        if x.numel() != 12:
+            raise ValueError("Input tensor size is not as expected")
+
+        x[0].sin_()
+        x[1].sin_()
+        y = torch.zeros_like(x)
+        y[2] = x[0]
+        y[3] = x[1]
+        return y
+
+    cfoo = torch.compile(foo)
+    
+    # Initialize inputs
+    x = torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]], dtype=torch.float32)
+    cx = torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]], dtype=torch.float32)
+    
+    # Execute eager and compiled versions
+    res = foo(x)
+    cres = cfoo(cx)
+    
+    # Verify that the compiled output matches the eager output.
+    # The bug causes cres[2] to be sin(sin(x[0])) instead of sin(x[0])).
+    torch.testing.assert_close(res, cres)
+
+if __name__ == "__main__":
+    test_compile_index_put_with_numel()

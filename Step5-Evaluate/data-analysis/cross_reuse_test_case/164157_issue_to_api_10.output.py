@@ -1,0 +1,83 @@
+import torch
+import torch.nn as nn
+
+# Safely configure dynamo/inductor if available
+# These configurations are specific to the compiler backend and may not exist
+# in older PyTorch versions or specific builds.
+try:
+    if hasattr(torch, '_dynamo'):
+        torch._dynamo.config.capture_scalar_outputs = True
+        torch._dynamo.config.capture_dynamic_output_shape_ops = True
+    if hasattr(torch, '_inductor'):
+        torch._inductor.config.emulate_precision_casts = True
+except AttributeError:
+    pass
+
+# Adapt the logic into a class-based structure similar to the tf.Module pattern
+# found in the similar API (tf.saved_model.save usage example).
+class StdModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+        t0 = arg0
+        t1 = torch.tanh(t0)
+        t2 = arg1
+        t3 = arg2
+        t4 = t2 * t3
+        t5 = t1.clone()
+        t5.fill_(t4.item())
+        
+        t6 = arg3
+        t7 = arg4
+        t8 = arg5
+        t9 = torch.cat([t6, t6, t7, t8], dim=2)
+        
+        # The API under test: torch.std
+        # This operation triggers the IncompatibleTypeErrorImpl in the bug report
+        # when compiled with float16 inputs.
+        t10 = t9.std(dim=2)
+        
+        t11 = torch.nn.functional.embedding(torch.clamp(t5, 0, t10.size(0) - 1).to(torch.long), t10)
+        output = t11 + sentinel
+        return output
+
+def test_std_fp16_compile_divergence():
+    # Check if torch.compile is available
+    if not hasattr(torch, 'compile'):
+        print("Skipping test: torch.compile is not available in this environment.")
+        return
+
+    # Check for CUDA availability since inputs are on 'cuda'
+    if not torch.cuda.is_available():
+        print("Skipping test: CUDA is not available.")
+        return
+
+    # Setup inputs
+    arg0 = torch.randint(0, 1000, [47], dtype=torch.int64, device='cuda')
+    arg1 = torch.randint(0, 1000, [], dtype=torch.int64, device='cuda')
+    arg2 = torch.randint(0, 1000, [], dtype=torch.int64, device='cuda')
+    arg3 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True)
+    arg4 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True)
+    arg5 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True)
+    sentinel = torch.tensor(0.0, dtype=torch.float16, device='cuda', requires_grad=True)
+
+    model = StdModel()
+
+    # 1. Run in Eager mode
+    out_eager = model(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_eager.sum().backward()
+    
+    # 2. Run in Compiled mode (analogous to @tf.function in the similar API)
+    compiled_model = torch.compile(model, fullgraph=True, dynamic=True)
+    out_compiled = compiled_model(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_compiled.sum().backward()
+
+    # 3. Check for divergence
+    # The bug report indicates a type error during compilation, but if it compiles,
+    # we must ensure the results match eager mode.
+    assert torch.allclose(out_eager, out_compiled, atol=1e-2, rtol=1e-2), "Eager and Compile outputs diverged"
+    print('Test Passed: Eager and Compile results match.')
+
+if __name__ == '__main__':
+    test_std_fp16_compile_divergence()

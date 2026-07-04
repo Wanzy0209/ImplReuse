@@ -1,0 +1,68 @@
+import torch
+
+# Check if torch._dynamo is available to handle environments without it
+has_dynamo = hasattr(torch, '_dynamo')
+
+# Configuration from the original bug report
+if has_dynamo:
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+else:
+    print("Warning: torch._dynamo is not available. Skipping dynamo configuration.")
+
+torch.manual_seed(1012969)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0 # size=(2, 10), stride=(10, 1), dtype=float64, device=cuda
+    var_node_4 = arg_1 # size=(10, 3), stride=(3, 1), dtype=float64, device=cuda
+    var_node_2 = torch.matmul(var_node_3.to(torch.float64), var_node_4.to(torch.float64)) # size=(2, 3), stride=(3, 1), dtype=float64, device=cuda
+    
+    # --- Adaptation for Similar API ---
+    # Original API: torch.unique(_inp_unique_wide)
+    # Similar API: torch.backends.cuda.cufft_plan_cache.size
+    # Note: The similar API returns an integer (scalar), not a Tensor.
+    # We adapt the logic to fetch the cache size and convert it to a tensor 
+    # to maintain compatibility with the subsequent matmul operation.
+    
+    # We assume device index 0 as the tensors are on 'cuda'
+    cache_size_val = torch.backends.cuda.cufft_plan_cache.size(0)
+    
+    # Convert the scalar result to a tensor to match the expected shape logic
+    var_node_1 = torch.tensor([cache_size_val], dtype=var_node_2.dtype, device=var_node_2.device)
+    # -------------------------------
+
+    var_node_5 = torch.full((1, 18), 0.40330381448978797, dtype=torch.float64) # size=(1, 18), stride=(18, 1), dtype=float64, device=cuda
+    var_node_0 = torch.matmul(var_node_1.to(torch.float64), var_node_5.to(torch.float64)) # size=(18,), stride=(1,), dtype=float64, device=cuda
+    
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+# Setup inputs on CUDA to match the original context
+arg_0 = torch.as_strided(torch.randn(20).to(torch.float64).cuda(), (2, 10), (10, 1))
+arg_1 = torch.as_strided(torch.randn(30).to(torch.float64).cuda(), (10, 3), (3, 1))
+
+args = (arg_0, arg_1, sentinel)
+
+# Test Eager Mode
+try:
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# Test Compiled Mode
+if has_dynamo:
+    try:
+        compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+        result_compiled = compiled_program(*args)
+        print(' compile success')
+    except Exception as e:
+        print(f' compile failed: {e}')
+else:
+    print(' compile skipped: torch._dynamo not available')

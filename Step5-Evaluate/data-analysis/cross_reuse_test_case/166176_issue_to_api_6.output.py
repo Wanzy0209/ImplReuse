@@ -1,0 +1,31 @@
+import torch
+
+def fn(x):
+    # First graph break to trigger resume codegen logic
+    torch._dynamo.graph_break()
+    
+    with torch.no_grad():
+        with torch.no_grad():
+            # Second graph break inside nested context
+            # This sequence originally caused a KeyError in resume codegen
+            torch._dynamo.graph_break()
+            
+            # Leverage the similar API: torch.isnan
+            # Using this API within the problematic context to ensure it handles the operation correctly
+            res = torch.isnan(x)
+            
+    return res
+
+# Input tensor including a NaN to verify isnan logic
+inp = torch.tensor([1.0, float('nan'), 2.0])
+
+# Compile with the "eager" backend as specified in the original bug report
+opt_m = torch.compile(fn, backend="eager")
+
+# Execute the compiled function
+# This should not raise a KeyError anymore
+result = opt_m(inp)
+
+# Verify the output is correct
+expected = torch.isnan(inp)
+assert torch.equal(result, expected), f"Expected {expected}, but got {result}"

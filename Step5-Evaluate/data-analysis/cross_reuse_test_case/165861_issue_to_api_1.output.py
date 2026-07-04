@@ -1,0 +1,43 @@
+import torch
+import torch.nn.functional as F
+import unittest
+
+class TestReflectPaddingLargeDim(unittest.TestCase):
+    """
+    Regression test for Issue #165861.
+    Reflect padding should not fail when a batch dimension is >= 2**16.
+    """
+
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_reflect_pad_large_batch_dim(self):
+        # Bug: Reflect padding breaks when a batch dimension is >= 2**16
+        # Shape: (65536, 1, 1, 2) - Using 4D tensor to ensure compatibility with circular padding
+        # which in some PyTorch versions only supports 4D/5D tensors.
+        x = torch.rand(2**16, 1, 1, 2, device="cuda")
+
+        # Verify other modes work (as per bug report)
+        F.pad(x, (1, 1), mode="constant")
+        F.pad(x, (1, 1), mode="circular")
+        F.pad(x, (1, 1), mode="replicate")
+
+        # The failing case in the bug report
+        # If the bug is fixed, this should not raise an error
+        try:
+            F.pad(x, (1, 1), mode="reflect")
+        except RuntimeError as e:
+            self.fail(f"Reflect padding failed with large dimension: {e}")
+
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_reflect_pad_boundary(self):
+        # Test just below the limit
+        x = torch.rand(2**16 - 1, 2, device="cuda")
+        F.pad(x, (1, 1), mode="reflect") # Should work
+
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_reflect_pad_large_last_dim(self):
+        # Bug report says large last dim is fine
+        x = torch.rand(2, 2**18, device="cuda")
+        F.pad(x, (1, 1), mode="reflect") # Should work
+
+if __name__ == "__main__":
+    unittest.main()

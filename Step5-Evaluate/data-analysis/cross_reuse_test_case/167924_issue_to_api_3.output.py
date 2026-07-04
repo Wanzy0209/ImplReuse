@@ -1,0 +1,31 @@
+import tensorflow as tf
+
+def test_tf_math_exp_with_sliced_tensor():
+    """
+    Test case based on Issue 167924 (Crash on MPS with repeat_interleave and sliced tensor).
+    This test adapts the reproduction logic (passing a sliced tensor to an operation)
+    to the similar API: tf.compat.v1.math.exp.
+    """
+    # Setup: Create a tensor mimicking the 'counts' tensor from the bug report.
+    # We use float values as tf.math.exp operates on floating-point inputs.
+    counts = tf.constant([0.0, 1.0, 0.0])
+
+    # Reproduce the specific slicing pattern from the bug: counts[1:3]
+    # This slice resulted in a segfault in the original PyTorch MPS implementation.
+    sliced_input = counts[1:3]
+
+    # Apply the similar API (tf.compat.v1.math.exp) to the sliced tensor.
+    # This verifies that the similar API handles the sliced tensor pattern correctly.
+    result = tf.compat.v1.math.exp(sliced_input)
+
+    # Expected values: exp(1.0) ~= 2.718, exp(0.0) = 1.0
+    expected = tf.constant([2.718281828459045, 1.0])
+
+    # Assert that the operation completed without crashing and produced the correct result.
+    # This mirrors the expectation that the original bug (crash) should not occur.
+    assert tf.reduce_all(tf.abs(result - expected) < 1e-6).numpy(), \
+        f"Expected {expected}, but got {result}"
+
+if __name__ == "__main__":
+    test_tf_math_exp_with_sliced_tensor()
+    print("Test passed.")

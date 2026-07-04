@@ -1,0 +1,53 @@
+import torch
+
+def test_lobpcg_mps_compile_backward():
+    """
+    Test case to verify torch.lobpcg compatibility with torch.compile 
+    and the backward pass on the MPS backend, inspired by Issue 161905.
+    """
+    # Check for MPS availability
+    if not torch.backends.mps.is_available():
+        print("MPS is not available. Skipping test.")
+        return
+
+    device = 'mps'
+    n = 10  # Matrix size
+    k = 2   # Number of eigenvalues
+
+    # Create a symmetric positive definite matrix A = L @ L.T + I
+    # requires_grad=True is needed to test the backward pass
+    L = torch.randn(n, n, device=device, requires_grad=True)
+    A = L @ L.T + torch.eye(n, device=device)
+    
+    # Initial guess for eigenvectors
+    X = torch.randn(n, k, device=device)
+
+    # Define the function to be compiled, similar to the original bug's train function
+    @torch.compile
+    def eigen_step(A, X):
+        # Call the similar API: torch.lobpcg
+        # Find the k largest eigenvalues
+        eigenvalues, eigenvectors = torch.lobpcg(A, k=k, X=X, largest=True)
+        
+        # Create a scalar loss to backpropagate (sum of eigenvalues)
+        loss = eigenvalues.sum()
+        return loss
+
+    # Forward pass
+    loss = eigen_step(A, X)
+
+    # Backward pass (The critical part of the original bug report)
+    try:
+        loss.backward()
+    except RuntimeError as e:
+        print(f"RuntimeError during backward pass on MPS: {e}")
+        raise
+
+    # Assertion to verify gradients were computed
+    assert L.grad is not None, "Gradients were not computed for L"
+    assert L.grad.abs().sum() > 0, "Gradients are zero"
+    
+    print("Test passed: torch.lobpcg works with torch.compile and backward on MPS.")
+
+if __name__ == "__main__":
+    test_lobpcg_mps_compile_backward()

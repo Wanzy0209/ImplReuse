@@ -1,0 +1,86 @@
+import torch
+import unittest
+
+class TestUniqueWithFlashAttentionCheck(unittest.TestCase):
+    def test_unique_compile_divergence_with_flash_check(self):
+        """
+        Test case for Issue 164876: Eager/Compile Divergence in torch.unique.
+        This test preserves the original bug reproduction logic while leveraging
+        torch.backends.cuda.is_flash_attention_available to ensure the environment
+        supports the necessary CUDA features, and to test the interaction of
+        scalar boolean checks within the compiled graph.
+        """
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is not available, skipping test.")
+
+        # Check if torch._dynamo is available (requires PyTorch 2.0+)
+        if not hasattr(torch, '_dynamo'):
+            self.skipTest("torch._dynamo is not available in this PyTorch version, skipping test.")
+
+        # Configure Dynamo as in the original bug report
+        torch._dynamo.config.capture_scalar_outputs = True
+        torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+        torch.manual_seed(1012969)
+
+        # Sentinel tensor to ensure gradient computation
+        sentinel = torch.tensor(1.0, requires_grad=True, device='cuda')
+
+        # Setup inputs as in the original bug report
+        arg_0 = torch.as_strided(torch.randn(20).to(torch.float64).cuda(), (2, 10), (10, 1))
+        arg_1 = torch.as_strided(torch.randn(30).to(torch.float64).cuda(), (10, 3), (3, 1))
+
+        def fuzzed_program(arg_0, arg_1, sentinel):
+            var_node_3 = arg_0
+            var_node_4 = arg_1
+            var_node_2 = torch.matmul(var_node_3.to(torch.float64), var_node_4.to(torch.float64))
+            
+            _inp_unique_wide = torch.arange(1, device=var_node_2.device, dtype=torch.int64)
+            _uniq_wide = torch.unique(_inp_unique_wide)
+            var_node_1 = _uniq_wide.to(var_node_2.dtype)
+            
+            var_node_5 = torch.full((1, 18), 0.40330381448978797, dtype=torch.float64, device=var_node_2.device)
+            var_node_0 = torch.matmul(var_node_1.to(torch.float64), var_node_5.to(torch.float64))
+            
+            # Leverage the similar API: torch.backends.cuda.is_flash_attention_available
+            # We call this inside the function to test if the compiler handles
+            # this boolean scalar check correctly alongside the dynamic shape ops.
+            is_flash_avail = torch.backends.cuda.is_flash_attention_available()
+            
+            # Use the result to ensure it is not optimized away
+            # (e.g., multiply by 1.0 if true, 1.0 if false - just to create a dependency)
+            # Note: We must ensure the operation remains on the tensor.
+            # Since is_flash_avail is a bool, we can use it to select a multiplier.
+            multiplier = 1.0 if is_flash_avail else 1.0
+            
+            result = var_node_0 * sentinel * multiplier
+            
+            if result.is_complex():
+                result = result.real
+            return result
+
+        args = (arg_0, arg_1, sentinel)
+
+        # Run Eager
+        try:
+            result_original = fuzzed_program(*args)
+            print(' eager success')
+        except Exception as e:
+            self.fail(f"Eager mode failed with: {e}")
+
+        # Run Compiled
+        try:
+            compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+            result_compiled = compiled_program(*args)
+            print(' compile success')
+        except Exception as e:
+            self.fail(f"Compiled mode failed with: {e}")
+
+        # Check for divergence
+        self.assertTrue(
+            torch.allclose(result_original, result_compiled),
+            f"Eager and Compile results diverged.\nEager: {result_original}\nCompile: {result_compiled}"
+        )
+
+if __name__ == '__main__':
+    unittest.main()

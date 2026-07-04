@@ -1,0 +1,47 @@
+import torch
+import torch.nn as nn
+
+# Bug report environment setup
+# Guard against AttributeError if torch._dynamo is not available (older PyTorch versions)
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1352030645)
+
+# Check for PyTorch 2.x availability (torch.compile) and CUDA
+if not hasattr(torch, 'compile'):
+    print("Test requires PyTorch 2.x (torch.compile) to run. Skipping.")
+elif not torch.cuda.is_available():
+    print("Test requires CUDA to run. Skipping.")
+else:
+    device = torch.device("cuda")
+
+    # Recreating the tensor context from the fuzzer output
+    # The original code produces var_node_1 with size (4, 9) and dtype bfloat16.
+    # We adapt this to a 4D tensor (4, 9, 1, 1) to be compatible with ConvTranspose2d.
+    input_tensor = torch.randn(4, 9, 1, 1, dtype=torch.bfloat16, device=device)
+
+    # Define the model using the similar API: torch.nn.LazyConvTranspose2d
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            # LazyConvTranspose2d infers in_channels from the input size(1) (which is 9 here)
+            self.conv = nn.LazyConvTranspose2d(out_channels=16, kernel_size=3)
+
+        def forward(self, x):
+            return self.conv(x)
+
+    model = Model().to(device)
+    model.to(torch.bfloat16)
+
+    # Run Eager
+    eager_output = model(input_tensor)
+
+    # Run Compiled
+    # The original bug was an Eager/Compile Divergence, so we verify compilation works
+    compiled_model = torch.compile(model)
+    compiled_output = compiled_model(input_tensor)
+
+    # Verify results match to ensure no divergence
+    assert torch.allclose(eager_output, compiled_output), "Divergence detected between eager and compiled outputs"
+    print("Test Passed: No divergence detected with torch.nn.LazyConvTranspose2d.")

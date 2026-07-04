@@ -1,0 +1,29 @@
+import torch
+
+# Setup: Create a tensor with channels_last memory format
+# Note: fmod works with floating point types, so we specify dtype
+x = torch.arange(0, 16, dtype=torch.float32).reshape(2, 2, 2, 2).cuda().to(memory_format=torch.channels_last)
+
+# Operation: Apply torch.fmod
+# We use a scalar divisor for simplicity
+y = torch.fmod(x, 2.0)
+
+# Verification: Check if memory ordering is preserved
+# The original bug report checked storage equality and torch.equal.
+# Here we check if the output maintains the channels_last format.
+
+is_input_cl = x.is_contiguous(memory_format=torch.channels_last)
+is_output_cl = y.is_contiguous(memory_format=torch.channels_last)
+
+# Calculate expected result to verify correctness
+expected = torch.fmod(x.cpu(), 2.0).cuda()
+
+print(f'Input is channels_last: {is_input_cl}')
+print(f'Output is channels_last: {is_output_cl}')
+print(f'Input strides: {x.stride()}')
+print(f'Output strides: {y.stride()}')
+print(f'Values correct: {torch.equal(y, expected)}')
+
+# Assertion to fail if memory format is lost
+assert is_output_cl, "torch.fmod did not preserve channels_last memory format"
+assert torch.equal(y, expected), "torch.fmod produced incorrect values"

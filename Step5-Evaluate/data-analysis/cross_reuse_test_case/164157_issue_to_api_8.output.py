@@ -1,0 +1,70 @@
+import torch
+import numpy as np
+
+try:
+    import tensorflow as tf
+except ImportError as e:
+    # Handle environment issues (e.g., GLIBC version mismatch) that prevent TensorFlow from loading.
+    print(f"Skipping test: Failed to import TensorFlow due to environment incompatibility.")
+    print(f"Details: {e}")
+    import sys
+    sys.exit(0)
+
+def test_categorical_hinge_fp16_precision():
+    """
+    Test case for tf.keras.losses.categorical_hinge with float16 inputs.
+    
+    This test is derived from a PyTorch issue (Issue ID: 164157) where 
+    torch.std on float16 tensors caused a type mismatch error (fp16 vs float64)
+    during compilation (Triton). 
+    
+    The similar API, categorical_hinge, involves arithmetic operations and 
+    reductions (sum) that often require careful handling of precision. 
+    This test verifies that the TensorFlow implementation handles float16 
+    inputs correctly in both eager and compiled (XLA) modes, ensuring no 
+    divergence or type errors occur.
+    """
+    
+    # Setup inputs with dtype float16 to mimic the bug's trigger condition
+    batch_size = 2
+    num_classes = 3
+    
+    # y_true: Ground truth (one-hot encoded), cast to float16
+    y_true = tf.constant([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]], dtype=tf.float16)
+    
+    # y_pred: Predictions, float16
+    y_pred = tf.constant([[0.1, 0.9, 0.0], [0.8, 0.1, 0.1]], dtype=tf.float16)
+
+    # 1. Eager Execution
+    loss_eager = tf.keras.losses.categorical_hinge(y_true, y_pred)
+    
+    # 2. Compiled Execution (mimics torch.compile)
+    # Using jit_compile=True forces XLA compilation, which is analogous to the 
+    # compilation step in the PyTorch bug where the IncompatibleTypeError occurred.
+    @tf.function(jit_compile=True)
+    def compiled_loss(y_t, y_p):
+        return tf.keras.losses.categorical_hinge(y_t, y_p)
+
+    loss_compiled = compiled_loss(y_true, y_pred)
+
+    # 3. Gradient Check (mimics backward())
+    with tf.GradientTape() as tape:
+        tape.watch(y_pred)
+        loss_val = tf.keras.losses.categorical_hinge(y_true, y_pred)
+    grads = tape.gradient(loss_val, y_pred)
+
+    # Assertions
+    # Check that outputs are finite (no NaNs or Infs resulting from type mismatches)
+    tf.debugging.assert_all_finite(loss_eager, message="Eager loss produced NaN/Inf")
+    tf.debugging.assert_all_finite(loss_compiled, message="Compiled loss produced NaN/Inf")
+    tf.debugging.assert_all_finite(grads, message="Gradients produced NaN/Inf")
+
+    # Check shapes
+    assert loss_eager.shape == (batch_size,), f"Expected shape ({batch_size},), got {loss_eager.shape}"
+    assert loss_compiled.shape == (batch_size,), f"Expected shape ({batch_size},), got {loss_compiled.shape}"
+    assert grads.shape == y_pred.shape, f"Gradient shape mismatch: {grads.shape} vs {y_pred.shape}"
+
+    print("Test Passed: tf.keras.losses.categorical_hinge handles fp16 inputs correctly in eager and compiled modes.")
+
+if __name__ == "__main__":
+    test_categorical_hinge_fp16_precision()

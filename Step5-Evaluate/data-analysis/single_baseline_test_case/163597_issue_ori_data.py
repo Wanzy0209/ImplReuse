@@ -1,0 +1,79 @@
+# SINGLE_LIBRARY_BASELINE for pytorch
+# original source preserved below
+import math
+
+import torch
+import torch.nn.functional as F
+
+
+def manual_scaled_dot_product_attention(
+    query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False
+) -> torch.Tensor:
+    """From https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html"""
+
+    L, S = query.size(-2), key.size(-2)
+    scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+    attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+    if is_causal:
+        assert attn_mask is None
+        temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+        attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+        attn_bias.to(query.dtype)
+
+    if attn_mask is not None:
+        if attn_mask.dtype == torch.bool:
+            attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+        else:
+            attn_bias = attn_mask + attn_bias
+
+    if enable_gqa:
+        key = key.repeat_interleave(query.size(-3) // key.size(-3), -3)
+        value = value.repeat_interleave(query.size(-3) // value.size(-3), -3)
+
+    attn_weight = query @ key.transpose(-2, -1) * scale_factor
+    attn_weight += attn_bias
+    attn_weight = torch.softmax(attn_weight, dim=-1)
+    attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+    return attn_weight @ value
+
+
+batch_size, seq_len, num_heads, head_dim = 1, 8, 12, 64
+
+q = torch.randn(batch_size, seq_len, num_heads, head_dim, device="mps").transpose(1, 2)
+k = torch.randn(batch_size, seq_len, num_heads, head_dim, device="mps").transpose(1, 2)
+v = torch.randn(batch_size, seq_len, num_heads, head_dim, device="mps").transpose(1, 2)
+
+# Built-in
+out_mps_builtin = F.scaled_dot_product_attention(q, k, v)
+out_cpu_builtin = F.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu())
+out_mps_cont_builtin = F.scaled_dot_product_attention(q.contiguous(), k, v)
+
+# Manual
+out_mps_manual = manual_scaled_dot_product_attention(q, k, v)
+out_cpu_manual = manual_scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu())
+out_mps_cont_manual = manual_scaled_dot_product_attention(q.contiguous(), k, v)
+
+print("--- Built-in F.scaled_dot_product_attention ---")
+print(f"MPS vs CPU (non-contiguous): {torch.norm(out_cpu_builtin - out_mps_builtin.cpu()):6f}")
+print(f"MPS vs CPU (contiguous): {torch.norm(out_cpu_builtin - out_mps_cont_builtin.cpu()):6f}")
+
+print("\n--- Manual scaled dot product attention ---")
+print(f"MPS vs CPU (non-contiguous): {torch.norm(out_cpu_manual - out_mps_manual.cpu()):6f}")
+print(f"MPS vs CPU (contiguous): {torch.norm(out_cpu_manual - out_mps_cont_manual.cpu()):6f}")
+
+print("\n--- Built-in vs Manual (on the same device) ---")
+print(f"CPU: {torch.norm(out_cpu_builtin - out_cpu_manual):6f}")
+print(f"MPS (non-contiguous): {torch.norm(out_mps_builtin - out_mps_manual):6f}")
+print(f"MPS (contiguous): {torch.norm(out_mps_cont_builtin - out_mps_cont_manual):6f}")
+
+print("\n--- Initially contiguous tensors ---")
+q_cont = torch.randn(batch_size, num_heads, seq_len, head_dim, device="mps")
+k_cont = torch.randn(batch_size, num_heads, seq_len, head_dim, device="mps")
+v_cont = torch.randn(batch_size, num_heads, seq_len, head_dim, device="mps")
+
+out_mps_initially_cont = F.scaled_dot_product_attention(q_cont, k_cont, v_cont)
+out_cpu_initially_cont = F.scaled_dot_product_attention(q_cont.cpu(), k_cont.cpu(), v_cont.cpu())
+out_manual_initially_cont = manual_scaled_dot_product_attention(q_cont, k_cont, v_cont)
+
+print(f"MPS vs CPU: {torch.norm(out_cpu_initially_cont - out_mps_initially_cont.cpu()):6f}")
+print(f"Built-in vs Manual (MPS): {torch.norm(out_mps_initially_cont - out_manual_initially_cont):6f}")

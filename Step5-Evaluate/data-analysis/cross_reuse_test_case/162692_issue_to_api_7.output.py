@@ -1,0 +1,71 @@
+import torch
+import torch.distributed as dist
+import sys
+
+# Fix: Handle ImportError for older PyTorch versions where DTensor is not available
+try:
+    from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh
+except ImportError:
+    print("Skipping test: torch.distributed._tensor (DTensor) is not available in this PyTorch version.")
+    sys.exit(0)
+
+import torch.testing as tt
+
+def test_dtensor_mean_uneven_sharding():
+    """
+    Test case for Issue 162692: Incorrect results of DTensor.mean with uneven sharding.
+    
+    This test verifies that DTensor.mean() correctly handles tensors where the 
+    sharding is uneven across devices (e.g., 3 elements split across 2 devices).
+    It also checks the edge case where one device might receive zero elements 
+    (e.g., 1 element split across 2 devices), which previously resulted in NaN.
+    """
+    # Initialize process group and device mesh
+    dist.init_process_group(backend="nccl")
+    rank = dist.get_rank()
+    torch.cuda.set_device(rank)
+    
+    mesh = init_device_mesh('cuda', (2,))
+
+    # --- Test Case 1: 3x4 Tensor (Uneven Sharding: 2 rows vs 1 row) ---
+    # Rank 0 expects 2 rows, Rank 1 expects 1 row
+    tensor_3x4 = torch.arange(12, dtype=torch.float32).reshape(3, 4).cuda()
+    dt_3x4 = distribute_tensor(tensor_3x4, device_mesh=mesh, placements=[Shard(0)])
+    
+    # Compute mean using DTensor
+    mean_dt_3x4 = dt_3x4.mean()
+    full_mean_3x4 = mean_dt_3x4.full_tensor()
+    
+    # Compute ground truth
+    expected_mean_3x4 = tensor_3x4.mean()
+    
+    # Assertion
+    assert torch.allclose(full_mean_3x4, expected_mean_3x4), \
+        f"Rank {rank}: 3x4 Mean mismatch. Expected {expected_mean_3x4}, got {full_mean_3x4}"
+
+    # --- Test Case 2: 1x4 Tensor (Extreme Uneven Sharding: 1 row vs 0 rows) ---
+    # Rank 0 expects 1 row, Rank 1 expects 0 rows
+    # This case previously resulted in NaN
+    tensor_1x4 = torch.arange(4, dtype=torch.float32).reshape(1, 4).cuda()
+    dt_1x4 = distribute_tensor(tensor_1x4, device_mesh=mesh, placements=[Shard(0)])
+    
+    # Compute mean using DTensor
+    mean_dt_1x4 = dt_1x4.mean()
+    full_mean_1x4 = mean_dt_1x4.full_tensor()
+    
+    # Compute ground truth
+    expected_mean_1x4 = tensor_1x4.mean()
+    
+    # Assertion: Check for NaN and correctness
+    assert not torch.isnan(full_mean_1x4), \
+        f"Rank {rank}: 1x4 Mean resulted in NaN"
+    assert torch.allclose(full_mean_1x4, expected_mean_1x4), \
+        f"Rank {rank}: 1x4 Mean mismatch. Expected {expected_mean_1x4}, got {full_mean_1x4}"
+
+    if rank == 0:
+        print("Test passed: DTensor.mean handles uneven sharding correctly.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    test_dtensor_mean_uneven_sharding()

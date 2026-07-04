@@ -1,0 +1,44 @@
+import os
+import torch
+
+def verify_min_gpu_count(min_gpus: int = 1) -> bool:
+    """ verification that we have at least 1 gpu to run the test """
+    has_gpu = torch.cuda.is_available()
+    gpu_count = torch.cuda.device_count()
+    return has_gpu and gpu_count >= min_gpus
+
+def main():
+    # Setup logic adapted from the original FSDP2 example
+    rank = int(os.environ.get("LOCAL_RANK", 0))
+    if torch.cuda.is_available():
+        device_type = "cuda"
+        device = torch.device(f"{device_type}:{rank}")
+        torch.cuda.set_device(rank)
+        print(f"Running on rank {rank} on device {device}")
+    else:
+        device = torch.device("cpu")
+        print(f"Running on device {device}")
+
+    # Original call site: torch.distributed.init_process_group(backend=backend, device_id=device)
+    # Replaced with torch.argsort test
+    
+    # Create a random tensor on the determined device
+    input_tensor = torch.randn(5, 5, device=device)
+    
+    # Call the similar API: torch.argsort
+    sorted_indices = torch.argsort(input_tensor, dim=-1)
+    
+    # Verify the result
+    # 1. Check shape
+    assert sorted_indices.shape == input_tensor.shape, "Output shape mismatch"
+    
+    # 2. Verify sorting logic
+    # Gather the values using the indices
+    sorted_values = torch.gather(input_tensor, -1, sorted_indices)
+    # Check if values are non-decreasing along the sorted dimension
+    assert (sorted_values[..., 1:] >= sorted_values[..., :-1]).all(), "Sorting logic failed"
+    
+    print("Test passed: torch.argsort works correctly on the device.")
+
+if __name__ == "__main__":
+    main()

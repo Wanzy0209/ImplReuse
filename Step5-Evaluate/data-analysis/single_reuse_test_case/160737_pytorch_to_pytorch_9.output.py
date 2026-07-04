@@ -1,0 +1,33 @@
+import torch
+import torch.nn as nn
+
+def test_lazy_linear(device):
+    try:
+        # Define a LazyLinear layer. 
+        # in_features is inferred lazily from the input size during the first forward pass.
+        layer = nn.LazyLinear(out_features=10, device=device)
+        
+        # Create an input tensor. 
+        # Unlike index_select which takes an index, LazyLinear takes the data tensor x.
+        x = torch.randn(2, 5, device=device)
+        
+        # Perform the forward pass
+        output = layer(x)
+        print(f"LazyLinear test succeeds for device: {device}. output shape: {output.shape}")
+        
+        # Verify that the weights were initialized correctly (LazyLinear specific behavior)
+        assert layer.weight is not None
+        assert layer.weight.shape == (10, 5)
+        assert layer.in_features == 5
+    except NotImplementedError as e:
+        # Handle cases where the backend (e.g., MPS) does not support the specific operation
+        print(f"LazyLinear test skipped for device: {device}. Reason: {e}")
+    except Exception as e:
+        print(f"LazyLinear test fails for device: {device}: {e}")
+
+# Test on CPU
+test_lazy_linear(device="cpu")
+
+# Test on MPS
+# Note: This will be skipped if MPS is not available or if the backend lacks support for UninitializedParameter.
+test_lazy_linear(device="mps")

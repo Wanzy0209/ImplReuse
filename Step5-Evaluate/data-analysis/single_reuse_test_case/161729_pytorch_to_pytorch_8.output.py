@@ -1,0 +1,47 @@
+import torch
+import torch.nn.functional as F
+import numpy as np
+
+# Ensure the test runs on CPU if CUDA is not available, mimicking the original setup
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# torch.set_default_device is not available in older PyTorch versions, 
+# so we explicitly pass the device to tensor creation instead.
+
+batch, in_dim, out_dim = 128, 1024, 4096
+x = torch.randn(batch, in_dim, dtype=torch.float, device=device)
+w = torch.randn(out_dim, in_dim, dtype=torch.float, device=device)
+
+# Adapted test for torch.nn.functional.softshrink
+# The original bug report highlights stride inconsistencies. 
+# We verify that softshrink handles strides correctly (preserving them for element-wise ops).
+
+print("Testing torch.nn.functional.softshrink")
+
+# Test 1: Contiguous input
+out_x = F.softshrink(x, lambd=0.5)
+print(f"Input x shape: {x.shape}, stride: {x.stride()}")
+print(f"Output x shape: {out_x.shape}, stride: {out_x.stride()}")
+assert out_x.is_contiguous(), "Output should be contiguous for contiguous input"
+
+# Test 2: Non-contiguous input (Transposed)
+# We check if the API preserves the memory layout (strides) like expected for element-wise ops
+x_t = x.t()
+out_x_t = F.softshrink(x_t, lambd=0.5)
+print(f"\nInput x.t() shape: {x_t.shape}, stride: {x_t.stride()}")
+print(f"Output x.t() shape: {out_x_t.shape}, stride: {out_x_t.stride()}")
+assert out_x_t.stride() == x_t.stride(), "Output strides should match input strides for element-wise operation"
+
+# Test 3: Comparison with NumPy (manual implementation)
+# Since numpy doesn't have a direct softshrink, we implement the formula for verification
+def np_softshrink(a, lambd=0.5):
+    return np.where(np.abs(a) > lambd, a - np.sign(a) * lambd, 0)
+
+x_np = x.cpu().numpy()
+out_torch = F.softshrink(x, lambd=0.5).cpu().numpy()
+out_np = np_softshrink(x_np, lambd=0.5)
+
+print(f"\nNumPy output shape: {out_np.shape}, strides: {out_np.strides}")
+print(f"PyTorch output shape: {out_torch.shape}, strides: {out_torch.strides}")
+assert np.allclose(out_torch, out_np), "Values should match NumPy implementation"
+# For contiguous inputs, strides should match between PyTorch and NumPy
+assert out_torch.strides == out_np.strides, "Strides should match NumPy for contiguous input"

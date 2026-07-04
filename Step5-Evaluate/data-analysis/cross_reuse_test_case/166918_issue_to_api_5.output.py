@@ -1,0 +1,90 @@
+import os
+import torch
+import torch.distributed as dist
+from torch.distributed._functional_collectives import broadcast
+import torch.multiprocessing as mp
+
+def setup(rank, world_size):
+    """
+    Initialize the distributed process group and set the device.
+    This mirrors the context setup pattern seen in similar API implementations
+    where a default context is required before operation.
+    """
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
+    
+    # Initialize the process group
+    dist.init_process_group(
+        backend='nccl',
+        init_method=f'tcp://127.0.0.1:29500',
+        rank=rank,
+        world_size=world_size
+    )
+    torch.cuda.set_device(rank)
+
+def cleanup():
+    """Destroy the process group to avoid resource leaks."""
+    dist.destroy_process_group()
+
+@torch.compile(dynamic=True)
+def example_compile_with_cond(rank_tensor):
+    """
+    Function using torch.cond inside a compiled context.
+    This tests the interaction between torch.cond, dynamo, and distributed contexts.
+    """
+    rank = rank_tensor.item()
+    
+    # torch.cond requires a tensor predicate
+    pred = torch.tensor(rank == 0)
+
+    # Using torch.cond for conditional execution
+    # The lambdas represent the branches similar to how functional ops handle logic
+    tensor = torch.cond(
+        pred,
+        lambda: torch.tensor([1, 2, 3, 4, 5], dtype=torch.float32, device="cuda"),
+        lambda: torch.zeros(5, dtype=torch.float32, device="cuda")
+    )
+    
+    # Perform a distributed collective operation inside the compiled graph
+    return broadcast(tensor, src=0, group=dist.group.WORLD)
+
+def run_test(rank, world_size):
+    print(f"Running test on rank {rank}")
+    setup(rank, world_size)
+    
+    # Configuration specific to the bug report
+    torch._dynamo.config.capture_scalar_outputs = True
+    
+    try:
+        # Create a tensor for the rank input
+        rank_input = torch.tensor([rank])
+        
+        # Execute the compiled function with torch.cond
+        result = example_compile_with_cond(rank_input)
+        
+        # Assertion to verify the operation completed without segfault
+        assert result is not None, "Result should not be None"
+        assert result.device.type == 'cuda', "Result should be on CUDA"
+        
+        # Verify content based on rank
+        if rank == 0:
+            expected = torch.tensor([1, 2, 3, 4, 5], device="cuda")
+        else:
+            expected = torch.tensor([0, 0, 0, 0, 0], device="cuda")
+            
+        # broadcast ensures all ranks have the data from rank 0
+        # However, the bug is about the segfault, so reaching here is the primary success criteria
+        assert torch.equal(result, expected), f"Rank {rank} data mismatch"
+        
+        print(f"Rank {rank} test passed. Result: {result}")
+        
+    except Exception as e:
+        print(f"Rank {rank} encountered an error: {e}")
+        raise
+    finally:
+        cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use multiprocessing to simulate distributed environment
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

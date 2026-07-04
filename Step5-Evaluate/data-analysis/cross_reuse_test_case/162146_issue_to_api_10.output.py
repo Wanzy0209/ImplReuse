@@ -1,0 +1,31 @@
+import torch
+
+# Handle environments where torch.compile is not available (PyTorch < 2.0)
+if not hasattr(torch, 'compile'):
+    # Mock torch.compile to act as an identity function
+    torch.compile = lambda f: f
+
+def foo(x):
+    # Use torch.diag to extract a view/slice, similar to how x[0] was used in the original bug
+    d = torch.diag(x)
+    # Perform an in-place operation on the result of torch.diag
+    d.sin_()
+    # Create a target tensor
+    y = torch.zeros_like(x)
+    # Assign the modified diagonal to a specific index (index_put operation)
+    # This mirrors the "y[2] = x[0]" logic from the original issue
+    y[0] = d
+    return y
+
+# Setup test data
+torch.manual_seed(2025)
+x = torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]], dtype=torch.float32)
+cx = x.clone()
+
+# Run eager and compiled versions
+res = foo(x)
+cfoo = torch.compile(foo)
+cres = cfoo(cx)
+
+# Check for correctness
+torch.testing.assert_close(res, cres)

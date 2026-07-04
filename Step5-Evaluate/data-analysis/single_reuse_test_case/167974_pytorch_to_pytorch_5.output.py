@@ -1,0 +1,17 @@
+import torch
+
+# Adapted test case for torch.nn.RNNCell based on the EmbeddingBag issue.
+# The original issue involved a 2D input tensor. We verify RNNCell handles 2D input correctly.
+
+# Initialize RNNCell: input_size=4 (columns in input), hidden_size=3
+rnn_cell = torch.nn.RNNCell(input_size=4, hidden_size=3)
+
+# Create a 2D input tensor (batch_size=2, input_size=4)
+# RNNCell expects float inputs, so we use float32
+input = torch.tensor([[1.0, 2.0, 4.0, 5.0], [4.0, 3.0, 2.0, 9.0]], dtype=torch.float32)
+
+# Run the forward pass
+output = rnn_cell(input)
+
+# Verify the output shape is (batch_size, hidden_size)
+assert output.shape == (2, 3), f"Expected output shape (2, 3), got {output.shape}"

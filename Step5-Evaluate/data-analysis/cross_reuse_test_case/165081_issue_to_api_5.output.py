@@ -1,0 +1,71 @@
+import unittest
+from unittest.mock import MagicMock, patch
+
+# The issue involves a compilation/guard failure in PyTorch Dynamo related to data-dependent shapes.
+# The similar API provided is a serialization function for XLA modules in TensorFlow.
+# This test verifies the behavior of the serialize function, specifically checking the 
+# versioning logic and data-dependent output (byte string), mirroring the context of the original bug.
+
+class TestSerializeModule(unittest.TestCase):
+    
+    def setUp(self):
+        # Mocking the internal TensorFlow compiler modules to ensure the test is runnable
+        # without a full source build of TensorFlow.
+        self.mock_stablehlo = MagicMock()
+        self.mock_xla = MagicMock()
+        
+        # Configure mocks based on the behavior seen in the similar API information
+        self.mock_stablehlo.get_minimum_version.return_value = "stablehlo_1.0"
+        self.mock_xla.call_module_maximum_supported_version.return_value = 10
+        
+        # Define the serialize function as provided in the similar API information
+        def serialize(module_str: str):
+            target = self.mock_stablehlo.get_minimum_version()
+            byte_str = self.mock_stablehlo.serialize_portable_artifact_str(module_str, target)
+            return byte_str, self.mock_xla.call_module_maximum_supported_version()
+            
+        self.serialize_func = serialize
+
+    def test_serialize_returns_correct_version(self):
+        """
+        Test that the serialize function returns the expected maximum supported version.
+        This parallels the 'Ne(u0, 9)' guard check in the PyTorch issue, verifying 
+        that version constants are handled correctly.
+        """
+        module_str = "test_module_v1"
+        byte_str, version = self.serialize_func(module_str)
+        
+        self.assertEqual(version, 10, "The returned version should match the maximum supported version (10).")
+
+    def test_serialize_handles_data_dependent_output(self):
+        """
+        Test that serialize handles the input string and produces a byte string output.
+        The size of the byte string is data-dependent on the input module_str.
+        This mirrors the data-dependent shape issue in the original PyTorch bug.
+        """
+        module_str = "module_with_data"
+        
+        # Mock the serialization to return a byte string that depends on the input
+        def side_effect_serialize(mod_str, target):
+            return f"serialized_{mod_str}_{target}".encode('utf-8')
+            
+        self.mock_stablehlo.serialize_portable_artifact_str.side_effect = side_effect_serialize
+        
+        byte_str, version = self.serialize_func(module_str)
+        
+        self.assertIsInstance(byte_str, bytes, "The serialized output should be a byte string.")
+        self.assertIn(b"module_with_data", byte_str, "The output should contain the input module data.")
+        
+    def test_serialize_empty_input(self):
+        """
+        Test edge case with empty input to ensure robustness, similar to fuzzer inputs.
+        """
+        module_str = ""
+        byte_str, version = self.serialize_func(module_str)
+        
+        self.assertEqual(version, 10)
+        # Verify the serialization function was called even with empty input
+        self.mock_stablehlo.serialize_portable_artifact_str.assert_called_once()
+
+if __name__ == '__main__':
+    unittest.main()

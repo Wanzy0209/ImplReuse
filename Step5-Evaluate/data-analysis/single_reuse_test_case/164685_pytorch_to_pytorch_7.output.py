@@ -1,0 +1,68 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = -6 # dtype=int64
+    var_node_3 = arg_0 # dtype=int32
+    var_node_1 = var_node_2 * var_node_3 # dtype=int32
+    var_node_5 = torch.full((), 1, dtype=torch.int64)
+    var_node_4 = var_node_5.item() # dtype=int64
+    var_node_0 = var_node_1 / var_node_4 # dtype=int64
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+def run_worker(rank, world_size):
+    setup(rank, world_size)
+
+    if rank == 0:
+        # Sender process
+        torch.manual_seed(19989)
+        sentinel = torch.tensor(1.0, requires_grad=True)
+        arg_0 = torch.tensor(torch.randn(()), dtype=torch.int32).item()
+        
+        # Generate the data using the logic from the bug report
+        result = fuzzed_program(arg_0, sentinel)
+        
+        # Adaptation: Use torch.distributed.send_object_list to send the result
+        # instead of compiling the function.
+        # We verify that the specific scalar types (int32/int64) and tensors
+        # generated in the bug report can be serialized and sent.
+        object_list = [result]
+        
+        try:
+            dist.send_object_list(object_list, dst=1)
+            print(' send_object_list success')
+        except Exception as e:
+            print(f' send_object_list failed: {e}')
+
+    elif rank == 1:
+        # Receiver process
+        object_list = [None]
+        try:
+            dist.recv_object_list(object_list, src=0)
+            print(f' recv_object_list success: {object_list[0]}')
+            # Basic assertion to ensure data was received
+            assert object_list[0] is not None
+        except Exception as e:
+            print(f' recv_object_list failed: {e}')
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use multiprocessing to simulate a distributed environment
+    mp.spawn(run_worker, args=(world_size,), nprocs=world_size, join=True)

@@ -1,0 +1,56 @@
+import sys
+import torch
+
+# Attempt to import the required module
+# This handles the ModuleNotFoundError if torch._inductor is not available
+try:
+    from torch._inductor import config
+except ModuleNotFoundError:
+    print("Skipping test: 'torch._inductor' module not found. This test requires a PyTorch build with inductor support.")
+    sys.exit(0)
+
+# Counter to track how many times the custom pass is applied
+pass_count = 0
+
+def custom_pre_pass(graph):
+    """
+    A custom graph pass that increments a counter to detect
+    if it is being executed multiple times erroneously.
+    """
+    global pass_count
+    pass_count += 1
+    # No actual graph modification needed to detect the duplication bug
+    return graph
+
+# Set the custom pre pass configuration.
+# This triggers the code path in torch/_inductor/fx_passes/joint_graph.py
+# mentioned in the bug report.
+config.joint_custom_pre_pass = custom_pre_pass
+
+# Define a function using the similar API: torch.all
+def test_func(x):
+    # Using torch.all as the operation to be compiled
+    return torch.all(x > 0)
+
+try:
+    # Compile the function using torch.compile (Original API)
+    compiled_test_func = torch.compile(test_func, backend="inductor")
+
+    # Create input and run the compiled function
+    input_tensor = torch.tensor([1, 2, 3, 4])
+    result = compiled_test_func(input_tensor)
+
+    # Verify the result is correct
+    assert result.item() == True
+
+    # Verify the fix for the bug:
+    # The bug report indicates joint_custom_pre_pass runs twice due to a merge mistake.
+    # We assert that it should only run once.
+    assert pass_count == 1, f"joint_custom_pre_pass was called {pass_count} times, expected 1."
+
+    print("Test passed: joint_custom_pre_pass executed exactly once.")
+
+finally:
+    # Reset config to avoid side effects
+    if hasattr(config, 'joint_custom_pre_pass'):
+        config.joint_custom_pre_pass = None

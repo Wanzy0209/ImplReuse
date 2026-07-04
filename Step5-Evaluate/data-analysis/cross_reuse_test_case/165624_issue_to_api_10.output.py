@@ -1,0 +1,59 @@
+import torch
+
+# Simulating the configuration object structure from the PyTorch bug report
+class Config:
+    def __init__(self, custom_pass):
+        self.joint_custom_pre_pass = custom_pass
+
+# Reproducing the buggy logic structure from torch/_inductor/fx_passes/joint_graph.py
+# The bug involves a conditional block being duplicated due to a merge mistake.
+def apply_transforms_with_bug(graph, config):
+    # First occurrence of the conditional block (Lines 581-584 in the issue)
+    if config.joint_custom_pre_pass is not None:
+        # Using torch addition to simulate the graph pass transformation
+        graph = graph + 1
+    
+    # Intermediate operations (e.g., remove_noop_ops, constant_folding)
+    # We assume these are no-ops for this specific test context
+    
+    # Second occurrence of the conditional block (Lines 594-600 in the issue)
+    # This is the "Merge Mistake" - it executes the pass twice.
+    if config.joint_custom_pre_pass is not None:
+        graph = graph + 1
+        
+    return graph
+
+def test_duplicate_execution_pattern():
+    """
+    Test case to reflect the relationship between the merge mistake bug 
+    and the similar API (torch operations).
+    
+    This test verifies that the 'buggy' code structure results in the 
+    operation being applied twice, demonstrating the logic error 
+    described in the issue.
+    """
+    # Setup: Enable the custom pass
+    config = Config(custom_pass=True)
+    initial_value = torch.tensor(10.0)
+    
+    # Execute the logic with the duplicate blocks
+    result = apply_transforms_with_bug(initial_value, config)
+    
+    # Expected behavior with the bug: 10 + 1 (first pass) + 1 (second pass) = 12
+    # If the bug were fixed (one block removed), the result would be 11.
+    expected_buggy_result = torch.tensor(12.0)
+    
+    # Assertion to confirm the impact of the duplicate execution
+    assert torch.equal(result, expected_buggy_result), \
+        f"Test failed: Expected {expected_buggy_result} (double application), got {result}"
+    
+    # Edge case: Verify that if the pass is None, no addition occurs
+    config_none = Config(custom_pass=None)
+    result_none = apply_transforms_with_bug(initial_value, config_none)
+    assert torch.equal(result_none, torch.tensor(10.0)), \
+        f"Test failed: Expected 10.0 (no pass), got {result_none}"
+
+    print("Test passed: The duplicate execution pattern behaves as expected.")
+
+if __name__ == "__main__":
+    test_duplicate_execution_pattern()

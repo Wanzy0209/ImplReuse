@@ -1,0 +1,73 @@
+import unittest
+import torch
+import math
+import tensorflow as tf
+
+class TestMathTruncONNXExport(unittest.TestCase):
+    """
+    Test case for Issue 166110: ConversionError when translating node math.trunc.
+    This test reproduces the bug where torch.onnx.export fails with math.trunc.
+    It also includes a reference test using the similar API tf.keras.activations.relu
+    to demonstrate the pattern of functional activation usage.
+    """
+
+    def test_onnx_export_math_trunc_error(self):
+        """
+        Reproduces the ConversionError when exporting a model with math.trunc to ONNX.
+        """
+        class TruncModel(torch.nn.Module):
+            def forward(self, x):
+                # The bug is triggered by using math.trunc inside the forward pass.
+                # This mimics the usage of functional activations like tf.keras.activations.relu.
+                return math.trunc(x)
+
+        model = TruncModel()
+        model.eval()
+        
+        # Create dummy input
+        dummy_input = torch.randn(1, 10)
+
+        # Verify standard PyTorch execution works
+        with torch.no_grad():
+            output = model(dummy_input)
+            self.assertIsNotNone(output)
+
+        # Attempt to export to ONNX
+        # This is expected to raise an Exception (ConversionError) due to the bug.
+        with self.assertRaises(Exception) as context:
+            torch.onnx.export(
+                model,
+                dummy_input,
+                "trunc_model.onnx",
+                opset_version=17,
+                input_names=['input'],
+                output_names=['output']
+            )
+
+        # Verify the error message matches the issue description
+        error_message = str(context.exception)
+        self.assertTrue("math.trunc" in error_message or "trunc" in error_message, 
+                        f"Expected error message to contain 'math.trunc', got: {error_message}")
+
+    def test_similar_api_relu_reference(self):
+        """
+        Leverages the similar API: tf.keras.activations.relu.
+        This test demonstrates the correct usage pattern of a functional activation
+        (ReLU) in TensorFlow, which serves as a semantic parallel to the failing
+        math.trunc operation in PyTorch.
+        """
+        # Define input tensor
+        x = tf.constant([-1.0, 0.0, 1.0, 2.0])
+
+        # Use the similar API: tf.keras.activations.relu
+        # This is the TensorFlow equivalent of a functional element-wise operation.
+        y = tf.keras.activations.relu(x)
+
+        # Define expected output for ReLU
+        expected = tf.constant([0.0, 0.0, 1.0, 2.0])
+
+        # Assert that the API behaves as expected
+        self.assertTrue(tf.reduce_all(tf.equal(y, expected)))
+
+if __name__ == '__main__':
+    unittest.main()

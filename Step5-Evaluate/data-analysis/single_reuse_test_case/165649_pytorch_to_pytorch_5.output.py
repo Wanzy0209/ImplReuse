@@ -1,0 +1,31 @@
+import torch
+
+# Setup inputs from the original bug report
+# These inputs caused a crash in torch.fmod due to integer overflow (INT64_MIN / -1)
+dividend = torch.full((2, 3), torch.iinfo(torch.int64).min, dtype=torch.int64, device='cpu')
+divisor = torch.full((3,), -1, dtype=torch.int64, device='cpu')
+
+print("Dividend tensor:", dividend)
+print("Divisor tensor:", divisor)
+
+# Adapt the call site to use the similar API: torch.atleast_1d
+# atleast_1d ensures tensors have at least 1 dimension. 
+# We pass both tensors as arguments.
+result = torch.atleast_1d(dividend, divisor)
+
+print("Result:", result)
+
+# Verify the behavior of torch.atleast_1d with these inputs
+# 1. It should not crash (stability check)
+# 2. It should return a tuple since multiple tensors were passed
+assert isinstance(result, tuple), "atleast_1d should return a tuple for multiple inputs"
+assert len(result) == 2, "Should return two tensors"
+
+# 3. Since inputs are already at least 1D, shapes and values should be preserved
+assert result[0].shape == dividend.shape, f"Expected shape {dividend.shape}, got {result[0].shape}"
+assert result[1].shape == divisor.shape, f"Expected shape {divisor.shape}, got {result[1].shape}"
+
+assert torch.equal(result[0], dividend), "Dividend values should be preserved"
+assert torch.equal(result[1], divisor), "Divisor values should be preserved"
+
+print("Test passed: torch.atleast_1d handled the inputs correctly without crashing.")

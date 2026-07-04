@@ -1,0 +1,45 @@
+import tensorflow as tf
+import tempfile
+import os
+
+# Define the custom class similar to the issue
+class Bar:
+    def __eq__(self, other):
+        return super().__eq__(other)
+
+    def __hash__(self):
+        return 0
+
+# Register the class for Keras serialization (analogous to pytree.register_constant)
+# This ensures the custom type is recognized during the saving process.
+tf.keras.utils.register_keras_serializable(package='test', name='Bar')(Bar)
+
+# Define a custom layer (analogous to the 'Foo' class in the issue)
+class FooLayer(tf.keras.layers.Layer):
+    def __init__(self, **kwargs):
+        super(FooLayer, self).__init__(**kwargs)
+        # Replicate the problematic logic: setting an attribute to a dict containing Bar()
+        self.attr = {3: Bar()}
+
+    def call(self, inputs):
+        return inputs
+
+    def get_config(self):
+        config = super(FooLayer, self).get_config()
+        # Ensure the attribute is part of the config to be processed by save_model
+        config['attr'] = self.attr
+        return config
+
+# Create a model using the custom layer
+model = tf.keras.Sequential([FooLayer(input_shape=(3,))])
+
+# Test the similar API: tf.keras.models.save_model
+# This corresponds to the execution of the compiled function in the original issue.
+with tempfile.TemporaryDirectory() as tmpdir:
+    filepath = os.path.join(tmpdir, 'model')
+    try:
+        tf.keras.models.save_model(model, filepath)
+        print("Test Passed: Model saved successfully.")
+    except Exception as e:
+        print(f"Test Failed with error: {e}")
+        raise

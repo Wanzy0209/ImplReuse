@@ -1,0 +1,47 @@
+import torch
+from typing import NamedTuple
+
+class MyNamedTuple(NamedTuple):
+    first: torch.Tensor
+    second: torch.Tensor
+
+class MyNamedTupleSubclass(MyNamedTuple):
+    pass
+
+# Define a custom operator that mimics the logic in the bug report
+# We define the return type as Tensor for schema compliance, 
+# but the implementation will return the NamedTuple to test attribute persistence.
+torch.library.define("test::custom_op", "(Tensor a, Tensor b) -> Tensor")
+
+# Use the modern API: torch.library.register_fake
+# This defines the behavior of the operator during tracing/compilation (FakeTensor mode)
+@torch.library.register_fake("test::custom_op")
+def custom_op_abstract(a, b):
+    tup = MyNamedTupleSubclass(first=a, second=b)
+    extra_info = torch.tensor(4.0)
+    tup.extra_info = extra_info  # Add dynamic attribute
+    return tup
+
+# Register a concrete implementation for CPU execution
+@torch.library.impl("test::custom_op", "CPU")
+def custom_op_cpu(a, b):
+    tup = MyNamedTupleSubclass(first=a, second=b)
+    extra_info = torch.tensor(4.0)
+    tup.extra_info = extra_info  # Add dynamic attribute
+    return tup
+
+def fn():
+    x = torch.tensor([2.0])
+    y = torch.tensor(1.0)
+    return torch.ops.test.custom_op(x, y)
+
+print("\nTesting Custom Op with torch.compile (uses register_fake):")
+# torch.compile will use the fake implementation registered above
+compiled_fn = torch.compile(fn, backend="eager")
+result = compiled_fn()
+
+# Verify if the dynamic attribute persists
+try:
+    print(f"Result extra_info: {result.extra_info}")
+except AttributeError as e:
+    print(f"AttributeError: {e}")

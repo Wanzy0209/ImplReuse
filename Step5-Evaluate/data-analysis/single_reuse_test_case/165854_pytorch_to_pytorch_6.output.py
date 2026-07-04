@@ -1,0 +1,68 @@
+import torch
+
+# Fix: Handle missing torch.compile for PyTorch versions < 2.0
+# If torch.compile is not available, we mock it to run the function in eager mode.
+if not hasattr(torch, 'compile'):
+    print("torch.compile is not available (requires PyTorch 2.0+). Running in eager mode.")
+    torch.compile = lambda fn, **kwargs: fn
+
+def run_with_k(compiled_fn, k, device, dtype):
+    """Run lobpcg with a specific k, creating a captured buffer sized by k."""
+    N = 64  # Matrix size
+
+    # Create captured buffer that depends on dynamic k
+    # This mimics the 'head_scale' buffer in the original bug report
+    buffer = torch.randn(k, device=device, dtype=dtype, requires_grad=True)
+
+    print(f"  Running with k={k}, buffer.shape={buffer.shape}")
+
+    # Run multiple iterations with the same buffer
+    for i in range(5):
+        # Create inputs
+        # A must be symmetric positive definite
+        A = torch.randn(N, N, device=device, dtype=dtype, requires_grad=True)
+        A = A @ A.T + 1e-3 * torch.eye(N, device=device, dtype=dtype)
+        
+        # Initial guess X
+        X = torch.randn(N, k, device=device, dtype=dtype, requires_grad=True)
+
+        # Call the compiled function with the buffer
+        # The buffer is used inside the compiled function to scale X
+        eigenvalues, eigenvectors = compiled_fn(A, X, buffer)
+        
+        # Perform backward pass
+        loss = eigenvalues.sum()
+        loss.backward()
+
+    print(f"   Completed {i+1} iterations")
+
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # lobpcg requires float32 or float64
+    dtype = torch.float32
+    torch.manual_seed(0)
+
+    # Test with different k values - this makes k a dynamic dimension
+    # and the captured buffer (buffer) changes size with k
+    k_values = [4, 8, 4, 16, 4]
+
+    # The function to be compiled
+    def compute_lobpcg(A, X, buffer):
+        # Use the buffer to scale the initial guess X
+        # This mimics the usage of head_scale in the original score_mod
+        X_scaled = X * buffer
+        return torch.lobpcg(A, k=X.shape[1], X=X_scaled)
+
+    compiled_fn = torch.compile(compute_lobpcg, fullgraph=True, dynamic=True)
+
+    print(f"Running lobpcg with dynamic k on {device}, dtype={dtype}")
+    print(f"Testing k values: {k_values}\n")
+
+    for iteration, k in enumerate(k_values, start=1):
+        print(f"Iteration {iteration}:")
+        run_with_k(compiled_fn, k, device, dtype)
+
+
+if __name__ == "__main__":
+    main()

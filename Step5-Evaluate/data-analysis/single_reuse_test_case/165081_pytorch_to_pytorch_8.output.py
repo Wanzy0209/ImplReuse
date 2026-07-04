@@ -1,0 +1,55 @@
+import torch
+import sys
+
+# Check if torch._dynamo is available
+if not hasattr(torch, '_dynamo'):
+    print("Test skipped: torch._dynamo is not available (requires PyTorch 2.0+).")
+    sys.exit(0)
+
+# Configuration from the bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+# Seed from the bug report
+torch.manual_seed(52676)
+
+def fuzzed_program():
+    # Recreating tensor definitions from the original test case
+    # var_node_23 = torch.full((156, 8), -0.5249394453404403, dtype=torch.float64)
+    var_node_23 = torch.full((156, 8), -0.5249394453404403, dtype=torch.float64, device="cuda")
+    # var_node_24 = torch.full((8, 9), 0.9331226188585692, dtype=torch.float64)
+    var_node_24 = torch.full((8, 9), 0.9331226188585692, dtype=torch.float64, device="cuda")
+
+    # Original call site (implied context of matrix operations):
+    # var_node_22 = torch.matmul(var_node_23, var_node_24)
+    
+    # Adaptation to test the similar API: torch.addmv
+    # torch.addmv(input, mat, vec, beta=1, alpha=1) performs: beta * input + alpha * (mat @ vec)
+    # We adapt the tensors to fit the addmv signature:
+    # mat (M, N) = var_node_23 (156, 8)
+    # vec (N)    = var_node_24[:, 0] (8)
+    # input (M)  = var_node_23[:, 0] (156)
+    
+    input_tensor = var_node_23[:, 0]
+    mat = var_node_23
+    vec = var_node_24[:, 0]
+    
+    # Call torch.addmv
+    result = torch.addmv(input_tensor, mat, vec, beta=1, alpha=1)
+    
+    return result
+
+# Execute the test
+try:
+    # Run eager mode
+    eager_result = fuzzed_program()
+    
+    # Run compiled mode
+    compiled_fn = torch._dynamo.optimize()(fuzzed_program)
+    compiled_result = compiled_fn()
+    
+    # Verify results match
+    assert torch.allclose(eager_result, compiled_result)
+    print("Test passed: Eager and compiled results match for torch.addmv.")
+except Exception as e:
+    print(f"Test failed with error: {e}")

@@ -1,0 +1,49 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def test_gather_object_duplicate_execution(rank, world_size):
+    """
+    Test case for torch.distributed.gather_object.
+    
+    This test is adapted from the bug report regarding duplicate execution 
+    in torch.compile's joint_graph.py. The bug involved a custom pass being 
+    executed twice due to a merge mistake. 
+    
+    Here, we verify that torch.distributed.gather_object behaves correctly 
+    (is idempotent) if called twice in succession, ensuring no data corruption 
+    or unexpected behavior occurs from such a duplicate call.
+    """
+    # Initialize the process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Define the object to gather
+    obj = f"object_from_rank_{rank}"
+    
+    # Prepare the gather list
+    # Only the destination rank (0) needs to provide a list
+    gather_list = [None] * world_size if rank == 0 else None
+
+    # First execution of gather_object
+    dist.gather_object(obj, gather_list, dst=0)
+
+    # Second execution of gather_object
+    # This simulates the "merge mistake" where the operation is called twice.
+    # We verify that the API handles this gracefully (idempotency).
+    dist.gather_object(obj, gather_list, dst=0)
+
+    # Verify results on the destination rank
+    if rank == 0:
+        expected = [f"object_from_rank_{i}" for i in range(world_size)]
+        assert gather_list == expected, f"Expected {expected}, but got {gather_list}"
+        print("Test Passed: gather_object handles duplicate execution correctly.")
+
+    # Cleanup
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_gather_object_duplicate_execution, args=(world_size,), nprocs=world_size, join=True)

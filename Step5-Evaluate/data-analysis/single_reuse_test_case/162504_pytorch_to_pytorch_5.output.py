@@ -1,0 +1,37 @@
+import torch
+
+torch.cuda.manual_seed(42)
+
+# Define input tensor (4D for upsample: N, C, H, W)
+input_size = (1, 3, 10, 10)
+scale_factor = 2
+
+# Eager execution
+eager_in = torch.ones(input_size, device="cuda", requires_grad=True)
+eager_out = torch.nn.functional.upsample(
+    eager_in, 
+    scale_factor=scale_factor, 
+    mode='nearest'
+)
+# Define grad_outputs for non-scalar output
+grad_outputs = torch.ones_like(eager_out)
+eager_in_grad, = torch.autograd.grad(eager_out, eager_in, grad_outputs=grad_outputs)
+
+# CUDA Graph execution
+g = torch.cuda.CUDAGraph()
+with torch.cuda.graph(g):
+    graph_in = torch.ones(input_size, device="cuda", requires_grad=True)
+    graph_out = torch.nn.functional.upsample(
+        graph_in, 
+        scale_factor=scale_factor, 
+        mode='nearest'
+    )
+    graph_grad_outputs = torch.ones_like(graph_out)
+    graph_in_grad, = torch.autograd.grad(graph_out, graph_in, grad_outputs=graph_grad_outputs)
+
+# Replay graph
+g.replay()
+
+# Verification
+assert torch.allclose(eager_in_grad, graph_in_grad, rtol=0.0, atol=0.0), "Mismatch in gradient outputs"
+print("Test passed.")

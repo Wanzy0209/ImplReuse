@@ -1,0 +1,79 @@
+import torch
+import torch._dynamo
+
+# The similar API (tf.errors.OperatorNotAllowedInGraphError) is raised when an 
+# operation is not supported in TensorFlow's graph execution mode.
+# This test case adapts that concept to PyTorch by verifying that torch.chunk
+# operates correctly within PyTorch's graph mode (torch.compile), specifically
+# handling non-contiguous tensors created via as_strided which triggered the
+# original divergence bug.
+
+def test_torch_chunk_graph_execution():
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch.manual_seed(1166094474)
+
+    # Sentinel tensor to ensure gradient computation
+    sentinel = torch.tensor(1.0, requires_grad=True)
+
+    # Setup inputs with specific strides (non-contiguous) to trigger the bug
+    arg_0 = torch.as_strided(torch.randint(0, 2, (12,), dtype=torch.int8).bool(), (12,), (1,))
+    arg_1 = torch.as_strided(torch.randint(5, 30, (10,)).to(torch.int64), (10,), (1,))
+    arg_2 = torch.as_strided(torch.randint(0, 2, (24,), dtype=torch.int8).bool(), (6, 4), (4, 1))
+    arg_3 = torch.as_strided(torch.randint(0, 2, (2,), dtype=torch.int8).bool(), (2,), (1,))
+
+    def fuzzed_program(arg_0, arg_1, arg_2, arg_3, sentinel):
+        var_node_3 = torch.full((12,), False, dtype=torch.bool)
+        var_node_2 = torch.chunk(var_node_3, 4, dim=0)[0]
+        
+        var_node_6 = arg_0
+        _input_size_var_node_5 = var_node_6.size(0)
+        _index_var_node_5 = torch.randint(0, _input_size_var_node_5, (10,), device=var_node_6.device)
+        var_node_5 = torch.gather(var_node_6, 0, _index_var_node_5)
+        var_node_4 = torch.chunk(var_node_5, 2, dim=0)[0]
+        
+        var_node_10 = arg_2
+        var_node_9 = torch.chunk(var_node_10, 4, dim=1)[0]
+        var_node_8 = torch.squeeze(var_node_9)
+        
+        var_node_1 = torch.cat([var_node_2, var_node_4, var_node_8], dim=0)
+        var_node_11 = arg_3
+        var_node_0 = torch.cat([var_node_1, var_node_11], dim=0)
+        
+        # Ensure gradient computation
+        result = var_node_0 * sentinel
+        if result.is_complex():
+            result = result.real
+        return result
+
+    args = (arg_0, arg_1, arg_2, arg_3, sentinel)
+
+    # 1. Eager Execution
+    try:
+        result_eager = fuzzed_program(*args)
+        print(" Eager execution successful")
+    except Exception as e:
+        print(f" Eager execution failed: {e}")
+        raise
+
+    # 2. Compiled Execution (Graph Mode)
+    # We check if the operation is allowed/functional in the graph, similar to 
+    # catching tf.errors.OperatorNotAllowedInGraphError in TF.
+    try:
+        compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+        result_compiled = compiled_program(*args)
+        print(" Compiled execution successful")
+    except AssertionError as e:
+        # Catching the specific divergence error mentioned in the issue:
+        # assert len(input_size) == len(new_size)
+        print(f" Graph execution failed with AssertionError (Divergence): {e}")
+        raise
+    except Exception as e:
+        print(f" Graph execution failed with unexpected error: {e}")
+        raise
+
+    # 3. Verify Consistency
+    assert torch.allclose(result_eager, result_compiled), "Divergence detected between eager and compiled outputs"
+    print(" Eager and Compiled results match")
+
+if __name__ == "__main__":
+    test_torch_chunk_graph_execution()

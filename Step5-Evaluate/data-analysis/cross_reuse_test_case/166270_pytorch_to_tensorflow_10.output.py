@@ -1,0 +1,83 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Adapted from PyTorch bug report logic to TensorFlow
+# The original bug involved a divergence between eager and compiled modes 
+# when using torch.squeeze. Here we test the TensorFlow equivalent logic
+# wrapped with the similar API: tf.autograph.experimental.do_not_convert.
+
+def get_input_tensor():
+    # Mimic: torch.as_strided(torch.randint(0, 2, (4,), dtype=torch.int8).bool(), (4,), (1,))
+    # Creates a random boolean tensor of size (4,)
+    return tf.cast(tf.random.uniform((4,), 0, 2, dtype=tf.int32), tf.bool)
+
+# The core logic adapted from the PyTorch fuzzed_program
+# We apply tf.autograph.experimental.do_not_convert to test the API's behavior
+# in preventing AutoGraph conversion, similar to how the PyTorch bug tested
+# compilation behavior.
+@tf.autograph.experimental.do_not_convert
+def fuzzed_program_tf(arg_0, sentinel):
+    # var_node_3 = torch.chunk(var_node_4, 4, dim=0)[0]
+    # tf.split returns a list, we take the first element
+    var_node_3 = tf.split(arg_0, 4, axis=0)[0]
+    
+    # var_node_2 = torch.squeeze(var_node_3)
+    var_node_2 = tf.squeeze(var_node_3)
+    
+    # var_node_1 = torch.stack([var_node_2], dim=0)
+    var_node_1 = tf.stack([var_node_2], axis=0)
+    
+    # var_node_0 = torch.reshape(var_node_1, [1])
+    var_node_0 = tf.reshape(var_node_1, [1])
+    
+    # Ensure gradient computation logic (mimicking sentinel multiplication)
+    result = var_node_0 * sentinel
+    
+    # Handle complex numbers if necessary (though inputs are bool/float here)
+    if result.dtype == tf.complex64 or result.dtype == tf.complex128:
+        result = tf.math.real(result)
+        
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = tf.Variable(1.0, dtype=tf.float32)
+
+# 1. Test Eager Execution
+print("Testing Eager Execution...")
+arg_0 = get_input_tensor()
+result_eager = fuzzed_program_tf(arg_0, sentinel)
+print(f" Eager success: {result_eager.shape}, {result_eager.dtype}")
+
+# 2. Test Compiled Execution (tf.function)
+# The function is decorated with do_not_convert, so AutoGraph will not convert it.
+# It will execute as-is within the tf.function graph context.
+print("\nTesting Compiled Execution (tf.function) with do_not_convert...")
+@tf.function
+def compiled_wrapper(arg, sent):
+    return fuzzed_program_tf(arg, sent)
+
+result_compiled = compiled_wrapper(arg_0, sentinel)
+print(f" Compile success: {result_compiled.shape}, {result_compiled.dtype}")
+
+# 3. Verify Consistency
+# Check if eager and compiled results match
+assert tf.reduce_all(tf.equal(result_eager, result_compiled)).numpy(), "Divergence detected between eager and compiled modes"
+print(" Verification passed: Eager and Compiled results match.")
+
+# 4. Test without do_not_convert to demonstrate standard AutoGraph behavior
+# This verifies that the logic itself is valid in TF graph mode without the decorator.
+print("\nTesting Standard AutoGraph Conversion (without do_not_convert)...")
+
+@tf.function
+def standard_autograph_func(arg, sent):
+    # Same logic without the decorator
+    var_node_3 = tf.split(arg, 4, axis=0)[0]
+    var_node_2 = tf.squeeze(var_node_3)
+    var_node_1 = tf.stack([var_node_2], axis=0)
+    var_node_0 = tf.reshape(var_node_1, [1])
+    result = var_node_0 * sent
+    return result
+
+result_standard = standard_autograph_func(arg_0, sentinel)
+print(f" Standard AutoGraph success: {result_standard.shape}, {result_standard.dtype}")

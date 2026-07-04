@@ -1,0 +1,69 @@
+import torch
+import sys
+
+# Fix: Check if torch._dynamo exists before accessing it
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(238)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = torch.full((), 1, dtype=torch.int16) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_3 = arg_0 # size=(), stride=(), dtype=int16, device=cuda
+    var_node_1 = torch.add(var_node_2, var_node_3) # size=(), stride=(), dtype=int16, device=cuda
+    
+    # Adapted call site: replacing torch.div with torch.exp
+    # Note: torch.exp typically promotes integer inputs to float.
+    var_node_0 = torch.exp(var_node_1) 
+    
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randn(1).to(torch.int16), (), ())
+
+args = (arg_0,) + (sentinel,)
+
+# Run Eager Mode
+try:
+    out_eager = fuzzed_program(*args)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+except Exception as e:
+    print(f'Eager Failed: {e}')
+    sys.exit(1)
+
+# Run Compiled Mode
+# Fix: Check if torch.compile is available (usually implies _dynamo is available)
+if hasattr(torch, 'compile'):
+    try:
+        compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+        out_compiled = compiled_program(*args)
+        out_compiled.sum().backward()
+        print('Compile Success! ')
+    except Exception as e:
+        print(f'Compile Failed: {e}')
+        sys.exit(1)
+else:
+    print("Compile Skipped: torch.compile not available in this PyTorch version")
+    sys.exit(0)
+
+# Check for divergence
+out_eager_sum = out_eager.sum()
+out_compiled_sum = out_compiled.sum()
+diff = (out_eager_sum - out_compiled_sum).abs().item()
+rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100
+print(f'Relative diff (sum): {rel_diff:.6f}%')
+
+if rel_diff > 5 and diff > 1:
+    print(f' Forward output sums differ significantly (relative and absolute)!')
+    print('out_eager_sum:', out_eager_sum.item())
+    print('out_compiled_sum:', out_compiled_sum.item())
+    print('Absolute diff:', diff)
+    print('Relative diff (%):', rel_diff)
+    sys.exit(1)

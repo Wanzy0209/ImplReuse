@@ -1,0 +1,65 @@
+import os, torch
+import torch.nn as nn, torch.nn.functional as F
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+# Necessary configuration for the bug context
+# Guard the import as torch._dynamo might not be available in all environments
+try:
+    import torch._dynamo as dynamo
+    dynamo.config.optimize_ddp = True
+except ImportError:
+    pass
+
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+
+# Initialize process group if not already initialized
+if not dist.is_initialized():
+    backend = "nccl" if torch.cuda.is_available() and dist.is_nccl_available() else "gloo"
+    dist.init_process_group(backend=backend)
+
+class AnyLayer(nn.Module):
+    """
+    Replaces the custom autograd function with a layer using torch.any.
+    We use keepdim to maintain a tensor output compatible with loss functions.
+    """
+    def forward(self, x):
+        # Check if any element in the spatial dimensions is greater than 0.5
+        # Returns a tensor of shape [Batch, 1, 1, 1]
+        return torch.any(x > 0.5, dim=[1, 2, 3], keepdim=True).float()
+
+def main():
+    device = torch.device(f"cuda:{LOCAL_RANK}" if torch.cuda.is_available() else "cpu")
+    
+    # Define model using the torch.any layer
+    model = nn.Sequential(nn.Conv2d(3, 3, 3, padding=1), AnyLayer()).to(device)
+    
+    # Apply torch.compile (the context of the bug)
+    model = torch.compile(model)
+    
+    # Wrap with DDP
+    model = DDP(model, 
+                device_ids=[LOCAL_RANK] if torch.cuda.is_available() else None, 
+                output_device=LOCAL_RANK if torch.cuda.is_available() else None, 
+                find_unused_parameters=True)
+    
+    opt = torch.optim.SGD(model.parameters(), lr=1e-4)
+
+    for it in range(3):
+        x = torch.rand(2, 3, 256, 256, device=device)
+        out = model(x)
+        
+        # Adapt target to the output shape of torch.any [2, 1, 1, 1]
+        target = torch.rand(2, 1, 1, 1, device=device)
+        loss = F.mse_loss(out, target)
+        
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        opt.step()
+        print(f"[rank{LOCAL_RANK}] iter={it+1} loss={loss.item():.6f}")
+
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

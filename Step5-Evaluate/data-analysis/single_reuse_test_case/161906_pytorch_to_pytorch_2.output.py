@@ -1,0 +1,52 @@
+import torch
+import torch.nn as nn
+
+class M(nn.Module):
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft, self.hop, self.win = n_fft, hop, win
+        # Register window as buffer so it moves with .to(device)
+        self.register_buffer("window", torch.hann_window(win))
+        # Introduce parameter for broadcasting / stride ops
+        self.p = nn.Parameter(torch.tensor(2.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        S = torch.stft(
+            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,
+            return_complex=True, window=self.window, pad_mode="constant"
+        )
+        R = torch.abs(S.real)   # unary op on real
+        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)
+        
+        # Adaptation: Replace torch.complex with torch.equal
+        # torch.equal checks if two tensors have the same size and elements.
+        # We verify if the API handles the stride/broadcasting context correctly.
+        is_equal = torch.equal(R, I)
+        
+        # torch.equal returns a bool, wrap it in a tensor to match return type
+        return torch.tensor(is_equal, device=x.device)
+
+def main():
+    # Fix: Force CPU execution to avoid CUFFT_INTERNAL_ERROR in the environment
+    device = "cpu"
+    
+    torch.manual_seed(0)
+
+    x = torch.randn(1, 16000, device=device)
+    m = M().to(device)
+
+    # Eager execution
+    z_eager = m(x)
+    print("eager mode OK:", z_eager.item(), z_eager.dtype)
+
+    # Compiled execution
+    m_c = torch.compile(m)
+    z_compiled = m_c(x)
+    print("compiled mode OK:", z_compiled.item(), z_compiled.dtype)
+
+    # Verify consistency between eager and compiled modes
+    assert torch.equal(z_eager, z_compiled), "Eager and compiled results differ"
+    print("Test passed: torch.equal behaves consistently in eager and compiled modes.")
+
+if __name__ == "__main__":
+    main()

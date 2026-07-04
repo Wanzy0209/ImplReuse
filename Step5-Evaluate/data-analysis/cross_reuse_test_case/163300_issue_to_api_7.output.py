@@ -1,0 +1,109 @@
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+import sys
+
+# Handle missing torch.nn.attention module (available in PyTorch 2.5+)
+try:
+    from torch.nn.attention.flex_attention import flex_attention
+    from torch.nn.attention import SDPBackend
+except ImportError:
+    print("Skipping test: 'torch.nn.attention' module not found. "
+          "This test requires PyTorch 2.5 or newer.")
+    sys.exit(0)
+
+# Helper functions derived from the similar API (torch.distributed.get_world_size)
+def is_dist_avail_and_initialized():
+    return dist.is_available() and dist.is_initialized()
+
+def get_world_size():
+    if not is_dist_avail_and_initialized():
+        return 1
+    return dist.get_world_size()
+
+class FlexAttentionCPB(nn.Module):
+    def __init__(self, N: int, R: int, H: int = 6, hidden: int = 32):
+        super().__init__()
+        self.mlp = nn.Sequential(nn.Linear(2, hidden), nn.GELU(), nn.Linear(hidden, H, bias=False))
+        self.gamma = nn.Parameter(torch.zeros(H))
+        self.H = H
+        self.init_tables(N, R)
+        self.register_buffer("r_cutoff", torch.tensor(R, dtype=torch.long), persistent=False)
+
+    def init_tables(self, N: int, R: int):
+        # continuous position bias   SwinV2
+        P = N - R
+        S = int(P**0.5)
+        assert S * S == P
+        rng = torch.arange(-(S - 1), S, dtype=torch.float32)
+        dY, dX = torch.meshgrid(rng, rng, indexing="ij")
+        rel = torch.stack([dY / max(S - 1, 1), dX / max(S - 1, 1)], dim=-1).reshape(-1, 2)
+        rel_table = torch.sign(rel) * torch.log1p(rel.abs())
+        self.register_buffer("rel_table", rel_table, persistent=False)
+
+        yy, xx = torch.arange(S), torch.arange(S)
+        Y, X = torch.meshgrid(yy, xx, indexing="ij")
+        flat = torch.stack([Y, X], 0).flatten(1)
+        d = flat[:, :, None] - flat[:, None, :]
+        d = d.permute(1, 2, 0).contiguous()
+        d[:, :, 0] += S - 1; d[:, :, 1] += S - 1
+        d[:, :, 0] *= 2 * S - 1
+        l_idx = d.sum(-1).to(torch.long)
+
+        idx = torch.full((N, N), 0, dtype=torch.long)
+        idx[R:, R:] = l_idx
+        self.register_buffer("idx_table", idx, persistent=False)
+
+    def _score_mod(self, mu: torch.Tensor):
+        bt = self.mlp(self.rel_table)
+        idx = self.idx_table
+        mu_q, mu_k = mu.unbind(2)
+        gam_sig = torch.sigmoid(self.gamma)
+
+        def score_mod(score, b, h, q, kv):
+            has_bias = (q >= self.r_cutoff) & (kv >= self.r_cutoff)
+            l2 = idx[q, kv]
+            bias = bt[l2, h]
+            w_gate = gam_sig[h] * (mu_q[b, h, q] + mu_k[b, h, kv])
+            return score + has_bias.to(score.dtype) * w_gate * bias
+
+        return score_mod
+
+    def forward(self, q, k, v, mu):
+        return flex_attention(q, k, v, score_mod=self._score_mod(mu))
+
+def test_flex_attention_compile():
+    device = "cuda"
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # Leverage similar API to determine batch size based on world size
+    world_size = get_world_size()
+    B = 2 * world_size
+    N, R, d, H = 18, 2, 32, 4
+    
+    mod = FlexAttentionCPB(N, R, H).to(device)
+    
+    # The bug occurs with torch.compile(dynamic=False)
+    mod = torch.compile(mod, dynamic=False)
+
+    q = torch.randn(B, H, N, d, device=device)
+    k = torch.randn_like(q)
+    v = torch.randn_like(q)
+    mu = torch.randn(B, H, 2, N, device=device)
+
+    with torch.nn.attention.sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            out = mod(q, k, v, mu)
+            # Verify output shape and validity
+            assert out.shape == (B, H, N, d), f"Output shape mismatch: {out.shape} vs {(B, H, N, d)}"
+            assert not torch.isnan(out).any(), "Output contains NaNs"
+            
+            # Test backward pass
+            out.norm().backward()
+            
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_flex_attention_compile()

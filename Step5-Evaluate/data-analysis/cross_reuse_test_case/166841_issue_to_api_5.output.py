@@ -1,0 +1,107 @@
+import unittest
+import torch
+import torch.export
+import torch._inductor
+import os
+import shutil
+import tempfile
+
+class TestAOTIMultiDeviceScatter(unittest.TestCase):
+    """
+    Test case for Issue 166841:
+    Verifies that aoti_compile_and_package correctly handles CPU scatter_add_ 
+    operations in models that also contain CUDA operations.
+    """
+    
+    def setUp(self):
+        # Create a temporary directory for the compiled package
+        self.test_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        # Clean up the temporary directory
+        if os.path.exists(self.test_dir):
+            shutil.rmtree(self.test_dir)
+
+    def test_cpu_scatter_add_with_cuda_matmul(self):
+        # --- 1. Minimal Model Definition ---
+        class MyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                # Buffers are explicitly on CPU
+                self.register_buffer(
+                    "index",
+                    torch.tensor([1, 4, 1, 7], device='cpu', dtype=torch.int64)
+                )
+                self.register_buffer(
+                    "src",
+                    torch.ones(4, device='cpu', dtype=torch.int64)
+                )
+
+            def forward(self, matrix, vector):
+                # Inputs are expected to be on CUDA
+
+                # 1. Operation on CPU tensors (scatter_add_)
+                # This is the operation that was incorrectly generating a CUDA kernel
+                z = torch.zeros((vector.shape[0],), device='cpu', dtype=torch.int64)
+                scatter_result = z.scatter_add(0, self.index, self.src)
+
+                # 2. Move result to CUDA and continue on CUDA
+                # This ensures the graph contains both CPU and CUDA device types
+                v = vector + scatter_result.to(vector.dtype).to('cuda')
+                return torch.matmul(matrix, v)
+
+        # --- 2. Setup and Compile ---
+        model = MyModel().eval().to('cpu')
+        
+        # Create inputs on CUDA
+        matrix = torch.randn(10, 10, device='cuda')
+        vector = torch.randn(10, device='cuda')
+        example_args = (matrix, vector)
+
+        # Export the model
+        print("Exporting model...")
+        ep = torch.export.export(model, example_args)
+
+        package_path = os.path.join(self.test_dir, "model_package.pt2")
+
+        # Compile using AOTInductor
+        print("Starting AOTInductor compilation...")
+        try:
+            torch._inductor.aoti_compile_and_package(
+                ep,
+                package_path=package_path,
+            )
+        except Exception as e:
+            self.fail(f"aoti_compile_and_package failed with: {e}")
+
+        self.assertTrue(os.path.exists(package_path), "Package file was not created")
+
+        # --- 3. Load and Run ---
+        print("\nAttempting to load and run compiled model...")
+        try:
+            loaded = torch._inductor.aoti_load_package(package_path)
+        except Exception as e:
+            self.fail(f"aoti_load_package failed with: {e}")
+
+        print("Model package loaded successfully.")
+
+        try:
+            # Run the loaded model
+            result = loaded(*example_args)
+            print("Model ran successfully with the loaded package.")
+            
+            # Verify the result against the eager model
+            with torch.no_grad():
+                expected = model(*example_args)
+            
+            self.assertTrue(torch.allclose(result, expected), "Output mismatch between eager and AOTI")
+            
+        except RuntimeError as e:
+            # Check for the specific error mentioned in the bug report
+            if "CUDAGuardImpl initialized with non-CUDA DeviceType: cpu" in str(e):
+                self.fail("Bug reproduced: CUDA kernel called on CPU tensors.")
+            else:
+                raise
+
+if __name__ == '__main__':
+    unittest.main()

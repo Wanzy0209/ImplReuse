@@ -1,0 +1,110 @@
+import torch
+import numpy as np
+import sys
+
+try:
+    import tensorflow as tf
+except ImportError as e:
+    print(f"Skipping test: Failed to import TensorFlow due to environment incompatibility.")
+    print(f"Details: {e}")
+    print("This is likely due to a missing GLIBCXX version in the system libraries.")
+    sys.exit(0)
+
+def test_tf_keras_backend_conv3d_divergence():
+    """
+    Test case for tf.keras.backend.conv3d adapted from a PyTorch conv1d issue.
+    The original issue (Issue ID: 163569) reported an eager/compile divergence
+    in PyTorch when using conv1d with specific tensor manipulations (exp, transpose).
+    This test replicates the logic using TensorFlow's conv3d to check for similar
+    behavior or graph compilation issues.
+    """
+    
+    # Enable strict graph mode to mimic torch.compile behavior
+    tf.config.run_functions_eagerly(False)
+
+    # Define inputs mirroring the PyTorch shapes, adapted for 3D convolution
+    # PyTorch arg0: (2, 261, 17, 358) -> TF: (Batch, Depth, Height, Width, Channels)
+    # We map the 4D PyTorch tensor to 5D by adding a channel dim.
+    arg0 = tf.random.normal([2, 261, 17, 358, 1], dtype=tf.float32)
+
+    # PyTorch arg1: (17, 64, 358) -> TF: (17, 1, 1, 358, 64)
+    # PyTorch conv1d input is (Batch, Channels, Length).
+    # TF conv3d input is (Batch, Depth, Height, Width, Channels).
+    # We map Length -> Width, Channels -> Channels. Depth=1, Height=1.
+    arg1 = tf.random.normal([17, 1, 1, 358, 64], dtype=tf.float32)
+
+    # PyTorch arg2: (261, 1, 64) -> TF: (1, 1, 1, 261, 64)
+    # PyTorch conv1d weight is (OutChannels, InChannels, KernelSize).
+    # TF conv3d kernel is (Depth, Height, Width, InChannels, OutChannels).
+    # We map KernelSize -> Width. Depth=1, Height=1.
+    # Note: We initialize with swapped In/Out channels to mimic the PyTorch transpose logic later.
+    arg2 = tf.random.normal([1, 1, 1, 261, 64], dtype=tf.float32)
+
+    @tf.function
+    def foo(arg0, arg1, arg2):
+        # t0 = arg0
+        t0 = arg0
+
+        # t1 = t0.max(dim=0).values
+        # PyTorch reduces dim 0 (Batch). TF reduces axis 0.
+        t1 = tf.reduce_max(t0, axis=0)
+
+        # t2 = t1.transpose(1, 0)
+        # PyTorch: (261, 17, 358) -> (17, 261, 358)
+        # TF: (261, 17, 358, 1) -> (17, 261, 358, 1)
+        t2 = tf.transpose(t1, perm=[1, 0, 2, 3])
+
+        # t3 = arg1
+        t3 = arg1
+
+        # t4 = torch.exp(t3)
+        t4 = tf.exp(t3)
+
+        # t5 = arg2
+        t5 = arg2
+
+        # t6 = t5.transpose(2, 1)
+        # PyTorch: (261, 1, 64) -> (261, 64, 1). This swaps In/Out channels for the conv weight.
+        # TF: (1, 1, 1, 261, 64) -> (1, 1, 1, 64, 261). Swaps In/Out channels.
+        t6 = tf.transpose(t5, perm=[0, 1, 2, 4, 3])
+
+        # t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0)
+        # TF: conv3d(x, kernel, strides, padding, data_format)
+        t7 = tf.keras.backend.conv3d(
+            t4, t6, strides=(1, 1, 1), padding='valid', data_format='channels_last'
+        )
+
+        # t8 = t7.clone(); t8.zero_()
+        t8 = tf.identity(t7)
+        t8 = tf.zeros_like(t8)
+
+        # t9 = t2 * t7 * t8
+        # Align shapes for multiplication.
+        # t2: (17, 261, 358, 1)
+        # t7: (17, 1, 1, 358, 261)
+        # We reshape t7 to match t2's structure (17, 261, 358, 1) to mimic the PyTorch element-wise logic.
+        t7_reshaped = tf.squeeze(t7, axis=[1, 2]) # (17, 358, 261)
+        t7_reshaped = tf.transpose(t7_reshaped, perm=[0, 2, 1]) # (17, 261, 358)
+        t7_reshaped = tf.expand_dims(t7_reshaped, axis=-1) # (17, 261, 358, 1)
+
+        t9 = t2 * t7_reshaped * t8
+        return t9
+
+    # Run Eager
+    out_eager = foo(arg0, arg1, arg2)
+    print('Eager Success! ')
+
+    # Run Compiled (tf.function)
+    out_compiled = foo(arg0, arg1, arg2)
+    print('Compile Success! ')
+
+    # Check for divergence
+    # Since t8 is zero, t9 should be zero. We check if eager and compiled produce the same result.
+    if tf.reduce_all(tf.equal(out_eager, out_compiled)).numpy():
+        print("Test Passed: No divergence between eager and compiled modes.")
+    else:
+        print("Test Failed: Divergence detected!")
+        raise AssertionError("Eager and compiled outputs differ.")
+
+if __name__ == '__main__':
+    test_tf_keras_backend_conv3d_divergence()

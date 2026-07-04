@@ -1,0 +1,79 @@
+import torch
+
+# Configuration from the original bug report
+# Check if _dynamo exists before accessing it to handle older PyTorch versions
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+else:
+    print("Warning: torch._dynamo not found. Skipping dynamo configuration. This test requires PyTorch 2.0+.")
+
+# Seed from the original bug report
+torch.manual_seed(70609)
+
+# Check for CUDA availability as the original bug was specific to CUDA
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if device == "cpu":
+    print("Warning: CUDA not available. Running on CPU. The original bug was on CUDA.")
+
+def fuzzed_program(arg_0, arg_1, arg_2, sentinel):
+    # Adapted call site: replacing the chain of torch.matmul with torch.istft
+    # The original bug involved matmul decomposition, and istft relies on matmul internally.
+    # We use the arguments to configure the istft operation.
+    
+    # arg_0: Input tensor (Complex STFT output)
+    # arg_1: n_fft (int)
+    # arg_2: hop_length (int)
+    
+    # Note: While the original bug used float16, istft requires complex input.
+    # We use complex64 (float32 components) which is standard, but the underlying
+    # matmul decomposition logic in the compiler is what is being tested.
+    return torch.istft(arg_0, n_fft=arg_1, hop_length=arg_2, return_complex=False)
+
+# Generate inputs for the adapted program
+# Shape: (batch, freq_bins, time_frames)
+# n_fft = 64 -> freq_bins = 33
+n_fft_val = 64
+hop_length_val = 16
+
+# Create a complex tensor on the device
+# Using random values to simulate fuzzed input
+arg_0 = torch.randn(2, 33, 100, dtype=torch.complex64, device=device)
+arg_1 = n_fft_val
+arg_2 = hop_length_val
+sentinel = None
+
+print("Running Eager execution...")
+try:
+    out_eager = fuzzed_program(arg_0, arg_1, arg_2, sentinel)
+    print(f"Eager output shape: {out_eager.shape}")
+except Exception as e:
+    print(f"Eager execution failed: {e}")
+    out_eager = None
+
+print("\nRunning Compiled execution (torch.compile)...")
+# Check if compile exists
+if hasattr(torch, 'compile'):
+    try:
+        compiled_fn = torch.compile(fuzzed_program)
+        out_compiled = compiled_fn(arg_0, arg_1, arg_2, sentinel)
+        print(f"Compiled output shape: {out_compiled.shape}")
+    except Exception as e:
+        print(f"Compiled execution failed: {e}")
+        out_compiled = None
+else:
+    print("Skipping Compiled execution: torch.compile not found (requires PyTorch 2.0+).")
+    out_compiled = None
+
+# Check for divergence between Eager and Compiled modes
+if out_eager is not None and out_compiled is not None:
+    print("\nChecking for divergence...")
+    if not torch.allclose(out_eager, out_compiled, rtol=1e-3, atol=1e-3):
+        print("DIVERGENCE DETECTED!")
+        diff = torch.abs(out_eager - out_compiled)
+        print(f"Max difference: {torch.max(diff)}")
+        print(f"Mean difference: {torch.mean(diff)}")
+    else:
+        print("Test Passed: No divergence detected.")
+else:
+    print("\nCould not check divergence due to execution failures.")

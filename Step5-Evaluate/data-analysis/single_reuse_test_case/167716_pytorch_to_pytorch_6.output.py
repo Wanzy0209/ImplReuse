@@ -1,0 +1,29 @@
+import torch
+import torch.nn.functional as F
+
+# Adapt the sparse tensor setup from the original bug report
+torch.manual_seed(42)
+
+# Create a sparse input tensor
+indices_A = torch.tensor([[0, 1, 2], [0, 2, 3]])
+values_A = torch.tensor([1.0, 2.0, 3.0])
+sparse_input = torch.sparse_coo_tensor(indices_A, values_A, size=(3, 4))
+
+# Create a weight tensor for PReLU
+# For a 2D input (Batch, Channels), weight size should match Channels (dim 1).
+# Here input size is (3, 4), so weight size is 4.
+weight = torch.tensor([0.1, 0.2, 0.3, 0.4])
+
+# Call the similar API: torch.nn.functional.prelu
+try:
+    y = F.prelu(sparse_input, weight)
+
+    # Attempt to convert to dense to check for corruption/segfaults similar to the original bug
+    if y.is_sparse:
+        y_dense = y.to_dense()
+    else:
+        y_dense = y
+
+    print("Test passed. Result:", y_dense)
+except Exception as e:
+    print(f"Test failed with exception: {e}")

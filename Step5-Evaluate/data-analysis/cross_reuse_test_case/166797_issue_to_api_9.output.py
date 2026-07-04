@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+
+"""
+Test case to verify that Torch ONNX Dynamo Export produces correct bias shapes.
+This test reproduces the issue where dynamo export results in incorrect bias 
+tensor shapes for Conv layers compared to the classical path.
+"""
+
+import torch
+import torch.onnx
+from torchvision.models import resnet50, ResNet50_Weights
+import onnx
+import tempfile
+import os
+
+
+def create_resnet50_model():
+    """
+    Create a ResNet50 model with pretrained weights using torchvision API.
+    
+    Returns:
+        torch.nn.Module: The ResNet50 model with pretrained weights
+    """
+    # Load ResNet50 with pretrained ImageNet weights using the new API
+    weights = ResNet50_Weights.DEFAULT
+    model = resnet50(weights=weights)
+    
+    print(f"Loaded ResNet50 with pretrained ImageNet weights: {weights}")
+    
+    return model
+
+
+def export_to_onnx(model, output_path, input_size=(224, 224), dynamo=False):
+    """
+    Export the PyTorch model to ONNX format.
+    
+    Args:
+        model (torch.nn.Module): The PyTorch model to export
+        output_path (str): Path to save the ONNX model
+        input_size (tuple): Input image size (height, width)
+        dynamo (bool): Whether to use PyTorch Dynamo
+    """
+    # Set model to evaluation mode
+    model.eval()
+    
+    # Create dummy input tensor
+    # Shape: (batch_size, channels, height, width)
+    dummy_input = torch.randn(1, 3, input_size[0], input_size[1])
+    
+    # Export to ONNX
+    with torch.no_grad():
+        torch.onnx.export(
+            model=model,
+            args=dummy_input,
+            f=output_path,
+            export_params=True,
+            opset_version=21,
+            do_constant_folding=True,
+            input_names=['input'],
+            output_names=['output'],
+            verbose=False,
+            dynamo=dynamo,
+        )
+
+    print(f"Model successfully exported to: {output_path} (dynamo={dynamo})")
+
+
+def get_bias_shapes(onnx_model):
+    """
+    Extract bias shapes for all Convolutional layers in the ONNX model.
+    
+    Args:
+        onnx_model (onnx.ModelProto): The loaded ONNX model
+        
+    Returns:
+        dict: A dictionary mapping node names to their bias shapes
+    """
+    bias_shapes = {}
+    initializer_map = {init.name: init for init in onnx_model.graph.initializer}
+    
+    for node in onnx_model.graph.node:
+        if node.op_type == 'Conv':
+            # Conv inputs: [input, weight, bias]
+            # Bias is optional (3rd input)
+            if len(node.input) > 2:
+                bias_name = node.input[2]
+                if bias_name in initializer_map:
+                    bias_tensor = initializer_map[bias_name]
+                    bias_shapes[node.name] = list(bias_tensor.dims)
+                    
+    return bias_shapes
+
+
+def test_resnet50_dynamo_bias_shape():
+    """
+    Main test function to compare bias shapes between Dynamo and Classical ONNX export.
+    """
+    # Create ResNet50 model
+    print("Creating ResNet50 model...")
+    model = create_resnet50_model()
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path_dynamo = os.path.join(tmpdir, "resnet50_dynamo.onnx")
+        path_classic = os.path.join(tmpdir, "resnet50_classic.onnx")
+        
+        # Export using both methods
+        export_to_onnx(model, path_dynamo, dynamo=True)
+        export_to_onnx(model, path_classic, dynamo=False)
+        
+        # Load models
+        model_dynamo = onnx.load(path_dynamo)
+        model_classic = onnx.load(path_classic)
+        
+        # Get bias shapes
+        dynamo_biases = get_bias_shapes(model_dynamo)
+        classic_biases = get_bias_shapes(model_classic)
+        
+        print(f"\nFound {len(dynamo_biases)} Conv layers with bias in Dynamo export.")
+        print(f"Found {len(classic_biases)} Conv layers with bias in Classic export.")
+        
+        # Verify shapes match
+        # The bug report specifically mentions node_Conv_649, but we check all for robustness
+        errors = []
+        for node_name, classic_shape in classic_biases.items():
+            if node_name in dynamo_biases:
+                dynamo_shape = dynamo_biases[node_name]
+                if dynamo_shape != classic_shape:
+                    errors.append(
+                        f"Node {node_name}: Shape mismatch. "
+                        f"Classic: {classic_shape}, Dynamo: {dynamo_shape}"
+                    )
+            else:
+                errors.append(f"Node {node_name}: Missing in Dynamo export")
+                
+        # Check for extra biases in Dynamo that shouldn't be there
+        for node_name in dynamo_biases:
+            if node_name not in classic_biases:
+                errors.append(f"Node {node_name}: Unexpected bias in Dynamo export")
+
+        if errors:
+            print("\nTest FAILED. Bias shape mismatches detected:")
+            for error in errors:
+                print(error)
+            raise AssertionError("Dynamo ONNX export produced incorrect bias shapes.")
+        else:
+            print("\nTest PASSED. Bias shapes match between Classic and Dynamo exports.")
+
+
+if __name__ == "__main__":
+    test_resnet50_dynamo_bias_shape()

@@ -1,0 +1,3 @@
+# SINGLE_LIBRARY_BASELINE for pytorch
+# original source preserved below
+triton_tem_fused__fused_rms_norm__to_copy_mul_split_with_sizes_transpose_view_zeros_26

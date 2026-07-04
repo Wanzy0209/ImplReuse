@@ -1,0 +1,61 @@
+import unittest
+import torch
+import torch.distributed as dist
+
+# Handle the missing module error by skipping the test if the dependency is not available.
+try:
+    from torch.distributed._tensor import distribute_tensor, Replicate, _StridedShard
+except ImportError:
+    @unittest.skip("torch.distributed._tensor module not found. Skipping test.")
+    class TestStridedShardSyncBatchNorm:
+        pass
+else:
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.testing._internal.distributed.test_utils import with_comms
+
+    class TestStridedShardSyncBatchNorm:
+        @with_comms
+        def test_strided_shard_with_syncbatchnorm(self):
+            """
+            Test case that reproduces the uneven strided shard bug logic
+            and leverages torch.nn.SyncBatchNorm to verify the tensor validity.
+            
+            The SyncBatchNorm API contains logic to check the size of the input tensor
+            (size = int(input.numel() // input.size(1))). This test ensures that the
+            local tensors produced by the fixed _StridedShard logic are valid inputs
+            for SyncBatchNorm, particularly when the sharding results in uneven
+            batch sizes (e.g., size 1 on one rank).
+            """
+            assert self.world_size == 2
+            device_mesh = init_device_mesh(self.device_type, (2, ))
+
+            # Create a 4D tensor compatible with SyncBatchNorm.
+            # Shape (Batch=5, Channels=4, Height=1, Width=1).
+            # We use an uneven batch size (5) to reproduce the bug scenario.
+            # We use H=1, W=1 so that on Rank 1 (which receives 1 sample),
+            # the calculated 'size' in SyncBatchNorm (numel // channels) becomes 1,
+            # exercising the specific check: if size == 1 and world_size < 2.
+            global_tensor = torch.randn(5, 4, 1, 1)
+
+            # Reproduce the bug logic: uneven strided shard
+            # split_factor=2 on dim 0 (size 5)
+            # Expected distribution:
+            # Rank 0: indices 0, 1, 3, 4 -> Shape (4, 4, 1, 1)
+            # Rank 1: index 2          -> Shape (1, 4, 1, 1)
+            dtensor = distribute_tensor(global_tensor, device_mesh, (Replicate(), )).redistribute(
+                device_mesh, (_StridedShard(0, split_factor=2),)
+            )
+
+            # Leverage the similar API: SyncBatchNorm
+            local_tensor = dtensor._local_tensor
+
+            # Initialize SyncBatchNorm with 4 features (channels)
+            sbn = torch.nn.SyncBatchNorm(4)
+
+            # Run forward pass
+            # This verifies that the uneven sharding produces valid inputs
+            # for SyncBatchNorm, including contiguity and size checks.
+            output = sbn(local_tensor)
+
+            # Assert output shape matches input shape
+            self.assertEqual(output.shape, local_tensor.shape)

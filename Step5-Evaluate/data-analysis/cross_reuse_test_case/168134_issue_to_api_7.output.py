@@ -1,0 +1,39 @@
+import tensorflow as tf
+import numpy as np
+
+# Enable eager execution to ensure .numpy() method is available on Tensors
+tf.compat.v1.enable_eager_execution()
+
+def test_repeat_elements_uneven_split():
+    """
+    Test case for tf.keras.backend.repeat_elements derived from 
+    Issue 168134: [DTensor] gaps in uneven strided shard.
+    
+    The original bug involved an uneven tensor distribution of [0, 1, 2, 3, 4] 
+    with a split factor of 2, which caused incorrect indexing.
+    
+    This test verifies that the similar API, repeat_elements, correctly handles
+    the same input shape and factor (rep=2) along the primary axis, ensuring
+    no data loss or incorrect ordering occurs with uneven dimensions.
+    """
+    # Reproduce the input tensor from the bug report
+    input_tensor = tf.constant([0, 1, 2, 3, 4], dtype=tf.float32)
+    
+    # Use the split_factor from the bug report as the repetition factor
+    rep = 2
+    axis = 0
+    
+    # Apply the similar API
+    result = tf.keras.backend.repeat_elements(input_tensor, rep, axis)
+    
+    # Define the expected output: each element repeated twice
+    # [0, 1, 2, 3, 4] -> [0, 0, 1, 1, 2, 2, 3, 3, 4, 4]
+    expected = np.array([0, 0, 1, 1, 2, 2, 3, 3, 4, 4], dtype=np.float32)
+    
+    # Assert that the result matches the expected output
+    np.testing.assert_array_equal(result.numpy(), expected)
+    
+    print("Test passed: repeat_elements correctly handles uneven input with rep=2.")
+
+if __name__ == "__main__":
+    test_repeat_elements_uneven_split()

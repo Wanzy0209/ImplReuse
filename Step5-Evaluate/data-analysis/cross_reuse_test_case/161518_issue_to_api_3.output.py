@@ -1,0 +1,69 @@
+import sys
+import time
+
+try:
+    import torch
+    import tensorflow as tf
+except ImportError as e:
+    # Handle environment incompatibility (e.g., GLIBCXX version mismatch)
+    if "GLIBCXX" in str(e) or "libstdc++" in str(e):
+        print("Skipping benchmark: TensorFlow environment is incompatible (GLIBCXX version mismatch).")
+        print(f"Details: {e}")
+        sys.exit(0)
+    else:
+        raise
+
+# Benchmarking memory throughput for tf.keras.backend.batch_flatten
+# Adapted from PyTorch copy_/cat benchmark logic (Issue 161518)
+
+# Target data size: 128 MiB
+DATA_SIZE_MIB = 128
+
+# Use dtypes supported by TF Keras backend
+dtypes = [tf.bfloat16, tf.float32]
+
+print("Benchmarking tf.keras.backend.batch_flatten")
+
+for dtype in dtypes:
+    element_size = dtype.size
+
+    # Calculate dimensions to approximate 128 MiB
+    # Shape: (Batch, Dim1, Dim2)
+    # Total bytes = Batch * Dim1 * Dim2 * element_size
+    # We set Batch=1, Dim2=1024 and solve for Dim1
+    dim1 = int((DATA_SIZE_MIB * 1024 * 1024) / (element_size * 1024))
+    dim2 = 1024
+    batch_size = 1
+
+    # Create input tensor (3D to ensure batch_flatten changes shape)
+    # Using tf.zeros to match torch.zeros
+    input_tensor = tf.zeros((batch_size, dim1, dim2), dtype=dtype)
+
+    # Warmup
+    _ = tf.keras.backend.batch_flatten(input_tensor)
+
+    # Benchmark loop
+    # Using tf.function to simulate graph execution (similar to cudagraphs in the original)
+    @tf.function
+    def bench_op(x):
+        return tf.keras.backend.batch_flatten(x)
+
+    iterations = 100
+    start_time = time.time()
+    for _ in range(iterations):
+        output = bench_op(input_tensor)
+    # Ensure synchronization
+    _ = output.numpy()
+    end_time = time.time()
+
+    avg_time_ms = (end_time - start_time) / iterations * 1000
+
+    # Calculate Bandwidth
+    # Note: batch_flatten is typically a metadata operation (reshape) and doesn't move memory.
+    # However, we calculate theoretical throughput based on data size to match the original script's logic.
+    # Assuming 1x Read (128 MiB) + 1x Write (128 MiB) = 256 MiB IO
+    io_size_mib = DATA_SIZE_MIB * 2
+
+    bdwidth = (io_size_mib / avg_time_ms) * 1000 / 1024 / 1024 # TiB/s
+
+    print("\t".join([str(dtype), f"{avg_time_ms:.2f} ms", f"{bdwidth:.2f} TiB/s"]))

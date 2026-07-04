@@ -1,0 +1,68 @@
+import numpy as np
+import torch
+
+
+def test_non_deterministic():
+    gt_res = np.array(
+        [
+            [
+                [-99.0, 1.0, -97.0, 3.0],
+                [-96.0, -98.0, 6.0, 7.0],
+                [8.0, 9.0, 10.0, 11.0],
+            ],
+            [
+                [-90.0, -92.0, 14.0, 15.0],
+                [-93.0, 17.0, -91.0, 19.0],
+                [20.0, 21.0, 22.0, 23.0],
+            ],
+        ],
+        dtype=np.float32,
+    )
+    gt_input_grad = np.array(
+        [
+            [[0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]],
+            [[0.0, 0.0, 1.0, 1.0], [0.0, 1.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]],
+        ],
+        dtype=np.float32,
+    )
+    gt_src_grad = np.array(
+        [
+            [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+            [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        ],
+        dtype=np.float32,
+    )
+    for i in range(1000):
+        torch.cuda.empty_cache()
+        inputs = torch.arange(24, dtype=torch.float32).reshape([2, 3, 4]).cuda()
+        src = torch.arange(-99, -99 + (2 * 2 * 3), dtype=torch.float32).reshape(
+            [2, 2, 3]
+        ).cuda()
+        index = torch.tensor(
+            [
+                [
+                    [0, 1, 0],
+                    [1, 1, 0],
+                ],
+                [
+                    [1, 0, 1],
+                    [0, 0, 1],
+                ],
+            ],
+            dtype=torch.int64,
+        ).cuda()
+
+        inputs.requires_grad = True
+        src.requires_grad = True
+
+        res = torch.scatter(inputs, 1, index, src)
+        res.backward(torch.ones_like(res))
+
+        print(f"Test {i + 1}/{1000}")
+        np.testing.assert_allclose(res.cpu().detach().numpy(), gt_res)
+        np.testing.assert_allclose(inputs.grad.cpu().numpy(), gt_input_grad)
+        np.testing.assert_allclose(src.grad.cpu().numpy(), gt_src_grad)
+
+
+if __name__ == "__main__":
+    test_non_deterministic()

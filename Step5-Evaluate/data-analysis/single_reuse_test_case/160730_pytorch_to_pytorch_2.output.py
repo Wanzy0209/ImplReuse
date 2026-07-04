@@ -1,0 +1,28 @@
+import torch
+import numpy as np
+
+# Fix: Check if _dynamo exists before accessing it to handle environments where it might not be available
+if hasattr(torch, '_dynamo'):
+    torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(x):
+    t = torch.tan(x)
+    e = t.expand(31, 51, 1)
+    # Replaced torch.mean with torch.prod to test the similar API
+    prod_val = torch.prod(e)
+    if prod_val.item() > 0.5:
+        out1 = torch.sub(e, e * 0.5)
+    else:
+        out1 = torch.add(e, e * 0.5)
+    # print("break")  # no error occurs if uncomment this line
+    return torch.sin(out1)
+
+
+np.random.seed(0)
+x = np.random.uniform(0, 10, size=(31, 51, 1)).astype(np.float16)
+
+cfoo = torch.compile(foo)
+eager_res = foo(torch.from_numpy(x))
+compile_res = cfoo(torch.from_numpy(x))
+
+torch.testing.assert_close(eager_res, compile_res)

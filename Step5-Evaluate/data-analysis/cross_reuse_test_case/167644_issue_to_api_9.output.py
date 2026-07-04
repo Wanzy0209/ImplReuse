@@ -1,0 +1,58 @@
+import torch
+import tensorflow as tf
+import warnings
+import sys
+
+def test_internal_warning_spam():
+    """
+    Test case reflecting the logic of Issue 167644.
+    
+    Original Issue: Calling torch.set_float32_matmul_precision (a public API)
+    triggers deprecation warnings about internal settings (allow_tf32) that 
+    the user cannot control directly.
+    
+    Similar API: tf.compat.v1.disable_v2_behavior.
+    This function internally calls multiple disable functions (tf2.disable, 
+    ops.disable_eager_execution, etc.). This test checks if calling this 
+    high-level API triggers warning spam from those internal toggles.
+    """
+    
+    print("Executing test for internal warning spam...")
+
+    # Capture warnings to detect "spam" similar to the PyTorch issue
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        # Ensure all warnings are triggered
+        warnings.simplefilter("always")
+
+        # Call the high-level public API
+        # This is analogous to torch.set_float32_matmul_precision("high")
+        # It triggers internal calls like:
+        # - tf2.disable()
+        # - ops.disable_eager_execution()
+        # - resource_variables_toggle.disable_resource_variables()
+        tf.compat.v1.disable_v2_behavior()
+
+        # Verify the functional intent (V2 behavior disabled)
+        # In a real test environment, we might check specific flags, 
+        # but here we ensure the call completes.
+        assert tf.compat.v1 is not None
+
+        # Analyze warnings
+        # The PyTorch issue complains about "spam" regarding internal deprecations.
+        # We check if any warnings were raised by the internal implementation.
+        warning_count = len(caught_warnings)
+        
+        print(f"Total warnings caught: {warning_count}")
+        
+        if warning_count > 0:
+            print("\n--- Detected Warnings (Spam Check) ---")
+            for w in caught_warnings:
+                print(f"Warning: {w.category.__name__}")
+                print(f"Message:  {w.message}")
+                print(f"File:     {w.filename}:{w.lineno}")
+                print("-" * 40)
+        else:
+            print("No warnings detected.")
+
+if __name__ == '__main__':
+    test_internal_warning_spam()
