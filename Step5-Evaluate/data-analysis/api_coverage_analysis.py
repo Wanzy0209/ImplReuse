@@ -16,6 +16,32 @@ from typing import Dict, Set
 SCRIPT_DIR = Path(__file__).parent
 
 
+def normalize_api(api: str) -> str:
+    """标准化API名称"""
+    if api.endswith('.'):
+        api = api[:-1]
+    if api.startswith('tensorflow.'):
+        api = 'tf.' + api[len('tensorflow.'):]
+    return api
+
+
+def is_valid_api(api: str) -> bool:
+    """检查API是否有效"""
+    if not api:
+        return False
+    if api.endswith('.'):
+        return False
+    parts = api.split('.')
+    if len(parts) < 2:
+        return False
+    for part in parts:
+        if not part:
+            return False
+        if not part[0].isalpha():
+            return False
+    return True
+
+
 def extract_apis_from_code(code: str, framework: str) -> Set[str]:
     """从代码中提取指定框架的 API 调用"""
     apis = set()
@@ -38,7 +64,10 @@ def extract_apis_from_code(code: str, framework: str) -> Set[str]:
 
     for pattern in patterns:
         matches = re.findall(pattern, code)
-        apis.update(matches)
+        for api in matches:
+            normalized_api = normalize_api(api)
+            if is_valid_api(normalized_api):
+                apis.add(normalized_api)
 
     return apis
 

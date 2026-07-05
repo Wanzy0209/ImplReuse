@@ -99,9 +99,9 @@ def plot_venn(
     ax.add_patch(patch_b_only)
     ax.add_patch(patch_intersection)
 
-    ax.text(center_a[0], center_a[1] + radius + 0.15, label_a, fontsize=20, fontweight='bold',
+    ax.text(center_a[0], center_a[1] + radius + 0.15, label_a, fontsize=30, fontweight='bold',
             ha='center', va='bottom', color='#1f77b4')
-    ax.text(center_b[0], center_b[1] + radius + 0.15, label_b, fontsize=20, fontweight='bold',
+    ax.text(center_b[0], center_b[1] + radius + 0.15, label_b, fontsize=30, fontweight='bold',
             ha='center', va='bottom', color='#1f77b4')
 
     ax.text(center_a[0] - 0.4, center_a[1], str(len(baseline_only)), fontsize=30, fontweight='bold',
@@ -111,8 +111,8 @@ def plot_venn(
     ax.text(0, center_a[1], str(len(intersection)), fontsize=30, fontweight='bold',
             ha='center', va='center', color='#FFFFFF')
 
-    ax.text(0, 1.35, title, fontsize=18, fontweight='bold',
-            ha='center', va='top', color='#000000')
+    # ax.text(0, 1.35, title, fontsize=18, fontweight='bold',
+            # ha='center', va='top', color='#000000')
 
     plt.tight_layout()
 
@@ -151,9 +151,9 @@ def plot_venn_simple(
     ax.add_patch(circle_intersection)
     circle_intersection.set_clip_path(circle_b)
 
-    ax.text(center_a[0], center_a[1] + radius + 0.15, label_a, fontsize=20, fontweight='bold',
+    ax.text(center_a[0], center_a[1] + radius + 0.15, label_a, fontsize=30, fontweight='bold',
             ha='center', va='bottom', color='#1f77b4')
-    ax.text(center_b[0], center_b[1] + radius + 0.15, label_b, fontsize=20, fontweight='bold',
+    ax.text(center_b[0], center_b[1] + radius + 0.15, label_b, fontsize=30, fontweight='bold',
             ha='center', va='bottom', color='#1f77b4')
 
     ax.text(center_a[0] - 0.4, center_a[1], str(len(baseline_only)), fontsize=30, fontweight='bold',
@@ -163,8 +163,8 @@ def plot_venn_simple(
     ax.text(0, center_a[1], str(len(intersection)), fontsize=30, fontweight='bold',
             ha='center', va='center', color='#ffffff')
 
-    ax.text(0, 1.35, title, fontsize=18, fontweight='bold',
-            ha='center', va='top', color='#000000')
+    # ax.text(0, 1.35, title, fontsize=18, fontweight='bold',
+    #         ha='center', va='top', color='#000000')
 
     plt.tight_layout()
 
