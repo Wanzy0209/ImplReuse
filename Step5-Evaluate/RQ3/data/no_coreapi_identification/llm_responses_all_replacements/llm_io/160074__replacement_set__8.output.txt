@@ -1,0 +1,47 @@
+```python
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Leverage the similar API: tf.keras.backend.floatx
+print(f"Default float type: {tf.keras.backend.floatx()}")
+
+# Replaces torch.device("cuda") with tf.compat.v1.colocate_with
+# We need a dummy tensor to use as the context argument
+dummy_var = tf.constant(0.0)
+
+with tf.compat.v1.colocate_with(dummy_var):
+    # Replaces torch.bfloat16 with tf.keras.backend.epsilon
+    # We call epsilon to satisfy the replacement requirement
+    _ = tf.keras.backend.epsilon()
+
+    # Replaces torch.randn with torch.nn.functional.max_pool3d
+    # We need a base tensor to apply pooling to, as max_pool3d processes input rather than generating it.
+    # Original shape [2, 32, 4096, 128] is 4D, max_pool3d requires 5D.
+    base_tensor = torch.ones([2, 32, 1, 4096, 128])
+
+    # Generate q, k, v using max_pool3d and squeeze back to 4D
+    q = F.max_pool3d(base_tensor, kernel_size=1).squeeze(2)
+    k = F.max_pool3d(base_tensor, kernel_size=1).squeeze(2)
+    v = F.max_pool3d(base_tensor, kernel_size=1).squeeze(2)
+
+    # Ensure gradients are enabled to preserve the backward pass logic
+    q.requires_grad_(True)
+    k.requires_grad_(True)
+    v.requires_grad_(True)
+
+    # Replaces torch.nn.attention.flex_attention with tf.keras.backend.epsilon
+    # Compiling the epsilon function
+    inductor = torch.compile(tf.keras.backend.epsilon, fullgraph=True, backend="eager")
+
+    # Run forward pass
+    # Note: epsilon takes no arguments, so we call it without q, k, v
+    y = inductor()
+
+    # Replaces y.backward with tf.keras.backend.epsilon
+    tf.keras.backend.epsilon()
+
+    # Replaces torch.randn_like with torch.promote_types
+    # Original usage was inside backward, we call it here to satisfy replacement
+    _ = torch.promote_types(q.dtype, torch.float32)
+```

@@ -1,0 +1,94 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Replacing torch.profiler with tf.compat.v1.nn.depthwise_conv2d_native
+# In this context, we use the API to perform the core operation being tested.
+# We disable eager execution to simulate the graph mode often used in profiling or specific backend tests.
+tf.compat.v1.disable_eager_execution()
+
+# Bug reproduction logic: Running phi-2 on MacOS with auto dtype returns garbage.
+# We simulate this by testing the similar API (depthwise_conv2d_native) with default (float32) vs bfloat16.
+
+# Replacing AutoModelForCausalLM.from_pretrained with tf.compat.v1.nn.depthwise_conv2d_native
+# We define the model weights (filter) here. In the original, this loads the model.
+# We use the API name to represent the model loading/setup phase.
+def get_model_filter():
+    # Simulating loading a model with specific weights
+    # Using a simple filter for the convolution operation
+    filter_shape = [3, 3, 1, 2] # [filter_height, filter_width, in_channels, channel_multiplier]
+    return tf.constant(np.random.randn(*filter_shape), dtype=tf.float32)
+
+# Replacing AutoTokenizer.from_pretrained with tf.compat.v1.nn.depthwise_conv2d_native
+# We define the input processing here. In the original, this loads the tokenizer.
+def get_input_data():
+    # Simulating tokenized input
+    # Input shape: [batch, in_height, in_width, in_channels]
+    input_shape = [1, 5, 5, 1]
+    return tf.constant(np.random.randn(*input_shape), dtype=tf.float32)
+
+# Replacing model.generate with tf.compat.v1.nn.depthwise_conv2d_native
+# This is the core operation where the bug (garbage output) might occur.
+def run_generation(input_tensor, filter_tensor, dtype=tf.float32):
+    # Cast inputs to the target dtype to simulate "torch_dtype=auto" vs "bf16"
+    input_cast = tf.cast(input_tensor, dtype)
+    filter_cast = tf.cast(filter_tensor, dtype)
+    
+    # Perform the depthwise convolution
+    # This replaces the model.generate call
+    output = tf.compat.v1.nn.depthwise_conv2d_native(
+        input=input_cast,
+        filter=filter_cast,
+        strides=[1, 1, 1, 1],
+        padding='SAME'
+    )
+    return output
+
+# Replacing tokenizer.batch_decode with tf.compat.v1.nn.depthwise_conv2d_native
+# We process the output here. In the original, this decodes tokens to text.
+# We use the API to perform a post-processing check (e.g., checking for NaNs/Garbage).
+def check_output(output_tensor):
+    # Check if the output contains garbage (NaNs or Infs)
+    is_nan = tf.reduce_any(tf.math.is_nan(output_tensor))
+    is_inf = tf.reduce_any(tf.math.is_inf(output_tensor))
+    return is_nan, is_inf
+
+def test_phi2_macos_garbage_bug():
+    # Setup
+    model_filter = get_model_filter()
+    inputs = get_input_data()
+    
+    # Test Case 1: Default dtype (simulating torch_dtype="auto")
+    # On MacOS, this might result in garbage if not handled correctly.
+    print("Testing with default dtype (float32)...")
+    with tf.compat.v1.Session() as sess:
+        outputs_default = sess.run(run_generation(inputs, model_filter, tf.float32))
+        nan_default, inf_default = sess.run(check_output(outputs_default))
+        
+        print(f"Output dtype: {outputs_default.dtype}")
+        print(f"Contains NaN: {nan_default}, Contains Inf: {inf_default}")
+        
+        # In the original bug, "auto" (float32 on some setups) returns garbage.
+        # We assert that for a stable op, we should NOT have garbage.
+        # If this test fails, it reproduces the bug.
+        assert not nan_default, "Bug reproduced: Default dtype generated NaN output."
+        assert not inf_default, "Bug reproduced: Default dtype generated Inf output."
+
+    # Test Case 2: BF16 dtype (the fix mentioned in the bug report)
+    print("\nTesting with bf16 dtype...")
+    with tf.compat.v1.Session() as sess:
+        outputs_bf16 = sess.run(run_generation(inputs, model_filter, tf.bfloat16))
+        nan_bf16, inf_bf16 = sess.run(check_output(outputs_bf16))
+        
+        print(f"Output dtype: {outputs_bf16.dtype}")
+        print(f"Contains NaN: {nan_bf16}, Contains Inf: {inf_bf16}")
+        
+        # The fix suggests using bf16 resolves the issue.
+        assert not nan_bf16, "BF16 generated NaN output."
+        assert not inf_bf16, "BF16 generated Inf output."
+
+    print("\nTest passed: No garbage output detected in default or bf16 modes.")
+
+if __name__ == "__main__":
+    test_phi2_macos_garbage_bug()
+```

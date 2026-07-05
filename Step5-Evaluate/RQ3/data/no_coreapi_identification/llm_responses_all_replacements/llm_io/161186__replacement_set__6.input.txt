@@ -1,0 +1,119 @@
+Issue ID: 161186
+Title: Memory leak when custom autograd Function is used with AC due to early-stopping
+Bug Description:
+### 🐛 Describe the bug
+
+Originally reported by Alex Nichol in slack channel
+
+```python
+import torch
+import torch.utils.checkpoint
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary
+        return None
+
+
+def op_fn(inp):
+    return MyOp.apply(inp)[0]
+
+
+dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+for i in range(1000):
+    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+    full_out.sum().backward()
+    dummy_input.grad = None  # free gradient memory
+    print(i, torch.cuda.memory_allocated() / 1024**2, "MiB")
+```
+
+This leak happens when a custom autograd Function is the last operation in a checkpointed region (and the autograd Function saves an output for backward). It happens because AC raises an exception to exit the forward early prior to the proper clean up custom autograd Function needs to do when it saves tensors.
+
+Original API Under Test: torch.utils.checkpoint.checkpoint
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.compat.v1.user_ops.my_fact
+Similarity score: 0.9703974723815918
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.user_ops.my_fact
+
+# --- tensorflow.python.user_ops.user_ops.my_fact ---
+def my_fact():
+  """Example of overriding the generated code for an Op."""
+  return _gen_user_ops.fact()
+
+Original Test Case:
+import torch
+import torch.utils.checkpoint
+
+class MyOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp: torch.Tensor):
+        out_0 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        out_1 = torch.zeros(2**20, device=inp.device, dtype=torch.float32)
+        ctx.save_for_backward(
+            inp,
+            out_0,
+            out_1,
+        )
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors  # this is necessary
+        return None
+
+
+def op_fn(inp):
+    return MyOp.apply(inp)[0]
+
+
+dummy_input = torch.nn.Parameter(torch.randn(2**20, device="cuda"))
+for i in range(1000):
+    full_out = torch.utils.checkpoint.checkpoint(op_fn, dummy_input, use_reentrant=False)
+    full_out.sum().backward()
+    dummy_input.grad = None  # free gradient memory
+    print(i, torch.cuda.memory_allocated() / 1024**2, "MiB")
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- MyOp.apply -> torch.backends.nnpack.is_available (score=0.96659916639328, source_group=issue_to_api)
+- ctx.save_for_backward -> torch.backends.nnpack.is_available (score=0.96659916639328, source_group=issue_to_api)
+- nn.Parameter -> torch.backends.nnpack.is_available (score=0.96659916639328, source_group=issue_to_api)
+- torch.Tensor -> torch.backends.nnpack.is_available (score=0.96659916639328, source_group=issue_to_api)
+- torch.autograd.Function -> torch.backends.nnpack.is_available (score=0.96659916639328, source_group=issue_to_api)
+- torch.cuda.memory_allocated -> torch.backends.nnpack.is_available (score=0.96659916639328, source_group=issue_to_api)
+- torch.float32 -> torch.backends.nnpack.is_available (score=0.96659916639328, source_group=issue_to_api)
+- torch.nn.Parameter -> torch.backends.nnpack.is_available (score=0.96659916639328, source_group=issue_to_api)
+- torch.randn -> torch.nn.functional.max_pool1d (score=0.9858288168907166, source_group=pytorch_to_pytorch)
+- torch.utils.checkpoint -> torch.backends.nnpack.is_available (score=0.96659916639328, source_group=issue_to_api)
+- torch.zeros -> torch.dist (score=0.9989177584648132, source_group=pytorch_to_pytorch)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

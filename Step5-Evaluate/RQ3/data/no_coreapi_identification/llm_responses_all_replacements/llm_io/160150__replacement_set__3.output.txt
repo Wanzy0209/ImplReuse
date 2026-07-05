@@ -1,0 +1,62 @@
+```python
+import tensorflow as tf
+
+def test_none_handling_in_summary_value():
+    """
+    Test case derived from Issue 160150: [ONNX] Exporter crashes when fx node output includes None.
+    
+    Original Logic:
+        A function returns a tuple (output, image_tokens_masks) where image_tokens_masks could be None.
+        The ONNX exporter crashes because it does not handle None as a valid node output.
+    
+    Adaptation:
+        - Replacement API: tf.keras.backend.backend (replaces torch.onnx._internal.exporter._core.py context)
+        - Similar API: tf.compat.v1.Summary.Value (used to test handling of None values)
+    """
+    
+    # Replacement API: tf.keras.backend.backend
+    # Used here to establish the backend context, replacing the internal exporter context.
+    backend = tf.keras.backend.backend()
+    print(f"Running test on backend: {backend}")
+    assert backend is not None
+
+    # Original Bug Logic: Function returning a tuple containing None
+    def get_model_output(return_dict):
+        output = tf.constant([1.0, 2.0])
+        image_tokens_masks = None  # This is the problematic value
+        if not return_dict:
+            return (output, image_tokens_masks)
+        return {"output": output}
+
+    # Execute the logic that triggers the bug in the original issue
+    output_tuple = get_model_output(return_dict=False)
+    
+    # Similar API: tf.compat.v1.Summary.Value
+    # The original bug occurred during the translation/processing of the graph output.
+    # Here, we test if tf.compat.v1.Summary.Value can handle the None value extracted from the tuple.
+    
+    _, none_value = output_tuple
+
+    try:
+        # Attempting to create a Summary.Value with None.
+        # In the original bug, the exporter crashed when encountering None.
+        # We check if this API handles it or crashes similarly.
+        summary_val = tf.compat.v1.Summary.Value(
+            tag="image_tokens_masks",
+            simple_value=none_value
+        )
+        # If execution reaches here, the API handles None (or ignores it).
+        print("Summary.Value handled None input without crashing.")
+        # Depending on the specific protobuf implementation, this might pass 
+        # (treating None as unset) or fail.
+        
+    except (TypeError, ValueError) as e:
+        # If it crashes, it mimics the original bug behavior.
+        print(f"Summary.Value crashed on None input: {e}")
+        # This assertion confirms the crash behavior exists in this context as well,
+        # similar to the ONNX exporter issue.
+        assert "NoneType" in str(type(e)) or "expected" in str(e).lower()
+
+if __name__ == "__main__":
+    test_none_handling_in_summary_value()
+```

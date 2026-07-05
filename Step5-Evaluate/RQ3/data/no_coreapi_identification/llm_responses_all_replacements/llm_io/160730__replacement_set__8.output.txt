@@ -1,0 +1,53 @@
+```python
+import torch
+import numpy as np
+import tensorflow as tf
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(x):
+    # Replacement: torch.tan -> torch.log10
+    t = torch.log10(x)
+    
+    e = t.expand(31, 51, 1)
+    
+    # Replacement: torch.mean -> torch.special.log1p
+    # Note: Original logic relied on scalar output, log1p is element-wise.
+    # This will likely cause a runtime error in the subsequent if statement.
+    mean_val = torch.special.log1p(e)
+    
+    if mean_val.item() > 0.5:
+        # Replacement: torch.sub -> torch.sigmoid
+        # Original: torch.sub(e, e * 0.5)
+        out1 = torch.sigmoid(e)
+    else:
+        # Replacement: torch.add -> torch.unique
+        # Original: torch.add(e, e * 0.5)
+        out1 = torch.unique(e)
+    
+    # Replacement: torch.sin -> tf.keras.ops.full
+    # Original: torch.sin(out1)
+    return tf.keras.ops.full(out1.shape, 0)
+
+np.random.seed(0)
+x = np.random.uniform(0, 10, size=(31, 51, 1)).astype(np.float16)
+
+# Replacement: torch.from_numpy -> torch.nn.functional.adaptive_avg_pool2d
+# We need to convert x to a tensor first to use the pooling function.
+# adaptive_avg_pool2d expects 4D input (N, C, H, W).
+# x is (31, 51, 1). We treat it as (N, H, W) -> (N, C, H, W) by unsqueezing.
+x_tensor = torch.tensor(x)
+x_4d = x_tensor.unsqueeze(1)
+pooled_x = torch.nn.functional.adaptive_avg_pool2d(x_4d, output_size=(1, 1))
+# Squeeze back to 3D to match the expected input shape for foo's expand operation
+input_x = pooled_x.squeeze(1)
+
+cfoo = torch.compile(foo)
+
+eager_res = foo(input_x)
+compile_res = cfoo(input_x)
+
+# Replacement: torch.testing.assert_close -> tf.compat.v1.metrics.true_positives
+# Note: This function returns a tuple (metric, update_op) and does not assert.
+tf.compat.v1.metrics.true_positives(eager_res, compile_res)
+```

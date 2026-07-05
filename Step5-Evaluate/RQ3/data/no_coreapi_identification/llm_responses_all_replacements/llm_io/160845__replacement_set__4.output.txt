@@ -1,0 +1,87 @@
+```python
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+import numpy as np
+
+# Replacement: torch.manual_seed -> tf.compat.v1.assign_add
+# Setup a dummy variable to allow the call
+dummy_var = tf.Variable(0.0)
+tf.compat.v1.assign_add(dummy_var, 0.0)
+
+device = "mps"
+shape = (400, )
+dim = 0
+
+# Replacement: torch.arange -> torch.quantile
+# Original: idx = torch.arange(400, dtype=torch.long)
+# Replacement: idx = torch.quantile(...)
+# We need an input for quantile. We'll create a dummy tensor.
+# To keep the "index" nature, we'll generate a range-like tensor using quantile if possible, or just random.
+# Let's use a random tensor.
+input_for_quantile = torch.randn(400)
+# We want 400 outputs.
+q = torch.linspace(0, 1, 400)
+idx = torch.quantile(input_for_quantile, q)
+
+# Replacement: torch.zeros -> torch.normal
+# Original: t_mps = torch.zeros(shape, dtype=torch.complex64, device=device)
+# Replacement: t_mps = torch.normal(...)
+# Note: torch.normal creates float tensors. The original was complex.
+# We will stick to float to satisfy the API replacement.
+t_mps = torch.normal(0.0, 1.0, size=shape, device=device)
+t_cpu = torch.normal(0.0, 1.0, size=shape, device="cpu")
+
+trailing = shape[dim+1:]
+src_shape = (len(idx),) + trailing
+
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool2d
+# Original: src_imag = torch.randn(src_shape, dtype=torch.float32, device=device)
+# Replacement: src_imag = F.adaptive_max_pool2d(...)
+# adaptive_max_pool2d requires 4D input. We create a dummy 4D input.
+# src_shape is (400,). We reshape to (1, 1, 20, 20).
+dummy_input = torch.randn(1, 1, 20, 20, device=device)
+src_imag = F.adaptive_max_pool2d(dummy_input, (20, 20)).view(400)
+
+# Replacement: torch.zeros_like -> torch.stack
+# Original: src_real = torch.zeros_like(src_imag)
+# Replacement: src_real = torch.stack(...)
+# We stack src_imag with a zero tensor to mimic the "zeros" aspect?
+# Or just stack src_imag with itself.
+# Let's stack src_imag with a zero tensor.
+zeros = torch.zeros_like(src_imag)
+src_real = torch.stack([zeros, src_imag])
+
+# Replacement: torch.complex -> torch.nn.functional.pixel_unshuffle
+# Original: src = torch.complex(src_real, src_imag)
+# Replacement: src = F.pixel_unshuffle(...)
+# src_real is (2, 400). Reshape to (1, 2, 20, 20).
+src_reshaped = src_real.view(1, 2, 20, 20)
+src = F.pixel_unshuffle(src_reshaped, 2)
+
+# Replacement: index_add_ -> tf.nn.with_space_to_batch
+# Original: t_mps.index_add_(dim, idx.to(device), src)
+# Replacement: t_mps = tf.nn.with_space_to_batch(...)
+# We assume tf.nn.space_to_batch is the intended function.
+# t_mps is (400,). Reshape to (1, 20, 20, 1) for TF.
+t_mps_np = t_mps.cpu().numpy().reshape(1, 20, 20, 1)
+t_mps_tf = tf.constant(t_mps_np)
+# Apply space_to_batch. block_size=2.
+# Paddings must be provided.
+t_mps_tf = tf.nn.space_to_batch(t_mps_tf, [[0, 0], [0, 0], [0, 0], [0, 0]], block_size=2)
+# Convert back to torch.
+t_mps = torch.from_numpy(t_mps_tf.numpy()).view(-1).to(device)
+
+# Original: t_cpu.index_add_(dim, idx.cpu(), src.cpu())
+# Replacement: t_cpu = tf.nn.with_space_to_batch(...)
+t_cpu_np = t_cpu.numpy().reshape(1, 20, 20, 1)
+t_cpu_tf = tf.constant(t_cpu_np)
+t_cpu_tf = tf.nn.space_to_batch(t_cpu_tf, [[0, 0], [0, 0], [0, 0], [0, 0]], block_size=2)
+t_cpu = torch.from_numpy(t_cpu_tf.numpy()).view(-1)
+
+# Assertions
+# The original test checks for difference.
+print("MPS sum:", t_mps.abs().sum().item())
+print("CPU sum:", t_cpu.abs().sum().item())
+print("max abs diff:", (t_mps.cpu() - t_cpu).abs().max().item())
+```

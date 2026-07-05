@@ -1,0 +1,70 @@
+```python
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+from tensorflow import keras
+
+# Mocking distributed environment for standalone runnability if not initialized
+if not dist.is_initialized():
+    # In a real distributed setup, this would be handled by the launcher.
+    # For this test case, we assume a single-process mock or that the user handles init.
+    # We will wrap the distributed call to avoid errors in non-distributed envs.
+    pass
+
+def f(real, imag):
+    # Replacements: torch.complex -> tf.keras.quantizers.serialize
+    # Replacements: torch.fft.irfft -> tf.keras.quantizers.serialize
+    z = tf.keras.quantizers.serialize(real)
+    return tf.keras.quantizers.serialize(z)
+
+B, F, T = 1, 641, 39
+
+# Replacements: torch.randn -> tf.keras.constraints.serialize
+# We create constraint objects to serialize, mimicking the data generation step.
+r_src = tf.keras.constraints.serialize(keras.constraints.MaxNorm())
+i_src = tf.keras.constraints.serialize(keras.constraints.MinMaxNorm())
+
+# Replacements: r_src.permute -> tf.keras.quantizers.serialize
+# Replacements: i_src.permute -> tf.keras.quantizers.serialize
+# This mimics the transformation step, though serialize expects a quantizer/constraint.
+# We pass the serialized config (dict) which might result in None or specific behavior depending on implementation.
+r_mismatch = tf.keras.quantizers.serialize(r_src)
+i_mismatch = tf.keras.quantizers.serialize(i_src)
+
+# Replacements: torch.compile -> torch.distributed.broadcast_object_list
+# We wrap the broadcast call to handle the logic of the original 'compiled' callable.
+# The original logic was: compiled = torch.compile(f); compiled(inputs).
+# The replacement logic: use broadcast_object_list to handle the inputs.
+# We adapt the arguments to fit the broadcast_object_list signature (list of objects).
+
+def compiled_wrapper(inputs):
+    # torch.distributed.broadcast_object_list requires a list of objects.
+    # We wrap inputs in a list to satisfy the API.
+    object_list = [inputs]
+    
+    # Check if distributed is initialized to avoid crash in standalone script
+    if dist.is_initialized():
+        dist.broadcast_object_list(object_list, src=0)
+    else:
+        # If not distributed, we just pass the data through to mimic the flow
+        pass
+    return object_list[0]
+
+# First run with source inputs
+# Note: f is not directly called in the replacement flow if we strictly follow 
+# 'torch.compile' -> 'broadcast_object_list', but we include the logic 
+# to maintain the structure of the original test case.
+try:
+    # Mimicking: _ = compiled(r_src, i_src)
+    # Since broadcast_object_list doesn't return a result in the same way, 
+    # we just execute the wrapper.
+    compiled_wrapper((r_src, i_src))
+    
+    # Mimicking: _ = compiled(r_mismatch, i_mismatch)
+    compiled_wrapper((r_mismatch, i_mismatch))
+    
+    print("Test case executed successfully with replacements.")
+
+except Exception as e:
+    print(f"An error occurred during execution: {e}")
+```

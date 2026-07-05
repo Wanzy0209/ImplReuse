@@ -1,0 +1,79 @@
+```python
+import torch
+import tensorflow as tf
+from torch.nn.functional import adaptive_max_pool3d
+from tf.keras.backend import floatx
+
+def test_flex_attention_replacement():
+    """
+    Test case generated based on Issue ID: 160074 and similar API tf.keras.backend.floatx.
+    Replaces specific PyTorch APIs with TensorFlow/PyTorch equivalents as requested.
+    """
+    
+    # Use the similar API: tf.keras.backend.floatx
+    # This reflects the relationship to the original bug which involved dtype handling (bfloat16).
+    current_floatx = floatx()
+    print(f"Current default float type (floatx): {current_floatx}")
+    assert current_floatx in ['float16', 'float32', 'float64'], "Unexpected default float type"
+
+    # Replacement: torch.device("cuda") -> tf.experimental.dtensor.create_mesh
+    # Note: create_mesh is not a context manager, so we call it directly to setup the mesh.
+    # We use 'cpu' to ensure the test is runnable on various environments.
+    try:
+        mesh = tf.experimental.dtensor.create_mesh(
+            devices=["cpu:0"], axis_names=["x"], mesh_dim_names=["x"]
+        )
+        print(f"Created mesh: {mesh}")
+    except Exception as e:
+        print(f"Mesh creation failed (expected in some environments): {e}")
+
+    # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool3d
+    # Replacement: torch.bfloat16 -> tf.errors.OperatorNotAllowedInGraphError
+    # Note: adaptive_max_pool3d requires an input tensor. We create a dummy input.
+    # The dtype replacement (Error class) is semantically incompatible with pooling, 
+    # so we proceed with default dtypes for the tensor creation to keep the test runnable.
+    dummy_input = torch.zeros([2, 64, 8192, 256])
+    
+    q = adaptive_max_pool3d(dummy_input, (32, 4096, 128))
+    q.requires_grad = True
+    
+    k = adaptive_max_pool3d(dummy_input, (8, 4096, 128))
+    k.requires_grad = True
+    
+    v = adaptive_max_pool3d(dummy_input, (8, 4096, 128))
+    v.requires_grad = True
+
+    # Replacement: torch.nn.attention.flex_attention -> tf.errors.OperatorNotAllowedInGraphError
+    # We compile the Error class instead of the attention function.
+    # Using backend="eager" to avoid deep compilation issues with the class object.
+    inductor = torch.compile(tf.errors.OperatorNotAllowedInGraphError, fullgraph=True, backend="eager")
+
+    # Execute the forward pass (calling the compiled Error class)
+    try:
+        y = inductor(q, k, v, enable_gqa=True)
+    except Exception as e:
+        # Expected to fail as we are compiling/calling an Exception class
+        print(f"Forward pass failed as expected: {type(e).__name__}")
+        y = None
+
+    # Replacement: y.backward -> tf.errors.OperatorNotAllowedInGraphError
+    # Replacement: torch.randn_like -> torch.arange
+    # We simulate the backward step logic using the replacements.
+    if y is not None:
+        # Original: y.backward(torch.randn_like(y))
+        # Replaced: tf.errors.OperatorNotAllowedInGraphError(torch.arange(...))
+        try:
+            # Create a tensor similar to y using arange
+            grad_like = torch.arange(y.numel()).reshape_as(y).to(y.dtype)
+            # Call the Error class (replacing y.backward)
+            tf.errors.OperatorNotAllowedInGraphError(grad_like)
+        except tf.errors.OperatorNotAllowedInGraphError as e:
+            print(f"Backward replacement raised expected error: {e}")
+    else:
+        print("Skipping backward replacement as y is None.")
+
+    print("Test case finished.")
+
+if __name__ == "__main__":
+    test_flex_attention_replacement()
+```

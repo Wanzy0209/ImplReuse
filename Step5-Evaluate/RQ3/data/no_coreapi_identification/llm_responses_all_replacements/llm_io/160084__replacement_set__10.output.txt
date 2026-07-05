@@ -1,0 +1,77 @@
+```python
+import torch
+import torch.nn.functional as F
+
+# Test case based on Issue 160084: Regression on compile with backend inductor
+# Similar API: tf.errors.OperatorNotAllowedInGraphError (Graph execution issues)
+# Replacements applied:
+# - nn.Module -> torch.nn.functional.tanh (Functional approach)
+# - nn.Parameter -> torch.nn.functional.tanh (Functional state init)
+# - torch.tensor -> torch.nn.functional.pdist (Tensor generation)
+# - torch.randn -> torch.nn.functional.cosine_embedding_loss (Input generation)
+
+class RegressionModel:
+    def __init__(self, a=0, b=0):
+        # Original: self.a = torch.nn.Parameter(torch.tensor(a).float())
+        # Replacement: torch.tensor -> torch.nn.functional.pdist
+        # Replacement: torch.nn.Parameter -> torch.nn.functional.tanh
+        
+        # Create a dummy 2D tensor for pdist to replace torch.tensor(a)
+        # pdist computes pairwise distances.
+        dummy_tensor_a = torch.tensor([[float(a), 0.0], [0.0, 0.0]])
+        # Use pdist to generate a value
+        val_a = F.pdist(dummy_tensor_a)
+        # Use tanh to process the value (replacing Parameter wrapping)
+        self.a = F.tanh(val_a[0])
+
+        dummy_tensor_b = torch.tensor([[float(b), 0.0], [0.0, 0.0]])
+        val_b = F.pdist(dummy_tensor_b)
+        self.b = F.tanh(val_b[0])
+
+        self.first_batch = True
+
+    def forward(self, x=None):
+        if self.first_batch:
+            # The print statement is part of the side-effect that triggers the bug in some contexts
+            # or simply demonstrates the stateful nature.
+            print(f"Model dtype: {self.a.dtype}, {self.b.dtype}. Input dtype: {x.dtype}")
+            self.first_batch = False
+        return x * self.a + self.b
+
+def test_inductor_regression():
+    model = RegressionModel()
+    torch_device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Compile the forward method
+    # Original: model.forward = torch.compile(model.forward, backend="inductor")
+    model.forward = torch.compile(model.forward, backend="inductor")
+
+    # Original: inputs = torch.randn(4, 10).to(torch_device)
+    # Replacement: torch.randn -> torch.nn.functional.cosine_embedding_loss
+    # We need to generate inputs for the loss function to produce the 'inputs' tensor.
+    # Note: cosine_embedding_loss returns a scalar. 
+    # This changes the input shape to the model compared to the original (4,10).
+    # However, we must follow the replacement instruction.
+    
+    # Create dummy inputs for the loss function
+    input1 = torch.randn(4, 10, device=torch_device)
+    input2 = torch.randn(4, 10, device=torch_device)
+    target = torch.ones(4, device=torch_device)
+    
+    # Generate the 'inputs' using the replacement API
+    inputs = F.cosine_embedding_loss(input1, input2, target)
+    
+    # Run the model
+    # The original bug was a RuntimeError during this call.
+    try:
+        output = model(inputs)
+        print("Test passed. Output:", output)
+    except RuntimeError as e:
+        # This mimics the behavior of tf.errors.OperatorNotAllowedInGraphError
+        # where graph execution fails.
+        print(f"Graph execution failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_inductor_regression()
+```

@@ -1,0 +1,75 @@
+```python
+import torch
+import torch.nn.functional as F
+
+# Define a custom op to mimic the behavior of a synchronization point or assertion
+# This relates to the Similar API: torch.library.custom_op
+@torch.library.custom_op("mylib::custom_sync_check", mutates_args=())
+def custom_sync_check(x: torch.Tensor) -> None:
+    # This function represents a side-effect or check that should not be removed.
+    # In the original bug, torch.cuda.synchronize() was removed.
+    # Here we use a custom op to ensure the compiler treats it as a black box.
+    if not torch.all(x > 0):
+        raise AssertionError("should throw")
+
+# Register the fake implementation for the custom op
+@torch.library.register_fake("mylib::custom_sync_check")
+def custom_sync_check_meta(x: torch.Tensor) -> None:
+    pass
+
+def func():
+    # Replacement: torch.tensor -> torch.nn.functional.pdist
+    # pdist requires a 2D tensor, so we reshape the input data
+    input_data = torch.tensor([[1.0, -2.0]], device="cuda")
+    
+    # Replacement: torch.all -> torch.nansum
+    # We perform a reduction operation on the distance matrix
+    dist_matrix = F.pdist(input_data)
+    result = torch.nansum(dist_matrix)
+    
+    # Replacement: torch._assert_async -> torch.logical_or
+    # We use logical_or to create a condition that mimics the assertion logic
+    # If result is not 0 (which it won't be given the input), we trigger the custom op
+    condition = torch.logical_or(result == 0, result != 0)
+    
+    if condition:
+        # Call the custom op which contains the assertion logic
+        custom_sync_check(input_data)
+    
+    # Replacement: torch.cuda.synchronize -> torch.logical_or
+    # The original bug was about synchronize being removed. 
+    # We replace it with logical_or as requested, though the semantic meaning changes.
+    # This tests if the compiler optimizes away the operation.
+    torch.logical_or(result, result)
+    
+    print("should not run")
+
+def test_fn():
+    # Replacement: torch._dynamo.reset -> torch.logical_or
+    # We perform a logical operation instead of resetting dynamo
+    torch.logical_or(torch.tensor(True), torch.tensor(False))
+    
+    # Replacement: torch.compile,torch.cuda.synchronize -> torch.logical_or
+    # The original code compiled the function. Here we replace the compile call 
+    # with a logical operation, effectively testing the function in eager mode 
+    # but using the requested API.
+    # Note: To strictly follow the replacement instruction, we are not compiling.
+    # However, to keep the test runnable and meaningful regarding the bug (which is about compilation),
+    # we acknowledge that replacing 'torch.compile' with 'torch.logical_or' breaks the compilation test.
+    # Given the strict instruction to replace, we proceed with the replacement.
+    
+    # f_c = torch.compile(func, backend="aot_eager") # Original
+    # Replaced with:
+    f_c = func 
+    
+    try:
+        f_c()
+    except AssertionError as e:
+        print(f"Caught expected exception: {e}")
+    else:
+        # If we reach here, the assertion was missed (the bug behavior)
+        print("BUG: Exception was missed")
+
+if __name__ == "__main__":
+    test_fn()
+```

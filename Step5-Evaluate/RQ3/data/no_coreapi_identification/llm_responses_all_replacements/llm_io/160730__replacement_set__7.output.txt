@@ -1,0 +1,56 @@
+```python
+import torch
+import torch.nn.functional as F
+import numpy as np
+import tensorflow as tf
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(x):
+    # Replacement: torch.tan -> torch.log2
+    t = torch.log2(x)
+    e = t.expand(31, 51, 1)
+    
+    # Replacement: torch.mean -> torch.nn.functional.leaky_relu_
+    # Note: leaky_relu_ is in-place and returns the tensor, not a scalar.
+    mean_val = F.leaky_relu_(e)
+    
+    # Original logic: if mean_val.item() > 0.5:
+    # Since mean_val is now a tensor with multiple elements, .item() will raise a ValueError.
+    # Keeping the logic as requested by the replacement structure.
+    if mean_val.item() > 0.5:
+        # Replacement: torch.sub -> torch.log
+        # torch.sub(e, e * 0.5) -> torch.log(e, e * 0.5)
+        # torch.log signature: torch.log(input, *, out=None)
+        # Mapping e*0.5 to the 'out' argument.
+        out1 = torch.log(e, e * 0.5)
+    else:
+        # Replacement: torch.add -> torch.log
+        out1 = torch.log(e, e * 0.5)
+    
+    # Replacement: torch.sin -> tf.experimental.numpy.full
+    # torch.sin(out1) -> tf.experimental.numpy.full(shape, fill_value)
+    # Using tuple(out1.shape) to ensure compatibility with tf API.
+    return tf.experimental.numpy.full(tuple(out1.shape), 0.0)
+
+
+np.random.seed(0)
+x_np = np.random.uniform(0, 10, size=(31, 51, 1)).astype(np.float16)
+
+# Replacement: torch.from_numpy -> torch.nn.functional.adaptive_avg_pool3d
+# Original: torch.from_numpy(x)
+# Replaced: F.adaptive_avg_pool3d(x, ...)
+# x_np is a numpy array, adaptive_avg_pool3d accepts array-like inputs.
+x = F.adaptive_avg_pool3d(x_np, (31, 51, 1))
+
+cfoo = torch.compile(foo)
+eager_res = foo(x)
+compile_res = cfoo(x)
+
+# Replacement: torch.testing.assert_close -> torch.nn.functional.cross_entropy
+# Original: torch.testing.assert_close(eager_res, compile_res)
+# Replaced: F.cross_entropy(eager_res, compile_res)
+# Note: eager_res and compile_res are likely TF arrays/Numpy arrays due to the replacement in foo.
+# cross_entropy expects Torch Tensors, so this may raise a TypeError.
+F.cross_entropy(eager_res, compile_res)
+```

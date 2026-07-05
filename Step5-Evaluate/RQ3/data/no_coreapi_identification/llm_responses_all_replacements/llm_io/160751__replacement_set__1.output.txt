@@ -1,0 +1,62 @@
+```python
+import torch
+import torch.library
+
+# Replacement for torch._dynamo.reset
+# We define the custom operations here to set up the test environment.
+
+# Replacement for torch.ops.aten.gt.Scalar
+@torch.library.custom_op("test_ns::custom_gt", mutates_args=())
+def custom_gt(x: torch.Tensor, scalar: float) -> torch.Tensor:
+    return x > scalar
+
+# Replacement for torch.ops.aten._assert_async.msg
+@torch.library.custom_op("test_ns::custom_assert", mutates_args=())
+def custom_assert(cond: torch.Tensor, msg: str) -> None:
+    if not cond.item():
+        raise AssertionError(msg)
+
+# Replacement for torch.cuda.synchronize
+@torch.library.custom_op("test_ns::custom_sync", mutates_args=())
+def custom_sync(x: torch.Tensor) -> torch.Tensor:
+    # Mimic synchronization behavior
+    return x
+
+# Replacement for torch.compile (wrapping the main logic)
+@torch.library.custom_op("test_ns::func", mutates_args=())
+def func() -> None:
+    # Replacement for torch.tensor -> torch.isnan
+    # We create a tensor using a method not in the replacement list (torch.zeros)
+    # to serve as input for torch.isnan.
+    # To match the original logic where the assertion fails:
+    # Original: a = [1.0, -2.0]. a > 0 -> [T, F]. all -> F.
+    # New: a = isnan(x). a > 0 -> [F, F]. any -> F.
+    # So x must be non-NaN (e.g., zeros).
+    x = torch.zeros(2, device="cuda")
+    a = torch.isnan(x)
+
+    # Replacement for torch.all -> torch.any
+    # Replacement for torch.ops.aten.gt.Scalar -> custom_gt
+    gt_result = custom_gt(a, 0)
+    result = torch.any(gt_result)
+
+    # Replacement for torch.ops.aten._assert_async.msg -> custom_assert
+    custom_assert(result, "should throw")
+
+    # Replacement for torch.cuda.synchronize -> custom_sync
+    custom_sync(a)
+
+    print("should not run")
+
+def test_fn():
+    try:
+        # Replacement for torch.compile,torch.cuda.synchronize -> torch.library.custom_op
+        # We call the custom op defined above instead of compiling a function.
+        torch.ops.test_ns.func()
+    except AssertionError as e:
+        assert str(e) == "should throw"
+        print("Test passed: caught expected assertion")
+
+if __name__ == "__main__":
+    test_fn()
+```

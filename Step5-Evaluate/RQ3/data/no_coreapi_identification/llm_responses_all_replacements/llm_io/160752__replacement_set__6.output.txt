@@ -1,0 +1,88 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Constants
+MAX = 3
+BATCH = 37
+
+# Data generation
+# Replacing torch.randint and torch.rand with tf.random.uniform
+# (Semantic translation for valid code)
+idxs = tf.random.uniform((BATCH,), minval=0, maxval=MAX, dtype=tf.int64)
+x = tf.random.uniform((BATCH, MAX), dtype=tf.float64)
+
+# Define the function using tf.custom_gradient (Similar API)
+# This replaces the need for complex autodiff logic that might fail
+@tf.custom_gradient
+def func(x, idxs):
+    # Forward pass
+    # Replacing torch.nn.functional.one_hot with tf.one_hot
+    # (Note: tf.keras.callbacks.BackupAndRestore is not a valid replacement for one_hot encoding logic)
+    one_hot_val = tf.one_hot(idxs, MAX)
+    # Replacing x.square with tf.square
+    y = tf.square(x) * one_hot_val
+
+    # Define gradient
+    def grad(upstream):
+        # dy/dx = 2 * x * one_hot
+        return upstream * 2.0 * x * one_hot_val, None
+
+    return y, grad
+
+# Define the Jacobian calculation
+# Replacing torch.func.jacfwd with tf.keras.ops.vectorized_map
+# This replaces the compiled jacobian logic (torch.compile)
+
+# We need a function that computes the Jacobian for a single element in the batch
+# to be used with vectorized_map.
+def compute_jacobian_elem(x_elem, idx_elem):
+    # x_elem: (MAX,), idx_elem: scalar
+    with tf.GradientTape() as tape:
+        tape.watch(x_elem)
+        # Add batch dim for func
+        y_elem = func(tf.expand_dims(x_elem, 0), tf.expand_dims(idx_elem, 0))
+    
+    # Jacobian shape: (1, MAX, 1, MAX) -> (MAX, MAX)
+    jac = tape.jacobian(y_elem, x_elem)
+    return tf.squeeze(jac)
+
+# Use vectorized_map to apply this to the whole batch
+# This replaces the "jacfunc = torch.compile(jacfunc, dynamic=True); out = jacfunc(x, idxs)"
+# logic by using a vectorized operation.
+
+def jacfunc(x, idxs):
+    # Replacing torch.func.jacfwd with tf.keras.ops.vectorized_map
+    from tensorflow.keras.ops import vectorized_map
+    
+    def wrapper(inputs):
+        x_in, idx_in = inputs
+        return compute_jacobian_elem(x_in, idx_in)
+    
+    return vectorized_map(wrapper, (x, idxs))
+
+# Test execution
+try:
+    # This mimics the "fails" scenario in the original bug, but here we expect it to work
+    # because we are using the robust TensorFlow equivalent patterns.
+    out = jacfunc(x, idxs)
+    
+    # Assertions
+    assert out.shape == (BATCH, MAX, MAX), f"Expected shape {(BATCH, MAX, MAX)}, got {out.shape}"
+    
+    # Verify the logic for a random sample
+    # For row i, col j: should be 2*x[i, j] if j == idxs[i] else 0
+    i = 0
+    idx = idxs[i]
+    expected_row = np.zeros((MAX, MAX))
+    expected_row[idx, idx] = 2.0 * x[i, idx].numpy()
+    
+    # Use np.testing for float comparison
+    np.testing.assert_array_almost_equal(out[i].numpy(), expected_row, decimal=5)
+    
+    print("Test passed: Jacobian computed successfully with vectorized_map and custom_gradient.")
+
+except Exception as e:
+    print(f"Test failed: {e}")
+    raise
+```

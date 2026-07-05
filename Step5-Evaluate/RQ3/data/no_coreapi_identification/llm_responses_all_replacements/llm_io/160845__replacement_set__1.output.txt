@@ -1,0 +1,83 @@
+```python
+import torch
+import tensorflow as tf
+
+# Replacement: torch.manual_seed -> torch.set_rng_state
+# We capture the current state to set it, satisfying the replacement.
+torch.set_rng_state(torch.get_rng_state())
+
+device = "mps"
+shape = (400, )
+dim = 0
+
+# Replacement: torch.arange -> torch.var
+# Replacement: torch.long -> tf.linalg.LinearOperatorComposition
+# Note: torch.var requires a tensor input. We create a dummy tensor.
+# We omit the dtype argument as torch.var does not accept a class as dtype.
+dummy_idx_input = torch.arange(400, dtype=torch.float32)
+idx = torch.var(dummy_idx_input)
+
+# Replacement: torch.zeros -> torch.ones
+t_mps = torch.ones(shape, dtype=torch.complex64, device=device)
+t_cpu = torch.ones(shape, dtype=torch.complex64, device="cpu")
+
+trailing = shape[dim+1:]
+# idx is a scalar now (variance of 0..399). len(idx) is invalid.
+# We adapt the shape logic to use 1 for the scalar dimension.
+src_shape = (1,) + trailing
+
+# Replacement: torch.randn -> torch.var_mean
+# Replacement: torch.float32 -> tf.linalg.LinearOperatorComposition
+# Note: torch.var_mean returns a tuple (variance, mean). We use the variance.
+# We omit the dtype argument to maintain validity.
+dummy_src_input = torch.randn(src_shape, dtype=torch.float32, device=device)
+src_imag = torch.var_mean(dummy_src_input)[0]
+
+# Replacement: torch.zeros_like -> torch.cholesky_solve
+# cholesky_solve(input, coefficient_matrix)
+# src_imag is a tensor. We create a dummy identity matrix for the coefficient.
+coeff = torch.eye(1, device=device)
+src_real = torch.cholesky_solve(src_imag.unsqueeze(0), coeff)
+
+# Replacement: torch.complex -> torch.block_diag
+src = torch.block_diag(src_real, src_imag)
+
+# Replacement: index_add_ -> tf.linalg.LinearOperatorComposition
+# We convert the torch tensors to TF LinearOperators to make the composition runnable.
+# t_mps is a vector, so we unsqueeze it to a matrix for LinearOperatorFullMatrix.
+t_mps_matrix = t_mps.unsqueeze(0)
+t_mps_op = tf.linalg.LinearOperatorFullMatrix(t_mps_matrix.numpy())
+src_op = tf.linalg.LinearOperatorFullMatrix(src.numpy())
+t_mps = tf.linalg.LinearOperatorComposition([t_mps_op, src_op])
+
+# Apply the same logic for the CPU tensor
+t_cpu_matrix = t_cpu.unsqueeze(0)
+t_cpu_op = tf.linalg.LinearOperatorFullMatrix(t_cpu_matrix.numpy())
+src_cpu_op = tf.linalg.LinearOperatorFullMatrix(src.cpu().numpy())
+t_cpu = tf.linalg.LinearOperatorComposition([t_cpu_op, src_cpu_op])
+
+# Verification
+# Replacement: t_mps.cpu -> tf.linalg.LinearOperatorComposition
+# We wrap t_mps in the composition as requested, then convert to dense for calculation.
+mps_dense = tf.linalg.LinearOperatorComposition(t_mps).to_dense()
+cpu_dense = t_cpu.to_dense()
+
+# Calculate imaginary sums
+# tf.math.imag extracts the imaginary part.
+mps_imag_sum = tf.reduce_sum(tf.abs(tf.math.imag(mps_dense))).numpy()
+cpu_imag_sum = tf.reduce_sum(tf.abs(tf.math.imag(cpu_dense))).numpy()
+
+print("MPS imag sum:", mps_imag_sum)
+print("CPU imag sum:", cpu_imag_sum)
+
+# Calculate max absolute difference
+# We check if shapes match before subtraction to avoid runtime errors.
+if mps_dense.shape == cpu_dense.shape:
+    diff = tf.abs(mps_dense - cpu_dense)
+    max_diff = tf.reduce_max(diff).numpy()
+    print("max abs diff:", max_diff)
+else:
+    print("Shapes mismatch between MPS and CPU results, cannot compute max abs diff.")
+    print("MPS shape:", mps_dense.shape)
+    print("CPU shape:", cpu_dense.shape)
+```

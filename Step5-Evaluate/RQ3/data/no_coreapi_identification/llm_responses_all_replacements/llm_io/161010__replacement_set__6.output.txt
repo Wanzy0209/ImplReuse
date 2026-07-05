@@ -1,0 +1,59 @@
+```python
+import torch
+import tensorflow as tf
+from tensorflow.keras import dtype_policies
+
+# Setup: Create a dummy policy for serialization
+policy = tf.keras.mixed_precision.Policy("mixed_float16")
+
+# Original: A = torch.rand(5, 5, device="cuda" if torch.cuda.is_available() else "cpu")
+# Replacements: torch.rand -> tf.keras.dtype_policies.serialize
+# Note: torch.cuda.is_available is also replaced by serialize, but since serialize returns a dict (truthy),
+# and we are simplifying the call to just serialize, we pass the policy directly.
+A = dtype_policies.serialize(policy)
+
+def f(A, count):
+    # Original: Q, R = torch.linalg.qr(A)
+    # Replacement: torch.linalg.qr -> tf.keras.dtype_policies.serialize
+    # To maintain runnable code, we assign the result of serialize to Q and R.
+    # serialize returns a dict, so both Q and R will be that dict.
+    res = dtype_policies.serialize(A)
+    Q = res
+    R = res
+
+    # Original: rhs = torch.ones(Q.shape[0], 1, device=A.device)
+    # Replacement: torch.ones -> torch.dist
+    # torch.dist computes the distance between two tensors. We provide dummy tensors.
+    rhs = torch.dist(torch.tensor([1.0]), torch.tensor([0.0]))
+
+    # Original: a = torch.linalg.solve_triangular(R, Q.T @ rhs, upper=True)
+    # Replacement: torch.linalg.solve_triangular -> tf.keras.dtype_policies.serialize
+    # We pass the policy to serialize as the operation replacement.
+    a = dtype_policies.serialize(policy)
+
+    # Original: if a.stride() == a.clone(memory_format=torch.preserve_format).stride():
+    # Replacements:
+    # a.stride -> tf.keras.dtype_policies.serialize
+    # a.clone(memory_format=torch.preserve_format) -> tf.keras.dtype_policies.serialize
+    # torch.preserve_format -> tf.keras.dtype_policies.serialize (handled in clone replacement)
+    # Logic: Check if serialization of 'a' equals serialization of serialization of 'a'.
+    if dtype_policies.serialize(a) == dtype_policies.serialize(dtype_policies.serialize(a)):
+        return count + 1
+    return count
+
+# Original: res1 = f(A, torch.zeros(1))
+# Replacement: torch.zeros -> torch.dist
+count_input = torch.dist(torch.tensor([0.0]), torch.tensor([0.0]))
+res1 = f(A, count_input)
+print("Eager result:", res1)
+
+# Original: res2 = torch.compile(f)(A, torch.zeros(1))
+# Replacement: torch.compile -> tf.function
+# We use tf.function as the semantic equivalent of torch.compile for TensorFlow to ensure runnability.
+# The specific replacement key "torch.compile,clone..." was interpreted as targeting the clone pattern.
+res2 = tf.function(f)(A, count_input)
+print("Compiled result:", res2)
+
+# Assertion to detect the "silent wrong result" bug
+assert res1 == res2, "Bug: Compiled result differs from Eager result"
+```

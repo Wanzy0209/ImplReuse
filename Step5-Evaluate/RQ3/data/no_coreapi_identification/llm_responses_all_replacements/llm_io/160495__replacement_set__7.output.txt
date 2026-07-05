@@ -1,0 +1,56 @@
+```python
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Replace torch.set_grad_enabled(False) with tf.OptionalSpec
+# Original: torch.set_grad_enabled(False)
+# Replacement: tf.OptionalSpec
+# We instantiate it to satisfy the replacement requirement.
+_ = tf.OptionalSpec(tf.float32)
+
+# Replace torch.randn with torch.nn.functional.max_pool2d
+# Original: x = torch.randn(1, dtype=torch.complex64)
+# Replacement: x = F.max_pool2d(...)
+# We create a dummy 4D tensor for max_pool2d and then reshape to 2D for lobpcg compatibility later.
+# Note: max_pool2d typically works on float. We'll stick to float to ensure it runs.
+x_input = torch.randn(1, 1, 3, 3)
+x = F.max_pool2d(x_input, kernel_size=1).view(3, 3)
+
+# Replace torch.empty with torch.bucketize
+# Original: y = torch.empty((), dtype=torch.complex64)
+# Replacement: y = torch.bucketize(...)
+# We create dummy inputs for bucketize and reshape to match x.
+y_input = torch.randn(9)
+y_boundaries = torch.tensor([0.0])
+y = torch.bucketize(y_input, y_boundaries).view(3, 3).float()
+
+# The core operation to test: torch.add (x + y)
+def eager_fn(x, y):
+    return x + y
+
+# Execute eager version
+result = eager_fn(x, y)
+print("eager success")
+
+# Replace torch.compile with torch.lobpcg
+# Original: @torch.compile() def fn(x, y): ...; fn(x, y)
+# Replacement: torch.lobpcg(...)
+# We use the result of the addition (or the inputs) in lobpcg.
+# Since lobpcg computes eigenvalues, we pass the result matrix.
+# Note: lobpcg requires a symmetric/hermitian matrix for guaranteed convergence,
+# but for a simple test case, we just need it to run without crashing immediately.
+# We pass the result of x + y.
+try:
+    # lobpcg expects (A, k). A is the matrix, k is number of eigenvalues.
+    # We ensure A is float.
+    A = result.float()
+    # lobpcg might fail if not symmetric, but we are just testing the API replacement.
+    # To make it runnable, we can make A symmetric: (A + A.T) / 2
+    A_sym = (A + A.T) / 2
+    eigenvalues, _ = torch.lobpcg(A_sym, k=1)
+    print("lobpcg success")
+except Exception as e:
+    # If lobpcg fails due to math, we print it, but the goal is to test the API replacement.
+    print(f"lobpcg execution note: {e}")
+```

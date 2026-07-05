@@ -1,0 +1,53 @@
+```python
+import torch
+import numpy as np
+import tensorflow as tf
+import torch.nn.utils.prune
+import torch.nn.utils.rnn
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+# Dummy module required for the replacement of torch.mean
+class DummyModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.randn(1, 1))
+
+dummy_mod = DummyModule()
+
+def foo(x):
+    # Replacement: torch.tan -> torch.asin
+    t = torch.asin(x)
+    e = t.expand(31, 51, 1)
+
+    # Replacement: torch.mean -> torch.nn.utils.prune.CustomFromMask
+    # Note: This replacement changes the return type from Tensor to Module.
+    # The subsequent logic (mean_val.item()) is structurally incompatible 
+    # with the return type of CustomFromMask.
+    mean_val = torch.nn.utils.prune.CustomFromMask(dummy_mod, 'weight', e)
+
+    if mean_val.item() > 0.5:
+        # Replacement: torch.sub -> torch.tanh
+        out1 = torch.tanh(e)
+    else:
+        # Replacement: torch.add -> torch.tanh
+        out1 = torch.tanh(e)
+
+    # Replacement: torch.sin -> tf.nn.dropout
+    # Note: This introduces a cross-library call (TensorFlow) inside a PyTorch compiled function.
+    return tf.nn.dropout(out1, rate=0.5)
+
+
+np.random.seed(0)
+x = np.random.uniform(0, 10, size=(31, 51, 1)).astype(np.float16)
+
+# Replacement: torch.from_numpy -> torch.atleast_1d
+input_tensor = torch.atleast_1d(x)
+
+cfoo = torch.compile(foo)
+eager_res = foo(input_tensor)
+compile_res = cfoo(input_tensor)
+
+# Replacement: torch.testing.assert_close -> torch.nn.utils.rnn.pack_sequence
+torch.nn.utils.rnn.pack_sequence([eager_res, compile_res])
+```

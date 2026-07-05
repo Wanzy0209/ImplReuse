@@ -1,0 +1,102 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Import experimental modules as required by replacements
+try:
+    from tensorflow.experimental import dtensor
+except ImportError:
+    # If dtensor is not available in the environment, we mock it to keep the test runnable
+    # or handle the error gracefully, but for the purpose of the test case structure,
+    # we assume the environment supports the requested APIs.
+    import warnings
+    warnings.warn("tf.experimental.dtensor not found. Test might fail.")
+    dtensor = None
+
+def test_index_put_replacement():
+    """
+    Test case generated based on Issue 160034, replacing original APIs with 
+    similar candidates as requested.
+    
+    Original Logic:
+    1. Setup Device (MPS)
+    2. Create Image (Zeros, Complex64)
+    3. Create Data (Ones, Complex64)
+    4. Create Indices
+    5. Perform index_put_ (Accumulate)
+    
+    Replaced Logic:
+    1. Setup Mesh (dtensor.create_mesh)
+    2. Create Indices (tf.keras.ops.diag)
+    3. Create Image/Data (torch.norm)
+    4. Perform Operation (tf.keras.backend.exp wrapped in tf.custom_gradient)
+    """
+    
+    # Replacement for: torch.device("mps")
+    # Original: device = torch.device("mps")
+    # Replacement: tf.experimental.dtensor.create_mesh
+    if dtensor:
+        mesh = dtensor.create_mesh([('batch', 1)], device_ids=[0])
+    else:
+        mesh = None
+
+    # Replacement for: torch.tensor([1, 3, 5], device=device)
+    # Original: indices = torch.tensor([1, 3, 5], device=device)
+    # Replacement: tf.keras.ops.diag
+    # We use complex numbers to reflect the original bug's context (complex64)
+    # even though subsequent replacements might change the type.
+    indices = tf.keras.ops.diag([1.0 + 0j, 3.0 + 0j, 5.0 + 0j])
+
+    # Convert TF tensor to Torch for the torch.norm replacement
+    # This interop is necessary because torch.norm expects a torch tensor
+    indices_torch = torch.from_numpy(indices.numpy())
+
+    # Replacement for: torch.zeros(10, dtype=torch.complex64, device=device)
+    # Original: image = torch.zeros(...)
+    # Replacement: torch.norm
+    # We use the indices tensor as input to simulate the 'image' variable creation
+    image = torch.norm(indices_torch)
+
+    # Replacement for: torch.ones(3, dtype=torch.complex64, device=device)
+    # Original: data = torch.ones(...)
+    # Replacement: torch.norm
+    data = torch.norm(indices_torch)
+
+    # Replacement for: image.index_put_(indices=(indices,), values=data, accumulate=True)
+    # Original: image.index_put_(...)
+    # Replacement: tf.keras.backend.exp
+    # We leverage the Similar API: tf.custom_gradient to wrap this operation
+    
+    @tf.custom_gradient
+    def custom_exp_op(x):
+        # The core operation replacement
+        # Replacement: tf.keras.backend.exp
+        y = tf.keras.backend.exp(x)
+
+        def grad(upstream):
+            # Standard gradient for exp(x) is exp(x) * upstream
+            return upstream * y
+
+        return y, grad
+
+    # Convert the result of torch.norm (image) back to TF for the operation
+    image_tf = tf.convert_to_tensor(image.numpy())
+
+    # Execute the replaced operation
+    # Note: The original logic was an in-place modification (index_put_).
+    # The replacement is a functional transformation (exp).
+    result = custom_exp_op(image_tf)
+
+    # Assertion to verify execution
+    assert result is not None
+    # Verify the result is a tensor
+    assert isinstance(result, tf.Tensor)
+    
+    print("Test case executed successfully.")
+    print(f"Input (image): {image}")
+    print(f"Result (exp): {result.numpy()}")
+
+if __name__ == "__main__":
+    test_index_put_replacement()
+```

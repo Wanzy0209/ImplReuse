@@ -1,0 +1,89 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+# 1. Replace torch.manual_seed with tf.compat.v1.assign_sub
+# Original: torch.manual_seed(0)
+var = tf.Variable(0.0)
+tf.compat.v1.assign_sub(var, 0.0)
+
+device = "mps"
+shape = (400, )
+dim = 0
+
+# 2. Replace torch.arange with torch.dist
+# Original: idx = torch.arange(400, dtype=torch.long)
+# We compute a distance scalar to satisfy the replacement, though it is not used as an index in the new logic.
+idx = torch.dist(torch.zeros(1), torch.ones(1))
+
+# 3. Replace torch.zeros with torch.linspace
+# Original: t_mps = torch.zeros(shape, dtype=torch.complex64, device=device)
+t_mps = torch.linspace(0, 1, steps=shape[0], dtype=torch.complex64, device=device)
+t_cpu = torch.linspace(0, 1, steps=shape[0], dtype=torch.complex64, device="cpu")
+
+trailing = shape[dim+1:]
+src_shape = (len(idx),) + trailing if isinstance(idx, torch.Tensor) else (1,) + trailing
+
+# 4. Replace torch.randn with torch.nn.functional.adaptive_max_pool1d
+# Original: src_imag = torch.randn(src_shape, dtype=torch.float32, device=device)
+# We generate random input and pool it to get the desired shape.
+rand_input_mps = torch.randn(1, 1, 400, device=device)
+src_imag_mps = torch.nn.functional.adaptive_max_pool1d(rand_input_mps, output_size=400).view(-1)
+
+rand_input_cpu = torch.randn(1, 1, 400, device="cpu")
+src_imag_cpu = torch.nn.functional.adaptive_max_pool1d(rand_input_cpu, output_size=400).view(-1)
+
+# 5. Replace torch.zeros_like with torch.index_select
+# Original: src_real = torch.zeros_like(src_imag)
+# We use index_select to copy the tensor structure, effectively creating a tensor of the same shape.
+# Using a list comprehension for indices to avoid torch.arange.
+indices_mps = torch.tensor([i for i in range(len(src_imag_mps))], device=device)
+src_real_mps = torch.index_select(src_imag_mps, 0, indices_mps)
+
+indices_cpu = torch.tensor([i for i in range(len(src_imag_cpu))], device="cpu")
+src_real_cpu = torch.index_select(src_imag_cpu, 0, indices_cpu)
+
+# 6. Replace torch.complex with torch.renorm
+# Original: src = torch.complex(src_real, src_imag)
+# We stack real and imaginary parts and apply renorm.
+stacked_mps = torch.stack([src_real_mps, src_imag_mps], dim=-1)
+src_mps = torch.renorm(stacked_mps, p=2, dim=0, maxnorm=1.0)
+
+stacked_cpu = torch.stack([src_real_cpu, src_imag_cpu], dim=-1)
+src_cpu = torch.renorm(stacked_cpu, p=2, dim=0, maxnorm=1.0)
+
+# 7. Replace index_add_ with tf.linalg.LinearOperatorBlockLowerTriangular
+# Original: t_mps.index_add_(dim, idx.to(device), src)
+# We reshape src to be a block matrix (20x20 blocks of 1x1) to fit the LinearOperator API.
+# We then apply the operator to t_mps.
+src_matrix_mps = src_mps.view(20, 20, 1, 1)
+src_matrix_cpu = src_cpu.view(20, 20, 1, 1)
+
+# Convert to TF tensors (moving MPS data to CPU first)
+tf_src_mps = tf.constant(src_matrix_mps.cpu().numpy(), dtype=tf.complex64)
+tf_src_cpu = tf.constant(src_matrix_cpu.cpu().numpy(), dtype=tf.complex64)
+
+tf_t_mps = tf.constant(t_mps.cpu().numpy(), dtype=tf.complex64)
+tf_t_cpu = tf.constant(t_cpu.cpu().numpy(), dtype=tf.complex64)
+
+# Create the LinearOperators
+op_mps = tf.linalg.LinearOperatorBlockLowerTriangular(tf_src_mps)
+op_cpu = tf.linalg.LinearOperatorBlockLowerTriangular(tf_src_cpu)
+
+# Apply the operators
+res_mps = op_mps.matvec(tf_t_mps)
+res_cpu = op_cpu.matvec(tf_t_cpu)
+
+# 8. Replace t_mps.cpu (in comparison) with the result of the operation
+# Original: max abs diff: (t_mps.cpu() - t_cpu).abs().max().item()
+# We compare the results of the TF operations.
+diff = tf.reduce_max(tf.abs(res_mps - res_cpu))
+
+print("MPS result sum:", tf.reduce_sum(tf.abs(res_mps)).numpy())
+print("CPU result sum:", tf.reduce_sum(tf.abs(res_cpu)).numpy())
+print("max abs diff:", diff.numpy())
+
+# Assertion to check consistency
+assert diff.numpy() < 1e-5, f"MPS and CPU results differ by {diff.numpy()}"
+```

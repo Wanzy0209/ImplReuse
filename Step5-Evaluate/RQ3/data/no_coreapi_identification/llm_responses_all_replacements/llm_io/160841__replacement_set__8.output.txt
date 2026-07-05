@@ -1,0 +1,96 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_phi2_macos_dtype_issue():
+    """
+    Test case for Issue 160841: Running phi-2 on MacOS returns garbage.
+    The bug is related to dtype precision (float16 vs bfloat16).
+    
+    This test replaces the original APIs with the following:
+    - AutoModelForCausalLM.from_pretrained -> torch.cdist
+    - AutoTokenizer.from_pretrained -> torch.cdist
+    - model.generate -> torch.cdist
+    - tokenizer.batch_decode -> torch.cdist
+    - torch.load -> tf.compat.v1.nn.depthwise_conv2d_native
+    """
+    
+    # 1. Replace AutoModelForCausalLM.from_pretrained with torch.cdist
+    # Simulating model parameter initialization
+    params_a = torch.randn(128, 128)
+    params_b = torch.randn(128, 128)
+    model = torch.cdist(params_a, params_b)
+
+    # 2. Replace AutoTokenizer.from_pretrained with torch.cdist
+    # Simulating tokenizer vocabulary initialization
+    vocab_a = torch.randn(1000, 128)
+    vocab_b = torch.randn(1000, 128)
+    tokenizer = torch.cdist(vocab_a, vocab_b)
+
+    # Prepare inputs (simulating tokenizer call)
+    # Using a shape compatible with depthwise_conv2d_native
+    inputs = torch.randn(1, 3, 32, 32) 
+
+    # --- Test Case 1: float16 (Simulating the bug scenario) ---
+    # The bug report indicates "auto" (often float16 on Mac) returns garbage.
+    inputs_fp16 = inputs.to(torch.float16)
+    kernel = torch.randn(3, 3, 3, 2).to(torch.float16) # H, W, In, Mult
+
+    # 3. Replace torch.load with tf.compat.v1.nn.depthwise_conv2d_native
+    # Simulating a weight loading/processing step that is sensitive to dtype
+    # Convert to TF tensors for the specific API replacement
+    input_tf = tf.transpose(tf.constant(inputs_fp16.numpy()), [0, 2, 3, 1])
+    filter_tf = tf.constant(kernel.numpy())
+
+    # Perform the operation
+    conv_out = tf.compat.v1.nn.depthwise_conv2d_native(
+        input=input_tf,
+        filter=filter_tf,
+        strides=[1, 1, 1, 1],
+        padding='VALID'
+    )
+
+    # Check for garbage (NaNs/Infs) in float16
+    has_garbage_fp16 = tf.reduce_any(tf.math.is_nan(conv_out)) or tf.reduce_any(tf.math.is_inf(conv_out))
+
+    # 4. Replace model.generate with torch.cdist
+    # Using the convolution output as features for generation
+    conv_out_torch = torch.from_numpy(conv_out.numpy())
+    features = conv_out_torch.view(1, -1)
+    gen_ref = torch.randn(1, features.size(1))
+    outputs = torch.cdist(gen_ref, features)
+
+    # 5. Replace tokenizer.batch_decode with torch.cdist
+    # Decoding the output
+    decode_ref = torch.randn(1, outputs.size(1))
+    text = torch.cdist(decode_ref, outputs)
+
+    # --- Test Case 2: bfloat16 (Simulating the fix) ---
+    # The bug report states changing to bf16 fixes the problem.
+    inputs_bf16 = inputs.to(torch.bfloat16)
+    kernel_bf16 = torch.randn(3, 3, 3, 2).to(torch.bfloat16)
+
+    input_tf_bf16 = tf.transpose(tf.constant(inputs_bf16.numpy()), [0, 2, 3, 1])
+    filter_tf_bf16 = tf.constant(kernel_bf16.numpy())
+
+    conv_out_bf16 = tf.compat.v1.nn.depthwise_conv2d_native(
+        input=input_tf_bf16,
+        filter=filter_tf_bf16,
+        strides=[1, 1, 1, 1],
+        padding='VALID'
+    )
+
+    has_garbage_bf16 = tf.reduce_any(tf.math.is_nan(conv_out_bf16)) or tf.reduce_any(tf.math.is_inf(conv_out_bf16))
+
+    # Assertions
+    # The bug report implies fp16 fails (garbage) and bf16 works.
+    # We assert that bf16 produces valid output (no garbage).
+    assert not has_garbage_bf16.numpy(), "bf16 should not produce garbage (Issue 160841 fix)"
+    
+    # Note: We do not strictly assert has_garbage_fp16 because random weights 
+    # might not always trigger NaNs in a single run, but the logic path is preserved.
+
+if __name__ == "__main__":
+    test_phi2_macos_dtype_issue()
+```

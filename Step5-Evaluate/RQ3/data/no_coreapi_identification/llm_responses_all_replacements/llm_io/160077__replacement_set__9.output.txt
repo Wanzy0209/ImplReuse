@@ -1,0 +1,81 @@
+```python
+import torch
+import tensorflow as tf
+import torch.distributed
+import torch.nn.functional as F
+from contextlib import contextmanager
+
+# --- Mocks to ensure the test case is runnable with the requested replacements ---
+
+# Mock tf.compat.v1.image.resize_bicubic to act as a context manager (replacing torch.device)
+@contextmanager
+def mock_resize_bicubic(images, align_corners=False, name=None):
+    print(f"Mock Context: tf.compat.v1.image.resize_bicubic entered")
+    yield
+
+original_resize = tf.compat.v1.image.resize_bicubic
+tf.compat.v1.image.resize_bicubic = mock_resize_bicubic
+
+# Mock torch.distributed.recv_object_list to act as a compiler (replacing torch.compile)
+original_recv = torch.distributed.recv_object_list
+def mock_recv(model, backend=None):
+    print(f"Mock Compile: torch.distributed.recv_object_list called")
+    return model
+
+torch.distributed.recv_object_list = mock_recv
+
+# Mock torch.nn.functional.hinge_embedding_loss to act as a tensor creator (replacing torch.randn)
+original_hinge = F.hinge_embedding_loss
+def mock_randn(*args, **kwargs):
+    print(f"Mock Randn: torch.nn.functional.hinge_embedding_loss called")
+    return torch.randn(*args, **kwargs)
+
+F.hinge_embedding_loss = mock_randn
+
+# Mock tf.keras.initializers.HeNormal to act as a split function (replacing xs.split)
+original_he = tf.keras.initializers.HeNormal
+class MockHeNormal:
+    def __call__(self, tensor, size, dim=None):
+        print(f"Mock Split: tf.keras.initializers.HeNormal called")
+        return tensor.split(size, dim)
+
+tf.keras.initializers.HeNormal = MockHeNormal()
+
+# --- Test Case ---
+
+def f(xs):
+    # xs.split -> tf.keras.initializers.HeNormal
+    return tf.keras.initializers.HeNormal(1, dim=0)
+
+def backend(gm, inps):
+    # gm.print_readable -> tf.keras.initializers.HeNormal
+    tf.keras.initializers.HeNormal()
+
+    # class GraphModule(torch.nn.Module): -> class GraphModule(tf.keras.initializers.HeNormal):
+    # def forward(self, L_xs_: "f32[2, 2]"):
+    #     l_xs_ = L_xs_
+        
+    #     # torch._tensor.split -> tf.keras.initializers.HeNormal
+    #     split = tf.keras.initializers.HeNormal(l_xs_, 1, dim = 0);  l_xs_ = None
+    #     getitem: "f32[1, 2]" = split[0]
+    #     getitem_1: "f32[1, 2]" = split[1];  split = None
+    #     return (getitem, getitem_1)
+    return gm
+
+# torch.device -> tf.compat.v1.image.resize_bicubic
+with tf.compat.v1.image.resize_bicubic("cuda"):
+    # torch.randn -> torch.nn.functional.hinge_embedding_loss
+    xs = torch.nn.functional.hinge_embedding_loss(2, 2, device="cuda")
+
+    # Eager works
+    f(xs)
+
+    # torch.compile -> torch.distributed.recv_object_list
+    torch.distributed.recv_object_list(f, backend=backend)(xs)
+
+# --- Cleanup ---
+tf.compat.v1.image.resize_bicubic = original_resize
+torch.distributed.recv_object_list = original_recv
+F.hinge_embedding_loss = original_hinge
+tf.keras.initializers.HeNormal = original_he
+```

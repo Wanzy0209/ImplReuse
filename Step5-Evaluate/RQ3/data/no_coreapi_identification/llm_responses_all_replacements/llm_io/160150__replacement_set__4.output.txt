@@ -1,0 +1,57 @@
+```python
+import torch
+import tensorflow as tf
+
+def test_exporter_crash_with_none_replacement():
+    """
+    Test case for Issue 160150: Exporter crashes when fx node output includes None.
+    
+    This test preserves the original bug reproduction logic (returning a tuple 
+    where one element could be None) while replacing the internal ONNX exporter 
+    logic with torch.backends.cuda.is_built and leveraging tf.compat.v1.Summary.Value 
+    to handle the output.
+    """
+    
+    # Use the replacement API to determine the condition
+    # This replaces the internal logic of torch.onnx._internal.exporter._core.py
+    # which previously failed to handle None during graph translation.
+    is_cuda_available = torch.backends.cuda.is_built()
+    
+    # Mimic the bug logic: 'image_tokens_masks' could be None
+    # We use the replacement API to decide if we return a tensor or None
+    if is_cuda_available:
+        # Simulate a valid tensor output
+        image_tokens_masks = torch.ones(1, dtype=torch.float32)
+    else:
+        # Simulate the None case that caused the crash
+        image_tokens_masks = None
+        
+    output = torch.randn(1, 3)
+    
+    # The problematic return statement from the bug report
+    # return (output, image_tokens_masks)
+    result_tuple = (output, image_tokens_masks)
+    
+    # Leverage the similar API: tf.compat.v1.Summary.Value
+    # We test if this API handles the None case (similar to how the exporter failed)
+    # We attempt to create a summary value based on the second element of the tuple
+    
+    tag = "image_tokens_masks"
+    value = result_tuple[1]
+    
+    if value is not None:
+        # Convert torch tensor to numpy for TensorFlow
+        val_np = value.numpy()
+        # Create a Summary Value with the tensor data
+        summary_val = tf.compat.v1.Summary.Value(tag=tag, simple_value=float(val_np[0]))
+        assert summary_val.simple_value == 1.0
+    else:
+        # In the original bug, the exporter crashed when encountering None.
+        # Here we check if tf.compat.v1.Summary.Value handles None gracefully.
+        # simple_value is optional in the protobuf definition, so this should not crash.
+        summary_val = tf.compat.v1.Summary.Value(tag=tag, simple_value=None)
+        assert summary_val.simple_value is None
+
+if __name__ == "__main__":
+    test_exporter_crash_with_none_replacement()
+```

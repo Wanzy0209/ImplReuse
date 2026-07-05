@@ -1,0 +1,90 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Test case for tf.compat.v1.nn.depthwise_conv2d_native
+# Based on Issue 160841: Running phi-2 on MacOS returns garbage (precision issue)
+# The bug is related to precision issues with default dtypes, fixed by using bfloat16.
+
+# Replacing AutoModelForCausalLM.from_pretrained
+# We use dispatch_for_binary_elementwise_apis to define the model's forward pass logic
+@tf.experimental.dispatch_for_binary_elementwise_apis(tf.Tensor, tf.Tensor)
+def model_forward(input_tensor, filter_tensor, name=None):
+    # Using the Similar API: tf.compat.v1.nn.depthwise_conv2d_native
+    # This mimics the internal operation of the model that was failing
+    return tf.compat.v1.nn.depthwise_conv2d_native(
+        input_tensor,
+        filter_tensor,
+        strides=[1, 1, 1, 1],
+        padding='SAME',
+        data_format='NHWC'
+    )
+
+# Replacing AutoTokenizer.from_pretrained
+# We use dispatch_for_binary_elementwise_apis to define input processing
+@tf.experimental.dispatch_for_binary_elementwise_apis(tf.Tensor, tf.Tensor)
+def tokenize_input(raw_input, vocab_tensor, name=None):
+    # Simplified tokenization: just return the input as a tensor
+    return raw_input
+
+# Replacing torch.profiler
+# We use dispatch_for_binary_elementwise_apis to wrap the execution context
+@tf.experimental.dispatch_for_binary_elementwise_apis(tf.Tensor, tf.Tensor)
+def profile_execution(op, context, name=None):
+    return op
+
+# Replacing tokenizer.batch_decode
+# We use dispatch_for_binary_elementwise_apis to define output decoding
+@tf.experimental.dispatch_for_binary_elementwise_apis(tf.Tensor, tf.Tensor)
+def decode_output(output_tensor, vocab_tensor, name=None):
+    return output_tensor
+
+def test_depthwise_conv_precision():
+    # Setup inputs
+    # Simulating the input from the bug report
+    batch_size = 1
+    height = 32
+    width = 32
+    in_channels = 3
+    channel_multiplier = 2
+    
+    # Input tensor
+    inputs = tf.random.normal([batch_size, height, width, in_channels])
+    
+    # Filter tensor
+    filter_shape = [3, 3, in_channels, channel_multiplier]
+    filters = tf.random.normal(filter_shape)
+    
+    # Replacing model.generate
+    # We call the dispatched function
+    # The bug was about torch_dtype="auto" causing garbage.
+    # We test with float32 (default) and bfloat16 (the fix).
+    
+    # Test with float32
+    try:
+        outputs_fp32 = model_forward(inputs, filters)
+        # Check for garbage (NaNs or Infs)
+        assert tf.reduce_all(tf.math.is_finite(outputs_fp32)), "Float32 output contains garbage (NaN/Inf)"
+    except Exception as e:
+        print(f"Float32 failed: {e}")
+        
+    # Test with bfloat16 (The fix in the bug report)
+    try:
+        inputs_bf16 = tf.cast(inputs, tf.bfloat16)
+        filters_bf16 = tf.cast(filters, tf.bfloat16)
+        
+        outputs_bf16 = model_forward(inputs_bf16, filters_bf16)
+        
+        # Check for garbage
+        assert tf.reduce_all(tf.math.is_finite(outputs_bf16)), "BFloat16 output contains garbage (NaN/Inf)"
+        
+        # Replacing tokenizer.batch_decode
+        decoded = decode_output(outputs_bf16, filters)
+        
+        print("Test passed. No garbage output detected.")
+    except Exception as e:
+        print(f"BFloat16 failed: {e}")
+
+if __name__ == "__main__":
+    test_depthwise_conv_precision()
+```

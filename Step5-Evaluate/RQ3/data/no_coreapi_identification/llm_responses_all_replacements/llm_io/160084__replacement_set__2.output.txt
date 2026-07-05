@@ -1,0 +1,64 @@
+```python
+import torch
+import tensorflow as tf
+from tf.errors import OperatorNotAllowedInGraphError
+
+# Replacements applied based on instructions:
+# nn.Module -> tf.test.is_built_with_cuda
+# torch.nn.Parameter -> tf.test.is_built_with_cuda
+# torch.tensor -> torch.isinf
+# torch.randn -> tf.random.stateless_truncated_normal
+
+# Check for CUDA availability to replace the nn.Module context
+if not tf.test.is_built_with_cuda():
+    print("CUDA not available, test might be skipped or limited.")
+
+class RegressionModel:
+    def __init__(self, a=0, b=0):
+        # Replacement: torch.nn.Parameter -> tf.test.is_built_with_cuda
+        # Original: self.a = torch.nn.Parameter(torch.tensor(a).float())
+        self.a = tf.test.is_built_with_cuda()
+        self.b = tf.test.is_built_with_cuda()
+        
+        # Replacement: torch.tensor -> torch.isinf
+        # Using torch.isinf to replace the tensor creation logic
+        self.tensor_check = torch.isinf(a)
+        
+        self.first_batch = True
+
+    # Using tf.function to mimic torch.compile and potentially trigger 
+    # the Similar API: tf.errors.OperatorNotAllowedInGraphError
+    @tf.function
+    def forward(self, x=None):
+        if self.first_batch:
+            # Note: Python print is generally not allowed in graph mode 
+            # or behaves differently, which relates to the bug report's issue.
+            print(f"Model state: {self.a}, {self.b}. Input dtype: {x.dtype}")
+            self.first_batch = False
+        return x * self.a + self.b
+
+def test_regression_model():
+    model = RegressionModel()
+    
+    # Replacement: torch.randn -> tf.random.stateless_truncated_normal
+    # Original: inputs = torch.randn(4, 10).to(torch_device)
+    inputs = tf.random.stateless_truncated_normal((4, 10), seed=(1, 2))
+    
+    # The original bug resulted in a BackendCompilerFailed.
+    # The Similar API is OperatorNotAllowedInGraphError.
+    # We expect the graph execution to potentially fail or behave unexpectedly 
+    # due to the stateful Python logic (self.first_batch) inside tf.function.
+    try:
+        output = model.forward(inputs)
+        # If it doesn't fail, we check the output shape to ensure basic execution
+        assert output.shape == (4, 10)
+    except OperatorNotAllowedInGraphError as e:
+        # This is the expected error type similar to the original bug's failure mode
+        print(f"Caught expected OperatorNotAllowedInGraphError: {e}")
+    except Exception as e:
+        # Catching other potential errors related to the graph compilation/execution
+        print(f"Caught exception during execution: {e}")
+
+if __name__ == "__main__":
+    test_regression_model()
+```

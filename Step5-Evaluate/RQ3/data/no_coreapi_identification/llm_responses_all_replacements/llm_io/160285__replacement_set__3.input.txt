@@ -1,0 +1,134 @@
+Issue ID: 160285
+Title: Wrong-size gradients in Expert Parallel MoE
+Bug Description:
+### 🐛 Describe the bug
+
+### Repro
+
+[test_moe_gradients.txt](https://github.com/user-attachments/files/21707913/test_moe_gradients.txt)
+[torch_moe.txt](https://github.com/user-attachments/files/21707912/torch_moe.txt)
+
+Install torchtitan on your system (`pip install torchtitan`). Rename the file extensions to .py. Run with `OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 test_moe_gradients.py`.
+
+The observed behavior is that the gradients for MoE layers are doubled with EP=2.
+
+Use of TorchGroupedExperts in a non-testcase environment shows that loss curves are equivalent even with the doubled gradients; each MoE gradient is exactly 2x in size.
+
+### Observables
+
+This testcase replicates torchtitan's EP+MoE layer by copying code directly into `torch_moe.py`. Possibilities:
+1. torch has a bug (perhaps in the distributed parts)
+2. torchtitan has a bug. I don't see it though.
+
+~3. my replication of torchtitan has a bug.~ I checked, vanilla torchtitan has the same bug.
+
+```
+kevin@kevin-h100-0:/mnt/clusterstorage/workspace/kevin$ OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 test_moe_gradients.py 
+Testing with 2 processes
+
+==================================================
+TEST 1: Without Expert Parallel Sharding
+==================================================
+1 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+1 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), dev
+...
+
+Original API Under Test: torch.distributed.tensor.DTensor
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.experimental.dtensor.name_based_save
+Similarity score: 0.9911180138587952
+
+Similar API information:
+# Extracted call chain for tf.experimental.dtensor.name_based_save
+
+# --- tensorflow.dtensor.python.save_restore.name_based_save ---
+def name_based_save(
+    mesh: layout_lib.Mesh,
+    checkpoint_prefix: Union[str, tensor_lib.Tensor],
+    name_tensor_dict: Dict[
+        str, Union[tensor_lib.Tensor, tf_variables.Variable]],
+):
+  """Saves name based Tensor into a Checkpoint.
+
+  The function prepares the input dictionary to the format of a `sharded_save`,
+  so that it can take advantage of DTensor SPMD based distributed save.
+
+  Same as restore, the function only supports saving on the single mesh.
+
+  Args:
+    mesh: The single mesh that all Tensors would be restored to.
+    checkpoint_prefix : The prefix of checkpoint to be restored.
+    name_tensor_dict: A ordered dictionary of tensor_names to a DTensor. The
+      DTensor shape/dtype must match the tensors being saved/restored for now.
+  """
+  if not context.executing_eagerly():
+    raise ValueError('name based save must run eagerly.')
+
+  ordered_name_tensor_dict = name_tensor_dict
+  if not isinstance(name_tensor_dict, collections.OrderedDict):
+    ordered_name_tensor_dict = collections.OrderedDict(name_tensor_dict)
+
+  # Current _d
+
+Original Test Case:
+kevin@kevin-h100-0:/mnt/clusterstorage/workspace/kevin$ OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 test_moe_gradients.py 
+Testing with 2 processes
+
+==================================================
+TEST 1: Without Expert Parallel Sharding
+==================================================
+1 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+1 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+1 experts.w3 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+0 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+0 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+0 experts.w3 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((dp=2), device: 'cuda', stride: (1,))
+
+WITHOUT EP Gradient Analysis:
+  experts.w1: grad_norm = 0.066087, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local()[0, 0, 0]=tensor(0.0013, device='cuda:0')
+  experts.w2: grad_norm = 0.554278, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local()[0, 0, 0]=tensor(0.0553, device='cuda:0')
+  experts.w3: grad_norm = 0.122219, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local()[0, 0, 0]=tensor(0.0024, device='cuda:0')
+  Total gradient norm: 0.571427
+
+==================================================
+TEST 2: With Expert Parallel Sharding
+==================================================
+Applying ExpertParallel sharding with EP size: 2Applying ExpertParallel sharding with EP size: 2
+
+0 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+0 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+0 experts.w3 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+1 experts.w1 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+1 experts.w2 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+1 experts.w3 torch.Size([2, 8, 8]) <class 'torch.distributed.tensor.DTensor'> DeviceMesh((notep=1, ep=2), device: 'cuda', stride: (2, 1))
+
+WITH EP Gradient Analysis:
+  experts.w1: grad_norm = 0.132158, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local()[0, 0, 0]=tensor(0.0026, device='cuda:0')
+  experts.w2: grad_norm = 1.109194, shape = torch.Size([2, 8, 8]), local shape = torch.Size([1, 8, 8]) param.grad.to_local
+...
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- TorchGroupedExperts,torch.distributed.tensor.DTensorwithExpertParallelsharding -> tf.experimental.dtensor.sharded_save (score=0.9904794692993164, source_group=issue_to_api)
+- loss.backward -> tf.experimental.dtensor.sharded_save (score=0.9904794692993164, source_group=issue_to_api)
+- p.grad.norm -> tf.experimental.dtensor.sharded_save (score=0.9904794692993164, source_group=issue_to_api)
+- param.grad.to_local -> tf.experimental.dtensor.sharded_save (score=0.9904794692993164, source_group=issue_to_api)
+- torch.Size -> tf.experimental.dtensor.sharded_save (score=0.9904794692993164, source_group=issue_to_api)
+- u003eloss.backward -> tf.experimental.dtensor.sharded_save (score=0.9904794692993164, source_group=issue_to_api)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

@@ -1,0 +1,55 @@
+```python
+import torch
+import torch.nn.functional as F
+from torch import nn
+
+
+def custom_op(x: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+    # Replacing torch.log with torch.nn.functional.tanhshrink
+    x = x.clamp(min=0, max=1)
+    x1 = x.clamp(min=eps)
+    x2 = (1 - x).clamp(min=eps)
+    return F.tanhshrink(x1 / x2)
+
+
+class Model(nn.Module):
+    @torch.compiler.disable(recursive=False)  # type: ignore[misc]
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Replacing inverse_sigmoid logic with torch.nn.functional.softsign
+        x = F.softsign(x)
+        return x
+
+
+def test_jit_script_with_softsign_and_tanhshrink():
+    """
+    Test case for Issue 160059: torch.jit.script fails with 'undefined value' error
+    when module has @torch.compiler.disable decorator.
+    
+    This variant replaces internal logic with torch.nn.functional.softsign and
+    torch.nn.functional.tanhshrink to verify the behavior with these specific APIs.
+    """
+    n = Model()
+    
+    # This should not raise an error in fixed versions
+    # The original bug was an "undefined value" error during scripting
+    try:
+        scripted_model = torch.jit.script(n)
+        
+        # Verify the scripted model runs correctly
+        input_tensor = torch.randn(10)
+        output = scripted_model(input_tensor)
+        
+        # Check output shape
+        assert output.shape == input_tensor.shape
+        
+        # Check that the output is different from input (softsign is not identity)
+        assert not torch.allclose(output, input_tensor)
+        
+        print("Test passed: torch.jit.script succeeded with @torch.compiler.disable and functional APIs.")
+    except Exception as e:
+        print(f"Test failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_jit_script_with_softsign_and_tanhshrink()
+```

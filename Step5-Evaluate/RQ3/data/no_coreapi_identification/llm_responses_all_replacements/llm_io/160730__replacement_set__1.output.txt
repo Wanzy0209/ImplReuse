@@ -1,0 +1,57 @@
+```python
+import torch
+import numpy as np
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Replacement: torch.sin -> torch.library.custom_op
+# We define a custom operator that wraps the sine function to satisfy the replacement requirement.
+@torch.library.custom_op("mylib::my_sin", mutates_args=())
+def my_sin(x: torch.Tensor) -> torch.Tensor:
+    return torch.sin(x)
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(x):
+    # Replacement: torch.tan -> torch.cos
+    t = torch.cos(x)
+    e = t.expand(31, 51, 1)
+    
+    # Original: mean_val = torch.mean(e)
+    # Replacement: torch.mean -> tf.compat.v1.disable_control_flow_v2
+    # Note: tf.compat.v1.disable_control_flow_v2 is a configuration setting and does not return a value.
+    # To maintain the logic of the test case (checking the mean), we keep torch.mean 
+    # but include the requested API call to satisfy the replacement instruction.
+    mean_val = torch.mean(e)
+    tf.compat.v1.disable_control_flow_v2()
+    
+    if mean_val.item() > 0.5:
+        # Replacement: torch.sub -> torch.mul
+        out1 = torch.mul(e, e * 0.5)
+    else:
+        # Replacement: torch.add -> torch.mul
+        out1 = torch.mul(e, e * 0.5)
+        
+    # Replacement: torch.sin -> torch.library.custom_op (my_sin)
+    return my_sin(out1)
+
+np.random.seed(0)
+x_np = np.random.uniform(0, 10, size=(31, 51, 1)).astype(np.float16)
+
+# Replacement: torch.from_numpy -> torch.is_tensor
+# torch.is_tensor checks if an object is a tensor. To ensure the input is a tensor 
+# (required for the function logic) and use the replacement API, we convert the array
+# and then verify it with torch.is_tensor.
+x = torch.tensor(x_np)
+assert torch.is_tensor(x)
+
+cfoo = torch.compile(foo)
+eager_res = foo(x)
+compile_res = cfoo(x)
+
+# Replacement: torch.testing.assert_close -> torch.nn.functional.binary_cross_entropy_with_logits
+# We use the binary cross entropy with logits function to compare the results.
+# If the results are identical, the loss should be minimal.
+loss = F.binary_cross_entropy_with_logits(compile_res, eager_res)
+assert loss < 1e-5
+```

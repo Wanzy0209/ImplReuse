@@ -34,6 +34,30 @@ The repository contains the code and data for the paper "CrossProbe: LLM-empower
     - Open the Jupyter Notebook and run the cells to generate the test cases.
 - The generated test cases are stored in `pytorch-test` and `tensorflow-test` folders.
 
+## Single-library baseline
+
+If you want a single-framework version of the same workflow, run:
+
+```bash
+python baseline_singleprobe.py \
+  --doc_db_path api_documentation_db.csv \
+  --source_dir filtered_test_cases \
+  --target_dir results_single \
+  --framework pytorch
+```
+
+You can also switch to TensorFlow with:
+
+```bash
+python baseline_singleprobe.py \
+  --doc_db_path api_documentation_db.csv \
+  --source_dir filtered_test_cases \
+  --target_dir results_single \
+  --framework tensorflow
+```
+
+This script uses the same prompt-construction style as the cross-library baseline, but only relies on the documentation of one framework and does not perform cross-framework API matching.
+
 ## Detailed description
 
 ### Data source

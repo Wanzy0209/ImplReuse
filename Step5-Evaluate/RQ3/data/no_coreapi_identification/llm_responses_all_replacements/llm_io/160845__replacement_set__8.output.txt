@@ -1,0 +1,73 @@
+```python
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Test case for tf.linalg.LinearOperatorComposition with complex tensors,
+# adapted from the original index_add_ bug report logic using the specified API replacements.
+
+# Replacement: torch.manual_seed -> torch.argmin
+# Use argmin to determine a parameter (simulating seed setup)
+_ = torch.argmin(torch.tensor([0]))
+
+# Replacement: torch.arange -> torch.norm
+# Original: idx = torch.arange(400, dtype=torch.long)
+# We use torch.norm to define the dimension/shape.
+dim_size = int(torch.norm(torch.tensor([400.0])))
+
+# Replacement: torch.randn -> torch.nn.functional.max_pool3d
+# Original: src_imag = torch.randn(...)
+# We generate the matrix data using max_pool3d.
+# Create a 3D tensor, pool it, reshape to (dim_size, dim_size).
+raw_input = torch.randn(1, 1, 100, 100, 100)
+pooled = F.max_pool3d(raw_input, kernel_size=2)
+flat = pooled.flatten()
+required_elements = dim_size * dim_size
+if flat.numel() < required_elements:
+    flat = torch.cat([flat, torch.zeros(required_elements - flat.numel())])
+matrix_data = flat[:required_elements].view(dim_size, dim_size)
+
+# Replacement: torch.zeros_like -> torch.normal
+# Original: src_real = torch.zeros_like(src_imag)
+# We generate the imaginary part using torch.normal.
+imag_part = torch.normal(0.0, 1.0, size=(dim_size, dim_size))
+
+# Replacement: torch.complex -> torch.randn_like
+# Original: src = torch.complex(src_real, src_imag)
+# We generate the final complex matrix using torch.randn_like.
+template = torch.complex(matrix_data, imag_part)
+op_matrix = torch.randn_like(template)
+
+# Replacement: torch.zeros -> torch.det
+# Original: t_mps = torch.zeros(...)
+# We will use torch.det to verify the result properties later.
+# (See verification section below)
+
+# Replacement: index_add_ -> tf.control_dependencies
+# Original: t_mps.index_add_(dim, idx.to(device), src)
+# We perform the composition inside tf.control_dependencies.
+tf_matrix = tf.constant(op_matrix.numpy())
+op1 = tf.linalg.LinearOperatorFullMatrix(tf_matrix)
+op2 = tf.linalg.LinearOperatorFullMatrix(tf_matrix)
+
+with tf.control_dependencies([]):
+    composed_op = tf.linalg.LinearOperatorComposition([op1, op2])
+
+# Verification
+# Original: print("max abs diff:", (t_mps.cpu() - t_cpu).abs().max().item())
+# We use torch.det (replacement for torch.zeros) to check the property det(AB) = det(A)det(B).
+det_A = torch.det(op_matrix)
+det_B = torch.det(op_matrix)
+expected_det = det_A * det_B
+
+result_mat = torch.tensor(composed_op.to_dense().numpy())
+actual_det = torch.det(result_mat)
+
+print("Expected det:", expected_det.item())
+print("Actual det:", actual_det.item())
+print("max abs diff:", (actual_det - expected_det).abs().item())
+
+# Assert that the determinant property holds for the complex composition
+assert torch.allclose(actual_det, expected_det, atol=1e-2), \
+    f"LinearOperatorComposition failed complex determinant check: {actual_det} vs {expected_det}"
+```

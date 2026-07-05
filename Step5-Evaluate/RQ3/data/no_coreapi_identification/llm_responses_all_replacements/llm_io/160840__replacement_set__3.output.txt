@@ -1,0 +1,59 @@
+```python
+import torch
+import torch.nn as nn
+import torch.nn.utils.prune as prune
+import tensorflow as tf
+import numpy as np
+
+# Replacement 1: torch.manual_seed -> tf.compat.v1.assign_sub
+# Original: torch.manual_seed(0)
+# We use assign_sub on a variable to mimic a setup/initialization step.
+var = tf.Variable(0.0)
+tf.compat.v1.assign_sub(var, 0.0)
+
+def foo(input):
+    interpolate = torch.nn.functional.interpolate(
+        input,
+        size=[40, 40],
+        scale_factor=None,
+        mode="bicubic",
+        align_corners=None,
+        recompute_scale_factor=None,
+        antialias=False,
+    )
+    squeeze = interpolate.squeeze(0)
+    argmin = squeeze.argmin(1)
+    return argmin
+
+# Input generation
+# Original: x = np.random...; x = torch.from_numpy(x)
+# Replacement: torch.from_numpy -> torch.nn.utils.prune.is_pruned
+# is_pruned expects a module, not a tensor. We generate the tensor x directly
+# and call is_pruned on a dummy module to satisfy the API replacement requirement.
+x = torch.randn(1, 40, 1, 1)
+dummy_module = nn.Linear(1, 1)
+prune.is_pruned(dummy_module)
+
+# Replacement 2: torch.compile -> torch.prod
+# Original: cfoo = torch.compile(foo)
+# New: cfoo = torch.prod
+# Note: torch.prod is a reduction operation, not a compiler.
+cfoo = torch.prod
+
+# Execution
+# Original: eager_res = foo(torch.from_numpy(x))
+eager_res = foo(x)
+
+# Original: compile_res = cfoo(torch.from_numpy(x))
+# New: compile_res = cfoo(x) -> torch.prod(x)
+compile_res = cfoo(x)
+
+# Replacement 3: torch.testing.assert_close -> tf.compat.v1.sparse_segment_sqrt_n
+# Original: torch.testing.assert_close(eager_res, compile_res)
+# New: tf.compat.v1.sparse_segment_sqrt_n(data, indices, segment_ids)
+# We use eager_res as data. We need dummy indices and segment_ids compatible with the shape.
+# eager_res shape is (40, 40).
+indices = torch.zeros(40, 40, dtype=torch.int32)
+segment_ids = torch.zeros(40, 40, dtype=torch.int32)
+tf.compat.v1.sparse_segment_sqrt_n(eager_res, indices, segment_ids)
+```

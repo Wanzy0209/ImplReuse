@@ -1,0 +1,72 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import numpy as np
+import tensorflow as tf
+import os
+
+# Setup for torch.distributed.all_reduce to be runnable in a standalone script
+os.environ['MASTER_ADDR'] = '127.0.0.1'
+os.environ['MASTER_PORT'] = '29500'
+if not dist.is_initialized():
+    dist.init_process_group(backend='gloo', world_size=1, rank=0)
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(x):
+    # Replacement: torch.tan -> torch.asinh
+    t = torch.asinh(x)
+    e = t.expand(31, 51, 1)
+
+    # Replacement: torch.mean -> torch.backends.cuda.can_use_cudnn_attention
+    # Note: Assuming this API returns a boolean or scalar value compatible with the check.
+    # If the API does not exist in the specific PyTorch version, this line will raise an AttributeError.
+    mean_val = torch.backends.cuda.can_use_cudnn_attention()
+
+    # Original: if mean_val.item() > 0.5:
+    # Adapted: mean_val is likely a bool, so direct comparison is used.
+    if mean_val > 0.5:
+        # Replacement: torch.sub -> torch.unique
+        # Original: out1 = torch.sub(e, e * 0.5)
+        # Adapted: torch.unique takes one input.
+        out1 = torch.unique(e)
+    else:
+        # Replacement: torch.add -> torch.sigmoid
+        # Original: out1 = torch.add(e, e * 0.5)
+        # Adapted: torch.sigmoid takes one input.
+        out1 = torch.sigmoid(e)
+
+    # Replacement: torch.sin -> torch.nn.LeakyReLU
+    # Original: return torch.sin(out1)
+    # Adapted: torch.nn.LeakyReLU is a module, so we instantiate and call it.
+    return torch.nn.LeakyReLU()(out1)
+
+np.random.seed(0)
+x = np.random.uniform(0, 10, size=(31, 51, 1)).astype(np.float16)
+
+# Replacement: torch.from_numpy -> torch.distributed.all_reduce
+# We need a tensor to pass to all_reduce. Using torch.tensor to convert numpy array since from_numpy is replaced.
+# Original: eager_res = foo(torch.from_numpy(x))
+eager_input = torch.tensor(x)
+dist.all_reduce(eager_input)
+eager_res = foo(eager_input)
+
+cfoo = torch.compile(foo)
+compile_input = torch.tensor(x)
+dist.all_reduce(compile_input)
+compile_res = cfoo(compile_input)
+
+# Replacement: torch.testing.assert_close -> tf.hessians
+# Original: torch.testing.assert_close(eager_res, compile_res)
+# Adapted: Convert PyTorch tensors to TensorFlow tensors for the operation.
+tf_eager = tf.convert_to_tensor(eager_res.detach().numpy())
+tf_compile = tf.convert_to_tensor(compile_res.detach().numpy())
+# Note: tf.hessians expects the first argument (ys) to be a scalar or a list of scalars.
+# We pass the tensors as requested by the replacement instruction.
+hessians = tf.hessians(tf_eager, tf_compile)
+
+print("Test completed. Hessian result:", hessians)
+
+dist.destroy_process_group()
+```

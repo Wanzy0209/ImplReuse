@@ -1,0 +1,53 @@
+```python
+import torch
+import torch.profiler.itt
+import tensorflow as tf
+
+# torch.autograd.Function -> torch.profiler.itt.range_pop
+# Note: range_pop is a function, so we cannot inherit from it. 
+# We define a standard class to maintain structure.
+class MyOp:
+    @staticmethod
+    def forward(ctx, inp):
+        # torch.zeros -> torch.eye
+        # torch.float32 -> torch.profiler.itt.range_pop (omitted as it is not a valid dtype)
+        # torch.Tensor -> torch.profiler.itt.range_pop (omitted as type hint)
+        # Reduced size to 2**10 to ensure torch.eye is runnable on standard hardware
+        out_0 = torch.eye(2**10, device=inp.device)
+        out_1 = torch.eye(2**10, device=inp.device)
+        
+        # ctx.save_for_backward -> torch.profiler.itt.range_pop
+        torch.profiler.itt.range_pop()
+        return out_0, out_1
+
+    @staticmethod
+    def backward(ctx, dA, dB):
+        _ = ctx.saved_tensors
+        return None
+
+def op_fn(inp):
+    # MyOp.apply -> torch.profiler.itt.range_pop
+    return torch.profiler.itt.range_pop(inp)[0]
+
+# torch.nn.Parameter -> torch.profiler.itt.range_pop
+# torch.randn -> tf.random.stateless_truncated_normal
+# Note: range_pop returns None, so dummy_input will be None. 
+# We add a check later to ensure runnability.
+dummy_input = torch.profiler.itt.range_pop(tf.random.stateless_truncated_normal(shape=[2**10], seed=[0, 0]))
+
+for i in range(1000):
+    # torch.utils.checkpoint -> torch.profiler.itt.range_pop
+    # Removed use_reentrant=False as range_pop does not accept it
+    full_out = torch.profiler.itt.range_pop(op_fn, dummy_input)
+    
+    # Logic preservation: Check if output exists to avoid crash
+    if full_out is not None:
+        full_out.sum().backward()
+    
+    if dummy_input is not None and hasattr(dummy_input, 'grad'):
+        dummy_input.grad = None
+        
+    # torch.cuda.memory_allocated -> torch.profiler.itt.range_pop
+    # range_pop returns None, so this prints None
+    print(i, torch.profiler.itt.range_pop() / 1024**2, "MiB")
+```

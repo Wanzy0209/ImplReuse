@@ -1,0 +1,56 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+# Test case for Issue 160841: Running phi-2 on MacOS returns garbage
+# Leveraging similar API: tf.compat.v1.nn.depthwise_conv2d_native
+
+def test_phi2_macos_garbage():
+    # Setup: Define a filter for the depthwise convolution
+    # This simulates the weights of the model
+    filter_weights = tf.constant(np.random.randn(3, 3, 1, 2), dtype=tf.float32)
+
+    # Define the depthwise convolution operation using the similar API
+    # This replaces the internal logic of the model that might be failing
+    def depthwise_op(x):
+        return tf.compat.v1.nn.depthwise_conv2d_native(
+            input=x,
+            filter=filter_weights,
+            strides=[1, 1, 1, 1],
+            padding='SAME'
+        )
+
+    # Replacement: AutoModelForCausalLM.from_pretrained -> tf.keras.Model
+    # We create a Keras model that encapsulates the model logic
+    inputs = tf.keras.Input(shape=(10, 10, 1))
+    outputs = tf.keras.layers.Lambda(depthwise_op)(inputs)
+    model = tf.keras.Model(inputs=inputs, outputs=outputs)
+
+    # Replacement: AutoTokenizer.from_pretrained -> tf.keras.Model
+    # We create a Keras model to simulate the tokenizer logic
+    tok_inputs = tf.keras.Input(shape=(None, None, None))
+    tokenizer = tf.keras.Model(inputs=tok_inputs, outputs=tok_inputs)
+
+    # Prepare input data (simulating tokenized input)
+    # Original: inputs = tokenizer(...)
+    input_data = tf.constant(np.random.rand(1, 10, 10, 1), dtype=tf.float32)
+
+    # Replacement: model.generate -> tf.keras.Model
+    # Original: outputs = model.generate(**inputs, max_length=32)
+    # We call the model directly to simulate generation/forward pass
+    generated_outputs = model(input_data)
+
+    # Replacement: tokenizer.batch_decode -> tf.keras.Model
+    # Original: text = tokenizer.batch_decode(outputs)[0]
+    decoded_text = tokenizer(generated_outputs)
+
+    # Assertions to check for garbage output (NaNs or Infs)
+    # This reflects the bug report where MacOS returned garbage
+    assert not tf.reduce_any(tf.math.is_nan(decoded_text)), "Model produced NaNs (Garbage output)"
+    assert not tf.reduce_any(tf.math.is_inf(decoded_text)), "Model produced Infs (Garbage output)"
+
+    print("Test passed: Output is valid (no garbage).")
+
+if __name__ == "__main__":
+    test_phi2_macos_garbage()
+```

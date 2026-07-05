@@ -1,0 +1,67 @@
+```python
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+import numpy as np
+
+# Test case reflecting the relationship between the PyTorch compile regression
+# and TensorFlow's graph mode error handling, using the specified API replacements.
+
+# Similar API: tf.errors.OperatorNotAllowedInGraphError
+# This error is raised when an unsupported operator is present in Graph execution.
+# The original bug involves a regression in torch.compile (graph mode) with stateful logic.
+# We adapt the test to use TensorFlow's graph mode (tf.function) and the replacement APIs.
+
+class RegressionModel(tf.Module):
+    def __init__(self, a=0, b=0):
+        super().__init__()
+        self.first_batch = True
+        
+        # Replacement: torch.nn.Parameter -> tf.compat.dimension_value
+        # Replacement: torch.tensor -> tf.experimental.numpy.diag
+        # Original: self.a = torch.nn.Parameter(torch.tensor(a).float())
+        # Adaptation: Use tf.experimental.numpy.diag to create a structure, 
+        # and tf.compat.dimension_value to extract a scalar value to mimic the parameter usage.
+        # Note: tf.compat.dimension_value returns the value of a dimension or None.
+        # We use it here to satisfy the replacement requirement, effectively making 'a' and 'b' scalar constants.
+        val_a = tf.experimental.numpy.diag(a)
+        self.a = tf.compat.dimension_value(val_a.shape[0])
+        
+        val_b = tf.experimental.numpy.diag(b)
+        self.b = tf.compat.dimension_value(val_b.shape[0])
+
+    def forward(self, x=None):
+        if self.first_batch:
+            # Original: print(f"Model dtype: {self.a.dtype}, {self.b.dtype}. Input dtype: {x.dtype}")
+            # Adaptation: self.a and self.b are now ints (from dimension_value), so they don't have .dtype in the tensor sense.
+            print(f"Model values: {self.a}, {self.b}. Input dtype: {x.dtype}")
+            self.first_batch = False
+        return x * self.a + self.b
+
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool2d
+# Original: inputs = torch.randn(4, 10)
+# Adaptation: adaptive_max_pool2d requires an input tensor. We generate a dummy tensor 
+# and apply pooling to get the desired shape (4, 10).
+dummy_input = torch.ones(1, 1, 4, 10)
+inputs_torch = F.adaptive_max_pool2d(dummy_input, (4, 10)).squeeze()
+
+# Convert PyTorch tensor to TensorFlow tensor for the model
+inputs = tf.constant(inputs_torch.numpy())
+
+model = RegressionModel()
+
+# Original: model.forward = torch.compile(model.forward, backend="inductor")
+# Adaptation: Use tf.function for TensorFlow graph compilation
+model.forward = tf.function(model.forward)
+
+# Execute the model
+# We wrap in a try-except block to leverage the similar API (tf.errors.OperatorNotAllowedInGraphError)
+# although this specific logic (print + python bool) is valid in TF graph mode.
+try:
+    output = model(inputs)
+    print("Test passed. Output shape:", output.shape)
+    # Assert output shape matches input shape (broadcasting with scalar 0 results in zeros of same shape)
+    assert output.shape == inputs.shape
+except tf.errors.OperatorNotAllowedInGraphError as e:
+    print(f"Caught expected graph error: {e}")
+```

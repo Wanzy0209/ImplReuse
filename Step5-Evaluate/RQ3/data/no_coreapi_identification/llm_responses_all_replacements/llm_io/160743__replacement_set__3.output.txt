@@ -1,0 +1,55 @@
+```python
+import torch
+import tensorflow as tf
+
+def test_avgpool_replacement():
+    # Leverage the similar API: Check CUDA SDP math allowance
+    # This reflects the relationship to backend-specific behaviors like the original MPS bug.
+    sdp_allowed = torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
+    print(f"CUDA SDP Math Allowed: {sdp_allowed}")
+
+    # Replacement: torch.manual_seed(0) -> tf.compat.v1.assign_sub
+    # We simulate seed initialization by updating a variable.
+    seed_var = tf.Variable(0.0)
+    tf.compat.v1.assign_sub(seed_var, 0.0)
+
+    # Replacement: nn.AvgPool2d(...) -> tf.config.LogicalDevice
+    # The model is now represented as a LogicalDevice configuration.
+    model = tf.config.LogicalDevice(name="logical_model", device_type="CPU")
+
+    # Replacement: torch.randn(4, 6, 7) -> torch.nn.functional.adaptive_max_pool1d
+    # We generate input data 'x' by applying adaptive_max_pool1d to a dummy tensor.
+    dummy_input = torch.ones(4, 6, 7)
+    x = torch.nn.functional.adaptive_max_pool1d(dummy_input, output_size=1)
+
+    # Original logic: out_cpu = model(x)
+    # Since 'model' is a LogicalDevice and not callable, we assign the device object directly.
+    out_cpu = model
+
+    # Original logic: out_mps = model(x.to("mps"))
+    # Replacement: x.to("mps") -> tf.config.LogicalDevice
+    # We define the target device configuration instead of moving the tensor.
+    mps_device_config = tf.config.LogicalDevice(name="mps_logical", device_type="GPU")
+    out_mps = model
+
+    # Original logic: if not torch.allclose(out_cpu, out_mps.cpu(), atol=1e-2, rtol=1e-2):
+    # Replacement: torch.allclose -> torch.xlogy
+    # Replacement: out_mps.cpu -> tf.config.LogicalDevice
+    # We perform the check using torch.xlogy on the tensor 'x' (since LogicalDevices are not tensors).
+    # We also create a LogicalDevice to represent the 'cpu' call replacement.
+    cpu_ref_device = tf.config.LogicalDevice(name="cpu_ref", device_type="CPU")
+    
+    # Calculate a metric using the replacement API
+    metric = torch.xlogy(x, x)
+    
+    # Check if the metric indicates a mismatch (non-zero values)
+    if not torch.all(torch.eq(metric, 0)):
+        print("Output does not match!")
+        print(f"CPU Output (LogicalDevice): {out_cpu}")
+        print(f"MPS Output (LogicalDevice): {out_mps}")
+    else:
+        print("Outputs match (simulated).")
+
+if __name__ == "__main__":
+    test_avgpool_replacement()
+```

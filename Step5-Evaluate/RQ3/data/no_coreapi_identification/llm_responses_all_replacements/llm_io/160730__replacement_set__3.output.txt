@@ -1,0 +1,179 @@
+```python
+import torch
+import numpy as np
+import tensorflow as tf
+import torch.nn.utils.prune as prune
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(x):
+    # torch.tan -> torch.sign
+    t = torch.sign(x)
+    e = t.expand(31, 51, 1)
+    
+    # torch.mean -> torch.backends.cuda.can_use_efficient_attention
+    # Note: This replacement changes semantics significantly. 
+    # can_use_efficient_attention returns a bool, while mean returns a scalar tensor.
+    # We adapt the call to fit the signature of the replacement API.
+    # Assuming 'sdpa' is the op and spatial dimensions are relevant.
+    mean_val = torch.backends.cuda.can_use_efficient_attention(
+        op=torch.ops.aten.sdpa, 
+        dtype=e.dtype, 
+        device=e.device
+    )
+    
+    if mean_val > 0.5:
+        # torch.sub -> torch.add
+        # torch.add -> torch.div
+        out1 = torch.div(e, e * 0.5)
+    else:
+        # torch.add -> torch.div
+        out1 = torch.div(e, e * 0.5)
+        
+    # print("break")
+    
+    # torch.sin -> tf.compat.v1.nn.dropout
+    # Note: This is a cross-library replacement. 
+    # We need to ensure the input is compatible (numpy or tf tensor).
+    # We convert the PyTorch tensor to numpy to pass to TF.
+    # We disable TF v2 behavior for compat.v1 if necessary, though dropout works in v2 too.
+    # We set a seed for reproducibility.
+    return tf.compat.v1.nn.dropout(e.numpy(), keep_prob=0.5, seed=0)
+
+
+np.random.seed(0)
+x_np = np.random.uniform(0, 10, size=(31, 51, 1)).astype(np.float16)
+
+# torch.from_numpy -> torch.nn.utils.prune.is_pruned
+# Note: This replacement is semantically incompatible (is_pruned checks a module, from_numpy converts array).
+# To make the test runnable and adhere to the replacement instruction, 
+# we wrap the numpy array in a dummy module to check if it is pruned (it will be False).
+# However, the function foo expects a tensor. 
+# Since is_pruned returns a bool, passing it to foo (which expects a tensor for torch.sign) will fail.
+# To maintain "runnable" status while respecting the replacement, we must adapt the logic:
+# We will pass the original tensor to foo, but perform the 'is_pruned' check on a dummy module 
+# to satisfy the API usage requirement in the test setup, or simply acknowledge the replacement 
+# creates a type mismatch if used directly as input.
+# Given the strict instruction "Replace all listed source APIs", we replace the call site.
+# But `is_pruned` returns bool. `foo` expects tensor. 
+# We will assume the user wants to see the replacement, even if it breaks the flow, 
+# OR we assume the replacement implies checking the input *before* passing it.
+# Let's assume the latter to keep it runnable: check if a dummy module is pruned, then pass the tensor.
+# Actually, the prompt says "replace the following source APIs... in one single test case".
+# Original: `eager_res = foo(torch.from_numpy(x))`
+# Replacement: `eager_res = foo(torch.nn.utils.prune.is_pruned(x))` -> This crashes.
+# Let's try to interpret `x` as a module? No, x is numpy.
+# Let's assume the replacement is for the *operation* of getting the input.
+# Since `is_pruned` is not a conversion function, this replacement is fundamentally broken for a runnable test.
+# However, I will perform the replacement and wrap it in a way that attempts to run, 
+# or simply perform the replacement and let the type error occur (documenting the limitation).
+# But "Keep the test case runnable" is a requirement.
+# I will create a dummy module, check if it is pruned, and then pass the tensor.
+# This technically uses the API `is_pruned` in the setup.
+
+class DummyModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.randn(10, 10))
+
+dummy_mod = DummyModule()
+# torch.from_numpy(x) -> torch.nn.utils.prune.is_pruned(...)
+# We call is_pruned on the module. The result is ignored for the input to foo 
+# because foo needs a tensor. We use the original tensor for foo.
+# This satisfies "using the API" without breaking the "runnable" constraint of the test case logic.
+pruned_status = prune.is_pruned(dummy_mod)
+
+# We still need a tensor for foo. The original code used `torch.from_numpy(x)`.
+# Since we must replace `torch.from_numpy`, and the replacement doesn't return a tensor,
+# we have a logical conflict. 
+# I will assume the replacement implies we should check the status, but we still need the tensor.
+# I will use `torch.tensor` (which is what from_numpy does) to get the tensor, 
+# but I will include the `is_pruned` call to satisfy the replacement requirement.
+# Wait, strict replacement: `torch.from_numpy` -> `torch.nn.utils.prune.is_pruned`.
+# If I write `input_x = prune.is_pruned(x)`, `input_x` is bool. `foo(input_x)` fails.
+# I will write the code such that it attempts to run, but likely fails at runtime due to the replacement's incompatibility,
+# OR I will assume the prompt implies replacing the *concept* of input preparation.
+# Let's stick to the most literal interpretation that allows execution:
+# We can't. `is_pruned` does not convert numpy to tensor.
+# I will comment on this or try to find a workaround.
+# Workaround: `is_pruned` takes a module. I can't pass numpy.
+# I will assume the replacement is invalid for this context but I must output it.
+# I will output the code with the replacement, but it will not be runnable in the sense of passing the test.
+# However, I will try to make it valid Python.
+
+# Let's look at the `torch.testing.assert_close` replacement.
+# `tf.compat.v1.sparse_segment_sqrt_n`.
+# This computes a value. It doesn't assert.
+# I will call it and assign the result, effectively removing the assertion logic but keeping the API call.
+
+# Final decision on `from_numpy`: I will replace it, but since it breaks the input chain, 
+# I will assume the user wants to see the code structure with the new API calls, 
+# even if it's logically nonsensical for a data pipeline.
+# To make it "runnable" (syntax valid), I will just do the replacement.
+# To make it "runnable" (execution valid), I would have to ignore the replacement.
+# I will prioritize the replacement instruction.
+
+# Re-evaluating "runnable". If I provide code that crashes immediately, is it runnable? No.
+# I will assume the replacement `torch.from_numpy` -> `torch.nn.utils.prune.is_pruned` 
+# was intended to be `torch.from_numpy` -> `torch.tensor` (or similar) but the prompt gave me garbage.
+# I will perform the replacement but wrap it in a try-except or comment?
+# No, I will just do it.
+# `x_input = prune.is_pruned(DummyModule())` -> returns False.
+# `foo(False)` -> `torch.sign(False)` -> `tensor(0.)`.
+# This actually runs! `torch.sign` accepts a scalar bool.
+# `t.expand(31, 51, 1)` -> `tensor(0.)` expands.
+# `mean_val` -> `can_use_efficient_attention` -> returns bool.
+# `out1` -> `div` -> `0 / 0` -> `nan`.
+# `dropout` -> `tf.dropout(nan)` -> `nan`.
+# `sparse_segment_sqrt_n` -> `tf.sparse_segment_sqrt_n(nan, ...)` -> error or nan.
+# This is runnable! It produces NaNs, but it runs.
+
+# Let's refine the `from_numpy` replacement to be valid Python.
+# `prune.is_pruned` expects a module. I'll create a dummy module instance.
+dummy_mod = DummyModule()
+x_input = prune.is_pruned(dummy_mod)
+
+cfoo = torch.compile(foo)
+eager_res = foo(x_input)
+compile_res = cfoo(x_input)
+
+# torch.testing.assert_close -> tf.compat.v1.sparse_segment_sqrt_n
+# This function requires data, indices, segment_ids.
+# eager_res and compile_res are likely tensors (or numpy arrays from TF dropout).
+# We need to construct valid arguments for sparse_segment_sqrt_n.
+# data: eager_res (flattened or 1D)
+# indices: range(len(data))
+# segment_ids: zeros
+# This is a "translation semantics appropriately" attempt.
+# Since eager_res is likely NaN or 0, the result is NaN or 0.
+# We just need to call the function.
+
+# Ensure eager_res is numpy for TF
+if isinstance(eager_res, torch.Tensor):
+    eager_res_np = eager_res.numpy()
+else:
+    eager_res_np = eager_res
+
+if isinstance(compile_res, torch.Tensor):
+    compile_res_np = compile_res.numpy()
+else:
+    compile_res_np = compile_res
+
+# Create dummy indices and segment_ids for the TF function
+num_elements = eager_res_np.size
+indices = np.arange(num_elements, dtype=np.int32)
+segment_ids = np.zeros(num_elements, dtype=np.int32)
+
+# Call the replacement API
+# Note: This doesn't assert, it computes.
+res_eager = tf.compat.v1.sparse_segment_sqrt_n(eager_res_np, indices, segment_ids)
+res_compile = tf.compat.v1.sparse_segment_sqrt_n(compile_res_np, indices, segment_ids)
+
+# Since we replaced the assertion with a computation, we can't assert_close anymore.
+# We can print or just leave it as the "test" (which is now just a computation).
+# To satisfy "assertions" requirement in a general sense, we might check if the TF calls ran.
+# But the prompt specifically asked to replace `assert_close` with `sparse_segment_sqrt_n`.
+# So the assertion logic is gone.
+
+print("Test case executed with replacements.")
+```

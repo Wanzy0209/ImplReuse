@@ -1,0 +1,84 @@
+```python
+import tensorflow as tf
+import tf.experimental.dtensor as dt
+import os
+import tempfile
+import numpy as np
+
+def test_distributed_tensor_save_integrity():
+    """
+    Test case adapted from Issue 160285 (Wrong-size gradients in Expert Parallel MoE).
+    
+    Original Logic:
+    1. Setup DeviceMesh with Expert Parallel (EP) sharding.
+    2. Run backward pass (loss.backward).
+    3. Check gradient norms (p.grad.norm) to detect doubling.
+    
+    Translated Logic (using tf.experimental.dtensor.sharded_save):
+    1. Setup Mesh with sharding.
+    2. Save the distributed tensor state (sharded_save).
+    3. Verify the saved data to ensure no duplication (doubling) occurred.
+    """
+    
+    # Setup: Create a mesh to simulate the distributed environment
+    # Replaces: torch.distributed.tensor.DTensor DeviceMesh setup
+    mesh = dt.create_mesh(
+        [("batch", 2)],  # Simulating 2 devices/experts
+        device_type="CPU"
+    )
+
+    # Create a DTensor with known values to check for doubling later
+    # Replaces: TorchGroupedExperts initialization
+    layout = dt.Layout([dt.UNSHARDED, dt.SHARDED], mesh)
+    local_values = tf.constant([[1.0, 2.0], [3.0, 4.0]])
+    d_tensor = dt.DTensor(local_values, layout=layout)
+
+    print(f"Original DTensor local values: {d_tensor.to_local()}")
+    print(f"Original DTensor global shape: {d_tensor.shape}")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prefix = os.path.join(tmpdir, "ckpt")
+        
+        # Action: Save the distributed tensor
+        # Replaces: loss.backward (The operation that triggers the distributed state update)
+        dt.sharded_save(
+            mesh=mesh,
+            checkpoint_prefix=prefix,
+            name_tensor_dict={"tensor": d_tensor}
+        )
+        print("Called tf.experimental.dtensor.sharded_save")
+
+        # Verification: Load and check the tensor
+        # Replaces: p.grad.norm (The operation that checks for correctness)
+        # We verify that the saved data matches the original and is not doubled.
+        
+        # Note: sharded_save writes a TensorFlow checkpoint. 
+        # We read it back to verify integrity.
+        reader = tf.train.load_checkpoint(prefix)
+        saved_tensor = reader.get_tensor("tensor/.shard_0") # Accessing shard data
+        
+        # In the original bug, gradients were doubled (2x).
+        # Here we assert the saved values are NOT doubled.
+        expected_local = d_tensor.to_local().numpy()
+        
+        print(f"Saved Tensor values: {saved_tensor}")
+        print(f"Expected values: {expected_local}")
+
+        # Assert that the values are exactly as expected, not doubled
+        np.testing.assert_array_almost_equal(
+            saved_tensor, 
+            expected_local,
+            decimal=5,
+            err_msg="Saved tensor values were doubled, similar to the gradient bug in Issue 160285."
+        )
+        
+        # Check global shape consistency
+        # Replaces: torch.Size checks
+        assert saved_tensor.shape == expected_local.shape, \
+            f"Shape mismatch: saved {saved_tensor.shape} vs expected {expected_local.shape}"
+
+    print("Test passed: No doubling detected in saved distributed tensor.")
+
+if __name__ == "__main__":
+    test_distributed_tensor_save_integrity()
+```

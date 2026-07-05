@@ -1,0 +1,92 @@
+```python
+import torch
+import tensorflow as tf
+
+MAX = 3
+BATCH = 37
+
+# Replacement: torch.randint -> torch.amax
+# Original: idxs = torch.randint(MAX, (BATCH,), dtype=torch.int64)
+# We use torch.amax on a dummy tensor to generate idxs.
+dummy_tensor = torch.ones((BATCH, MAX))
+idxs = torch.amax(dummy_tensor, dim=1).to(dtype=torch.int64)
+
+# Replacement: torch.rand -> tf.custom_gradient
+# Original: x = torch.rand((BATCH, MAX), dtype=torch.float64)
+# We define a custom gradient function to generate random data.
+@tf.custom_gradient
+def custom_rand(shape):
+    # Using tf.float64 as the type, as torch.float64 -> tf.custom_gradient is syntactically invalid for dtype
+    val = tf.random.uniform(shape, dtype=tf.float64)
+    def grad(upstream):
+        return tf.zeros_like(val)
+    return val, grad
+
+x = custom_rand((BATCH, MAX))
+
+# Replacement: x.square -> tf.custom_gradient
+# We define the square operation with a custom gradient.
+@tf.custom_gradient
+def custom_square(x):
+    y = tf.square(x)
+    def grad(dy):
+        return dy * 2.0 * x
+    return y, grad
+
+# Replacement: torch.nn.functional.one_hot -> torch.is_floating_point
+# Replacement: torch.func.jacfwd -> tf.custom_gradient
+# We define the main function 'func' using tf.custom_gradient to handle the gradient logic
+# that was previously handled by jacfwd.
+@tf.custom_gradient
+def func(x, idxs):
+    # idxs is a torch tensor, x is a tf tensor.
+    # We use torch.is_floating_point to replace one_hot logic.
+    # one_hot creates a mask, is_floating_point checks type.
+    is_float = torch.is_floating_point(idxs)
+    
+    # Convert the boolean result to a TensorFlow tensor for multiplication
+    mask = tf.cast(is_float, x.dtype)
+    
+    # Apply the custom square operation
+    res = custom_square(x) * mask
+    
+    # Define the gradient function for the custom gradient
+    def grad(dy):
+        # Gradient of x^2 * mask is 2*x*mask
+        dx = dy * 2.0 * x * mask
+        # Gradient with respect to idxs is zero (mask is constant w.r.t idxs in this context)
+        # We return a zero tensor compatible with idxs shape
+        didxs = tf.zeros_like(tf.cast(idxs, tf.float32))
+        return dx, didxs
+    
+    return res, grad
+
+# Replacement: torch.compile -> tf.custom_gradient
+# Original: jacfunc = torch.compile(jacfunc, dynamic=True)
+# We wrap the execution in a tf.custom_gradient block to mimic the compilation/wrapping step.
+@tf.custom_gradient
+def compiled_jacfunc(x, idxs):
+    # In the original bug, jacfunc returns the Jacobian.
+    # Here we compute the output and its gradient.
+    y = func(x, idxs)
+    def grad(dy):
+        # Use TensorFlow's gradient tape logic inside the custom gradient if needed,
+        # or simply pass through the gradient defined in func.
+        # For this test, we rely on the gradient defined in 'func'.
+        return tf.gradients(y, [x, idxs], dy)
+    return y, grad
+
+# Test execution
+# Original: out = jacfunc(x, idxs)
+# We run the compiled function.
+with tf.GradientTape() as tape:
+    tape.watch(x)
+    # Note: idxs is an integer tensor, gradients w.r.t it are not typically supported in standard backprop,
+    # but we are testing the API replacement logic.
+    out = compiled_jacfunc(x, idxs)
+
+# Assertion to check if the test runs and produces output of correct shape
+assert out.shape == (BATCH, MAX), f"Expected shape ({BATCH}, {MAX}), got {out.shape}"
+
+print("Test passed successfully.")
+```

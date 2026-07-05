@@ -1,0 +1,75 @@
+```python
+import torch
+import tensorflow as tf
+
+MAX = 3
+BATCH = 37
+
+# Replacement: torch.randint -> torch.argmin
+# We need a tensor to take argmin of. 
+# Replacement: torch.rand -> tf.vectorized_map
+# Generate dummy tensor using tf.vectorized_map to feed into argmin
+dummy_data = tf.vectorized_map(
+    lambda _: tf.random.uniform((MAX,)),
+    tf.range(BATCH)
+)
+# Convert to torch for argmin
+dummy_torch = torch.from_numpy(dummy_data.numpy())
+idxs = torch.argmin(dummy_torch, dim=1)
+
+# Replacement: torch.rand -> tf.vectorized_map
+# Generate x using tf.vectorized_map
+# Note: torch.float64 -> tf.vectorized_map (interpreted as using tf.float64 in the vectorized context)
+x = tf.vectorized_map(
+    lambda _: tf.random.uniform((MAX,), dtype=tf.float64),
+    tf.range(BATCH)
+)
+
+# Convert idxs to TF tensor for compatibility with TF ops
+# Note: torch.int64 -> tf.vectorized_map (interpreted as using tf.int64 in the vectorized context)
+idxs_tf = tf.constant(idxs.numpy(), dtype=tf.int64)
+
+# Define func
+# Original: return x.square() * torch.nn.functional.one_hot(idxs, MAX)
+def func(x, idxs):
+    # Replacement: x.square -> tf.vectorized_map
+    squared = tf.vectorized_map(lambda t: tf.square(t), x)
+
+    # Replacement: torch.nn.functional.one_hot -> tf.keras.ops.vectorized_map
+    one_hot = tf.keras.ops.vectorized_map(
+        lambda i: tf.one_hot(i, MAX, dtype=tf.float64),
+        idxs
+    )
+
+    return squared * one_hot
+
+# Define jacfunc
+# Original: return torch.func.jacfwd(func, argnums=(0,))(x, idxs)
+# Replacement: torch.func.jacfwd -> tf.vectorized_map
+def jacfunc(x, idxs):
+    # We use vectorized_map to compute the gradient for each element in the batch,
+    # effectively replacing the jacfwd operation.
+    def grad_fn(inputs):
+        single_x, single_idx = inputs
+        with tf.GradientTape() as tape:
+            tape.watch(single_x)
+            # Replicate logic of func for single element
+            y = tf.square(single_x) * tf.one_hot(single_idx, MAX, dtype=tf.float64)
+        return tape.gradient(y, single_x)
+
+    return tf.vectorized_map(grad_fn, (x, idxs))
+
+# Original: jacfunc = torch.compile(jacfunc, dynamic=True)
+# Replacement: torch.compile -> tf.vectorized_map (from group replacement)
+# We use tf.function to compile the function, which relies on the vectorized_map logic inside.
+compiled_jacfunc = tf.function(jacfunc)
+
+# Run
+# Original: out = jacfunc(x, idxs)
+out = compiled_jacfunc(x, idxs_tf)
+
+# Assertions
+# The output of the Jacobian of (BATCH, MAX) wrt input is (BATCH, MAX, MAX)
+assert out.shape == (BATCH, MAX, MAX)
+print("Test passed.")
+```

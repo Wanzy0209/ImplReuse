@@ -1,0 +1,65 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import torch.multiprocessing as mp
+import os
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    # Replacement: torch.set_grad_enabled -> torch.nn.Hardshrink
+    # Original: torch.set_grad_enabled(False)
+    shrink = torch.nn.Hardshrink()
+
+    # Replacement: torch.randn -> torch.nn.functional.max_pool3d
+    # Original: x = torch.randn(1, dtype=torch.complex64)
+    # max_pool3d requires a 5D input. We create a dummy tensor to pool.
+    dummy_input = torch.ones(1, 1, 1, 1, 1, dtype=torch.complex64)
+    x = F.max_pool3d(dummy_input, kernel_size=1)
+
+    # Replacement: torch.empty -> torch.as_strided
+    # Original: y = torch.empty((), dtype=torch.complex64)
+    # We create a 0-dim view of x.
+    y = x.as_strided(())
+
+    def eager_fn(x, y):
+        # Adaptation: Use torch.add instead of x + y
+        return torch.add(x, y)
+
+    # Replacement: torch.compile -> torch.distributed.send_object_list
+    # Original: @torch.compile() def fn(x, y): return x + y; fn(x, y)
+    # We replace the compiled function call with the distributed send.
+    if rank == 0:
+        try:
+            # Sending the tensors to rank 1
+            dist.send_object_list([x, y], dst=1)
+            print("compiler success (distributed send)")
+        except Exception as e:
+            print(f"distributed send failed: {e}")
+    else:
+        # Receiving logic to make the test runnable
+        try:
+            reqs = dist.recv_object_list([None, None], src=0)
+            print("rank 1 received objects")
+        except Exception as e:
+            print(f"rank 1 failed to receive: {e}")
+
+    # Run eager
+    eager_res = eager_fn(x, y)
+    print("eager success")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)
+```

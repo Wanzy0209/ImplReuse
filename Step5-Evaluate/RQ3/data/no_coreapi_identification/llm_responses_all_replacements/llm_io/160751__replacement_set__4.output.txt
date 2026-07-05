@@ -1,0 +1,58 @@
+```python
+import torch
+import tensorflow as tf
+
+# Leverage the similar API: torch.library.custom_op
+# We define a custom operation to encapsulate the logic, mimicking how one might
+# try to preserve behavior or define a kernel in the context of the bug report.
+@torch.library.custom_op("mytest::sync_check", mutates_args=())
+def sync_check_op(x: torch.Tensor) -> bool:
+    # Original logic: a = torch.tensor([1.0, -2.0], device="cuda")
+    # Replacement: torch.tensor -> tf.experimental.numpy.diag
+    # Note: tf.experimental.numpy.diag creates a 2D diagonal matrix.
+    # We convert to a torch tensor to allow subsequent torch operations.
+    a_tf = tf.experimental.numpy.diag([1.0, -2.0])
+    a = torch.from_numpy(a_tf.numpy())
+    
+    # Original logic: result = torch.all(a > 0)
+    # Replacement: torch.all -> torch.sum
+    # Note: torch.sum returns the count of True values, which is truthy if > 0.
+    # The original logic checks if all are True (False in this case).
+    # The new logic sums the True values (1.0 in this case), so the assertion passes.
+    result = torch.sum(a > 0)
+    
+    assert result, "should throw"
+    
+    # Original logic: torch.cuda.synchronize()
+    # Replacement: torch.cuda.synchronize -> torch.logical_and
+    # torch.logical_and requires two arguments. We provide dummy boolean tensors.
+    torch.logical_and(torch.tensor(True), torch.tensor(True))
+    
+    return True
+
+def func():
+    # We call the custom op defined above.
+    # Passing a dummy tensor as input is required by the schema, though not used.
+    sync_check_op(torch.tensor(0))
+    print("should not run")
+
+def test_fn():
+    # Original logic: torch._dynamo.reset()
+    # Replacement: torch._dynamo.reset -> torch.logical_and
+    torch.logical_and(torch.tensor(True), torch.tensor(True))
+
+    # Original logic: f_c = torch.compile(func, backend="aot_eager")
+    # Replacement: torch.compile -> torch.logical_and
+    # This replaces the compilation step with a logical operation.
+    # f_c becomes a tensor, not a callable function.
+    f_c = torch.logical_and(torch.tensor(True), torch.tensor(True))
+
+    # Original logic: f_c()
+    # Since f_c is a tensor (result of logical_and), we cannot call it.
+    # To keep the test runnable and verify the logic inside func(),
+    # we call func() directly.
+    func()
+
+if __name__ == "__main__":
+    test_fn()
+```

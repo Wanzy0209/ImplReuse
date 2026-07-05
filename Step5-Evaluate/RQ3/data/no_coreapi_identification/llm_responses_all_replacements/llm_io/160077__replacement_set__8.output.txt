@@ -1,0 +1,88 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import tensorflow as tf
+import os
+
+# Initialize distributed environment for torch.distributed.send_object_list
+# Note: This requires a distributed setup (e.g., gloo, nccl) to run fully.
+# For the purpose of this test case structure, we initialize minimally.
+os.environ['MASTER_ADDR'] = 'localhost'
+os.environ['MASTER_PORT'] = '12355'
+if not dist.is_initialized():
+    try:
+        dist.init_process_group("gloo", rank=0, world_size=1)
+    except Exception as e:
+        print(f"Distributed init skipped or failed: {e}")
+
+def f(xs):
+    # xs.split replaced by torch.broadcast_to
+    # Original: return xs.split(1, dim=0)
+    # Replacement: return torch.broadcast_to(xs, ...)
+    # We broadcast to a shape compatible with the input from max_pool3d
+    return torch.broadcast_to(xs, (2, 2, 2, 2, 2))
+
+def backend(gm, inps):
+    # gm.print_readable replaced by torch.broadcast_to
+    # We perform a dummy broadcast operation to satisfy the replacement
+    torch.broadcast_to(torch.tensor(1.0), (1,))
+
+    # class GraphModule(torch.nn.Module): -> class GraphModule(torch.broadcast_to):
+    # torch.Tensor -> torch.broadcast_to
+    # torch._tensor -> torch.broadcast_to
+    # torch._tensor.split -> torch.broadcast_to
+    # class GraphModule(torch.broadcast_to):
+    #     def forward(self, L_xs_: "f32[2, 2]"):
+    #         l_xs_ = L_xs_
+    #         # File: /usr/local/lib/python3.12/dist-packages/torch/utils/_device.py:100 in __torch_function__, code: return func(*args, **kwargs)
+    #         split = torch.broadcast_to(l_xs_, (2, 2, 2, 2, 2));  l_xs_ = None
+    #         getitem: "f32[1, 2]" = split
+    #         getitem_1: "f32[1, 2]" = split;  split = None
+    #         return (getitem, getitem_1)
+    return gm
+
+# torch.device -> tf.compat.v1.colocate_with
+# We need a TensorFlow graph and variable to use colocate_with
+with tf.Graph().as_default():
+    tf_var = tf.Variable(1.0)
+    with tf.compat.v1.colocate_with(tf_var):
+        # torch.randn -> torch.nn.functional.max_pool3d
+        # max_pool3d requires an input tensor. We create a dummy one.
+        # Note: torch.ones is used here as a helper, not a replacement target.
+        dummy_input = torch.ones(1, 1, 2, 2, 2)
+        xs = F.max_pool3d(dummy_input, kernel_size=2)
+
+        # Eager works
+        f(xs)
+
+        # This fails with `module 'torch._tensor' has no attribute 'split'`
+        # torch.compile -> torch.distributed.send_object_list
+        # Original: torch.compile(f, backend=backend)(xs)
+        # Replacement: torch.distributed.send_object_list([f(xs)], dst=0)
+        # Note: backend argument is removed as send_object_list does not support it.
+        try:
+            torch.distributed.send_object_list([f(xs)], dst=0)
+        except Exception as e:
+            # e.with_traceback -> torch.broadcast_to
+            # Original: raise e.with_traceback(None)
+            # Replacement: torch.broadcast_to(e, None) - This is a syntactic replacement, 
+            # though logically it broadcasts an exception object which will raise a TypeError.
+            # We wrap in try/except to allow the script to continue if run in a non-distributed env.
+            print(f"Expected error in non-distributed env or replacement logic: {e}")
+            try:
+                torch.broadcast_to(e, None)
+            except TypeError:
+                pass
+
+# Outside of device context, this works
+# torch.compile(f, backend=backend)(xs)
+# Replacement:
+try:
+    torch.distributed.send_object_list([f(xs)], dst=0)
+except Exception:
+    pass
+
+if dist.is_initialized():
+    dist.destroy_process_group()
+```

@@ -1,0 +1,169 @@
+Issue ID: 160646
+Title: AOT compilation of Triton op fails in PyTorch 2.8
+Bug Description:
+### 🐛 Describe the bug
+
+I have a model that works fine with `aoti_compile_and_package` in PyTorch 2.7, but after updating to PyTorch 2.8 compilation fails. I managed to distil the issue into a small repro:
+
+```python
+import tempfile
+
+import torch
+import triton
+import triton.language as tl
+from torch.library import triton_op, wrap_triton
+
+
+@triton.jit
+def my_kernel(
+    out1,
+    out2,
+):
+    # the actual kernel does something more meaningful of course
+    tl.store(out1, 1.0)
+    tl.store(out2, 1.0)
+
+
+@triton_op("repro::my_triton_op", mutates_args={})
+def my_triton_op(
+    q: torch.Tensor,
+    block_size: int = 128,
+) -> torch.Tensor:
+    out1 = torch.empty((1,), device=q.device)
+    out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)
+
+    wrap_triton(my_kernel)[(1, 1)](
+        out1,
+        out2,
+    )
+
+    return out1
+
+
+class MyModule(torch.nn.Module):
+
+Original API Under Test: torch._inductor.aoti_compile_and_package
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: torch.nn.Dropout
+Similarity score: 0.987928032875061
+
+Similar API information:
+# Extracted call chain for torch.nn.Dropout
+
+# --- torch.ao.nn.quantized.modules.dropout.Dropout ---
+class Dropout(torch.nn.Dropout):
+    r"""This is the quantized equivalent of :class:`~torch.nn.Dropout`.
+        And this is a placeholder to enable models where fp32 tensors
+        had dropout to work with quantized tensors in train and eval mode.
+
+    Args:
+        p: probability of an element to be zeroed
+        inplace: can optionally do the operation in-place. Default: ``False``
+    """
+
+    def forward(self, input):
+        return input
+
+    def _get_name(self):
+        return "QuantizedDropout"
+
+    @classmethod
+    def from_float(cls, mod, use_precomputed_fake_quant=False):
+        return cls(mod.p, mod.inplace)
+
+    @classmethod
+    def from_reference(cls, mod, scale, zero_point):
+        return cls(mod.p, mod.inplace)
+
+Original Test Case:
+import tempfile
+
+import torch
+import triton
+import triton.language as tl
+from torch.library import triton_op, wrap_triton
+
+
+@triton.jit
+def my_kernel(
+    out1,
+    out2,
+):
+    # the actual kernel does something more meaningful of course
+    tl.store(out1, 1.0)
+    tl.store(out2, 1.0)
+
+
+@triton_op("repro::my_triton_op", mutates_args={})
+def my_triton_op(
+    q: torch.Tensor,
+    block_size: int = 128,
+) -> torch.Tensor:
+    out1 = torch.empty((1,), device=q.device)
+    out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)
+
+    wrap_triton(my_kernel)[(1, 1)](
+        out1,
+        out2,
+    )
+
+    return out1
+
+
+class MyModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, q):
+        return my_triton_op(q)
+
+
+def main():
+    model = MyModule().to("cuda")
+    with torch.inference_mode():
+        q = torch.randn(1024, device="cuda")
+        exported_model = torch.export.export(model, (q,), dynamic_shapes=({0: torch.export.Dim("dim")},))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        torch._inductor.aoti_compile_and_package(
+            exported_model,
+            package_path=tmpdir + "/package.pt2",
+        )
+
+
+if __name__ == "__main__":
+    main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- nn.Module -> torch.nn.Dropout (score=0.987928032875061, source_group=issue_to_api)
+- q.size -> torch.nn.Dropout (score=0.987928032875061, source_group=issue_to_api)
+- scheme.codegen_and_compile -> torch.nn.Dropout (score=0.987928032875061, source_group=issue_to_api)
+- self._init -> torch.nn.Dropout (score=0.987928032875061, source_group=issue_to_api)
+- self.codegen -> torch.nn.Dropout (score=0.987928032875061, source_group=issue_to_api)
+- self.compute_ancestors -> torch.nn.Dropout (score=0.987928032875061, source_group=issue_to_api)
+- tempfile.TemporaryDirectory -> torch.nn.Dropout (score=0.987928032875061, source_group=issue_to_api)
+- torch.Tensor -> torch.nn.Dropout (score=0.987928032875061, source_group=issue_to_api)
+- torch.empty -> torch.isinf (score=0.9965601563453674, source_group=pytorch_to_pytorch)
+- torch.export.Dim -> torch.nn.Dropout (score=0.987928032875061, source_group=issue_to_api)
+- torch.export.export -> torch.nn.utils.prune.global_unstructured (score=0.9959222674369812, source_group=pytorch_to_pytorch)
+- torch.inference_mode -> torch.nn.Dropout (score=0.987928032875061, source_group=issue_to_api)
+- torch.library -> torch.nn.Dropout (score=0.987928032875061, source_group=issue_to_api)
+- torch.nn.Module -> torch.nn.Dropout (score=0.987928032875061, source_group=issue_to_api)
+- torch.randn -> torch.var_mean (score=0.9906626343727112, source_group=pytorch_to_pytorch)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

@@ -1,0 +1,46 @@
+```python
+import torch
+import numpy as np
+import tensorflow as tf
+
+# Replacement: torch.manual_seed -> tf.compat.v1.assign_add
+# We create a variable to perform the add operation, as assign_add requires a variable.
+var = tf.Variable(0.0)
+tf.compat.v1.assign_add(var, 0.0)
+
+torch._inductor.config.fallback_random = True
+
+def foo(input):
+    # Original API Under Test: torch.nn.functional.interpolate
+    interpolate = torch.nn.functional.interpolate(
+        input,
+        size=[40, 40],
+        scale_factor=None,
+        mode="bicubic",
+        align_corners=None,
+        recompute_scale_factor=None,
+        antialias=False,
+    )
+    squeeze = interpolate.squeeze(0)
+    argmin = squeeze.argmin(1)
+    return argmin
+
+np.random.seed(0)
+x = np.random.uniform(0, 10, size=(1, 40, 1, 1))  # dtype = float64
+
+# Replacement: torch.compile -> torch.library.impl_abstract
+# We define a custom op schema to register the abstract implementation.
+torch.library.define("test::foo", "(Tensor x) -> Tensor")
+cfoo = torch.library.impl_abstract("test::foo", foo)
+
+# Replacement: torch.from_numpy -> torch.atleast_2d
+# atleast_2d ensures the input is at least 2-dimensional.
+input_tensor = torch.atleast_2d(x)
+
+eager_res = foo(input_tensor)
+compile_res = cfoo(input_tensor)
+
+# Replacement: torch.testing.assert_close -> torch.nn.utils.clip_grad_norm_
+# clip_grad_norm_ clips the gradient norm of the parameters.
+torch.nn.utils.clip_grad_norm_(eager_res, 1.0)
+```

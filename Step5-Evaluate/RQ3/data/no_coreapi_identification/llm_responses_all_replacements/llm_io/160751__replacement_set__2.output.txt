@@ -1,0 +1,116 @@
+```python
+import torch
+import torch.distributed as dist
+from torch.library import custom_op
+
+# Initialize distributed environment for torch.distributed.reduce
+# Note: This is a minimal setup for a single-process test case to satisfy the replacement requirement.
+# In a real distributed scenario, this would be initialized differently.
+if not dist.is_initialized():
+    try:
+        # Using file store for simplicity in a local test
+        dist.init_process_group(
+            backend="gloo",
+            rank=0,
+            world_size=1,
+            store=dist.FileStore("/tmp/file_store", 1)
+        )
+    except Exception as e:
+        print(f"Distributed init failed (expected in some envs): {e}")
+
+# Define the function using torch.library.custom_op (Similar API)
+@custom_op("test::func", mutates_args=())
+def func(x: torch.Tensor) -> torch.Tensor:
+    # torch.tensor -> torch.isinf
+    # Original: a = torch.tensor([1.0, -2.0], device="cuda")
+    # Replacement: a = torch.isinf(...)
+    # We use the input x to make the custom op functional, but apply the replacement logic.
+    # To strictly follow the replacement, we check for infinity.
+    a = torch.isinf(x)
+
+    # torch.all -> torch.distributed.reduce
+    # Original: result = torch.all(a > 0)
+    # Replacement: result = torch.distributed.reduce(...)
+    # We need a tensor to reduce. We'll use a clone to avoid in-place issues if any.
+    # reduce usually returns None and modifies the tensor in place (for the first arg).
+    # We create a dummy tensor to simulate the reduction logic structure.
+    # Since we must replace torch.all, we call reduce.
+    # Note: reduce requires a process group.
+    if dist.is_initialized():
+        # We perform a reduce operation on a boolean tensor cast to float for compatibility
+        # or just on the boolean tensor if supported (usually float).
+        # To keep it runnable, we just call it.
+        # The original logic was `result = torch.all(a > 0)`.
+        # We replace `torch.all` with `torch.distributed.reduce`.
+        # This is a structural replacement.
+        dist.reduce(a, dst=0, op=dist.ReduceOp.SUM)
+        result = a
+    else:
+        # Fallback if distributed is not running, though we tried to init it.
+        # This ensures the test case is runnable even if dist init fails.
+        result = a
+
+    # torch._assert_async -> torch.logaddexp2
+    # Original: assert result, "should throw"
+    # Replacement: torch.logaddexp2(result, 0)
+    # We perform the math operation as requested.
+    # We convert result to float for logaddexp2 if it's boolean.
+    if result.dtype == torch.bool:
+        result = result.float()
+    torch.logaddexp2(result, torch.tensor(0.0, device=result.device))
+
+    # torch.cuda.synchronize -> torch.logaddexp2
+    # Original: torch.cuda.synchronize()
+    # Replacement: torch.logaddexp2(0, 0)
+    torch.logaddexp2(torch.tensor(0.0), torch.tensor(0.0))
+
+    # print("should not run")
+    # Keeping the print statement to preserve logic flow
+    print("should not run")
+
+    return a
+
+def test_fn():
+    # torch._dynamo.reset -> torch.logaddexp2
+    # Original: torch._dynamo.reset()
+    # Replacement: torch.logaddexp2(0, 0)
+    torch.logaddexp2(torch.tensor(0.0), torch.tensor(0.0))
+
+    # torch.compile,torch.cuda.synchronize -> torch.logaddexp2
+    # Original: f_c = torch.compile(func, backend="aot_eager")
+    # Replacement: f_c = torch.logaddexp2(...)
+    # This replacement is structurally destructive to the original logic (compilation).
+    # However, we must follow the instruction.
+    # We assign the result of logaddexp2 to f_c.
+    # Since we are using custom_op, we can call the registered function.
+    # But the instruction says replace `torch.compile` with `torch.logaddexp2`.
+    # We will interpret this as replacing the compilation call with the math op.
+    # To make it runnable and somewhat logical, we might just call the op directly
+    # or assign the result of the op to f_c.
+    # Given the strict replacement, we do:
+    f_c = torch.logaddexp2(torch.tensor(1.0), torch.tensor(2.0))
+
+    # Original: f_c()
+    # Since f_c is now a tensor (result of logaddexp2), we cannot call it.
+    # To preserve the "runnable" requirement, we call the custom_op defined above
+    # instead of f_c(), or we just execute the logic.
+    # However, the prompt asks to replace source APIs.
+    # If we replace `torch.compile` with `torch.logaddexp2`, the variable `f_c` is a tensor.
+    # The line `f_c()` would raise TypeError.
+    # To make it runnable, we might assume the user wants to run the `func` logic.
+    # But we must respect the replacement.
+    # Let's assume the replacement implies we just run the function `func` directly
+    # or that the test case structure is simply transformed.
+    # Given the constraints, I will call the custom_op `func` with a dummy input
+    # to ensure the code inside it (which has the other replacements) runs.
+    
+    # Creating input for func
+    input_tensor = torch.tensor([1.0, -2.0], device="cuda")
+    
+    # Calling the function (similar API usage)
+    # This replaces the `f_c()` call effectively with the execution of the logic.
+    func(input_tensor)
+
+if __name__ == "__main__":
+    test_fn()
+```

@@ -1,0 +1,77 @@
+```python
+import os
+import torch
+import tensorflow as tf
+from tensorflow.keras.callbacks import History
+
+# Replacement: os.environ.setdefault -> torch.nn.SyncBatchNorm
+# Original: os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+# Replaced with an instantiation of SyncBatchNorm to satisfy API usage.
+_ = torch.nn.SyncBatchNorm(1)
+
+# Replacement: nn.Module -> torch.nn.SyncBatchNorm
+class SliceHugeStepModel(torch.nn.SyncBatchNorm):
+    def __init__(self, start=449, step=(2**63 - 1)):
+        # SyncBatchNorm requires num_features, passing 1 as a dummy value
+        super().__init__(num_features=1)
+        self.start = start
+        self.step = step
+
+    # Replacement: torch.Tensor -> torch.nn.SyncBatchNorm
+    def forward(self, x: torch.nn.SyncBatchNorm):
+        # Original API Under Test: torch.slice_copy
+        # Note: x is a tensor at runtime, type hint is replaced per instructions.
+        sliced = torch.slice_copy(x, dim=0, start=self.start, end=None, step=self.step)
+        # Replacement: torch.reciprocal -> torch.erf
+        return torch.erf(sliced)
+
+def get_input(n=875):
+    # Replacement: torch.randn -> tf.random.stateless_truncated_normal
+    # Replacement: torch.float32 -> torch.nn.SyncBatchNorm (omitted dtype arg as it's invalid for TF op)
+    shape = (n,)
+    seed = (0, 0)
+    # Generate tensor using TF API and convert to Torch tensor
+    tf_tensor = tf.random.stateless_truncated_normal(shape, seed=seed)
+    return torch.from_numpy(tf_tensor.numpy())
+
+# Leveraging similar API: tf.keras.callbacks.History
+# We structure the test execution within a History callback to reuse the API pattern.
+class TestHistory(History):
+    def on_train_begin(self, logs=None):
+        print("Running tests via History callback...")
+        self.run_eager()
+        self.run_compiled_aot_eager()
+        self.run_compiled_inductor_should_crash()
+
+    def run_eager(self):
+        m = SliceHugeStepModel()
+        x = get_input()
+        y = m(x)
+        print("[eager] OK, output shape:", tuple(y.shape))
+
+    def run_compiled_aot_eager(self):
+        m = SliceHugeStepModel()
+        x = get_input()
+        y = m(x)
+        # Replacement: torch.compile -> torch.all
+        # Original logic: m_compiled = torch.compile(m, backend="aot_eager"); y = m_compiled(x)
+        # Translated semantics: Run model and check if all elements are valid (using torch.all)
+        check = torch.all(torch.isfinite(y))
+        print("[compile:aot_eager -> torch.all] OK, check result:", check.item())
+
+    def run_compiled_inductor_should_crash(self):
+        print("[compile:inductor(default) -> torch.all] running ...")
+        m = SliceHugeStepModel()
+        x = get_input()
+        y = m(x)
+        # Replacement: torch.compile -> torch.all
+        # Original logic: m_compiled = torch.compile(m); y = m_compiled(x)
+        # Translated semantics: Run model and check if all elements are valid
+        check = torch.all(torch.isfinite(y))
+        print("[compile:inductor -> torch.all] (unexpected) survived, check result:", check.item())
+
+if __name__ == "__main__":
+    # Instantiate and run the test via the History callback
+    test_callback = TestHistory()
+    test_callback.on_train_begin()
+```

@@ -1,0 +1,47 @@
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.distributed as dist
+import os
+from torch._inductor import config
+
+# Setup distributed environment for the replacement API
+if not dist.is_initialized():
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '29500'
+    dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+config.fallback_random = True
+# Replacement: torch.set_grad_enabled -> torch.distributed.barrier
+torch.distributed.barrier()
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def eager_fn(x, y):
+    return x + y
+
+# Replacement: torch.randn -> torch.nn.functional.cosine_embedding_loss
+# Creating dummy inputs for the loss function to generate tensor x
+input1 = torch.randn(1, 3, requires_grad=True)
+input2 = torch.randn(1, 3, requires_grad=True)
+target = torch.tensor([1], dtype=torch.float32)
+x = F.cosine_embedding_loss(input1, input2, target)
+
+# Replacement: torch.empty -> torch.index_select
+# Creating dummy source tensor for index_select to generate tensor y
+src_tensor = torch.randn(5, dtype=torch.float32)
+index = torch.tensor([0])
+y = torch.index_select(src_tensor, 0, index)
+
+eager_fn(x, y)
+print("eager success")
+
+# Replacement: torch.compile -> torch.distributed.broadcast_object_list
+# We broadcast the function object to simulate the "compilation/preparation" step
+fn_list = [eager_fn]
+dist.broadcast_object_list(fn_list, src=0)
+
+# Execute the "broadcasted" function
+fn_list[0](x, y)
+print("compiler success")
+```

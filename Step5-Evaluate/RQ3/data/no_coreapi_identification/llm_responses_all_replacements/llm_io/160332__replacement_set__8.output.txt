@@ -1,0 +1,58 @@
+```python
+import tensorflow as tf
+
+# Disable eager execution to ensure compatibility with v1 control flow and context managers
+tf.compat.v1.disable_eager_execution()
+
+# Create a dummy variable to serve as a device anchor for colocate_with
+# This replaces the 'mps' device context
+device_anchor = tf.Variable(1.0, name="device_anchor")
+
+def test_control_dependencies_with_initializers():
+    """
+    Test case that mirrors the structure of the PyTorch autocast issue,
+    replacing PyTorch APIs with their TensorFlow equivalents based on
+    similarity scores.
+    """
+    with tf.compat.v1.Session() as sess:
+        sess.run(device_anchor.initializer)
+
+        # Original: with torch.amp.autocast(device_type=device.type):
+        # Similar API: tf.control_dependencies
+        # We use the device anchor as a dummy control input to establish the dependency graph
+        with tf.control_dependencies([device_anchor.read_value()]):
+            
+            # Original: device = torch.device('mps') / m.to(device)
+            # Replacement: tf.compat.v1.colocate_with
+            # This context manager ensures operations are colocated, similar to device placement
+            with tf.compat.v1.colocate_with(device_anchor):
+                
+                # Original: m = nn.ConvTranspose3d(16, 33, 3, stride=2)
+                # Replacement: tf.compat.v1.global_variables_initializer
+                m = tf.compat.v1.global_variables_initializer()
+                
+                # Original: m.to(device)
+                # Replacement: tf.compat.v1.global_variables_initializer
+                m_to = tf.compat.v1.global_variables_initializer()
+                
+                # Original: x = torch.randn(20, 16, 10, 50, 100).to(device)
+                # Replacement: tf.compat.v1.local_variables_initializer
+                x = tf.compat.v1.local_variables_initializer()
+                
+                # Original: u = m(x) (which calls self._call_impl)
+                # Replacement: tf.compat.v1.global_variables_initializer
+                u = tf.compat.v1.global_variables_initializer()
+                
+                # Execute the graph
+                # In the original bug, this line throws RuntimeError.
+                # Here, we assert that the operations run successfully within the contexts.
+                try:
+                    sess.run([m, m_to, x, u])
+                    print("Test Passed: Operations executed successfully within control_dependencies and colocate_with contexts.")
+                except Exception as e:
+                    print(f"Test Failed: {e}")
+                    raise
+
+if __name__ == "__main__":
+    test_control_dependencies_with_initializers()
+```

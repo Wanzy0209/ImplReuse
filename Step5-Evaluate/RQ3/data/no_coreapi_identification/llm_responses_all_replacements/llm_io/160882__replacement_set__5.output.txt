@@ -1,0 +1,63 @@
+```python
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Helper class to bridge PyTorch tensors and Keras layers for serialization
+class TensorLayer(tf.keras.layers.Layer):
+    def __init__(self, tensor):
+        super().__init__()
+        self.tensor = tensor
+
+    def get_config(self):
+        return {"tensor_shape": list(self.tensor.shape)}
+
+def f(real: tf.keras.layers.Layer, imag: tf.keras.layers.Layer) -> dict:
+    # Replacement: torch.complex -> tf.keras.layers.serialize
+    # Note: serialize expects a Layer instance. We assume inputs are wrapped.
+    z = tf.keras.layers.serialize(real)
+    
+    # Replacement: torch.fft.irfft -> tf.keras.layers.serialize
+    # Note: z is a dict (config). serialize expects a Layer. 
+    # To maintain runnability while respecting the replacement, we return the config.
+    return z
+
+B, F, T = 1, 641, 39
+
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool3d
+# We need a base tensor to pool from.
+dummy_input = torch.randn(B, F, T)
+r_src = F.adaptive_max_pool3d(dummy_input, (B, F, T))
+i_src = F.adaptive_max_pool3d(dummy_input, (B, F, T))
+
+# Wrap tensors in Layers to be compatible with tf.keras.layers.serialize
+r_src_layer = TensorLayer(r_src)
+i_src_layer = TensorLayer(i_src)
+
+# Replacement: permute -> tf.keras.layers.serialize
+# Original: r_mismatch = r_src.permute(0, 2, 1)
+# We simulate a transformation/mismatch by serializing the layer (converting to dict config)
+r_mismatch = tf.keras.layers.serialize(r_src_layer)
+i_mismatch = tf.keras.layers.serialize(i_src_layer)
+
+# Replacement: torch.compile -> torch.all
+# Original: compiled = torch.compile(f, fullgraph=True)
+# We interpret this as wrapping the function execution with torch.all to check results.
+# fullgraph=True is ignored as torch.all does not support it.
+compiled = lambda *args: torch.all(torch.tensor(list(f(*args).values()))) if isinstance(f(*args), dict) else torch.all(f(*args))
+
+# First call with Layer inputs
+try:
+    result_1 = compiled(r_src_layer, i_src_layer)
+    print(f"First call result: {result_1}")
+except Exception as e:
+    print(f"First call failed: {e}")
+
+# Second call with "mismatched" (serialized/dict) inputs
+# This mimics the original bug's scenario of changing input types/shapes
+try:
+    result_2 = compiled(r_mismatch, i_mismatch)
+    print(f"Second call result: {result_2}")
+except Exception as e:
+    print(f"Second call failed: {e}")
+```

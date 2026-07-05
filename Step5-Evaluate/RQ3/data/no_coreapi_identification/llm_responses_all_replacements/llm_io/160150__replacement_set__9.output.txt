@@ -1,0 +1,84 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_exporter_handles_none_like_output():
+    """
+    Test case derived from Issue 160150: [ONNX] Exporter crashes when fx node output includes None.
+    
+    This test simulates the scenario where a model returns a tuple containing a None value
+    (represented here by an empty VarLenFeature result) and attempts to export/serialize it.
+    
+    Original API: torch.onnx.export
+    Similar API: tf.compat.v1.Summary.Value (used for serialization/exporting data)
+    Replacement API: tf.io.VarLenFeature (used to generate the None-like condition)
+    """
+    
+    # 1. Setup: Define features using the Replacement API (tf.io.VarLenFeature)
+    # This simulates the 'image_tokens_masks' which could be None.
+    # VarLenFeature returns a SparseTensor, which can be empty (effectively None).
+    feature_spec = {
+        'output': tf.io.FixedLenFeature([], tf.float32),
+        'image_tokens_masks': tf.io.VarLenFeature(tf.float32)
+    }
+    
+    # Create a serialized example where 'image_tokens_masks' is missing
+    # This mimics the condition: image_tokens_masks = None
+    example = tf.train.Example(features=tf.train.Features(feature={
+        'output': tf.train.Feature(float_list=tf.train.FloatList(value=[1.0]))
+    }))
+    
+    # 2. Parse the example
+    parsed = tf.io.parse_single_example(example.SerializeToString(), feature_spec)
+    
+    output = parsed['output']
+    image_tokens_masks = parsed['image_tokens_masks']
+    
+    # Verify that the mask is indeed empty (None-like)
+    assert image_tokens_masks.values.shape[0] == 0, "VarLenFeature should be empty to simulate None"
+    
+    # 3. Simulate the export process using the Similar API (tf.compat.v1.Summary.Value)
+    # The original bug occurred when the exporter tried to process the None value.
+    # Here we test if Summary.Value handles the None-like input gracefully.
+    
+    # Case A: Valid output (should succeed)
+    try:
+        tensor_proto = tf.make_tensor_proto(output.numpy())
+        summary_val = tf.compat.v1.Summary.Value(tag="output", tensor=tensor_proto)
+        print("Successfully exported valid output.")
+    except Exception as e:
+        print(f"Failed to export valid output: {e}")
+        raise
+
+    # Case B: None-like output (The Bug Scenario)
+    # In the original bug, the exporter crashed when encountering None.
+    # We test if tf.compat.v1.Summary.Value handles this explicitly or crashes.
+    
+    # We simulate the logic: return (output, image_tokens_masks)
+    # where image_tokens_masks is None.
+    
+    none_value = None
+    
+    try:
+        # This mimics the exporter attempting to process the None node output.
+        # We expect a clean error (TypeError/ValueError), not a crash.
+        summary_mask = tf.compat.v1.Summary.Value(
+            tag="image_tokens_masks",
+            tensor=none_value
+        )
+        # If we reach here, the API accepts None (which differs from the crash, but is valid behavior)
+        print("Summary.Value accepted None input.")
+        
+    except (TypeError, ValueError) as e:
+        # This is the expected behavior: The API rejects the invalid input type cleanly.
+        # The bug was a crash (segfault), so a clean exception indicates the fix/robustness.
+        print(f"Summary.Value rejected None input cleanly with: {type(e).__name__}")
+        
+    except Exception as e:
+        # Catching any other unexpected errors (like crashes, though Python catches them as exceptions usually)
+        print(f"Unexpected error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_exporter_handles_none_like_output()
+```

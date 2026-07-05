@@ -1,0 +1,54 @@
+```python
+import torch
+import tensorflow as tf
+import pytest
+
+def test_operator_not_allowed_in_graph_error():
+    """
+    Test case adapted from Issue 160084 (PyTorch regression) to verify
+    tf.errors.OperatorNotAllowedInGraphError behavior with similar logic.
+    
+    Replacements applied:
+    - torch.randn -> torch.var_mean
+    - torch.tensor -> torch.isnan
+    - torch._dynamo.exc.BackendCompilerFailed -> tf.errors.OperatorNotAllowedInGraphError
+    - nn.Module -> tf.Module (Runnable equivalent)
+    - nn.Parameter -> tf.Variable (Runnable equivalent)
+    """
+    
+    # Replacement: torch.randn -> torch.var_mean
+    # torch.var_mean returns (variance, mean). We use the mean as input.
+    _, inputs = torch.var_mean(torch.randn(4, 10))
+    inputs = tf.convert_to_tensor(inputs.numpy())
+
+    # Replacement: nn.Module -> tf.Module
+    class RegressionModel(tf.Module):
+        def __init__(self, a=0, b=0):
+            super().__init__()
+            # Replacement: torch.tensor -> torch.isnan
+            # torch.isnan returns a boolean tensor. We convert to float for the model.
+            # We use float('nan') to ensure torch.isnan returns True, creating a NaN parameter.
+            nan_val = float('nan')
+            self.a = tf.Variable(torch.isnan(torch.tensor(nan_val)).float().numpy(), dtype=tf.float32)
+            self.b = tf.Variable(torch.isnan(torch.tensor(nan_val)).float().numpy(), dtype=tf.float32)
+            self.first_batch = True
+
+        # Equivalent of torch.compile
+        @tf.function
+        def __call__(self, x):
+            # Original logic: if self.first_batch:
+            # To trigger tf.errors.OperatorNotAllowedInGraphError (the replacement for BackendCompilerFailed),
+            # we use a Tensor (self.a) in a boolean context. This mimics the "unsupported operator" pattern.
+            # Note: Using a Python bool (self.first_batch) would not raise this error in tf.function.
+            if self.a > 0: 
+                print(f"Model dtype: {self.a.dtype}, {self.b.dtype}. Input dtype: {x.dtype}")
+                self.first_batch = False
+            return x * self.a + self.b
+
+    model = RegressionModel()
+
+    # Replacement: torch._dynamo.exc.BackendCompilerFailed -> tf.errors.OperatorNotAllowedInGraphError
+    # We expect this error to be raised due to the tensor boolean context.
+    with pytest.raises(tf.errors.OperatorNotAllowedInGraphError):
+        _ = model(inputs)
+```
