@@ -132,6 +132,41 @@ def save_summary(summary: Dict, output_file: Path):
             })
 
 
+def save_api_details(baseline_apis: Set[str], reuse_apis: Set[str], output_prefix: Path, framework: str):
+    """保存交集和独有API列表"""
+    baseline_only = baseline_apis - reuse_apis
+    reuse_only = reuse_apis - baseline_apis
+    intersection = baseline_apis & reuse_apis
+
+    intersection_file = output_prefix.parent / f"{output_prefix.stem}_intersection_apis.txt"
+    baseline_only_file = output_prefix.parent / f"{output_prefix.stem}_baseline_only_apis.txt"
+    reuse_only_file = output_prefix.parent / f"{output_prefix.stem}_reuse_only_apis.txt"
+
+    with open(intersection_file, 'w', encoding='utf-8') as f:
+        f.write(f"# {framework} APIs - Intersection (Both Baseline and Reuse)\n")
+        f.write(f"# Total: {len(intersection)}\n")
+        f.write("#" * 70 + "\n")
+        for api in sorted(intersection):
+            f.write(f"{api}\n")
+    print(f"  Saved intersection APIs to {intersection_file}")
+
+    with open(baseline_only_file, 'w', encoding='utf-8') as f:
+        f.write(f"# {framework} APIs - Only in Baseline\n")
+        f.write(f"# Total: {len(baseline_only)}\n")
+        f.write("#" * 70 + "\n")
+        for api in sorted(baseline_only):
+            f.write(f"{api}\n")
+    print(f"  Saved baseline-only APIs to {baseline_only_file}")
+
+    with open(reuse_only_file, 'w', encoding='utf-8') as f:
+        f.write(f"# {framework} APIs - Only in Reuse\n")
+        f.write(f"# Total: {len(reuse_only)}\n")
+        f.write("#" * 70 + "\n")
+        for api in sorted(reuse_only):
+            f.write(f"{api}\n")
+    print(f"  Saved reuse-only APIs to {reuse_only_file}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="API Coverage Analysis for test cases")
     parser.add_argument(
@@ -217,6 +252,9 @@ def main():
         print(f"  Union (total): {len(cross_union)}")
         print(f"  Formula check: {len(cross_baseline_only)} + {len(cross_reuse_only)} + {len(cross_intersection)} = {len(cross_union)}")
 
+        cross_output_prefix = args.base_dir / "cross"
+        save_api_details(cross_baseline_apis, cross_reuse_apis, cross_output_prefix, 'TensorFlow')
+
     single_baseline = summary.get('single_baseline')
     single_reuse = summary.get('single_reuse')
     if single_baseline and single_reuse:
@@ -234,6 +272,9 @@ def main():
         print(f"  Intersection (both): {len(single_intersection)}")
         print(f"  Union (total): {len(single_union)}")
         print(f"  Formula check: {len(single_baseline_only)} + {len(single_reuse_only)} + {len(single_intersection)} = {len(single_union)}")
+
+        single_output_prefix = args.base_dir / "single"
+        save_api_details(single_baseline_apis, single_reuse_apis, single_output_prefix, 'PyTorch')
 
 
 if __name__ == "__main__":
