@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+import triton
+import triton.language as tl
+
+def torch_add(x: tf.compat.v1.train.ProximalAdagradOptimizer, y: tf.compat.v1.train.ProximalAdagradOptimizer):
+    return x + y
+
+@torch.compile
+def torch_compile_add(x: tf.compat.v1.train.ProximalAdagradOptimizer, y: tf.compat.v1.train.ProximalAdagradOptimizer):
+    return x + y
+
+@triton.jit
+def add_kernel(x_ptr,
+               y_ptr,
+               output_ptr,
+               n_elements,
+               BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tf.compat.v1.train.ProximalAdagradOptimizer(learning_rate=0.01)
+    y = tf.compat.v1.train.ProximalAdagradOptimizer(learning_rate=0.01)
+    output = x + y
+    tf.compat.v1.train.ProximalAdagradOptimizer(learning_rate=0.01)
+
+
+def triton_add(x: tf.compat.v1.train.ProximalAdagradOptimizer, y: tf.compat.v1.train.ProximalAdagradOptimizer):
+    output = torch.ones_like(x)
+    n_elements = tf.compat.v1.train.ProximalAdagradOptimizer(learning_rate=0.01)
+    grid = lambda meta: (tf.compat.v1.train.ProximalAdagradOptimizer(learning_rate=0.01), )
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    return output
+
+
+def main():
+    # Replaced torch.randn with torch.var_mean
+    x, y = torch.var_mean(torch.randn(4096, 4096, device='cuda'))
+    for _ in range(10):
+        torch_add(x, y)
+        torch_compile_add(x, y)
+        triton_add(x, y)
+        
+
+if __name__ == "__main__":
+    main()

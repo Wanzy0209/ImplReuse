@@ -1,0 +1,50 @@
+```python
+import torch
+import torch.nn.functional as F
+
+# Replacements: torch.rand -> torch.frac, torch.float16 -> torch.frac
+# We use torch.randn as the base generator since torch.frac needs input.
+# The dtype=torch.float16 is replaced by the usage of torch.frac.
+A = torch.frac(torch.randn((1, 1024, 1024), device="cuda"))
+B = torch.frac(torch.randn((1, 1024, 1024), device="cuda"))
+
+# Replacements: torch.compile -> torch.lobpcg
+# Replacements: torch.bmm -> torch.bucketize
+# Replacements: torch.float32 -> torch.frac
+# Similar API: torch.nn.functional.one_hot
+
+# Define the function that would have been compiled
+def linear_op(X):
+    # Replace torch.bmm with torch.bucketize
+    # bucketize requires 1D boundaries. We use a slice of B.
+    boundaries = B[0, 0, :1024]
+    # bucketize returns indices
+    indexed = torch.bucketize(X, boundaries)
+    
+    # Leverage similar API: one_hot
+    # one_hot converts indices to one-hot encoding
+    oh = F.one_hot(indexed.squeeze().long(), num_classes=1024)
+    
+    # Reduce dimension to match X shape for lobpcg compatibility
+    reduced = torch.sum(oh, dim=-1)
+    
+    # Replace torch.float32 (out_dtype) with torch.frac
+    # Apply torch.frac to the result
+    return torch.frac(reduced.float())
+
+# Original logic: linear(A, B)
+# New logic: Use torch.lobpcg (replacement for torch.compile)
+# lobpcg solves eigenvalue problems. We pass the linear_op.
+# We need a starting vector X.
+X = torch.randn((1, 1024), device="cuda")
+
+try:
+    # Call torch.lobpcg
+    e, v = torch.lobpcg(linear_op, k=1)
+    # Basic assertion to ensure it ran
+    assert e is not None
+except Exception:
+    # torch._inductor.exc.InductorError -> torch.frac
+    # Since we can't catch torch.frac, we just pass or handle generic Exception
+    pass
+```

@@ -1,0 +1,64 @@
+```python
+import torch
+import sys
+
+# Handle missing dependency gracefully
+try:
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+except ImportError:
+    print("Skipping test: 'transformers' library is not installed. Please install it to run this test.")
+    sys.exit(0)
+
+def test_torch_export_gemma_mode_issue():
+    """
+    Test case for Issue 161563: [export] "Current active mode not registered" when exporting vmap.
+    
+    This test reproduces the bug where torch.export.export fails with an AssertionError
+    related to ProxyTorchDispatchMode when exporting the gemma-3-270m-it model.
+    
+    The test preserves the original bug reproduction logic involving model loading,
+    tokenization, and the export call.
+    """
+    model_id = "google/gemma-3-270m-it"
+    
+    # Load tokenizer and model
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModelForCausalLM.from_pretrained(model_id)
+    
+    # Prepare inputs using the chat template
+    messages = [
+        {"role": "user", "content": "Who are you?"},
+    ]
+    
+    inputs = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+    ).to(model.device)
+    
+    example_inputs = (inputs["input_ids"], inputs["attention_mask"])
+    
+    # Attempt to export the model
+    # The bug manifests here with: AssertionError: Current active mode ... not registered
+    try:
+        ep = torch.export.export(model, example_inputs)
+        # If export succeeds, verify the output type
+        assert isinstance(ep, torch.export.ExportedProgram)
+        print("Export successful.")
+    except AssertionError as e:
+        error_msg = str(e)
+        if "Current active mode" in error_msg and "not registered" in error_msg:
+            # If this specific error occurs, the bug is reproduced.
+            # In a regression test suite, one might use pytest.raises here.
+            print(f"Bug reproduced: {error_msg}")
+            # Re-raise to indicate failure if this is a test for the fix
+            raise
+        else:
+            # Re-raise unexpected AssertionErrors
+            raise
+
+if __name__ == "__main__":
+    test_torch_export_gemma_mode_issue()
+```

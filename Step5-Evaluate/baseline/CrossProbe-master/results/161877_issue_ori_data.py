@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: PyTorch input format is (Batch, Channels, Length), TensorFlow is (Batch, Length, Channels)
@@ -22,4 +21,3 @@ class MyConv1dModule(tf.keras.Model):
 
 model = MyConv1dModule()
 output = model.conv1(input_data)
-```

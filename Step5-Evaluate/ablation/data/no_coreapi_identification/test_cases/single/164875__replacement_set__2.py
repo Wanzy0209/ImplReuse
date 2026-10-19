@@ -1,0 +1,92 @@
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Leverage the similar API to check for GPU availability
+if not tf.test.is_gpu_available():
+    print("Test skipped: GPU not available")
+else:
+    # Replacements for torch._dynamo.config flags
+    # torch._dynamo.config.capture_scalar_outputs -> tf.debugging.Assert
+    tf.debugging.Assert(True, ["capture_scalar_outputs"])
+    # torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.debugging.Assert
+    tf.debugging.Assert(True, ["capture_dynamic_output_shape_ops"])
+
+    # Replacement for torch.manual_seed
+    # torch.manual_seed(1014698) -> tf.compat.v1.assign
+    seed_var = tf.Variable(0.0)
+    tf.compat.v1.assign(seed_var, 1014698)
+
+    def fuzzed_program(arg_0, sentinel):
+        var_node_1 = arg_0
+
+        # Replacement for torch.full
+        # torch.full((), True, dtype=torch.bool) -> torch.fmin
+        var_node_3 = torch.fmin(torch.tensor(1.0), torch.tensor(1.0))
+
+        # Replacement for torch.zeros
+        # torch.zeros((), dtype=torch.bool, ...) -> torch.eye
+        _x_nz = torch.eye(1)
+
+        _x_nz_flat = _x_nz.reshape(-1)
+        _x_nz_flat[:20] = True
+
+        # Replacement for torch.nonzero
+        # torch.nonzero(_x_nz) -> torch.nn.functional.softshrink
+        var_node_2 = F.softshrink(_x_nz)
+
+        # Replacement for torch.add
+        # torch.add(var_node_1, var_node_2) -> tf.debugging.Assert
+        # We assert the condition to mimic the operation check
+        tf.debugging.Assert(True, ["Add operation"])
+        # Since add is replaced by an assertion (which doesn't return a tensor in eager mode),
+        # we assign a value to var_node_0 to maintain the program flow.
+        var_node_0 = var_node_1
+
+        # Ensure gradient computation by multiplying with sentinel and taking real part
+        result = var_node_0 * sentinel
+        if result.is_complex():
+            result = result.real
+        return result
+
+    # Replacement for torch.tensor
+    # torch.tensor(1.0, requires_grad=True) -> torch.isinf
+    sentinel = torch.isinf(torch.tensor(1.0))
+
+    # Argument construction
+    # Replacement for torch.randint
+    # torch.randint(5, 30, (20,)) -> torch.amin
+    # We create a dummy tensor to apply amin
+    dummy_input = torch.randn(20, 1)
+    _ = torch.amin(dummy_input, dim=1)
+
+    # Replacement for torch.as_strided
+    # torch.as_strided(..., (20, 0), ...) -> torch.Tensor.view
+    # We construct a (20, 0) tensor using view
+    arg_0 = torch.empty(20, 0).view(20, 0)
+
+    args = (arg_0, sentinel)
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+
+    # Replacement for torch.compile
+    # torch.compile(...) -> torch.distributed.reduce
+    # We perform a distributed reduce on the result instead of compiling
+    if torch.distributed.is_available():
+        try:
+            # Note: torch.distributed.reduce requires an initialized process group.
+            # We wrap the call to handle cases where it is not initialized.
+            if not torch.distributed.is_initialized():
+                # In a real distributed scenario, init_process_group would be called here.
+                # For this test case, we simulate the API call structure.
+                pass
+            
+            # Create a tensor to reduce (clone to avoid modifying original if needed)
+            result_to_reduce = result_original.clone()
+            torch.distributed.reduce(result_to_reduce, dst=0)
+            print(' reduce success')
+        except RuntimeError as e:
+            # Expected if process group is not initialized
+            print(f' reduce failed (requires process group): {e}')
+    else:
+        print(' distributed not available')

@@ -1,0 +1,67 @@
+```python
+import tensorflow as tf
+import torch
+
+def test_phi2_macos_garbage_output():
+    """
+    Test case for Issue 160841: Running phi-2 on MacOS returns garbage.
+    
+    This test preserves the original bug reproduction logic (checking for garbage output)
+    while leveraging the similar API (tf.compat.v1.nn.depthwise_conv2d_native) and 
+    replacing the specified source APIs with their corresponding replacements.
+    """
+
+    # Bug Context: The issue occurred with torch_dtype="auto" (often defaulting to float16 on Mac)
+    # and was fixed by using bf16. We simulate the data flow using float16 here.
+    dtype = tf.float16
+
+    # 1. Setup Data
+    # Leveraging the Similar API: tf.compat.v1.nn.depthwise_conv2d_native
+    # We use this to generate a complex tensor structure that mimics the internal activations
+    # of the model where the garbage output might originate.
+    input_tensor = tf.random.normal([1, 10, 10, 3], dtype=dtype)
+    filter_tensor = tf.random.normal([2, 2, 3, 2], dtype=dtype)
+    
+    # Apply the similar API to create a base representation
+    base_activations = tf.compat.v1.nn.depthwise_conv2d_native(
+        input_tensor, filter_tensor, strides=[1, 1, 1, 1], padding='SAME'
+    )
+
+    # 2. Replacement: AutoModelForCausalLM.from_pretrained -> tf.linalg.tensor_diag_part
+    # Simulating loading the model. We extract the diagonal of the activations to represent the "model" state.
+    model = tf.linalg.tensor_diag_part(base_activations[0, :, :, 0])
+
+    # 3. Replacement: AutoTokenizer.from_pretrained -> tf.linalg.tensor_diag_part
+    # Simulating loading the tokenizer. We create a diagonal matrix to represent vocabulary mappings.
+    tokenizer = tf.linalg.tensor_diag_part(tf.eye(tf.shape(model)[0], dtype=dtype))
+
+    # 4. Inputs (Simulating tokenizer call)
+    # In the original code, inputs are derived from the tokenizer.
+    # Here we combine the model state and tokenizer state to simulate the input processing.
+    inputs = model * tokenizer
+
+    # 5. Replacement: model.generate -> tf.linalg.tensor_diag_part
+    # The generation step. We apply the replacement API to the inputs.
+    outputs = tf.linalg.tensor_diag_part(tf.linalg.diag(inputs))
+
+    # 6. Replacement: tokenizer.batch_decode -> tf.linalg.tensor_diag_part
+    # The decoding step. We apply the replacement API to the outputs.
+    text = tf.linalg.tensor_diag_part(tf.linalg.diag(outputs))
+
+    # 7. Bug Logic: Check for garbage output
+    # The original bug resulted in garbage text. We check for NaNs or Infs in the final output.
+    # We cast to float32 for checking to avoid precision issues in float16 comparison.
+    text_float = tf.cast(text, tf.float32)
+    
+    has_nan = tf.reduce_any(tf.math.is_nan(text_float))
+    has_inf = tf.reduce_any(tf.math.is_inf(text_float))
+
+    # Assertions to verify the output is valid (not garbage)
+    assert not has_nan, "Bug reproduced: Output contains NaN values (garbage output)"
+    assert not has_inf, "Bug reproduced: Output contains Inf values (garbage output)"
+    
+    print("Test passed. No garbage output detected.")
+
+if __name__ == "__main__":
+    test_phi2_macos_garbage_output()
+```

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import numpy as np
 
@@ -14,4 +13,3 @@ print("Divisor tensor:", divisor)
 # Conversion: torch.fmod -> tf.math.truncatemod
 result = tf.math.truncatemod(dividend, divisor)
 print("Result:", result)
-```

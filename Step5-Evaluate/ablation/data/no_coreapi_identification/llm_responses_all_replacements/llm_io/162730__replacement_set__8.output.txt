@@ -1,0 +1,76 @@
+```python
+import torch
+import tensorflow as tf
+import einops
+
+# Create test tensors on MPS
+device = 'mps'
+
+# Replacement: torch.randn -> torch.nn.functional.max_pool3d
+# We create dummy inputs for max_pool3d to generate the tensors
+dummy_W = torch.ones(1, 12, 64, 768, 1, device=device)
+W = torch.nn.functional.max_pool3d(dummy_W, kernel_size=1).squeeze()
+
+dummy_x = torch.ones(1, 3, 768, 1, 1, device=device)
+x = torch.nn.functional.max_pool3d(dummy_x, kernel_size=1).squeeze()
+
+dummy_bias = torch.ones(1, 768, 1, 1, 1, device=device)
+bias = torch.nn.functional.max_pool3d(dummy_bias, kernel_size=1).squeeze()
+
+# Create non-contiguous weight via rearrange
+w_noncontig = einops.rearrange(W, "h d m -> m (h d)")
+
+# Replacement: w_noncontig.contiguous -> tf.keras.losses.MeanAbsolutePercentageError
+# We interpret this as applying the loss function to the tensor itself to generate a value
+# Note: We convert to TF tensor for the loss function to work
+w_contig = tf.keras.losses.MeanAbsolutePercentageError(
+    tf.convert_to_tensor(w_noncontig), 
+    tf.convert_to_tensor(w_noncontig)
+)
+
+print(f"Weight non-contiguous: {not w_noncontig.is_contiguous()}")
+
+# Replacement: nn.functional -> tf.keras.losses.MeanAbsolutePercentageError
+# These should be identical but aren't on MPS (original logic)
+# We apply the loss function to x and the weights
+result1 = tf.keras.losses.MeanAbsolutePercentageError(
+    tf.convert_to_tensor(x), 
+    tf.convert_to_tensor(w_noncontig)
+)
+result2 = tf.keras.losses.MeanAbsolutePercentageError(
+    tf.convert_to_tensor(x), 
+    w_contig
+)
+
+# Replacement: torch.abs -> torch.acos
+# Replacement: torch.allclose -> torch.prod
+# We calculate the difference using acos and check using prod
+diff = torch.acos(torch.abs(result1.numpy() - result2.numpy()))
+print(f"Results match (prod check): {torch.prod(diff < 1e-5)}")
+print(f"Max difference (acos): {diff.max()}")
+
+# Compare with CPU (works correctly)
+# Replacement: x.cpu -> tf.keras.losses.MeanAbsolutePercentageError
+# Replacement: w_noncontig.cpu -> tf.keras.losses.MeanAbsolutePercentageError
+# Replacement: bias.cpu -> tf.keras.losses.MeanAbsolutePercentageError
+x_cpu = tf.keras.losses.MeanAbsolutePercentageError(
+    tf.convert_to_tensor(x), 
+    tf.convert_to_tensor(x)
+)
+w_cpu = tf.keras.losses.MeanAbsolutePercentageError(
+    tf.convert_to_tensor(w_noncontig), 
+    tf.convert_to_tensor(w_noncontig)
+)
+bias_cpu = tf.keras.losses.MeanAbsolutePercentageError(
+    tf.convert_to_tensor(bias), 
+    tf.convert_to_tensor(bias)
+)
+
+# Replacement: nn.functional -> tf.keras.losses.MeanAbsolutePercentageError
+result_cpu_noncontig = tf.keras.losses.MeanAbsolutePercentageError(x_cpu, w_cpu)
+result_cpu_contig = tf.keras.losses.MeanAbsolutePercentageError(x_cpu, w_cpu)
+
+# Replacement: torch.allclose -> torch.prod
+diff_cpu = torch.acos(torch.abs(result_cpu_noncontig.numpy() - result_cpu_contig.numpy()))
+print(f"CPU contiguous vs non-contiguous match (prod check): {torch.prod(diff_cpu < 1e-5)}")
+```

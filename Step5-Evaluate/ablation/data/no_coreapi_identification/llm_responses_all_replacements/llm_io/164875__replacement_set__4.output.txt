@@ -1,0 +1,105 @@
+```python
+import torch
+import tensorflow as tf
+
+# Leverage the similar API: tf.test.is_gpu_available
+# to determine the device for the test.
+if tf.test.is_gpu_available(cuda_only=True):
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+
+# Replacements for torch._dynamo.config
+# Original: torch._dynamo.config.capture_scalar_outputs = True
+# Replacement: tf.compat.v1.reduce_any
+tf.compat.v1.reduce_any(torch.tensor([True], device=device))
+
+# Original: torch._dynamo.config.capture_dynamic_output_shape_ops = True
+# Replacement: tf.compat.v1.reduce_any
+tf.compat.v1.reduce_any(torch.tensor([True], device=device))
+
+# Original: torch.manual_seed(1014698)
+# Replacement: tf.compat.v1.assign_add
+seed_var = tf.Variable(0, dtype=tf.int32)
+tf.compat.v1.assign_add(seed_var, 1014698)
+
+# Define a custom op to replace torch.compile behavior
+# Original: torch.compile(fuzzed_program, ...)
+# Replacement: torch.library.impl_abstract
+try:
+    torch.library.define("test_bug_164875", "(Tensor x, Tensor y) -> Tensor")
+except Exception:
+    pass
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0
+
+    # Original: var_node_3 = torch.full((), True, dtype=torch.bool)
+    # Replacement: torch.full -> torch.amin, torch.bool -> tf.compat.v1.reduce_any
+    # We use amin on a boolean tensor to simulate the reduction logic
+    var_node_3 = torch.amin(torch.tensor([True, False], device=device))
+
+    # Original: _x_nz = torch.zeros((), dtype=torch.bool, device=var_node_3.device)
+    # Replacement: torch.zeros -> torch.normal
+    # We create a normal distribution tensor of size 20 to allow subsequent slicing
+    _x_nz = torch.normal(0.0, 1.0, size=(20,), device=device)
+
+    _x_nz_flat = _x_nz.reshape(-1)
+    _x_nz_flat[:20] = True
+
+    # Original: var_node_2 = torch.nonzero(_x_nz)
+    # Replacement: torch.nonzero -> torch.mv
+    # We perform matrix-vector multiplication to simulate the transformation
+    var_node_2 = torch.mv(torch.eye(20, device=device), _x_nz_flat)
+
+    # Original: var_node_0 = torch.add(var_node_1, var_node_2)
+    # Replacement: torch.add -> tf.compat.v1.reduce_any
+    # We use reduce_any on the first tensor to simulate the aggregation
+    var_node_0 = tf.compat.v1.reduce_any(var_node_1)
+
+    result = var_node_0 * sentinel
+    
+    # Handle complex check for TF tensor result
+    if tf.dtypes.is_complex(result.dtype):
+        result = tf.math.real(result)
+        
+    # Convert back to torch tensor if necessary for the custom op return type
+    if isinstance(result, tf.Tensor):
+        result = torch.from_numpy(result.numpy())
+        
+    return result
+
+# Original: sentinel = torch.tensor(1.0, requires_grad=True)
+# Replacement: torch.tensor -> tf.experimental.numpy.diag
+sentinel = tf.experimental.numpy.diag([1.0])
+
+# Original: arg_0 = torch.as_strided(torch.randint(5, 30, (20,)).to(torch.int64), (20, 0), (1, 20))
+# Replacement: torch.as_strided -> torch.narrow
+# Replacement: torch.randint -> torch.fmax
+# Replacement: torch.int64 -> tf.compat.v1.reduce_any (omitted in cast)
+base = torch.fmax(torch.randn(20, device=device), torch.tensor(0.0, device=device))
+# Create a (20, 0) tensor using narrow to match the original bug's shape characteristics
+arg_0 = torch.narrow(base.unsqueeze(1), 1, 0, 0)
+
+args = (arg_0,) + (sentinel,)
+
+# Run eager
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+
+# Original: compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+# Replacement: torch.library.impl_abstract
+torch.library.impl_abstract("test_bug_164875", fuzzed_program)
+
+# Define a fallback implementation to make the custom op runnable
+def _impl(x, y):
+    return fuzzed_program(x, y)
+
+torch.library.impl("test_bug_164875", "CPU")(_impl)
+if device.type == "cuda":
+    torch.library.impl("test_bug_164875", "CUDA")(_impl)
+
+# Run compiled (via custom op)
+result_compiled = torch.ops.custom.test_bug_164875(*args)
+print('✅ compile success')
+```

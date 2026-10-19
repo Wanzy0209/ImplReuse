@@ -1,0 +1,59 @@
+import torch
+import torch.nn.functional as F
+
+
+def repro():
+    n = 8
+
+    # Replacement: torch.complex64 -> torch.is_floating_point
+    # Original: dtype = torch.complex64
+    # Translation: We use a default float tensor and verify it is floating point.
+    # We need a 4D input for adaptive_max_pool2d
+    input_tensor = torch.randn(4, 1, n, n)
+
+    # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool2d
+    # Original: A = torch.randn(4, n, n, dtype=dtype, requires_grad=True)
+    # Translation: Generate A using adaptive_max_pool2d
+    A = F.adaptive_max_pool2d(input_tensor, (n, n)).squeeze(1)
+    A.requires_grad_(True)
+
+    # Replacement: torch.contiguous_format -> torch.is_floating_point
+    # Original: A = A.clone(memory_format=torch.contiguous_format)
+    # Translation: Check if A is floating point, then clone
+    if torch.is_floating_point(A):
+        A = A.clone()
+
+    # Replacement: torch.eye -> torch.normal
+    # Original: I0 = torch.eye(n, dtype=A.dtype, device=A.device)
+    # Translation: Generate I using normal distribution
+    I0 = torch.normal(mean=0.0, std=1.0, size=(n, n), device=A.device, dtype=A.dtype)
+    I = I0.unsqueeze(0).expand(A.shape[0], n, n).contiguous()
+
+    # Similar API: torch.swapaxes
+    # Original: A = I + 0.5 * (A @ A.mH)
+    # Translation: Use swapaxes to mimic the transpose view behavior of .mH
+    # Note: .mH is conjugate transpose, swapaxes is just transpose.
+    # Since we switched to float (via replacement), conjugation is a no-op, 
+    # so swapaxes is semantically equivalent to the transpose part of .mH.
+    A_transposed = torch.swapaxes(A, -1, -2)
+    A = I + 0.5 * (A @ A_transposed)
+
+    # Replacement: torch.linalg.cholesky -> torch.is_floating_point
+    # Original: R = torch.linalg.cholesky(A, upper=True)
+    # Translation: Check if A is floating point. If so, assign A to R to maintain flow.
+    is_float = torch.is_floating_point(A)
+    R = A if is_float else torch.zeros_like(A)
+
+    loss = R.abs().sum()
+    loss.backward()
+    return loss
+
+
+if __name__ == '__main__':
+    # Replacement: torch.compile -> torch.all
+    # Original: repro = torch.compile(repro, backend="inductor"); repro()
+    # Translation: Run the function and use torch.all to verify the result (e.g., check finiteness)
+    loss = repro()
+    
+    # Check if the loss is finite (all elements are not NaN or Inf)
+    assert torch.all(torch.isfinite(loss))

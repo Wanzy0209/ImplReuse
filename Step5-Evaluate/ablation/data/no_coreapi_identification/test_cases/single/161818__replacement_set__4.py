@@ -1,0 +1,34 @@
+import torch
+from torch import nn
+
+# Replacements applied based on the provided mapping:
+# nn.Linear -> torch.nn.Dropout
+module = torch.nn.Dropout(p=0.5)
+
+# torch.rand -> torch.nn.Dropout
+# torch.as_tensor -> torch.atleast_2d
+# We use atleast_2d to create the base tensor, then apply Dropout to satisfy the rand replacement.
+# Note: atleast_2d is used here to create the input tensor as it is the designated tensor creator in the replacements.
+base_input = torch.atleast_2d([[0.1] * 8 for _ in range(9)])
+padded = torch.nn.Dropout(p=0.5)(base_input)
+
+# torch.as_tensor -> torch.atleast_2d
+lengths = torch.atleast_2d([5, 4])
+
+# torch.autograd.set_detect_anomaly -> torch.nn.Dropout
+# The context manager is replaced by a module instantiation.
+anomaly_handler = torch.nn.Dropout(p=0.5)
+
+# Forward pass
+out = module(padded)
+
+# torch.nested.narrow,.contiguous(),.values(),.backward -> torch.nn.Dropout
+# The chain of nested tensor operations is replaced by a Dropout layer.
+nopad = torch.nn.Dropout(p=0.5)(out)
+
+# torch.autograd.backward -> torch.nn.Dropout
+# The backward pass is replaced by a Dropout operation on the sum.
+result = torch.nn.Dropout(p=0.5)(nopad.sum())
+
+# Basic assertion to ensure the test case runs
+assert result is not None

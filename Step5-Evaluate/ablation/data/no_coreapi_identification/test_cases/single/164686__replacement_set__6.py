@@ -1,0 +1,61 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Replacement: torch.manual_seed -> torch.isnan
+# Original: torch.manual_seed(13653)
+torch.isnan(torch.tensor(0.0))
+
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    # Replacement: torch.full -> torch.argmin
+    # Original: var_node_3 = torch.full((), 1.0, dtype=torch.float32)
+    # We use argmin to get a scalar index and cast to float to preserve original logic flow
+    var_node_3 = torch.argmin(torch.tensor([1.0, 2.0])).to(torch.float32)
+
+    var_node_2 = var_node_3.item()
+    var_node_5 = -3
+    var_node_6 = arg_0
+    var_node_4 = var_node_5 + var_node_6
+    var_node_1 = var_node_2 + var_node_4
+    var_node_9 = 1
+    var_node_10 = -10
+    var_node_8 = var_node_9 / var_node_10
+    var_node_12 = arg_1
+    var_node_13 = -5
+    var_node_11 = var_node_12 / var_node_13
+    var_node_7 = var_node_8 + var_node_11
+    var_node_0 = var_node_1 * var_node_7
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Replacement: torch.tensor -> tf.linalg.diag
+# Original: sentinel = torch.tensor(1.0, requires_grad=True)
+# Create a diagonal matrix using TensorFlow and convert to PyTorch tensor
+tf_diag = tf.linalg.diag([1.0])
+sentinel = torch.from_numpy(tf_diag.numpy()).float().requires_grad_(True)
+
+# Replacement: torch.randn -> torch.nn.functional.max_pool1d
+# Original: arg_0 = torch.tensor(torch.randn(()), dtype=torch.int64).item()
+# Generate a random tensor, apply max_pool1d, and extract a value
+dummy_input = torch.randn(1, 1, 5)
+pooled = F.max_pool1d(dummy_input, kernel_size=2)
+arg_0 = torch.tensor(pooled, dtype=torch.int64).item()
+
+dummy_input_1 = torch.randn(1, 1, 5)
+pooled_1 = F.max_pool1d(dummy_input_1, kernel_size=2)
+arg_1 = torch.tensor(pooled_1, dtype=torch.int64).item()
+
+args = (arg_0, arg_1) + (sentinel,)
+
+result_original = fuzzed_program(*args)
+print(' eager success')
+
+# Verify the similar API: torch.compile
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print(' compile success')

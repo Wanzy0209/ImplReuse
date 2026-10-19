@@ -1,0 +1,59 @@
+```python
+import torch
+import tensorflow as tf
+
+# Helper to use tf.custom_gradient as a tensor operation replacement
+def apply_custom_gradient_op(x):
+    @tf.custom_gradient
+    def _op(y):
+        def grad(dy):
+            return dy
+        return y, grad
+    return _op(x)
+
+def foo(x):
+    x.tan_()
+    x = x.t()
+    # Replacement: x.argmin -> tf.custom_gradient
+    return apply_custom_gradient_op(x)
+
+# Replacement: torch.manual_seed -> tf.compat.v1.assert_variables_initialized
+tf.compat.v1.assert_variables_initialized()
+
+# Replacement: torch.randn -> tf.custom_gradient
+# We use tf.custom_gradient to wrap a random tensor generator
+@tf.custom_gradient
+def randn_replacement():
+    def grad(upstream):
+        return upstream
+    return tf.random.normal((4, 6)), grad
+
+x1 = randn_replacement()
+
+# Replacement: x1.clone -> tf.custom_gradient
+# We use tf.custom_gradient to wrap an identity operation
+@tf.custom_gradient
+def clone_replacement(y):
+    def grad(upstream):
+        return upstream
+    return tf.identity(y), grad
+
+x2 = clone_replacement(x1)
+
+out1 = foo(x1)
+
+# Replacement: torch.compile -> torch.distributed.recv_object_list
+# Note: This replaces the compilation step with a distributed receive operation.
+# This requires a distributed context to function properly.
+cf = torch.distributed.recv_object_list([foo])
+
+# Original logic: out2 = cf(x2)
+# Preserving the structure, assuming cf acts as the compiled function.
+# Note: This will likely raise a TypeError as cf is a list, not a callable.
+out2 = cf(x2)
+
+# Replacement: torch.testing.assert_close -> tf.linalg.lu_solve
+# Note: This replaces the assertion with a linear algebra solve operation.
+# Arguments are mapped structurally.
+tf.linalg.lu_solve(out1, out2, out1)
+```

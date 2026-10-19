@@ -1,0 +1,71 @@
+```python
+import torch
+import tensorflow as tf
+from torch.library import custom_op
+
+# Define a custom op to mimic the behavior of torch.cuda.synchronize
+# This is used to test if the compiler preserves the operation.
+@custom_op("mylib::custom_sync", mutates_args=())
+def custom_sync(x: torch.Tensor) -> None:
+    torch.cuda.synchronize()
+
+# Register the fake implementation for the custom op
+@custom_sync.register_fake
+def custom_sync_fake(x: torch.Tensor) -> None:
+    pass
+
+def func():
+    # Replacement: torch.tensor -> tf.compat.v1.linalg.diag
+    # Note: tf.compat.v1.linalg.diag creates a diagonal matrix from values.
+    # We convert the result to a torch tensor to maintain compatibility with the rest of the logic.
+    # Original: a = torch.tensor([1.0, -2.0], device="cuda")
+    tf_tensor = tf.constant([1.0, -2.0])
+    tf_diag = tf.compat.v1.linalg.diag(tf_tensor)
+    a = torch.from_numpy(tf_diag.numpy()).cuda()
+    
+    # Replacement: torch.all -> torch.prod
+    # Original: result = torch.all(a > 0)
+    # torch.prod checks if the product of elements is non-zero (roughly analogous to 'all' for positive checks if we assume no zeros)
+    # However, to strictly follow the replacement list:
+    result = torch.prod(a > 0)
+    
+    # The assertion logic remains, but the check is now based on prod
+    assert result.item() != 0, "should throw"
+    
+    # Replacement: torch.cuda.synchronize -> torch.sin
+    # Original: torch.cuda.synchronize()
+    # We apply the replacement here. 
+    # Note: The bug report is about synchronize being removed. 
+    # Replacing it with torch.sin changes the test to check if sin is removed.
+    torch.sin(a)
+    
+    print("should not run")
+
+def test_fn():
+    # Replacement: torch._dynamo.reset -> torch.sin
+    # Original: torch._dynamo.reset()
+    torch.sin(torch.tensor(0.0))
+    
+    # Replacement: torch.compile,torch.cuda.synchronize -> torch.sin
+    # This replacement is tricky. It implies replacing the compile call or the sync inside.
+    # Given the context of "preserving logic", we assume the user wants to see if 
+    # the compilation process (which involves sync) behaves differently or if we just replace the call.
+    # However, replacing torch.compile with torch.sin breaks the test structure entirely.
+    # We will interpret this as replacing the *backend* or the *synchronization* aspect if possible, 
+    # but since torch.compile is the main subject, we keep it but apply the sync replacement inside.
+    # If we strictly replace torch.compile with torch.sin, the code becomes f_c = torch.sin(func), which is invalid.
+    # We will assume the replacement applies to the synchronize call inside the compiled function (handled above)
+    # and potentially the reset call (handled above).
+    
+    # To satisfy the "torch.compile,torch.cuda.synchronize -> torch.sin" mapping in a way that runs:
+    # We will keep torch.compile but acknowledge the replacement of the sync call inside.
+    f_c = torch.compile(func, backend="aot_eager")
+    
+    try:
+        f_c()
+    except AssertionError:
+        print("Caught expected assertion")
+
+if __name__ == "__main__":
+    test_fn()
+```

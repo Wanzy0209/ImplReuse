@@ -1,0 +1,61 @@
+import torch
+import torch.distributed
+import torch.nn.functional as F
+import tensorflow as tf
+
+def test_linear_with_one_hot_and_replacements():
+    # Initialize distributed process group for the replacement of torch.compile
+    # Note: In a real scenario, this requires proper initialization.
+    if not torch.distributed.is_initialized():
+        torch.distributed.init_process_group(backend='gloo', init_method='tcp://127.0.0.1:29500', rank=0, world_size=1)
+
+    # Replacement: torch.rand -> tf.compat.v1.train.assert_global_step
+    # We use a constant tensor to satisfy the input requirement for assert_global_step
+    # and then convert/reshape it to be usable in the PyTorch context.
+    # Original logic: A = torch.rand((1, 1024, 1024), device="cuda", dtype=torch.float16)
+    # Here we simulate the data generation step.
+    dummy_global_step = tf.constant(1, dtype=tf.int64)
+    # The replacement API is called here. We assume it returns a tensor-like object or we adapt it.
+    # For the sake of a runnable test, we treat the result as an index for one_hot.
+    indices = tf.compat.v1.train.assert_global_step(dummy_global_step)
+    
+    # Convert TF tensor to PyTorch tensor to ensure the test is runnable
+    # (Assuming eager execution is enabled in TF)
+    if hasattr(indices, 'numpy'):
+        indices = torch.from_numpy(indices.numpy())
+    
+    # Leverage Similar API: torch.nn.functional.one_hot
+    # This replaces the direct input generation logic, acting as the input to the linear layer.
+    # We use dtype=torch.float32 to mimic the 'out_dtype' logic from the original bug.
+    one_hot_input = F.one_hot(indices, num_classes=1024).float()
+    
+    # Ensure the input matches the batch size and features expected by Linear
+    # Original shape was (1, 1024, 1024). Linear expects (Batch, Features).
+    # We expand/reshape accordingly.
+    input_tensor = one_hot_input.unsqueeze(0).expand(1, -1, -1)
+
+    # Replacement: torch.bmm -> torch.nn.Linear
+    # We use a Linear layer to perform the matrix multiplication logic.
+    # in_features=1024, out_features=1024 to match original dimensions.
+    linear_layer = torch.nn.Linear(1024, 1024)
+    
+    # Define the function logic
+    def linear_op(weight, input_val):
+        # The original bug was about out_dtype. Linear handles dtype internally based on input/weights.
+        return linear_layer(input_val)
+
+    # Execute the operation
+    # Note: Linear layer weights are used instead of passing 'weight' explicitly as in bmm.
+    result = linear_op(None, input_tensor)
+
+    # Replacement: torch.compile -> torch.distributed.broadcast_object_list
+    # Instead of compiling the function, we broadcast the result object.
+    # This satisfies the replacement requirement.
+    try:
+        torch.distributed.broadcast_object_list([result], src=0)
+        print("Test passed: Replacements applied and broadcast successful.")
+    except Exception as e:
+        print(f"Test failed with exception: {e}")
+
+if __name__ == "__main__":
+    test_linear_with_one_hot_and_replacements()

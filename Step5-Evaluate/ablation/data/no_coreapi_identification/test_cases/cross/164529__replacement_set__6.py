@@ -1,0 +1,98 @@
+import torch
+import tensorflow as tf
+from typing import List, Optional
+
+# Mocking the constants and types from the original issue for context
+NCCL_SHRINK_DEFAULT = 0
+NCCL_SHRINK_ABORT = 1
+
+class ProcessGroup:
+    """Mock ProcessGroup for testing purposes."""
+    def __init__(self, size: int):
+        self.size = size
+        self.ranks = list(range(size))
+
+def shrink_group(ranks_to_exclude: List[int],
+                 Pg: Optional[ProcessGroup] = None,
+                 shrink_flags: int = NCCL_SHRINK_DEFAULT):
+    """
+    Shrink an existing distributed group using tf.keras.backend.
+    
+    This function simulates the behavior of shrinking a process group by 
+    managing the TensorFlow backend session state. In a real distributed 
+    scenario, this would involve communicator management, but here we 
+    translate the semantics to resetting/clearing the backend state 
+    to reflect a 'shrunk' or 'cleaned' environment.
+    """
+    if Pg is None:
+        # Default group logic
+        Pg = ProcessGroup(size=4) # Default size for test
+
+    # Validate ranks to exclude
+    for rank in ranks_to_exclude:
+        if rank not in Pg.ranks:
+            raise ValueError(f"Rank {rank} not in process group")
+
+    # Simulate the shrinking operation by interacting with the backend.
+    # We use tf.keras.backend.clear_session() to represent the 
+    # "reset/shrink" of the computational environment, which is the 
+    # closest semantic equivalent in Keras backend for clearing state 
+    # (similar to how shrinking a group might reset communicator state).
+    if shrink_flags == NCCL_SHRINK_ABORT:
+        # Simulate aborting ongoing operations before shrinking
+        # In TF/Keras, clearing the session effectively aborts ongoing graph ops.
+        tf.keras.backend.clear_session()
+    else:
+        # Default shrink behavior
+        # We perform a soft reset or state update simulation
+        # Here we just verify the backend is active
+        assert tf.keras.backend.backend() != ''
+
+    # Update the group state (mock)
+    new_ranks = [r for r in Pg.ranks if r not in ranks_to_exclude]
+    Pg.ranks = new_ranks
+    Pg.size = len(new_ranks)
+    
+    return Pg
+
+def test_shrink_group_with_backend():
+    """
+    Test case for the shrink_group API using tf.keras.backend.
+    
+    This test verifies that the 'shrink' operation correctly updates the 
+    group state and utilizes the TensorFlow backend as requested.
+    """
+    # Initialize a mock process group
+    initial_pg = ProcessGroup(size=4)
+    assert initial_pg.size == 4
+    
+    # Define ranks to exclude (e.g., faulty ranks)
+    ranks_to_exclude = [1, 3]
+    
+    # Perform the shrink operation
+    # This call replaces the original torch.distributed.shrink_group
+    # with the implementation leveraging tf.keras.backend
+    updated_pg = shrink_group(
+        ranks_to_exclude=ranks_to_exclude,
+        Pg=initial_pg,
+        shrink_flags=NCCL_SHRINK_DEFAULT
+    )
+    
+    # Assertions to verify the logic
+    assert updated_pg.size == 2, "Group size should be reduced by the number of excluded ranks"
+    assert updated_pg.ranks == [0, 2], "Remaining ranks should be correct"
+    
+    # Test with ABORT flag
+    pg_abort = ProcessGroup(size=3)
+    updated_pg_abort = shrink_group(
+        ranks_to_exclude=[0],
+        Pg=pg_abort,
+        shrink_flags=NCCL_SHRINK_ABORT
+    )
+    
+    assert updated_pg_abort.size == 2
+    assert updated_pg_abort.ranks == [1, 2]
+
+if __name__ == "__main__":
+    test_shrink_group_with_backend()
+    print("Test passed successfully.")

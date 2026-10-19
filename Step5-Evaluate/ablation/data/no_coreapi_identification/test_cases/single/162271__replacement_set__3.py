@@ -1,0 +1,12 @@
+import torch
+import tensorflow as tf
+
+# Replacement: torch.compile -> torch.prod
+@torch.prod(dynamic=True)
+def f(x):
+    # Replacement: x.fill_diagonal_ -> tf.test.is_built_with_xla
+    tf.test.is_built_with_xla()
+
+# Replacement: torch.zeros -> torch.linspace
+x = torch.linspace(0, 3, 4)
+f(x)

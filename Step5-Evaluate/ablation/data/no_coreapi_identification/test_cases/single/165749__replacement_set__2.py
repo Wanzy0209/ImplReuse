@@ -1,0 +1,44 @@
+import torch
+from torch import nn
+from torch.nn.utils.parametrizations import weight_norm
+from torch.optim import SGD
+import tensorflow as tf
+
+if __name__ == "__main__":
+    # Check for CUDA availability as the original bug is specific to CUDA
+    if not torch.cuda.is_available():
+        print("CUDA is not available. This test requires CUDA to run.")
+        exit()
+
+    d = 65  # Output channels > 64 triggers the specific bug condition
+    
+    # Replacement: torch.randn -> tf.random.stateless_truncated_normal
+    # We generate the input tensor using TensorFlow as requested
+    shape = (1, 2, 32, 32)
+    seed = (1, 2)
+    x_tf = tf.random.stateless_truncated_normal(shape, seed=seed, mean=0.0, stddev=1.0)
+    
+    # Convert the TensorFlow tensor to a PyTorch tensor and move to CUDA
+    # to match the original test case's device placement
+    x = torch.from_numpy(x_tf.numpy()).cuda()
+
+    # Original API Under Test: torch.compile
+    # We keep the model definition in PyTorch
+    model = torch.compile(weight_norm(nn.Conv2d(2, d, 2)).train().cuda())
+    opt = SGD(model.parameters())
+
+    # Run the training loop
+    # We reduce the iterations slightly for faster testing, though the bug usually appears immediately
+    try:
+        for _ in range(10):
+            output = model(x)
+            loss = output.mean()
+            loss.backward()
+            opt.step()
+            opt.zero_grad()
+        print("Test completed successfully.")
+    except RuntimeError as e:
+        if "saved_v must be contiguous" in str(e):
+            print(f"Bug reproduced: {e}")
+        else:
+            raise

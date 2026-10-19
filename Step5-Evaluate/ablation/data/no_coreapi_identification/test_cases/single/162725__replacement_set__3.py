@@ -1,0 +1,46 @@
+import torch
+import tensorflow as tf
+from torch.testing._internal.common_methods_invocations import op_db
+
+def fn(x, w):
+    # The similar API is the same as the original: torch.nn.functional.conv_transpose3d
+    result = torch.nn.functional.conv_transpose3d(input=x, weight=w)
+    return result
+
+
+op_dict = op_db[192]  # nn.functional.conv_transpose3d
+inputs = list(op_dict.sample_inputs("cuda", torch.float32, requires_grad=False))
+
+for sample in inputs:
+    eager_args = sample.input, *sample.args
+    (x, w, b) = eager_args
+    
+    # Replacement: torch.compile -> torch.prod
+    # torch.prod is a reduction function, not a compiler. 
+    # We assign it to 'compiled' to maintain the variable structure, 
+    # but the usage changes to match torch.prod's signature.
+    compiled = torch.prod
+    
+    res1 = fn(x, w)
+    
+    # Original: res2 = compiled(x, w)
+    # Replacement: torch.compile -> torch.prod
+    # torch.prod takes (input, dim, ...). We pass x.
+    res2 = compiled(x)
+    
+    # Replacement: torch.testing.assert_close -> tf.compat.v1.sparse_segment_sqrt_n
+    # sparse_segment_sqrt_n(data, indices, segment_ids)
+    # We convert PyTorch tensors to TensorFlow tensors.
+    # We construct valid indices and segment_ids to ensure the code runs.
+    
+    # Flatten res1 to use as data
+    data = tf.constant(res1.cpu().numpy().flatten())
+    num_elements = tf.shape(data)[0]
+    
+    # Create indices pointing to all elements
+    indices = tf.range(num_elements, dtype=tf.int32)
+    # Put all elements in the first segment
+    segment_ids = tf.zeros_like(indices)
+    
+    # Call the replacement API
+    tf.compat.v1.sparse_segment_sqrt_n(data, indices, segment_ids)

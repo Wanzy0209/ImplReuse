@@ -1,0 +1,56 @@
+import torch
+import tensorflow as tf
+import tf.lookup
+
+# Helper to translate torch.rand -> tf.lookup.KeyValueTensorInitializer
+# while maintaining runnable semantics for torch.addmm
+def get_rand_tensor_via_initializer(shape, device="cuda"):
+    # Create keys and values for the initializer
+    keys = tf.range(tf.reduce_prod(shape), dtype=tf.int64)
+    values = tf.random.uniform(shape, dtype=tf.float32)
+    
+    # Apply the replacement API: tf.lookup.KeyValueTensorInitializer
+    initializer = tf.lookup.KeyValueTensorInitializer(keys, values)
+    
+    # Extract the tensor data to make it usable in PyTorch
+    table = tf.lookup.StaticHashTable(initializer, default_value=0.0)
+    tensor_values = table.lookup(keys)
+    
+    # Convert to PyTorch tensor and move to device
+    return torch.from_numpy(tensor_values.numpy().reshape(shape)).to(device)
+
+# Setup inputs using the replacement for torch.rand
+x = get_rand_tensor_via_initializer((2,))
+a = get_rand_tensor_via_initializer((2, 3))
+b = get_rand_tensor_via_initializer((3, 2))
+
+# Define the function f
+# Replacement: torch.nn.functional.relu -> torch.nn.functional.layer_norm
+# Original API Under Test: torch.addmm (preserved)
+f = lambda x, a, b: torch.nn.functional.layer_norm(
+    torch.addmm(x, a, b, alpha=0.5, beta=0.5), 
+    [2] # normalized_shape for the output of addmm (2, 2)
+)
+
+# Define the compiled/transformed function
+# Replacement: torch.compile -> torch.any
+# To keep the test runnable and preserve the call structure fc(x, a, b),
+# we wrap torch.any to handle the function arguments.
+fc = lambda x, a, b: torch.any(f(x, a, b))
+
+# Execute and compare
+# Note: Due to the replacement of torch.compile with torch.any, 
+# fc returns a boolean scalar while f returns a tensor.
+# This reflects the structural change requested.
+res_f = f(x, a, b)
+res_fc = fc(x, a, b)
+
+print("Result of f(x, a, b):")
+print(res_f)
+print("\nResult of fc(x, a, b) [torch.any applied]:")
+print(res_fc)
+
+# The original bug was a mismatch between f and fc.
+# Here, the mismatch is expected due to the replacement logic.
+assert res_f.dtype == torch.float32
+assert res_fc.dtype == torch.bool

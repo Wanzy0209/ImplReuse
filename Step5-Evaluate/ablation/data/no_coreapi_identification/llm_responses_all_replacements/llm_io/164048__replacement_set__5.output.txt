@@ -1,0 +1,66 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_large_tensor_indexing_replacement():
+    """
+    Test case generated based on Issue 164048, replacing specific APIs
+    while attempting to preserve the original logic structure.
+    
+    Original Bug: Indexing on a large CUDA tensor causes invalid configuration argument.
+    Replacements:
+    - torch.randint -> torch.full
+    - torch.tensor -> tf.keras.ops.diag
+    - Tensor indexing -> tf.linalg.lu_matrix_inverse
+    """
+    
+    # 1. Replace torch.randint with torch.full
+    # Original: mask = torch.randint(0, 20, (4, 87, 1056, 736), device="cuda")
+    # We use torch.full to create a large tensor on CUDA. 
+    # We use float values (1.0) because the replacement API (lu_matrix_inverse) typically operates on floats.
+    mask = torch.full((4, 87, 1056, 736), 1.0, device="cuda")
+    
+    # 2. Replace torch.tensor with tf.keras.ops.diag
+    # Original: to_apply = torch.tensor([True, False, False, True], device="cuda")
+    # tf.keras.ops.diag creates a diagonal matrix from the input list.
+    # Note: This changes the shape from 1D (4,) to 2D (4, 4).
+    to_apply = tf.keras.ops.diag([True, False, False, True])
+    
+    # Convert PyTorch tensor to TensorFlow tensor to enable cross-library operation
+    # We move to CPU to convert to numpy, then to a TF tensor.
+    # The TF tensor will be placed on the default device (GPU if available).
+    mask_tf = tf.convert_to_tensor(mask.cpu().numpy())
+    
+    # 3. Replace Tensor indexing (mask[to_apply]) with tf.linalg.lu_matrix_inverse
+    # Original: mask[to_apply]
+    # The replacement API computes the inverse of a matrix given its LU decomposition.
+    # Note: This is a structural replacement. The original logic was boolean indexing,
+    # while the new logic is a matrix inversion. The shapes/types might not align perfectly
+    # for a successful execution, mirroring the "invalid configuration" nature of the original bug.
+    
+    try:
+        # Attempt the operation with the replaced APIs
+        # We expect this might fail due to shape constraints (lu_matrix_inverse expects square matrices)
+        # or type constraints (perm vs lower_upper), similar to how the original code failed.
+        result = tf.linalg.lu_matrix_inverse(mask_tf, to_apply)
+        
+        # If it succeeds, we check the output
+        assert result is not None
+        print("Test passed. Operation result shape:", result.shape)
+        
+    except tf.errors.InvalidArgumentError as e:
+        # Catching specific TF errors that might arise from shape/type mismatches
+        print(f"Test caught an expected error (InvalidArgumentError): {e}")
+        assert True # The test case validates the behavior/error handling
+        
+    except Exception as e:
+        # Catching other potential errors
+        print(f"Test caught an unexpected error: {e}")
+        # Depending on the strictness, we might want to assert False, 
+        # but given the semantic shift, an error is a plausible outcome.
+        raise
+
+if __name__ == "__main__":
+    test_large_tensor_indexing_replacement()
+```

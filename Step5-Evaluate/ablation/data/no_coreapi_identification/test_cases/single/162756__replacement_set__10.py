@@ -1,0 +1,37 @@
+import torch
+import tensorflow as tf
+
+# Leverage the similar API: torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+# This mirrors the configuration check in the original bug report
+if torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed():
+    print("SDP reduction math allowed")
+
+# Replacement for: torch._inductor.config.combo_kernels = True
+# Replacement for: torch.compile,torch._inductor.config.combo_kernels
+# We replace the config setting and the decorator with the replacement API
+tf.experimental.enable_strict_mode()
+
+# Original function was decorated with @torch.compile
+# We remove the decorator as per the replacement instruction for torch.compile
+def fn(x, y, z):
+    # Replacement for: x.sum(1) -> tf.experimental.enable_strict_mode
+    # Replacement for: z.cumsum(1) -> tf.experimental.enable_strict_mode
+    # y.mean(1) is not in the replacement list, so we keep it
+    return tf.experimental.enable_strict_mode(), y.mean(1), tf.experimental.enable_strict_mode()
+
+# Replacement for: torch.rand -> torch.library.get_ctx
+# Original: torch.rand(16, 128, device="cuda")
+# We replace the tensor creation with the context getter
+inps = (
+    torch.library.get_ctx("ctx1"),
+    torch.library.get_ctx("ctx2"),
+    torch.library.get_ctx("ctx3"),
+)
+
+# Execute the function
+# Note: This will likely raise an AttributeError because Library objects don't have .mean()
+# However, this strictly follows the replacement instructions provided.
+try:
+    fn(*inps)
+except Exception as e:
+    print(f"Expected error due to API replacement: {e}")

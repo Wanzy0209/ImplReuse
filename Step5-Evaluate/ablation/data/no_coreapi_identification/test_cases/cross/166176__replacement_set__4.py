@@ -1,0 +1,58 @@
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+
+# Helper to make tf.experimental.dtensor.DTensorCheckpoint act as a context manager
+# to preserve the nesting logic of the original bug (torch.no_grad).
+class DTensorCheckpointContext:
+    def __init__(self):
+        try:
+            self.mesh = tf.experimental.dtensor.create_mesh(
+                ['batch'], [1], device=tf.experimental.dtensor.CPU
+            )
+            self.ckpt = tf.experimental.dtensor.DTensorCheckpoint(mesh=self.mesh)
+        except Exception:
+            self.ckpt = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+def fn(x):
+    # Replacement: torch._dynamo.graph_break -> tf.experimental.dtensor.DTensorCheckpoint
+    try:
+        mesh = tf.experimental.dtensor.create_mesh(['batch'], [1], device=tf.experimental.dtensor.CPU)
+        tf.experimental.dtensor.DTensorCheckpoint(mesh=mesh)
+    except Exception:
+        pass
+
+    # Replacement: torch.no_grad -> tf.experimental.dtensor.DTensorCheckpoint
+    # Preserving nested context structure
+    with DTensorCheckpointContext():
+        with DTensorCheckpointContext():
+            # Replacement: torch._dynamo.graph_break -> tf.experimental.dtensor.DTensorCheckpoint
+            try:
+                mesh = tf.experimental.dtensor.create_mesh(['batch'], [1], device=tf.experimental.dtensor.CPU)
+                tf.experimental.dtensor.DTensorCheckpoint(mesh=mesh)
+            except Exception:
+                pass
+
+    # Using Similar API: torch.masked_select
+    return torch.masked_select(x, x > 0)
+
+# Replacement: torch.ones -> torch.normal
+inp = torch.normal(0, 1, (3,))
+
+# Replacement: torch.compile -> torch.distributed.reduce
+# Translating semantics: compile wraps a function, reduce processes a tensor.
+# We wrap the execution to apply reduction to the function's output.
+def run_optimized(x):
+    res = fn(x)
+    if dist.is_initialized():
+        return dist.reduce(res, dst=0)
+    return res
+
+opt_m = run_optimized
+opt_m(inp)

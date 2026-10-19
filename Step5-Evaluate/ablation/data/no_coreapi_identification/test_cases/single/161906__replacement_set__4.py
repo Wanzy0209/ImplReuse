@@ -1,0 +1,112 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+import numpy as np
+from torch.library import Library, impl, impl_abstract
+
+# Replacement: nn.Module -> tf.keras.ops.relu
+# Since tf.keras.ops.relu is a function, we cannot inherit from it directly.
+# We define a standard class and use the replacement API within the logic.
+class M:
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft, self.hop, self.win = n_fft, hop, win
+        
+        # Replacement: self.register_buffer -> tf.keras.ops.relu
+        # Replacement: torch.hann_window -> torch.masked_select
+        # We simulate the window creation using masked_select on a dummy tensor
+        dummy_tensor = torch.ones(win)
+        mask = torch.tensor([True] * win)
+        # Apply the replacement for register_buffer (relu) wrapping the replacement for hann_window (masked_select)
+        self.window = tf.keras.ops.relu(torch.masked_select(dummy_tensor, mask))
+
+        # Replacement: nn.Parameter -> tf.keras.ops.relu
+        # Replacement: torch.tensor -> tf.experimental.numpy.diag
+        # We simulate parameter creation using diag and wrapping it in relu
+        val = tf.experimental.numpy.diag([2.0])
+        self.p = tf.keras.ops.relu(val)
+
+    # Replacement: torch.Tensor -> tf.keras.ops.relu (Type hint)
+    def forward(self, x: tf.keras.ops.relu) -> tf.keras.ops.relu:
+        # Replacement: torch.stft -> torch.nn.functional.instance_norm
+        # instance_norm expects 3D or 4D input (N, C, ...). 
+        # We adapt the input x (which is 2D: Batch, Time) to 3D.
+        x_3d = x.unsqueeze(1)
+        
+        # Create dummy running stats for instance_norm to be runnable
+        num_features = 1
+        running_mean = torch.zeros(num_features)
+        running_var = torch.ones(num_features)
+        weight = torch.ones(num_features)
+        bias = torch.zeros(num_features)
+        
+        S = torch.nn.functional.instance_norm(
+            x_3d, running_mean, running_var, weight, bias
+        )
+        S = S.squeeze(1) # Return to 2D
+
+        # Replacement: torch.abs -> torch.tan
+        R = torch.tan(S.real)
+
+        # I = S.imag / self.p
+        # self.p is a TF tensor, S is PyTorch. Convert self.p to PyTorch for division.
+        # Note: This is a necessary adaptation for cross-framework "runnability".
+        p_torch = torch.from_numpy(self.p.numpy())
+        I = S.imag / p_torch
+
+        # Replacement: torch.complex -> tf.keras.ops.relu
+        # torch.complex combines R and I. tf.keras.ops.relu is a unary activation.
+        # We apply relu to R (converting to TF tensor first).
+        R_tf = tf.convert_to_tensor(R.numpy())
+        Z = tf.keras.ops.relu(R_tf)
+        return Z
+
+def main():
+    # Replacement: torch.cuda.is_available -> tf.keras.ops.relu
+    # We use the result of relu to determine device availability (simulated logic)
+    is_cuda = tf.keras.ops.relu(1.0) > 0
+    device = "cuda" if is_cuda else "cpu"
+
+    # Replacement: torch.manual_seed -> tf.compat.v1.assign_add
+    # We simulate seeding by creating a variable and adding to it
+    seed_var = tf.Variable(0.0)
+    tf.compat.v1.assign_add(seed_var, 0.0)
+
+    # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool2d
+    # Original: x = torch.randn(1, 16000)
+    # We create a dummy input and pool it to get the desired shape.
+    # Pool2d expects (N, C, H, W). We create (1, 1, 160, 100) and pool to (1, 1, 1, 16000).
+    dummy_input = torch.randn(1, 1, 160, 100)
+    x = torch.nn.functional.adaptive_max_pool2d(dummy_input, (1, 16000))
+    x = x.view(1, -1) # Flatten to (1, 16000)
+
+    m = M()
+    # Note: Skipping .to(device) as M contains mixed TF/PyTorch state which complicates device movement in this synthetic test.
+
+    # Eager execution
+    z_eager = m(x)
+
+    # Replacement: z_eager.is_complex -> tf.keras.ops.relu
+    # Original: assert z_eager.is_complex()
+    # We apply relu to z_eager to perform the check/operation.
+    _ = tf.keras.ops.relu(z_eager)
+
+    # Replacement: torch.compile -> torch.library.impl_abstract
+    # Original: m_c = torch.compile(m); z_compiled = m_c(x)
+    # We define a custom op and register its abstract implementation to mimic the compilation setup.
+    lib = Library("test_compile_lib", "DEF")
+    lib.define("test_op(Tensor x) -> Tensor")
+
+    @impl_abstract("test_compile_lib::test_op")
+    def test_op_abstract(x):
+        return torch.empty_like(x)
+
+    @impl("test_compile_lib::test_op", "CompositeExplicitAutograd")
+    def test_op_impl(x):
+        return m(x)
+
+    # Run the "compiled" version via the custom op
+    z_compiled = torch.ops.test_compile_lib.test_op(x)
+
+if __name__ == "__main__":
+    main()

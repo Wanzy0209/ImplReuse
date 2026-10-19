@@ -1,0 +1,31 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+import pytest
+
+def test_dynamo_regression_replacement():
+    """
+    Test case reflecting the regression bug about collections.defaultdict creation,
+    adapted with the specified API replacements and similar API usage.
+    """
+    # Original API Under Test: torch.compile
+    # Similar API: torch.nn.functional.hardtanh_
+    
+    def fn(x):
+        # Replacement: collections.defaultdict -> tf.errors.OperatorNotAllowedInGraphError
+        # In the original bug, a defaultdict was instantiated/used here.
+        # We replace it with the TensorFlow error class as requested.
+        _ = tf.errors.OperatorNotAllowedInGraphError
+        
+        # Using the similar API (torch.nn.functional.hardtanh_) to reflect
+        # the code pattern relationship mentioned in the issue.
+        return F.hardtanh_(x)
+
+    compiled_fn = torch.compile(fn)
+    input_tensor = torch.randn(5)
+
+    # Replacement: torch._dynamo.exc.Unsupported -> tf.errors.OperatorNotAllowedInGraphError
+    # The original test failed with torch._dynamo.exc.Unsupported.
+    # We expect the replaced error here.
+    with pytest.raises(tf.errors.OperatorNotAllowedInGraphError):
+        compiled_fn(input_tensor)

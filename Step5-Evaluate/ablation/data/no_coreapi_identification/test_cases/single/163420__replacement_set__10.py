@@ -1,0 +1,50 @@
+import torch
+import tensorflow as tf
+
+# torch._dynamo.config.capture_scalar_outputs = True
+# Replacement: torch._dynamo.config.capture_scalar_outputs -> torch.svd
+# Note: torch.svd is a function, not a config setting. Removing config line to maintain syntax validity.
+
+def foo(arg0, arg1):
+    t0 = arg0
+    t1 = arg1
+    # t2 = t0.clone(); t2.fill_diagonal_(t1.item())
+    # Replacement: fill_diagonal_ -> torch.svd
+    # t2 = t0.clone()
+    # u, s, v = torch.svd(t2)
+    # return t2
+    u, s, v = torch.svd(t0)
+    return u
+
+# arg0 = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True)
+# Replacement: torch.empty -> tf.compat.v1.nn.dropout
+# Replacement: torch.float32 -> torch.svd (Handled by omitting explicit dtype in TF op)
+# Note: tf.compat.v1.nn.dropout requires an input tensor. We create a dummy tensor, apply dropout, and convert to torch.
+with tf.device('/GPU:0'):
+    x_tf = tf.random.uniform([1, 1]) # Defaults to float32
+    x_tf = tf.compat.v1.nn.dropout(x_tf, keep_prob=0.5)
+    arg0 = torch.from_numpy(x_tf.numpy()).cuda().requires_grad_(True)
+
+# arg1 = torch.empty([], dtype=torch.float32, device='cuda', requires_grad=True)
+# Replacement: torch.empty -> tf.compat.v1.nn.dropout
+with tf.device('/GPU:0'):
+    y_tf = tf.random.uniform([])
+    y_tf = tf.compat.v1.nn.dropout(y_tf, keep_prob=0.5)
+    arg1 = torch.from_numpy(y_tf.numpy()).cuda().requires_grad_(True)
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1)
+    # out_eager.sum().backward()
+    # Replacement: out_eager.sum -> torch.svd
+    # We need a scalar for backward(). We take the sum of the singular values (S) from the SVD result.
+    _, s, _ = torch.svd(out_eager)
+    s.sum().backward()
+    print('Eager Success! ')
+
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    # out_compiled.sum().backward()
+    # Replacement: out_eager.sum -> torch.svd
+    _, s_comp, _ = torch.svd(out_compiled)
+    s_comp.sum().backward()
+    print('Compile Success! ')

@@ -1,4 +1,3 @@
-```python
 def test_meta_llama(self):
         from transformers import TFAutoModelForCausalLM, AutoTokenizer
         import tensorflow as tf
@@ -53,4 +52,3 @@ def test_meta_llama(self):
         
         # Conversion: torch.allclose -> np.allclose
         self.assertTrue(np.allclose(res1.numpy(), res2.numpy(), atol=0.001))
-```

@@ -1,0 +1,28 @@
+import torch
+
+def func():
+    # Create a tensor on CUDA
+    a = torch.tensor([1.0, 2.0, 3.0], device="cuda")
+    
+    # Use the similar API: torch.var
+    # Calculate variance
+    variance = torch.var(a)
+    
+    # Perform a check/assertion similar to the original
+    # We assert a false condition to trigger the exception path
+    assert variance < 0, "should throw"
+    
+    # The critical part: synchronize
+    # In the bug report, this is removed in aot_eager mode
+    torch.cuda.synchronize()
+    
+    print("should not run")
+
+def test_fn():
+    torch._dynamo.reset()
+    # Compile with aot_eager backend
+    f_c = torch.compile(func, backend="aot_eager")
+    f_c()
+
+if __name__ == "__main__":
+    test_fn()

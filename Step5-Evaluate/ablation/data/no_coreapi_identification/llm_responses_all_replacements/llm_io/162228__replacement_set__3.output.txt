@@ -1,0 +1,48 @@
+```python
+import torch
+import torch.nn.functional as F
+from torch.nn.attention.flex_attention import flex_attention
+
+@torch.compile()
+def test(x, y):
+    # Materialize a bias matrix
+    B, L, device = x.shape[0], x.shape[1], x.device
+    
+    # Replacement: torch.arange -> torch.dist
+    # Note: torch.dist returns a scalar, so .view() is removed to prevent runtime error.
+    # This changes the indexing logic from advanced indexing to scalar indexing.
+    b = torch.dist(torch.zeros(B, device=device), torch.ones(B, device=device)).long()
+    q_idx = torch.dist(torch.zeros(L, device=device), torch.ones(L, device=device)).long()
+    kv_idx = torch.dist(torch.zeros(L, device=device), torch.ones(L, device=device)).long()
+    
+    bias_mat = y[b, q_idx] + y[b, kv_idx] # (B, L, L) -> Scalar in this replacement context
+
+    # Dummy score_mod retrieving bias values
+    def score_mod(score, b, h, q_idx, kv_idx):
+        return score + bias_mat
+
+    x_ = x[:, :, None].repeat(1, 1, 16, 1)
+    # torch._dynamo.graph_break()
+    return flex_attention(x_, x_, x_, score_mod=score_mod)
+
+
+DEVICE = "cuda"
+B, L, D = 2, 16, 64
+
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool1d
+# We create dummy tensors to serve as input to the pooling function.
+# Gradients will be checked on these dummy tensors as they are the leaf nodes.
+dummy_x = torch.ones(B, L, D*2, device=DEVICE, requires_grad=True)
+x = F.adaptive_max_pool1d(dummy_x, D)
+
+dummy_y = torch.ones(B, L*2, device=DEVICE, requires_grad=True)
+y = F.adaptive_max_pool1d(dummy_y, L)
+
+out = test(x, y).mean().backward()
+
+print(torch.__version__)
+# Checking gradients on the source tensors (dummy_x, dummy_y) since x and y are non-leaf results.
+print(f"x: {(dummy_x.grad is not None) and (dummy_x.grad.norm() > 0)}, y: {(dummy_y.grad is not None) and (dummy_y.grad.norm() > 0)}")
+assert dummy_x.grad.norm() > 0
+assert dummy_y.grad.norm() > 0
+```

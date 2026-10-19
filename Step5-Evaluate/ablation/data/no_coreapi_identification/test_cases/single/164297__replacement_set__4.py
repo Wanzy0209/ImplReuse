@@ -1,0 +1,35 @@
+import torch
+import tensorflow as tf
+
+# Test case adapted from Issue 164297 (PyTorch segfault on import)
+# Original logic: Accessing torch._C._onnx.OperatorExportTypes and converting to int caused a segfault.
+# Replacements:
+# - 'import torch' -> 'tf.compat.v1.experimental.output_all_intermediates'
+# - 'torch._C._onnx.OperatorExportTypes' -> 'tf.compat.v1.experimental.output_all_intermediates'
+
+def test_tf_experimental_output_all_intermediates_stability():
+    """
+    Tests that accessing and converting the experimental output_all_intermediates
+    flag to an integer does not cause a segmentation fault, mirroring the
+    stability issue found in PyTorch's OperatorExportTypes.
+    """
+    # Access the property (replaces 'import torch')
+    # This ensures the attribute is loaded and accessible.
+    flag = tf.compat.v1.experimental.output_all_intermediates
+
+    # Attempt to convert to int (replaces 'torch._C._onnx.OperatorExportTypes')
+    # The original bug occurred in the __int__ call via pybind11.
+    # We verify this operation completes successfully and returns a valid integer.
+    try:
+        int_value = int(flag)
+    except Exception as e:
+        # If a segfault occurs, the test runner will catch it as a crash.
+        # If a Python exception occurs, we re-raise it to indicate failure.
+        raise AssertionError(f"Failed to convert output_all_intermediates to int: {e}")
+
+    # Assertion to verify the result is a valid boolean integer (0 or 1)
+    assert int_value in [0, 1], f"Expected 0 or 1, got {int_value}"
+
+if __name__ == "__main__":
+    test_tf_experimental_output_all_intermediates_stability()
+    print("Test passed successfully.")

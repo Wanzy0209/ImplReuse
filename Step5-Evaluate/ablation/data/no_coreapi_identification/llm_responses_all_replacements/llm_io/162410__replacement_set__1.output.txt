@@ -1,0 +1,35 @@
+```python
+import torch
+import torch.nn.functional as F
+import torch._inductor.config as inductor_config
+
+def f(x, y):
+    x.copy_(x.flip(1))
+    y = y.sum(dim=1, keepdim=True) + y
+    return x + y
+
+# Replacing torch.randn with torch.var_mean
+# Since var_mean is not a tensor creation function, we create a dummy tensor first
+# and apply var_mean to it. We use values 0.4 so that the subsequent sum x+y
+# results in values within [0, 1], which is required for the binary_cross_entropy_with_logits
+# replacement later.
+dummy = torch.ones(20, 1024 * 1024, device="cuda") * 0.4
+var, mean = torch.var_mean(dummy)
+
+# Expand the scalar results to the required shape for the function f
+x = mean.expand(20, 1024 * 1024).clone()
+y = var.expand(20, 1024 * 1024).clone()
+
+x_copy = x.clone()
+
+opt_f = torch.compile(f)
+ref = f(x, y)
+act = opt_f(x_copy, y)
+
+# Replacing torch.testing.assert_close with torch.nn.functional.binary_cross_entropy_with_logits
+# ref acts as the target, act acts as the input (logits)
+loss = F.binary_cross_entropy_with_logits(act, ref)
+
+print(f"Loss: {loss.item()}")
+print(f"{torch._inductor.metrics.generated_kernel_count=}")
+```

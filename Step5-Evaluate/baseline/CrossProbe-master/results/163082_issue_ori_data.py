@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.manual_seed -> tf.random.set_seed
@@ -34,4 +33,3 @@ print("Normalized vector (compile):", xyz[0].numpy().tolist(), "tf.math.acos of 
 
 xyz = vec_norm_without_compile(c)
 print("Normalized vector (without compile):", xyz[0].numpy().tolist(), "tf.math.acos of component 0", tf.math.acos(xyz[0, 0]).numpy())
-```

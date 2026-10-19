@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 flag = True
@@ -29,4 +28,3 @@ def fn(x):
 fn(tf.ones(3))
 flag = False
 fn(tf.ones(3))
-```

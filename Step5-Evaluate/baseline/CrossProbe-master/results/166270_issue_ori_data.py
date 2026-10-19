@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # torch._dynamo.config.capture_scalar_outputs = True
@@ -39,4 +38,3 @@ print('✅ eager success')
 compiled_program = tf.function(fuzzed_program)
 result_compiled = compiled_program(*args)
 print('✅ compile success')
-```

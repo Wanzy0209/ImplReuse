@@ -1,0 +1,33 @@
+import tensorflow as tf
+
+def test_tensor_ndim_repeated_access():
+    """
+    Test case adapted from Issue 162630 (Intrusive Caching DLPack).
+    Replaces DLPack conversion calls with tf.experimental.numpy.ndim
+    to verify consistent behavior on repeated access.
+    """
+    # Create a tensor
+    x = tf.zeros((10, 20))
+
+    # Original logic: ToDLPack() -> creates/caches DLManagedTensor
+    # Replacement: tf.experimental.numpy.ndim
+    dim_1 = tf.experimental.numpy.ndim(x)
+    
+    # Original logic: cached_dl_managed_tensor_.load -> retrieves cached value
+    # Replacement: tf.experimental.numpy.ndim
+    dim_2 = tf.experimental.numpy.ndim(x)
+
+    # Original logic: mylib.from_dlpack -> uses the tensor
+    # Replacement: tf.experimental.numpy.ndim
+    dim_3 = tf.experimental.numpy.ndim(x)
+
+    # Assertions to ensure correctness and consistency
+    assert dim_1 == 2, "First call ndim should be 2"
+    assert dim_2 == 2, "Second call ndim should be 2"
+    assert dim_3 == 2, "Third call ndim should be 2"
+    
+    # Ensure all calls return the same value (validating the "cached" state)
+    assert dim_1 == dim_2 == dim_3
+
+if __name__ == "__main__":
+    test_tensor_ndim_repeated_access()

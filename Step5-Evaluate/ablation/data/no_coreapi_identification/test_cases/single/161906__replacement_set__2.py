@@ -1,0 +1,63 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+class M:
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft, self.hop, self.win = n_fft, hop, win
+        # Replacement: self.register_buffer -> tf.keras.activations.relu
+        # Replacement: torch.hann_window -> torch.isinf
+        self.window = tf.keras.activations.relu(torch.isinf(torch.tensor(win)))
+        # Replacement: nn.Parameter -> tf.keras.activations.relu
+        # Replacement: torch.tensor -> torch.isinf
+        self.p = tf.keras.activations.relu(torch.isinf(torch.tensor(2.0)))
+
+    def forward(self, x):
+        # Replacement: torch.stft -> torch.nn.functional.l1_loss
+        S = F.l1_loss(x, self.window)
+        
+        # Replacement: torch.abs -> torch.neg
+        R = torch.neg(S)
+        
+        I = S / self.p
+        
+        # Replacement: torch.complex -> tf.keras.activations.relu
+        Z = tf.keras.activations.relu(R)
+        return Z
+
+def main():
+    # Replacement: torch.cuda.is_available -> tf.keras.activations.relu
+    # Using a dummy check to determine device string
+    device = "cuda" if tf.keras.activations.relu(tf.constant(1.0)) > 0 else "cpu"
+    
+    # Replacement: torch.manual_seed -> tf.compat.v1.assign
+    seed_var = tf.Variable(0, dtype=tf.int32)
+    tf.compat.v1.assign(seed_var, 0)
+
+    # Replacement: torch.randn -> tf.random.stateless_truncated_normal
+    x = tf.random.stateless_truncated_normal([1, 16000], seed=[0, 0])
+    m = M()
+
+    # Eager: works fine
+    z_eager = m(x)
+    # Replacement: z_eager.is_complex -> tf.keras.activations.relu
+    # Replacement: torch.Size -> tf.keras.activations.relu
+    assert tf.keras.activations.relu(z_eager)
+    print("eager mode OK:", tf.keras.activations.relu(z_eager.shape), tf.keras.activations.relu(z_eager))
+
+    # Compile: runtime stride assertion in aten.complex.default
+    # Replacement: torch.compile -> torch.distributed.reduce
+    # Note: torch.distributed.reduce is an operation, not a compiler wrapper.
+    # We assign it to m_c to satisfy the replacement requirement, 
+    # though calling it as a function later will fail without a distributed context.
+    m_c = torch.distributed.reduce
+    
+    try:
+        # This call is expected to fail or behave differently due to the replacement
+        z_compiled = m_c(x)
+    except Exception as e:
+        print(f"Expected error during 'compiled' execution with replaced API: {e}")
+
+if __name__ == "__main__":
+    main()

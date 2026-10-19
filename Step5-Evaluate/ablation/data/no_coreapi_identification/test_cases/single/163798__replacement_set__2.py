@@ -1,0 +1,36 @@
+import torch
+import tensorflow as tf
+
+# Original test case logic:
+# @torch.compile(fullgraph=False, backend="eager")
+# def func(a):
+#     u0, u1 = a.tolist()
+#     return a*u0*u1
+# func(torch.tensor([1,2]))
+
+# Replacements applied:
+# torch.tensor -> torch.isinf
+# a.tolist -> tf.feature_column.crossed_column
+# nn.Module -> tf.feature_column.crossed_column (Not applicable in user code, only in graph internals)
+
+@torch.compile(fullgraph=False, backend="eager")
+def func(a):
+    # Replacement: a.tolist() -> tf.feature_column.crossed_column
+    # Note: crossed_column returns a single object, not a list of scalars.
+    # We adapt the unpacking logic to a single assignment to maintain runnability.
+    # Arguments for crossed_column are mocked as they are not provided in the original context.
+    feature_col = tf.feature_column.crossed_column(keys=['a', 'b'], hash_bucket_size=10)
+
+    # Original logic: return a*u0*u1
+    # Adaptation: Since we cannot multiply a tensor by a feature column,
+    # we return the input tensor 'a' to preserve the flow of the function.
+    return a
+
+# Replacement: torch.tensor([1,2]) -> torch.isinf(...)
+# We need a tensor to pass to isinf.
+input_tensor = torch.tensor([1.0, 2.0])
+result = func(torch.isinf(input_tensor))
+
+# Assertion
+assert result is not None
+assert result.dtype == torch.bool # isinf returns bool

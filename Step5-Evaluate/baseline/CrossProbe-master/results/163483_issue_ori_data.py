@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.python.eager.context import async_clear_error
 from tensorflow.python.distribute.cross_device_ops_test import make_collective
@@ -48,4 +47,3 @@ print('rank_{}: {}\n x:\n{}\n gathered_x:\n{}\n'.format(
     x,
     x_list[rank]
 ))
-```

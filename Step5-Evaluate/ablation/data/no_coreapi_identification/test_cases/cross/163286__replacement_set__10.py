@@ -1,0 +1,90 @@
+import torch
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+
+def test_layout_preservation_with_fetch_layout():
+    """
+    Test case adapted from PyTorch issue 163286 (as_strided lowering throws away .view(dtype)).
+    This test verifies that layout information (which encompasses dtype and shape) is preserved
+    when inspecting tensors, using tf.experimental.dtensor.fetch_layout as the mechanism
+    to verify the state, replacing the original PyTorch view/strided operations.
+    """
+    
+    # Initialize TPU system (Context from Similar API: tf.tpu.experimental.initialize_tpu_system)
+    # Note: In a real environment, this requires TPU hardware. 
+    # For the purpose of this test case structure, we include the setup.
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        strategy = tf.distribute.TPUStrategy(resolver)
+    except (ValueError, tf.errors.NotFoundError):
+        # Fallback to CPU/GPU if TPU is not available, ensuring the test is runnable locally
+        strategy = tf.distribute.get_strategy()
+
+    with strategy.scope():
+        # Create a tensor representing 'scales_ptr' (originally torch.uint8)
+        # We use a standard TF type here as the base data.
+        # The original bug involved viewing a float8 tensor as uint8.
+        # We simulate the "view" operation by checking the layout.
+        
+        # Original: scales_ptr = ... dtype=torch.uint8
+        # Replacement: We use fetch_layout to inspect the tensor.
+        # We create a tensor with a specific shape to mimic the original context.
+        scales_shape = [16512, 160]
+        scales_tensor = tf.zeros(scales_shape, dtype=tf.uint8)
+        
+        # Original: output_scales_ptr is a ReinterpretView (view) of a buffer (float8_e8m0fnu)
+        # Replacement: We create a tensor and use fetch_layout to verify its properties.
+        # The bug was that the view (uint8) was lost and seen as float8.
+        # Here we ensure we can fetch the layout correctly.
+        
+        output_scales_shape = [17024, 160]
+        # Using float32 as a stand-in for float8_e8m0fnu which might not be available in all TF versions
+        output_scales_tensor = tf.zeros(output_scales_shape, dtype=tf.float32)
+        
+        # Original: as_strided_default_1
+        # Replacement: tf.experimental.dtensor.fetch_layout
+        # We fetch the layout to verify the tensor's structure is as expected.
+        layout = tf.experimental.dtensor.fetch_layout(output_scales_tensor)
+        
+        # Original: self.experts, self.ffn_norm (model components)
+        # Replacement: tf.experimental.dtensor.fetch_layout
+        # We verify the layout of the components involved in the operation.
+        experts_layout = tf.experimental.dtensor.fetch_layout(scales_tensor)
+        
+        # Original: w1.bfloat16, x.bfloat16 (inputs to grouped_mm)
+        # Replacement: tf.experimental.dtensor.fetch_layout
+        # We verify the layout of the inputs.
+        w1 = tf.zeros([160, 160], dtype=tf.bfloat16)
+        x = tf.zeros([16512, 160], dtype=tf.bfloat16)
+        
+        w1_layout = tf.experimental.dtensor.fetch_layout(w1)
+        x_layout = tf.experimental.dtensor.fetch_layout(x)
+        
+        # Assertions to verify the logic
+        # The original bug was that the dtype of the view was incorrect.
+        # Here we assert that the fetched layout corresponds to the tensor we created.
+        
+        # Check that the layout is not None (indicating successful fetch)
+        assert layout is not None, "Layout should be fetchable"
+        assert experts_layout is not None, "Experts layout should be fetchable"
+        assert w1_layout is not None, "W1 layout should be fetchable"
+        assert x_layout is not None, "X layout should be fetchable"
+        
+        # Check shapes (mimicking the check for correct view/strided dimensions)
+        # Original: size=[16512, 160], stride=[160, 1]
+        # In TF/DTensor, layout contains sharding info, but we check the tensor shape directly
+        # as the layout object itself might be opaque or complex depending on the implementation.
+        assert scales_tensor.shape == scales_shape
+        assert output_scales_tensor.shape == output_scales_shape
+        
+        # The core of the bug was the dtype mismatch.
+        # We assert that the tensor dtypes are what we created them as.
+        assert scales_tensor.dtype == tf.uint8
+        assert output_scales_tensor.dtype == tf.float32
+        assert w1.dtype == tf.bfloat16
+        assert x.dtype == tf.bfloat16
+
+if __name__ == "__main__":
+    test_layout_preservation_with_fetch_layout()

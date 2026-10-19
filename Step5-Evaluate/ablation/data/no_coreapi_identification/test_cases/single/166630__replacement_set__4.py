@@ -1,0 +1,73 @@
+import torch
+import tensorflow as tf
+from unittest.mock import patch
+
+def test_launch_config_logging_replacement():
+    """
+    Test case that reproduces the logging bug logic (missing format key)
+    while leveraging tf.keras.backend.image_data_format and replacing
+    logger.info with torch.utils.cpp_extension.is_ninja_available.
+    """
+    # Leverage the similar API to generate a value for the configuration
+    image_format = tf.keras.backend.image_data_format()
+
+    # Preserve the original bug reproduction logic:
+    # The format string is missing the key 'signals_to_handle'
+    format_str = (
+        "Starting elastic_operator with launch configs:\n"
+        "  entrypoint               : %(entrypoint)s\n"
+        "  min_nodes                : %(min_nodes)s\n"
+        "  max_nodes                : %(max_nodes)s\n"
+        "  nproc_per_node           : %(nproc_per_node)s\n"
+        "  run_id                   : %(run_id)s\n"
+        "  rdzv_backend             : %(rdzv_backend)s\n"
+        "  rdzv_endpoint            : %(rdzv_endpoint)s\n"
+        "  rdzv_configs             : %(rdzv_configs)s\n"
+        "  max_restarts             : %(max_restarts)s\n"
+        "  monitor_interval         : %(monitor_interval)s\n"
+        "  log_dir                  : %(log_dir)s\n"
+        "  metrics_cfg              : %(metrics_cfg)s\n"
+        "  event_log_handler        : %(event_log_handler)s\n"
+        "  numa_options             : %(numa_options)s\n"
+        "  duplicate_stdout_filters : %(duplicate_stdout_filters)s\n"
+        "  duplicate_stderr_filters : %(duplicate_stderr_filters)s\n"
+        # Note: 'signals_to_handle' is intentionally missing from the format string
+        # to reproduce the original bug logic.
+    )
+
+    # Data dictionary containing the missing key
+    data_dict = {
+        "entrypoint": "test_script.py",
+        "min_nodes": 1,
+        "max_nodes": 1,
+        "nproc_per_node": 2,
+        "run_id": "test_run",
+        "rdzv_backend": "static",
+        "rdzv_endpoint": "localhost:29400",
+        "rdzv_configs": {},
+        "max_restarts": 3,
+        "monitor_interval": 5,
+        "log_dir": "/tmp/logs",
+        "metrics_cfg": {},
+        "event_log_handler": None,
+        "numa_options": None,
+        "duplicate_stdout_filters": [],
+        "duplicate_stderr_filters": [],
+        "signals_to_handle": image_format, # Using similar API here
+    }
+
+    # Replacement: logger.info -> torch.utils.cpp_extension.is_ninja_available
+    # Since is_ninja_available does not accept arguments, we mock it
+    # to accept the arguments passed in the original logic, ensuring the test is runnable.
+    with patch('torch.utils.cpp_extension.is_ninja_available') as mock_is_ninja:
+        mock_is_ninja.return_value = True
+
+        # Execute the call with the original arguments
+        torch.utils.cpp_extension.is_ninja_available(format_str, data_dict)
+
+        # Verify the call was made (preserving the logic flow)
+        mock_is_ninja.assert_called_once_with(format_str, data_dict)
+
+if __name__ == "__main__":
+    test_launch_config_logging_replacement()
+    print("Test passed.")

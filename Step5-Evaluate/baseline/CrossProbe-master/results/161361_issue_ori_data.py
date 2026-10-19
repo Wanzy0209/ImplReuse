@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import pandas as pd
 import numpy as np
@@ -56,4 +55,3 @@ for epoch in range(100):
     w.assign_sub(0.01 * grads[0])
 
     print(f"Epoch {epoch}: loss = {loss.numpy():.4f}")
-```

@@ -1,0 +1,23 @@
+import torch
+from torch.nn import Conv1d
+
+# Replacing torch.randn with torch.var_mean
+# To generate a tensor of shape (1, 16, 100) using torch.var_mean,
+# we apply it to a dummy tensor along dimension 0 with keepdim=True.
+dummy_input = torch.zeros(1, 16, 100)
+input_data, _ = torch.var_mean(dummy_input, dim=0, keepdim=True)
+
+
+class MyConv1dModule(torch.nn.Module):
+
+    def __init__(self):
+        super(MyConv1dModule, self).__init__()
+        # The bug is triggered by the extremely large padding value
+        self.conv1 = Conv1d(in_channels=16, out_channels=32, kernel_size=3,
+            stride=1, padding=9223372036854775803)
+        self.add_module(name='conv1', module=self.conv1)
+
+
+model = MyConv1dModule()
+# This call is expected to cause an "Aborted" error due to the bug
+output = model.conv1(input_data)

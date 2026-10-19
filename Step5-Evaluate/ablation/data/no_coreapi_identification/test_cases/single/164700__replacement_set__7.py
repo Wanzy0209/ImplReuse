@@ -1,0 +1,46 @@
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.special
+
+device = "cuda"
+
+def f(x, y):
+    # torch.cat -> torch.isnan
+    # Using torch.stack to handle the list argument for isnan
+    y2 = torch.isnan(torch.stack([x[:, 1:], y[:, None] + 32 * 2048], dim=1))
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    # torch.arange -> torch.linspace
+    # torch.cat -> torch.isnan
+    return (
+        torch.isnan(torch.stack([x2, y3], dim=1))
+        + torch.linspace(-2048, 0, 2048, device=device)[None, None, :]
+    ).reshape(1, 32 * 2048)
+
+# torch.zeros -> torch.slogdet
+# torch.int64 -> torch.special.log1p
+# torch.int32 -> torch.special.log1p
+# We adapt the input generation to use slogdet (which requires a square matrix input)
+# and wrap with log1p as per the replacement instructions.
+# We also expand the result to match the original shape (1, 32) for runnability.
+
+# x = torch.zeros(1, 32, dtype=torch.int64, device=device)
+# Replacement:
+x = torch.special.log1p(torch.slogdet(torch.eye(32, device=device))[0].expand(1, 32))
+
+# y = torch.zeros(1, dtype=torch.int32, device=device)
+# Replacement:
+y = torch.special.log1p(torch.slogdet(torch.eye(1, device=device))[0].expand(1))
+
+# This succeeds
+print(f(x, y))
+
+# torch.compile -> torch.special.log1p
+# Original: torch.compile(f)(...)
+# Replacement: torch.special.log1p(f(...))
+print(torch.special.log1p(f(x, y)))

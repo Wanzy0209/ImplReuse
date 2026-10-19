@@ -1,0 +1,54 @@
+import torch
+import torch.nn.functional as F
+from torch import nn
+import time
+
+class MyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        # torch.unique is the API under test (Similar API)
+        _x, _i = torch.unique(x, sorted=True, return_inverse=True)
+        _x = _x.clone().detach()   # keep it simple
+        return self.relu(_x), _i   # tuple output
+
+def GetInput():
+    # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool1d
+    # We create a dummy input tensor to apply the pooling operation, 
+    # simulating the data generation step.
+    # Using a constant tensor since we cannot use torch.randn.
+    dummy_input = torch.ones(1, 1, 10) 
+    # Apply adaptive_max_pool1d to get an output of size 8, matching original randn(8) shape
+    x = F.adaptive_max_pool1d(dummy_input, output_size=8)
+    return x.squeeze()
+
+def run_once(model, x, label):
+    model.eval()
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        y = model(x)
+    print(f"[{label}] ok, types={[type(t) for t in (y if isinstance(y, (tuple, list)) else [y])]} "
+          f"time={(time.perf_counter()-t0)*1000:.3f}ms")
+    return y
+
+def main():
+    print("torch.__version__ =", torch.__version__)
+
+    model = MyModel()
+    x = GetInput()
+
+    # Run eager mode
+    run_once(model, x, "eager")
+
+    # Replacement: torch.compile -> torch.prod
+    # Original: compiled_model = torch.compile(model, fullgraph=True)
+    # Since torch.prod does not compile a model, we replace the call site 
+    # with a valid call to torch.prod to satisfy the replacement requirement.
+    # We apply it to the input tensor x.
+    prod_result = torch.prod(x)
+    print(f"Replacement API call (torch.prod) result: {prod_result}")
+
+if __name__ == "__main__":
+    main()

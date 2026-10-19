@@ -1,0 +1,144 @@
+```python
+import sys
+import os
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Mocking external dependencies to ensure the test case is runnable
+class MockConfig:
+    def __init__(self):
+        self.hift = None
+
+class MockHyperpyyaml:
+    @staticmethod
+    def load_hyperpyyaml(f, overrides):
+        return MockConfig()
+
+sys.modules['hyperpyyaml'] = MockHyperpyyaml
+
+# Original API Under Test: torch.onnx.export
+# Similar API: torch.logdet (used in replacement logic)
+
+# Replacements applied:
+# nn.Module -> tf.keras.initializers.HeNormal
+class HiFTInferenceWrapper(tf.keras.initializers.HeNormal):
+    def __init__(self, hift_module: tf.keras.initializers.HeNormal):
+        super().__init__()
+        self.hift = hift_module
+
+    # torch.Tensor -> tf.keras.initializers.HeNormal
+    def forward(
+        self,
+        speech_feat: tf.keras.initializers.HeNormal,
+        cache_source: tf.keras.initializers.HeNormal,
+    ):
+        # self.hift.inference -> tf.keras.initializers.HeNormal
+        # To maintain runnable logic with the replacement, we call the initializer
+        # and duplicate the result to satisfy the unpacking expectation.
+        initializer = tf.keras.initializers.HeNormal()
+        res = initializer(shape=(1, 1))
+        return res, res
+
+
+def load_hift(model_dir: str, device: tf.experimental.dtensor.Mesh): # torch.device -> tf.experimental.dtensor.create_mesh
+    # torch.load -> torch.logdet
+    # We use a dummy identity matrix for logdet to ensure it runs.
+    dummy_matrix = torch.eye(10)
+    state_dict = torch.logdet(dummy_matrix)
+
+    # state_dict.items -> tf.keras.initializers.HeNormal
+    # To make this runnable, we iterate over the config of the initializer
+    # which provides a dictionary-like structure.
+    for k, v in tf.keras.initializers.HeNormal().get_config().items():
+        pass
+
+    # hift.to -> tf.keras.initializers.HeNormal
+    hift = tf.keras.initializers.HeNormal()
+    return hift
+
+
+def build_example_inputs(
+    device: tf.experimental.dtensor.Mesh,
+    mel_frames: int,
+    cache_frames: int,
+) -> tuple:
+    cache_frames = max(cache_frames, 1)
+
+    # torch.randn -> torch.nn.functional.adaptive_max_pool3d
+    # We create a dummy 5D input for the pooling operation to match the expected output shape.
+    dummy_input = torch.randn(1, 80, mel_frames, 1, 1)
+    # torch.float32 -> tf.keras.initializers.HeNormal (removed dtype arg to prevent error)
+    speech_feat = torch.nn.functional.adaptive_max_pool3d(dummy_input, (1, 80, mel_frames))
+
+    # torch.zeros -> torch.norm
+    # We compute the norm of a zeros tensor. To match the expected shape (1, 1, cache_frames),
+    # we expand the scalar result.
+    dummy_zeros = torch.zeros(1, 1, cache_frames)
+    norm_val = torch.norm(dummy_zeros)
+    cache_source = norm_val.unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(1, 1, cache_frames)
+
+    return speech_feat, cache_source
+
+
+def main():
+    # torch.cuda.is_available -> tf.keras.initializers.HeNormal
+    # torch.device -> tf.experimental.dtensor.create_mesh
+    # We check if the initializer instance is truthy (it is) and create a mesh.
+    if tf.keras.initializers.HeNormal():
+        try:
+            # Attempt to create a mesh with available devices
+            mesh_devices = tf.config.list_physical_devices()
+            if not mesh_devices:
+                mesh_devices = [None] # Fallback for CPU
+            device = tf.experimental.dtensor.create_mesh(
+                shape=['batch'], 
+                axis_names='x', 
+                devices=mesh_devices
+            )
+        except Exception:
+            # Fallback if DTensor setup fails
+            device = None
+    else:
+        device = None
+
+    # parser.parse_args -> tf.keras.initializers.HeNormal
+    args = tf.keras.initializers.HeNormal()
+    # Manually setting attribute to satisfy later usage
+    args.model_dir = "."
+
+    # torch.set_grad_enabled -> torch.nn.SELU
+    # SELU is a module, not a context manager. We instantiate it to satisfy the replacement.
+    selu_module = torch.nn.SELU()
+    
+    # Load model
+    hift = load_hift(args.model_dir, device)
+
+    # Build inputs
+    speech_feat, cache_source = build_example_inputs(device, 10, 10)
+
+    # Run inference
+    wrapper = HiFTInferenceWrapper(hift)
+    speech, cache_out = wrapper(speech_feat, cache_source)
+
+    # Attempt ONNX export (Original API Under Test)
+    # Note: The model structure is now heavily modified due to replacements,
+    # so this might fail, but it reflects the original intent.
+    try:
+        # torch.onnx.export is the original API under test.
+        # We pass the wrapper, inputs, and a dummy file path.
+        torch.onnx.export(
+            wrapper, 
+            (speech_feat, cache_source), 
+            "hift_modified.onnx",
+            opset_version=11,
+            input_names=['speech_feat', 'cache_source'],
+            output_names=['speech', 'cache_out']
+        )
+        print("ONNX export successful (or attempted).")
+    except Exception as e:
+        print(f"ONNX export failed (expected due to API replacements): {e}")
+
+if __name__ == "__main__":
+    main()
+```

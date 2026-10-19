@@ -1,0 +1,31 @@
+import sys
+import platform
+import torch
+import tensorflow as tf
+
+# Define a simple function for tf.autograph.trace to process
+def dummy_function(x):
+    return x + 1
+
+print("Python:", sys.version)
+print("Executable:", sys.executable)
+print("PyTorch:", torch.__version__)
+print("TensorFlow:", tf.__version__)
+print("macOS:", platform.mac_ver()[0])
+print("platform:", platform.platform())
+print("arch:", platform.machine())
+print("is_macos_or_newer(14,0):",
+      getattr(torch.backends.mps, "is_macos_or_newer", lambda *a: "no-func")(14,0))
+
+# Replacement: torch.backends.mps.is_built -> tf.autograph.trace
+# Original logic checked if MPS was built (boolean). 
+# Here we replace it with tf.autograph.trace, which converts a Python function to a TensorFlow graph.
+# We print the result of the trace operation to verify the API works.
+try:
+    traced_func = tf.autograph.trace(dummy_function)
+    print("TF autograph trace status: Success (Callable returned)")
+except Exception as e:
+    print(f"TF autograph trace status: Failed ({e})")
+
+# Original API Under Test: torch.backends.mps.is_available
+print("MPS available?:", torch.backends.mps.is_available())

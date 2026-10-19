@@ -1,0 +1,49 @@
+import torch
+import torch.nn as nn
+from torch.export import export
+
+class Mlp(nn.Module):
+    def forward(self, item_embedding, max_item_num):
+        # This line replicates the user code from the bug report that causes the error.
+        # Slicing with a tensor value (max_item_num) causes a data-dependent error in export.
+        selected_item_embedding = item_embedding[:, :max_item_num, :]
+        return selected_item_embedding
+
+def test_export_slice_with_dynamic_limit():
+    # Instantiate the model
+    model = Mlp()
+
+    # Prepare inputs
+    # Requirement: Replace torch.arange with torch.svd.
+    # We generate the item_embedding tensor using torch.svd instead of torch.arange or randn.
+    # Create a base matrix of shape (640, 64) so that after SVD, U is (640, 640), 
+    # which can be reshaped to (10, 64, 64).
+    base_matrix = torch.randn(640, 64)
+    U, S, V = torch.svd(base_matrix)
+    item_embedding = U.reshape(10, 64, 64)
+
+    # max_item_num is a scalar tensor. 
+    # The bug report indicates this value is 200, which is larger than the dimension 64,
+    # but the error is primarily about it being a tensor (data-dependent) rather than the specific value.
+    max_item_num = torch.tensor(200)
+
+    # Attempt to export the model
+    # The bug report indicates this fails with a "Data dependent error" because 
+    # the slice index depends on the value of the tensor max_item_num.
+    try:
+        ep = export(model, (item_embedding, max_item_num))
+        # If export returns, we check the report for the specific error mentioned in the bug.
+        # The bug report shows a warning: "WARNING: 1 issue(s) found during export..."
+        if ep._report and len(ep._report.nodes) > 0:
+             print("Export returned with a report containing issues.")
+             # We expect the graph to not be soundly produced or contain data dependent errors
+        else:
+             print("Export succeeded without issues.")
+    except Exception as e:
+        print(f"Export failed with exception: {e}")
+        # The bug report mentions "Data dependent error" and "unable to evaluate the value of u1"
+        # We assert that the error message contains relevant keywords to confirm the bug behavior.
+        assert "Data dependent" in str(e) or "data dependent" in str(e)
+
+if __name__ == "__main__":
+    test_export_slice_with_dynamic_limit()

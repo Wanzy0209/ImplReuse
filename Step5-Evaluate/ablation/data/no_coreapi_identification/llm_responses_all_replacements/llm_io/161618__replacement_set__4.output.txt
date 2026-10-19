@@ -1,0 +1,41 @@
+```python
+import triton
+import torch
+import torch.nn as nn
+
+# Dimensions from the original issue
+m = 20120
+k = 1536
+n = 512
+
+# Replacement: torch.randn -> torch.broadcast_tensors
+# We create tensors with compatible shapes for broadcasting to (m, n).
+# This allows us to use the 'm' and 'n' dimensions while satisfying the replacement.
+t1 = torch.empty((m, 1)).cuda()
+t2 = torch.empty((1, n)).cuda()
+t3 = torch.empty((1, n)).cuda()
+
+# Apply broadcast_tensors to generate inputs a, mat1, mat2
+a, mat1, mat2 = torch.broadcast_tensors(t1, t2, t3)
+
+# Replacement: torch._inductor.config -> torch.nn.LSTMCell
+# We instantiate the LSTMCell to replace the configuration context.
+# input_size and hidden_size are set to n to match the broadcasted tensor dimensions.
+lstm_cell = nn.LSTMCell(input_size=n, hidden_size=n).cuda()
+
+# Replacement: torch.addmm -> torch.argmax
+# Define the function to compile. We use the LSTMCell and apply argmax to the output.
+# We map the inputs: mat1 as input, mat2 as hidden state, a as cell state.
+f = lambda a, mat1, mat2: torch.argmax(lstm_cell(mat1, (mat2, a))[0])
+
+# Compile the function
+# The original 'with inductor_config.patch' block is removed as the config API is replaced by LSTMCell.
+compiled = torch.compile(f, dynamic=False)
+
+# Run the compiled function
+result = compiled(a, mat1, mat2)
+
+# Leverage similar API (tf.keras.callbacks.TerminateOnNaN) logic:
+# Check for NaNs in the result to ensure stability, translating the TF callback logic to PyTorch.
+assert not torch.isnan(result).any(), "Result contains NaN values"
+```

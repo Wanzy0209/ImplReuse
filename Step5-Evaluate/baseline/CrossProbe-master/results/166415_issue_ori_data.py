@@ -1,4 +1,3 @@
-```python
 import os
 import tensorflow as tf
 
@@ -17,4 +16,3 @@ with tf.device(device):
     output = model(tf.random.normal((8, 10)))
 
 print(output)
-```

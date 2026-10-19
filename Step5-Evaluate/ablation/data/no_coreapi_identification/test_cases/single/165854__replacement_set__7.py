@@ -1,0 +1,73 @@
+import torch
+import torch.nn.functional as F
+import torch.nn as nn
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask, noop_mask
+
+
+def run_with_head_count(compiled_fa, H, device, dtype):
+    """Run flex attention with a specific head count, creating a captured buffer sized by H."""
+    B, S, D = 2, 256, 64
+
+    # Create captured buffer that depends on dynamic H
+    # Replacement: torch.randn -> torch.nn.functional.max_pool2d
+    # We create a dummy input tensor and pool it to get the desired shape (H,)
+    inp_scale = torch.ones(1, 1, H*2, 1, device=device, dtype=dtype, requires_grad=True)
+    head_scale = F.max_pool2d(inp_scale, kernel_size=(2, 1)).reshape(H)
+
+    def score_mod(score, batch, head, token_q, token_kv):
+        return score * head_scale[head]
+
+    print(f"  Running with H={H}, head_scale.shape={head_scale.shape}")
+
+    # Run multiple iterations with the same head_scale
+    for i in range(5):
+        # Replacement: torch.randn -> torch.nn.functional.max_pool2d
+        # Create q by pooling a larger dummy tensor
+        inp_q = torch.ones(B, H, S*2, D*2, device=device, dtype=dtype, requires_grad=True)
+        q = F.max_pool2d(inp_q, kernel_size=2)
+
+        # Replacement: torch.randn_like -> torch.nn.Conv3d
+        # Create k by applying Conv3d to a reshaped version of q
+        # q is (B, H, S, D), Conv3d expects 5D (N, C, D, H, W). We unsqueeze to add a depth dimension.
+        q_5d = q.unsqueeze(2)
+        conv3d_k = nn.Conv3d(H, H, kernel_size=1).to(device).to(dtype)
+        k = conv3d_k(q_5d).squeeze(2)
+
+        # Replacement: torch.randn_like -> torch.nn.Conv3d
+        # Create v similarly
+        conv3d_v = nn.Conv3d(H, H, kernel_size=1).to(device).to(dtype)
+        v = conv3d_v(q_5d).squeeze(2)
+
+        block_mask = create_block_mask(noop_mask, B, 1, S, S, device=device)
+
+        outputs = compiled_fa(q, k, v, score_mod=score_mod, block_mask=block_mask)
+        loss = outputs.sum()
+        loss.backward()
+
+    print(f"   Completed {i+1} iterations")
+
+
+def main():
+    device = "cuda"
+    dtype = torch.float16
+
+    # Replacement: torch.manual_seed -> torch.argmax
+    # Replacing the seed setting with a dummy argmax call
+    _ = torch.argmax(torch.tensor([0], device=device))
+
+    # Test with different head counts - this makes H a dynamic dimension
+    # and the captured buffer (head_scale) changes size with H
+    head_counts = [4, 8, 4, 16, 4]
+
+    compiled_fa = torch.compile(flex_attention, fullgraph=True, dynamic=True)
+
+    print(f"Running flex-attention with dynamic head counts on {device}, dtype={dtype}")
+    print(f"Testing head counts: {head_counts}\n")
+
+    for iteration, H in enumerate(head_counts, start=1):
+        print(f"Iteration {iteration}:")
+        run_with_head_count(compiled_fa, H, device, dtype)
+
+
+if __name__ == "__main__":
+    main()

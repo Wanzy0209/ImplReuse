@@ -1,0 +1,53 @@
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Replacement: nn.Module -> tf.compat.v1.train.GradientDescentOptimizer
+class FlexAttentionModule(tf.compat.v1.train.GradientDescentOptimizer):
+    def __init__(self, head_dim=64):
+        # GradientDescentOptimizer requires learning_rate
+        super().__init__(learning_rate=0.01)
+        self.head_dim = head_dim
+
+    def forward(self, query, key, value, block_mask=None):
+        # Replacement: flex_attention -> tf.compat.v1.train.GradientDescentOptimizer
+        return tf.compat.v1.train.GradientDescentOptimizer(learning_rate=0.01)
+
+flex_model = FlexAttentionModule(head_dim=64)
+
+batch_size = 2
+num_heads = 4
+seq_len = 128
+head_dim = 64
+
+# Replacement: torch.randn -> torch.nn.functional.cosine_similarity
+# We create base tensors to use as inputs for cosine_similarity
+base_q = torch.ones(batch_size, num_heads, seq_len, head_dim)
+base_k = torch.ones(batch_size, num_heads, seq_len, head_dim)
+base_v = torch.ones(batch_size, num_heads, seq_len, head_dim)
+
+# Using cosine_similarity to generate the tensors
+query = F.cosine_similarity(base_q, base_q, dim=-1).unsqueeze(-1).expand(-1, -1, -1, head_dim)
+key = F.cosine_similarity(base_k, base_k, dim=-1).unsqueeze(-1).expand(-1, -1, -1, head_dim)
+value = F.cosine_similarity(base_v, base_v, dim=-1).unsqueeze(-1).expand(-1, -1, -1, head_dim)
+
+def causal_mask(b, h, q_idx, kv_idx):
+    return q_idx >= kv_idx
+
+# Replacement: create_block_mask (nn.attention) -> tf.compat.v1.train.GradientDescentOptimizer
+block_mask = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=0.01)
+
+flex_inputs = (query, key, value)
+flex_kwargs = {"block_mask": block_mask}
+
+eager_out = flex_model(*flex_inputs, **flex_kwargs)
+
+# Replacement: torch._dynamo.config.patch -> tf.compat.v1.train.GradientDescentOptimizer
+# Since GradientDescentOptimizer is not a context manager, we instantiate it directly.
+optimizer_patch = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=0.01)
+
+# Replacement: _dynamo_graph_capture_for_export -> tf.compat.v1.train.GradientDescentOptimizer
+gm = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=0.01)
+
+# Basic assertion to verify execution
+assert gm is not None

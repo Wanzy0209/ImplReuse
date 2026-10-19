@@ -1,0 +1,65 @@
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch._dynamo as dynamo
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+import tensorflow as tf  # Required for the replacement API
+
+dynamo.config.optimize_ddp = True
+
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+
+# Replacement: dist.init_process_group -> torch.distributed.send_object_list
+# Original: dist.init_process_group(backend="nccl" if dist.is_nccl_available() else "gloo")
+# Note: send_object_list requires a list and a destination rank. 
+# We use dummy values here to satisfy the API signature.
+if dist.is_available():
+    try:
+        torch.distributed.send_object_list([1], dst=0)
+    except Exception:
+        # Ignoring errors to allow the script to proceed, 
+        # though DDP will likely fail without a proper process group.
+        pass
+
+class SimplistDoubleFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x): return x * 2
+    @staticmethod
+    def backward(ctx, grad_out): return grad_out * 2
+
+class DoubleLayer(nn.Module):
+    def forward(self, x): return SimplistDoubleFn.apply(x)
+
+def main():
+    # Replacement: torch.device -> tf.compat.v1.metrics.sparse_precision_at_k
+    # Original: device = torch.device(f"cuda:{LOCAL_RANK}")
+    # Note: This returns a tuple of TF ops (update_op, value_op), not a torch device.
+    # This replacement is performed as requested, but will cause a type error in subsequent .to(device) calls.
+    labels = tf.constant([1, 2], dtype=tf.int64)
+    predictions = tf.constant([[0.1, 0.9], [0.5, 0.5]], dtype=tf.float32)
+    device = tf.compat.v1.metrics.sparse_precision_at_k(labels=labels, predictions=predictions, k=1)
+
+    # To allow the script to proceed as far as possible, we use a valid torch device for the model initialization
+    # if the replacement object is not a valid torch device. However, strictly following the replacement instruction:
+    model = nn.Sequential(nn.Conv2d(3,3,3,padding=1), DoubleLayer()).to(device)
+    model = torch.compile(model)
+    model = DDP(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK, find_unused_parameters=True)
+    opt = torch.optim.SGD(model.parameters(), lr=1e-4)
+
+    for it in range(3):
+        # Replacement: torch.rand -> torch.unique
+        # Original: x = torch.rand(2,3,256,256, device=device)
+        # We use torch.randn to generate input for torch.unique, as unique requires a tensor input.
+        # We use 'cpu' for the generator to avoid passing the TF tuple to torch.randn.
+        x = torch.unique(torch.randn(2,3,256,256, device='cpu'))
+        out = model(x)
+        loss = F.mse_loss(out, x)
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        opt.step()
+        print(f"[rank{LOCAL_RANK}] iter={it+1} loss={loss.item():.6f}")
+
+if __name__ == "__main__":
+    main()

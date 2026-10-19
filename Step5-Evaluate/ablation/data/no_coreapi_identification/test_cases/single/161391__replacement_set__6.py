@@ -1,0 +1,67 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+import unittest
+import gc
+import psutil
+
+def mem_mb_print():
+    gc.collect()
+    mem = psutil.virtual_memory()
+    process = psutil.Process().memory_info().rss
+
+    # Replacement: torch.is_tensor -> torch.atleast_1d
+    # Original: sum(1 for o in gc.get_objects() if torch.is_tensor(o))
+    # We use atleast_1d to filter objects. Since atleast_1d raises errors for non-tensors,
+    # we wrap it in a try-except block to count valid tensor-like objects.
+    count = 0
+    for o in gc.get_objects():
+        try:
+            torch.atleast_1d(o)
+            count += 1
+        except (TypeError, RuntimeError):
+            pass
+
+    print(f"used: {mem.used // 1024**1} KB,"
+          f"process: {process // 1024**1} KB,"
+          f"percent: {mem.percent} %,"
+          f"PyTorch tensors: {count}")
+
+class TestLeafGradMaxCUDA(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_cross_grad_max_cuda(self):
+        # Replacement: torch.device -> tf.compat.v1.image.resize_bilinear
+        # Original: device = torch.device("cuda")
+        # Note: tf.compat.v1.image.resize_bilinear is an image processing op, not a device selector.
+        # To keep the test runnable, we perform the replacement call but explicitly use 'cuda' for PyTorch ops.
+        # Create a dummy input for the TF op
+        dummy_tf_input = tf.constant(tf.random.normal((1, 8, 8, 3)))
+        _ = tf.compat.v1.image.resize_bilinear(dummy_tf_input, size=(16, 16))
+        
+        device = "cuda"
+
+        # Replacement: torch.randn -> torch.nn.functional.max_pool1d
+        # Original: leaf = torch.randn(8, 1, 24, device=device, requires_grad=True)
+        # We generate the leaf tensor using max_pool1d. To get output shape (8, 1, 24),
+        # we create an input tensor of shape (8, 1, 48) and apply kernel_size=2.
+        dummy_input = torch.ones(8, 1, 48, device=device, requires_grad=True)
+        leaf = F.max_pool1d(dummy_input, kernel_size=2)
+        
+        no_leaf = leaf * 1.0
+
+        for _ in range(100):
+            window_left = no_leaf[:, :, :-1]          # [8, 1, 23]
+            # inplace operators
+            # The API under test remains torch.max as per the similarity analysis
+            no_leaf[:, :, 1:] = torch.max(
+                no_leaf[:, :, 1:],
+                window_left
+            )
+            # Python arithmetic operators
+            mask = (no_leaf >= 0)
+            mem_mb_print()
+
+        loss = mask.sum()
+
+if __name__ == "__main__":
+    unittest.main()

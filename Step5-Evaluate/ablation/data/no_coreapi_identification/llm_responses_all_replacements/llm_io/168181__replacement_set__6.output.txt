@@ -1,0 +1,56 @@
+```python
+import torch
+import triton
+import triton.language as tl
+import unittest
+
+# Define a simple add kernel for the test to be runnable
+@triton.jit
+def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+class TestTritonKernels(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_triton_kernel_to_cpu_replaced(self):
+        # Helper to generate inputs using max_pool1d instead of randn
+        # We need a 3D input for max_pool1d. Using torch.ones to generate data.
+        base_x = torch.ones(4, 4, 4, device="cuda")
+        base_y = torch.ones(4, 4, 4, device="cuda")
+        
+        # Replacement: torch.randn -> torch.nn.functional.max_pool1d
+        # Input shape (4, 4, 4) -> Pool kernel 4 -> Output (4, 4, 1) -> Squeeze -> (4, 4)
+        x = torch.nn.functional.max_pool1d(base_x, kernel_size=4).squeeze(-1)
+        y = torch.nn.functional.max_pool1d(base_y, kernel_size=4).squeeze(-1)
+
+        def f(x, y):
+            # Replacement: torch.zeros_like -> torch.quantile
+            # To maintain shape (4, 4) for the kernel, we pass a (4, 4) tensor of quantiles.
+            # torch.quantile(input, q) where q is a tensor results in shape input.shape + q.shape
+            # if dim is not specified. However, quantile reduces dimensions.
+            # To get (4, 4) output from (4, 4) input, we can use a specific setup or just accept
+            # that the kernel will write to the result of the quantile.
+            # Here we create a (4, 4) tensor of quantile values between 0 and 1.
+            q_vals = torch.linspace(0, 1, 16, device=x.device).view(4, 4)
+            out = torch.quantile(x, q_vals)
+            
+            # Call the kernel. The original test used grid=(1,) and block size 16.
+            # x.numel() is 16, so this fits.
+            add_kernel[(1,)](x, y, out, 16, 16)
+            
+            out_cpu = out.cpu() + 1
+            return out_cpu
+
+        eager_out = f(x, y)
+        compiled_out = torch.compile(f)(x, y)
+        self.assertEqual(compiled_out, eager_out)
+
+if __name__ == '__main__':
+    unittest.main()
+```

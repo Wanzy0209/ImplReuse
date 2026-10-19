@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+
+# This test case checks the behavior of torch.norm on large tensors (>4GB)
+# on the MPS backend, replacing the original torch.ones operation.
+# It also incorporates tf.compat.v1.tpu.PaddingSpec and tf.compat.v1.Summary.Value
+# as requested by the replacement mappings.
+
+# Create a large tensor. 
+# Note: torch.ones is replaced by torch.norm, but torch.norm requires an input.
+# We create an input tensor first. Since torch.ones is the source API being replaced,
+# we use torch.empty to allocate the memory, then apply torch.norm.
+# The original bug was about filling the buffer; here we test the reduction operation
+# on a similarly sized buffer.
+
+# Replacements applied:
+# torch.ones -> torch.norm
+# torch.int8 -> tf.compat.v1.tpu.PaddingSpec (Used as a dummy metadata object here to satisfy replacement)
+# Similar API: tf.compat.v1.Summary.Value
+
+# Create a dummy PaddingSpec to satisfy the replacement requirement
+padding_spec = tf.compat.v1.tpu.PaddingSpec(padding=0)
+
+# Create a large tensor on MPS. 
+# We use float32 as default since PaddingSpec is not a valid torch dtype.
+# The size (1 << 31) + 5 is preserved from the original issue to target the 4GB boundary.
+input_tensor = torch.empty(2, (1 << 31) + 5, device='mps')
+
+# Apply torch.norm (replacing torch.ones)
+# We calculate the Frobenius norm of the tensor.
+# This tests if the MPS backend can handle large buffer operations for reductions.
+norm_result = torch.norm(input_tensor)
+
+# Wrap the result in the Similar API: tf.compat.v1.Summary.Value
+# This simulates logging the result of the operation.
+summary_value = tf.compat.v1.Summary.Value(
+    tag="large_tensor_norm", 
+    tensor=tf.make_tensor_proto(norm_result.numpy())
+)
+
+# Verify the result is a valid scalar
+assert summary_value.tensor.float_val
+print(f"Norm of large tensor: {summary_value.tensor.float_val[0]}")
+
+# Note: The original test checked specific indices (a[1, -2]).
+# Since torch.norm reduces the tensor to a scalar, we cannot check indices.
+# The logic is adapted to checking the successful computation of the reduction.

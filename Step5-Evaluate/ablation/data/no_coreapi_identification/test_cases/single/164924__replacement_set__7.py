@@ -1,0 +1,45 @@
+import torch
+import tensorflow as tf
+
+# Replacement: torch.nn.Module -> tf.data.experimental.pad_to_cardinality
+# Since we cannot inherit from a function, we define a class that utilizes the replacement logic.
+class Isin:
+    def __init__(self, device):
+        # Replacement: torch.manual_seed -> torch.argmax
+        # Original: torch.manual_seed(777)
+        torch.argmax(torch.tensor([777]))
+        
+        self.device = device
+
+        # Replacement: torch.randint -> torch.argmin
+        # Original: self.x = torch.randint(-50, 50, (1,), dtype=torch.int64, device=device)
+        # Note: torch.int64 is also replaced, but argmin doesn't take dtype, so it is omitted.
+        dummy_input_x = torch.tensor([[-50, 50]], device=device)
+        self.x = torch.argmin(dummy_input_x, dim=1)
+
+        dummy_input_y = torch.tensor([[-50, 50]], device=device)
+        self.y = torch.argmin(dummy_input_y, dim=1)
+
+    def forward(self):
+        print(self.x)
+        print(self.y)
+
+        # Replacement: torch.isin -> tf.data.experimental.pad_to_cardinality
+        # Original: out = torch.isin(self.x, self.y, assume_unique=False, invert=False)
+        # We adapt the inputs to fit the new API. pad_to_cardinality expects a dataset and cardinality.
+        # We convert the tensor to a dataset.
+        ds = tf.data.Dataset.from_tensor_slices(self.x.cpu().numpy())
+        out = tf.data.experimental.pad_to_cardinality(ds, 5)
+        return {'out': out}
+
+model = Isin('cuda')
+print("Eager:", model.forward())
+
+# Replacement: torch.compile -> tf.experimental.dtensor.jobs
+# Original: compiled_model = torch.compile(model, backend='inductor')
+compiled_model = tf.experimental.dtensor.jobs()
+
+# Original: print("Inductor:", compiled_model.forward())
+# Since compiled_model is now a list of strings (from dtensor.jobs), we cannot call .forward().
+# We print the result of the replacement API to verify execution.
+print("DTensor Jobs:", compiled_model)

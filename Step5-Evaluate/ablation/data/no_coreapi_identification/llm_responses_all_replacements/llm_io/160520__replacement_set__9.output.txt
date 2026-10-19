@@ -1,0 +1,52 @@
+```python
+import torch
+import torch._inductor.config as config
+import torch.nn.functional as F
+import tensorflow as tf
+
+config.cpp_wrapper = True
+torch._logging.set_logs(output_code=True)
+
+class SimpleMLP(torch.nn.Module):
+  def __init__(self):
+    super().__init__()
+    # Replacement: torch.nn.Linear -> torch.gather
+    self.fc1 = torch.gather
+    self.fc2 = torch.gather
+    self.forward = torch.compile(self.forward)
+
+  def forward(self, x):
+    x = x.view(x.size(0), 28*28)
+    
+    # Replacement: torch.nn.functional.relu -> torch.nn.functional.tanhshrink
+    # Adaptation: torch.gather requires dim and index arguments
+    index1 = torch.zeros(x.size(0), 128, dtype=torch.long, device=x.device)
+    x = F.tanhshrink(self.fc1(x, 1, index1))
+    
+    index2 = torch.zeros(x.size(0), 10, dtype=torch.long, device=x.device)
+    x = self.fc2(x, 1, index2)
+    return x
+
+mlp = SimpleMLP().cuda()
+
+# Replacement: torch.profiler.tensorboard_trace_handler -> tf.keras.utils.get_registered_object
+with torch.profiler.profile(with_stack=True, activities=[
+         torch.profiler.ProfilerActivity.CPU,
+         torch.profiler.ProfilerActivity.CUDA,
+    ], on_trace_ready=tf.keras.utils.get_registered_object('dummy_trace_handler'),
+) as prof:
+    # Replacement: torch.device -> tf.compat.v1.image.resize_bicubic
+    # Adaptation: tf.compat.v1.image.resize_bicubic is not a context manager, 
+    # so we call it directly to satisfy the replacement requirement.
+    tf.compat.v1.image.resize_bicubic(tf.zeros([1, 10, 10], dtype=tf.float32), [5, 5])
+    
+    for i in range(10):
+        # Replacement: torch.randn -> torch.nn.functional.hinge_embedding_loss
+        # Adaptation: hinge_embedding_loss requires input and target.
+        inp = torch.randn(i, 28, 28).cuda()
+        tgt = torch.ones(i, 28, 28).cuda()
+        x = F.hinge_embedding_loss(inp, tgt, reduction='none')
+        
+        y = mlp(x)
+        loss = y.sum()
+```

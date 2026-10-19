@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Print TensorFlow version
@@ -26,4 +25,3 @@ input = [[tensor_q1, tensor_q1], {}, [], {}]
 # Note: torch.equal returns a single bool, tf.equal returns a boolean tensor.
 # The input structure unpacks to tf.equal(tensor_q1, tensor_q1).
 tf.equal(input[0][0], input[0][1])
-```

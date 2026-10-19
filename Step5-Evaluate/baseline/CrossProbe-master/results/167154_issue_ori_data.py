@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.rand -> tf.random.uniform
@@ -26,4 +25,3 @@ input = tf.broadcast_to(tf.reshape(base, (499, 768)), (5, 499, 768))
 # Conversion: torch.nn.functional.linear -> tf.linalg.matmul + bias
 # PyTorch's F.linear(input, weight, bias) computes input @ weight.T + bias
 output = tf.linalg.matmul(input, weight, transpose_b=True) + bias
-```

@@ -1,0 +1,34 @@
+import torch
+
+# Replacement for torch.randn -> torch.var_mean
+# We generate a base tensor to calculate variance and mean, then use the variance 
+# expanded to the required input shape (1, 3, 32).
+base_tensor = torch.ones(1, 3, 32)
+var, _ = torch.var_mean(base_tensor)
+input_data = var.expand(1, 3, 32)
+
+# Original API Under Test: torch.nn.LazyConv1d
+# The bug is triggered by the extremely large padding value.
+lazy_conv1d = torch.nn.LazyConv1d(
+    out_channels=16, 
+    kernel_size=3, 
+    stride=1,
+    padding=9223372036854775803, 
+    bias=True
+)
+
+# Replacement for torch.device -> torch.diff
+# torch.diff returns a tensor. Passing a tensor to the 'device' argument of .to() 
+# moves the module to the device of that tensor.
+dummy_tensor_for_device = torch.tensor([0, 1])
+lazy_conv1d.to(device=torch.diff(dummy_tensor_for_device))
+
+# Execute the forward pass
+# Note: This is expected to cause a Segmentation Fault based on the original bug report.
+try:
+    output = lazy_conv1d(input_data)
+    # If the bug is fixed, this line might be reached.
+    assert output is not None
+except Exception as e:
+    # Catching standard exceptions to prevent test runner crash if it's a Python error instead of Segfault
+    print(f"Exception occurred: {e}")

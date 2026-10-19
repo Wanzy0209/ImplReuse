@@ -1,0 +1,33 @@
+import torch
+import torch.nn.functional as F
+
+@torch.compile(fullgraph=True)
+def fn(encoder_attention_mask, encoder_hidden_states):
+    # Original logic from the bug report
+    encoder_hidden_states = encoder_hidden_states.new_zeros([1, 512, 3072])
+    text_len = encoder_attention_mask.sum().item()
+    encoder_hidden_states = encoder_hidden_states[:, :text_len]
+    return encoder_hidden_states
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+# Replacement 1: torch.arange -> torch.eye
+# Original: mask = (torch.arange(512) < 8).unsqueeze(0).cuda()
+# We replace torch.arange(512) with torch.eye(512).
+# Note: torch.eye returns a 2D tensor, so the resulting mask shape changes,
+# but the sum().item() logic remains valid for generating a scalar slice length.
+mask = (torch.eye(512) < 8).unsqueeze(0).cuda()
+
+# Replacement 2: torch.randn -> torch.nn.functional.max_pool1d
+# Original: hidden = torch.randn((1, 512, 4096)).cuda()
+# We replace torch.randn with torch.nn.functional.max_pool1d.
+# Since max_pool1d requires an input tensor, we generate a dummy input.
+dummy_input = torch.ones(1, 512, 4096).cuda()
+hidden = F.max_pool1d(dummy_input, kernel_size=1).cuda()
+
+# Run the function
+output = fn(mask, hidden)
+
+# Assertion to verify execution
+assert output is not None
+assert output.shape[0] == 1

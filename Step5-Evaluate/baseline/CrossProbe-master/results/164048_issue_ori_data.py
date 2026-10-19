@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # PyTorch uses device="cuda", TensorFlow uses device context '/GPU:0'
@@ -12,4 +11,3 @@ with tf.device('/GPU:0'):
 
     # PyTorch boolean indexing mask[to_apply] -> tf.boolean_mask(mask, to_apply)
     tf.boolean_mask(mask, to_apply)
-```

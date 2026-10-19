@@ -1,0 +1,50 @@
+```python
+import torch
+from torch.nn.attention.flex_attention import flex_attention
+
+@torch.compile()
+def test(x, y):
+    # Materialize a bias matrix
+    B, L, device = x.shape[0], x.shape[1], x.device
+    
+    # Replacement: torch.arange -> torch.var
+    # Original: b = torch.arange(B, device=device, dtype=torch.long).view(B, 1, 1)
+    # We use torch.var on x to generate a tensor of shape (B, 1, 1) and cast to long for indexing
+    b = torch.var(x, dim=(1, 2), keepdim=True).long()
+    
+    # Original: q_idx = torch.arange(L, device=device, dtype=torch.long).view(1, L, 1)
+    q_idx = torch.var(x, dim=(0, 2), keepdim=True).long()
+    
+    # Original: kv_idx = torch.arange(L, device=device, dtype=torch.long).view(1, 1, L)
+    kv_idx = torch.var(x, dim=(0, 1), keepdim=True).long()
+
+    bias_mat = y[b, q_idx] + y[b, kv_idx] # (B, L, L)
+
+    # Dummy score_mod retrieving bias values
+    def score_mod(score, b, h, q_idx, kv_idx):
+        return score + bias_mat[b, q_idx, kv_idx]
+
+    x_ = x[:, :, None].repeat(1, 1, 16, 1)
+    # torch._dynamo.graph_break()
+    return flex_attention(x_, x_, x_, score_mod=score_mod)
+
+
+DEVICE = "cuda"
+B, L, D = 2, 16, 64
+
+# Replacement: torch.randn -> torch.var_mean
+# Original: x = torch.randn(B, L, D, device=DEVICE, requires_grad=True)
+# We use torch.var_mean on a random tensor to generate x. 
+# We compute variance along dim 0 and expand back to (B, L, D) to maintain shape and gradient flow.
+x = torch.var_mean(torch.randn(B, L, D, device=DEVICE, requires_grad=True), dim=0, keepdim=True)[0].expand(B, L, D)
+
+# Original: y = torch.randn(B, L, device=DEVICE, requires_grad=True)
+y = torch.var_mean(torch.randn(B, L, device=DEVICE, requires_grad=True), dim=0, keepdim=True)[0].expand(B, L)
+
+out = test(x, y).mean().backward()
+
+print(torch.__version__)
+print(f"x: {(x.grad is not None) and (x.grad.norm() > 0)}, y: {(y.grad is not None) and (y.grad.norm() > 0)}")
+assert x.grad.norm() > 0
+assert y.grad.norm() > 0
+```

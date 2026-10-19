@@ -1,0 +1,45 @@
+```python
+import torch
+import torch.export
+
+class DynamicSliceModel(torch.nn.Module):
+    """
+    Minimal model reproducing the data-dependent slicing error
+    described in the bug report.
+    """
+    def forward(self, item_embedding, max_item_num):
+        # The problematic operation from the traceback:
+        # selected_item_embedding = item_embedding[:, :max_item_num, :]
+        return item_embedding[:, :max_item_num, :]
+
+def test_export_dynamic_slice():
+    model = DynamicSliceModel()
+    
+    # Create example inputs.
+    # Replacing torch.arange with torch.zeros as requested.
+    # Shape corresponds to the log: Tensor(shape: torch.Size([s10, s64, 64]))
+    item_embedding = torch.zeros(10, 64, 64)
+    
+    # max_item_num is a scalar tensor used for slicing
+    max_item_num = torch.tensor(20)
+
+    # Attempt to export the model.
+    # The bug report indicates this fails with a "Data dependent error"
+    # when trying to evaluate the value of the slice index.
+    try:
+        ep = torch.export.export(model, args=(item_embedding, max_item_num))
+        
+        # If export succeeds, verify the output shape is correct
+        result = ep.module()(item_embedding, max_item_num)
+        expected_shape = torch.Size([10, 20, 64])
+        assert result.shape == expected_shape, f"Expected shape {expected_shape}, got {result.shape}"
+        print("Test passed: Export successful and output shape is correct.")
+        
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+        # Re-raise to ensure the test case signals failure if the bug is present
+        raise
+
+if __name__ == "__main__":
+    test_export_dynamic_slice()
+```

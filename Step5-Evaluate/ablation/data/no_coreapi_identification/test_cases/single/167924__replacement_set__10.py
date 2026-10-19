@@ -1,0 +1,49 @@
+import torch
+import tensorflow as tf
+
+# Ensure MPS is available, fallback to CPU if not (for testability)
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+
+# Replacement: torch.tensor -> torch.nn.functional.pdist
+# Original: counts = torch.tensor([0, 1, 0], device="mps")
+# We create a 2D tensor input for pdist using arange (since torch.tensor is replaced)
+# Input [[0], [1], [0]] results in distances [1, 0, 1]
+pdist_input = torch.arange(3, device=device).view(-1, 1).float()
+counts = torch.nn.functional.pdist(pdist_input)
+
+# Original: data = torch.arange(2, device="mps")
+data = torch.arange(2, device=device)
+
+# Original: data.repeat_interleave(counts[1:3], dim=0)
+# We perform the slicing as in the original bug report
+sliced_counts = counts[1:3]
+
+# Replacement: repeat_interleave -> tf.keras.ops.custom_gradient
+# We need to convert PyTorch tensors to TensorFlow tensors
+data_tf = tf.convert_to_tensor(data.cpu().numpy())
+sliced_counts_tf = tf.convert_to_tensor(sliced_counts.cpu().numpy())
+
+# Define the forward pass and gradient function to translate semantics
+# The original operation repeats 'data' based on 'counts'
+def forward_op(x, c):
+    # Use tf.repeat to mimic repeat_interleave logic
+    y = tf.repeat(x, c)
+    
+    # Define gradient function
+    def grad(dy):
+        # Gradient w.r.t x is dy (accumulated), w.r.t c is 0 (indices)
+        return dy, tf.zeros_like(c)
+    
+    return y, grad
+
+# Wrap the function to accept a tuple of inputs (standard for custom_gradient with multiple args)
+def wrapped_func(inputs):
+    return forward_op(inputs[0], inputs[1])
+
+# Apply the custom gradient op
+custom_op = tf.keras.ops.custom_gradient(wrapped_func)
+result = custom_op((data_tf, sliced_counts_tf))
+
+# Assertion to verify execution
+assert result is not None
+print("Test case executed successfully.")

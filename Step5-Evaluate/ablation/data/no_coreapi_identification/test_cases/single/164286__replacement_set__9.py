@@ -1,0 +1,40 @@
+import torch
+import torch.func
+
+def f(a, x):
+    # Replacing torch.sparse.mm with torch.mm
+    return torch.mm(a, x)
+
+# Replacing torch.tensor with torch.empty_strided
+# Original a was a sparse tensor, but torch.mm requires dense tensors.
+# We create a dense 3x3 matrix using torch.empty_strided.
+a = torch.empty_strided((3, 3), (3, 1), dtype=torch.float32)
+# Initialize 'a' with an identity matrix for a meaningful test
+a[0, 0] = 1.0
+a[1, 1] = 1.0
+a[2, 2] = 1.0
+
+# Original x was torch.tensor([1.0, 3.0, 2.0])[:, None]
+# We create a 3x1 dense matrix using torch.empty_strided.
+x = torch.empty_strided((3, 1), (1, 1), dtype=torch.float32)
+x[0, 0] = 1.0
+x[1, 0] = 3.0
+x[2, 0] = 2.0
+
+# Test direct call
+result = f(a, x)
+print("Direct call result:", result)
+
+# Test vjp (the context of the original bug)
+# The original bug caused a crash here because GradTrackingTensor lost the sparse layout.
+# For torch.mm with dense tensors, we expect this to work correctly.
+try:
+    vjp_fn = torch.func.vjp(f, a, x)[1]
+    # Call the vjp function with a cotangent to ensure the backward pass is exercised
+    grads = vjp_fn(torch.ones_like(result))
+    print("VJP successful. Gradients computed.")
+    assert grads[0] is not None
+    assert grads[1] is not None
+except Exception as e:
+    print(f"VJP failed: {e}")
+    raise

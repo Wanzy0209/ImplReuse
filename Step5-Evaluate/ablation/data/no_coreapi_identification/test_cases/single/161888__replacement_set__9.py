@@ -1,0 +1,21 @@
+import torch
+
+print(torch.__version__)
+
+# Replacement: torch.randint -> torch.bernoulli
+# Original: tensor1 = torch.randint(low=-100, high=100, size=(9, 3, 7), dtype=torch.int16)
+# torch.bernoulli generates random 0s and 1s from a probability tensor.
+prob1 = torch.rand(9, 3, 7)
+tensor1 = torch.bernoulli(prob1).to(torch.int16)
+
+# Original: tensor2 = torch.randint(low=0, high=2, size=(1, 6, 4, 8), dtype=torch.bool)
+prob2 = torch.rand(1, 6, 4, 8)
+tensor2 = torch.bernoulli(prob2).to(torch.bool)
+
+# Reproducing the original logic with the replaced tensors
+input = [[[], 154691921484029491302139942063978250367, ()], {}, [tensor1, tensor2], {}]
+
+# The following calls are expected to trigger the segmentation fault or error
+# associated with the malformed arguments in the bug report.
+r1 = torch.nn.MaxUnpool2d(*input[0], **input[1])
+r2 = r1(*input[2], **input[3])

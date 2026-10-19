@@ -1,0 +1,75 @@
+```python
+import torch
+import torch.nn.functional as F
+import torch.distributed
+import tensorflow as tf
+
+# Initialize distributed process group to allow recv_object_list to be called
+# Note: This is a minimal setup for the API replacement. 
+# In a real scenario, this would require a sender process.
+try:
+    torch.distributed.init_process_group(
+        backend='gloo', 
+        init_method='tcp://127.0.0.1:29500', 
+        rank=0, 
+        world_size=1
+    )
+except Exception as e:
+    print(f"Distributed init skipped or failed: {e}")
+
+def repro():
+    n = 8
+
+    # Replacement: torch.complex64 -> tf.compat.v1.gradients
+    # Note: This assigns a function object to dtype, which is semantically unusual 
+    # but follows the replacement instruction.
+    dtype = tf.compat.v1.gradients
+
+    # Replacement: torch.randn -> torch.nn.functional.max_pool3d
+    # To adapt the logic, we create a dummy input tensor to pool.
+    # We ignore the 'dtype' variable here as max_pool3d infers dtype from input,
+    # and passing a function object as dtype would be invalid.
+    input_tensor = torch.randn(4, n, n, 1, requires_grad=True)
+    A = F.max_pool3d(input_tensor, kernel_size=(1, 1, 1)).squeeze(-1)
+
+    # Replacement: torch.contiguous_format -> tf.compat.v1.gradients
+    # Note: clone expects a memory_format enum. Passing a function object 
+    # satisfies the replacement instruction but may cause runtime errors.
+    A = A.clone(memory_format=tf.compat.v1.gradients)
+
+    # Replacement: torch.eye -> torch.matrix_power
+    # Logic preservation: A^0 results in the Identity matrix.
+    I0 = torch.matrix_power(A, 0)
+
+    I = I0.unsqueeze(0).expand(A.shape[0], n, n).contiguous()
+
+    # Original logic: A = I + 0.5 * (A @ A.mH)
+    # Similar API usage: torch.swapaxes
+    # We use swapaxes to implement the matrix transpose part of mH.
+    # mH is conjugate transpose, so we also apply .conj().
+    A_H = torch.swapaxes(A, -1, -2).conj()
+    A = I + 0.5 * (A @ A_H)
+
+    # Replacement: torch.linalg.cholesky -> tf.compat.v1.gradients
+    # Note: This replaces the decomposition with a gradient computation.
+    R = tf.compat.v1.gradients(A, A)
+
+    loss = R.abs().sum()
+
+    # Replacement: Variable._execution_engine.run_backward -> tf.compat.v1.gradients
+    # Replaces the backward pass.
+    tf.compat.v1.gradients(loss, A)
+
+
+if __name__ == '__main__':
+    # Replacement: torch.compile -> torch.distributed.recv_object_list
+    # Note: This replaces the compilation step with a distributed receive operation.
+    # The function 'repro' is placed in a list to be received.
+    # This operation will block indefinitely without a corresponding sender.
+    repro_list = [repro]
+    torch.distributed.recv_object_list(repro_list, src=0)
+    
+    # Attempt to call the received object if it is callable
+    if repro_list and callable(repro_list[0]):
+        repro_list[0]()
+```

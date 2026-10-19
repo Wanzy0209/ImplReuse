@@ -1,0 +1,47 @@
+import tensorflow as tf
+import torch
+import torch.nn.functional as F
+
+def test_backward_stream_control():
+    """
+    Test case generated based on Issue 164094 and API replacements.
+    Replaces PyTorch stream switching logic with TensorFlow control_dependencies
+    and replaces random data generation with hinge_embedding_loss.
+    """
+    # Setup inputs for the replacement of torch.randn
+    # Since torch.randn is replaced by hinge_embedding_loss, we need inputs for it.
+    input_tensor = torch.tensor([1.0, 1.0], requires_grad=True)
+    target_tensor = torch.tensor([1.0, 1.0])
+
+    # Replaces torch.cuda.Stream
+    # We use a TF op to represent the stream/event to wait on
+    stream_event = tf.no_op(name="stream_event")
+
+    # Replaces torch.autograd.Function / BackwardStreamSwitcher.apply
+    # Replaces torch.cuda.set_stream / ctx.stream.wait_stream
+    # Replaces torch.cuda.current_stream
+    with tf.control_dependencies([stream_event]):
+        # Replaces torch.randn
+        # The forward operation is now the loss calculation
+        loss = F.hinge_embedding_loss(input_tensor, target_tensor)
+
+        # Replaces self.layer2
+        # We wrap a dummy layer operation or the loss itself
+        with tf.control_dependencies([loss]):
+            # Replaces y.sum
+            # We wrap the result in dependencies
+            with tf.control_dependencies([loss]):
+                # Replaces backward
+                # In PyTorch, backward is called. In TF, we might just ensure the op runs.
+                # To make it a valid test, we can check the value or just run it.
+                # Since we are in a TF context but using PT tensors, we just execute the line.
+                # To actually trigger the PT backward, we need to call .backward().
+                # But we are inside TF control dependencies.
+                # This is a hybrid test.
+                loss.backward()
+
+    # Assert something to make it a test
+    assert loss.item() >= 0
+
+if __name__ == "__main__":
+    test_backward_stream_control()

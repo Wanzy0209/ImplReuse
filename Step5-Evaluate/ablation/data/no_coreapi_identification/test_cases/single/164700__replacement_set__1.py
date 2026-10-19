@@ -1,0 +1,62 @@
+import os
+import torch
+import torch.nn as nn
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Replacements: torch.cat -> torch.nn.Linear
+# We need to instantiate Linear layers to replace the concatenation operations.
+# Original x shape: (1, 32). x[:, 1:] -> (1, 31).
+# Original y shape: (1, 1).
+# Cat result: (1, 32).
+linear1 = nn.Linear(31, 32).to(device)
+
+# Original x2 shape: (1, 31, 1). y3 shape: (1, 1, 1).
+# Cat result: (1, 32, 1).
+# Reshape target: (1, 32 * 2048).
+# Linear replacement for second cat:
+# We need to map (1, 31, 1) -> (1, 32 * 2048).
+# Flatten x2 to (1, 31).
+linear2 = nn.Linear(31, 32 * 2048).to(device)
+
+def f(x, y):
+    # Replaces torch.cat([x[:, 1:], y[:, None] + 32 * 2048], dim=1)
+    # with torch.nn.Linear
+    y2 = linear1(x[:, 1:])
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    # Replaces torch.cat([x2, y3], dim=1) with torch.nn.Linear (linear2)
+    # Replaces torch.arange(-2048, 0, device=device)[None, None, :] with torch.var(x)
+    # We flatten x2 to pass to linear2
+    return (linear2(x2.reshape(1, -1)) + torch.var(x)).reshape(1, 32 * 2048)
+
+# Replaces torch.zeros with torch.ones
+# Replaces torch.int32/int64 with torch.float32 (to support torch.solve semantics)
+# Note: torch.int32/int64 -> torch.solve replacement implies switching to the domain of solve (floats)
+x = torch.ones(1, 32, dtype=torch.float32, device=device)
+y = torch.ones(1, dtype=torch.float32, device=device)
+
+# This succeeds (calling the modified function f)
+try:
+    result_f = f(x, y)
+    print(f"Function f executed successfully. Output shape: {result_f.shape}")
+except Exception as e:
+    print(f"Function f failed: {e}")
+
+# This crashes (or replaces torch.compile(f) with torch.solve)
+# Original: torch.compile(f)(x, y)
+# Replacement: torch.solve(x, y)
+# Note: torch.solve is deprecated in favor of torch.linalg.solve.
+# We use torch.linalg.solve here to ensure the test is runnable on modern PyTorch,
+# interpreting "torch.solve" as the semantic target.
+# torch.solve(B, A) is equivalent to torch.linalg.solve(A, B).
+try:
+    # We attempt to solve the system y @ X = x
+    # y is (1, 1), x is (1, 32)
+    result_solve = torch.linalg.solve(y.unsqueeze(0), x)
+    print(f"torch.linalg.solve executed successfully. Output shape: {result_solve.shape}")
+except RuntimeError as e:
+    # torch.solve (and linalg.solve) can raise errors for singular matrices or other issues
+    print(f"torch.linalg.solve raised an error (expected behavior for some inputs): {e}")

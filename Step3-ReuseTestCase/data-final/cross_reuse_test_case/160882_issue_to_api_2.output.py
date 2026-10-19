@@ -1,0 +1,62 @@
+import torch
+import pytest
+
+def test_torch_compile_complex_dynamic_shapes():
+    """
+    Test case for Issue 160882.
+    
+    Verifies that torch.compile handles torch.complex correctly when input shapes 
+    change between calls (dynamic shapes). The bug caused an AssertionError 
+    when the compiled function was called with permuted/mismatched input shapes 
+    compared to the initial compilation trace.
+    
+    This test preserves the logic of the original bug report while structuring 
+    the test to verify the fix.
+    """
+    # The function to be compiled, mirroring the structure of the issue's repro
+    def f(real: torch.Tensor, imag: torch.Tensor) -> torch.Tensor:
+        z = torch.complex(real, imag)
+        return torch.fft.irfft(z, dim=1)
+
+    # Compile with fullgraph and dynamic=True to trigger the specific code path
+    # related to handling shape changes in the backend.
+    compiled = torch.compile(f, fullgraph=True, dynamic=True)
+
+    B, F, T = 1, 641, 39
+
+    # Create source tensors
+    r_src = torch.randn(B, F, T)
+    i_src = torch.randn(B, F, T)
+    
+    # First call: establishes the initial graph/trace
+    try:
+        out1 = compiled(r_src, i_src)
+    except Exception as e:
+        pytest.fail(f"First compilation call failed: {e}")
+
+    # Create inputs with mismatched shapes (permuted dimensions)
+    r_mismatch = r_src.permute(0, 2, 1)
+    i_mismatch = i_src.permute(0, 2, 1)
+
+    # Second call: triggers the recompilation or dynamic shape handling
+    # This is where the bug (AssertionError) originally occurred.
+    try:
+        out2 = compiled(r_mismatch, i_mismatch)
+    except AssertionError as e:
+        pytest.fail(f"Bug reproduced: AssertionError on shape mismatch (Issue 160882): {e}")
+    except Exception as e:
+        pytest.fail(f"Second call failed with unexpected error: {e}")
+
+    # Assertions to verify outputs are generated and shapes are as expected
+    assert out1 is not None
+    assert out2 is not None
+    
+    # Verify output shapes correspond to the input shapes
+    # irfft on dim=1 of (1, 641, 39) -> (1, 1280, 39)
+    # irfft on dim=1 of (1, 39, 641) -> (1, 76, 641)
+    assert out1.shape == (1, 1280, 39), f"Expected shape (1, 1280, 39), got {out1.shape}"
+    assert out2.shape == (1, 76, 641), f"Expected shape (1, 76, 641), got {out2.shape}"
+
+if __name__ == "__main__":
+    test_torch_compile_complex_dynamic_shapes()
+    print("Test passed successfully.")

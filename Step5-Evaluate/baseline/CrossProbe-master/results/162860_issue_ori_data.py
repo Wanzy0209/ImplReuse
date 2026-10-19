@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 def inner(x):
@@ -13,4 +12,3 @@ def fn(x):
     return inner(x)
 
 fn(tf.ones(3))
-```

@@ -1,0 +1,65 @@
+import torch
+import sys
+
+# Keep configurations as they are relevant to the eager/compile divergence context
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    # Original logic involved addmm, norm, var, relu, pow.
+    # Replacing core operations with torch.quantile and torch.nn.functional.elu.
+    
+    t0 = arg0 # size=(5, 4), dtype=bfloat16, device=cuda
+    t1 = arg1 # size=(3, 4, 5, 2), dtype=float32, device=cuda
+    t2 = arg2 # scalar for quantile, dtype=float32, device=cuda
+
+    # Use torch.quantile (replacing addmm/norm/var chain)
+    # Note: torch.quantile might cast bfloat16 to float32 internally
+    t3 = torch.quantile(t0, t2) 
+    
+    # Use torch.nn.functional.elu (replacing relu)
+    t4 = torch.nn.functional.elu(t3)
+    
+    # Another quantile operation to add complexity
+    t5 = torch.quantile(t1, t2)
+    
+    # Combine results
+    output = t4 + t5
+    return output
+
+# Generate arguments
+# Using bfloat16 and float32 to test precision handling
+arg0 = torch.rand([5, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+arg1 = torch.rand([3, 4, 5, 2], dtype=torch.float32, device='cuda', requires_grad=True)
+arg2 = torch.tensor(0.5, dtype=torch.float32, device='cuda') # Quantile value
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+    
+    # Compiled execution
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+    print('Compile Success! ')
+    
+    # Compare outputs (forward)
+    # Using .item() to get scalar values for comparison
+    out_eager_sum = out_eager.sum()
+    out_compiled_sum = out_compiled.sum()
+    
+    diff = (out_eager_sum - out_compiled_sum).abs().item()
+    rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100
+    
+    print(f'Relative diff (sum): {rel_diff:.6f}%')
+    
+    if rel_diff > 5:
+        print(f' Forward output sums differ significantly (relative)!')
+        print('out_eager_sum:', out_eager_sum.item())
+        print('out_compiled_sum:', out_compiled_sum.item())
+        print('Absolute diff:', diff)
+        print('Relative diff (%):', rel_diff)
+        sys.exit(1)

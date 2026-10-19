@@ -1,0 +1,124 @@
+Please fix the following Python test case based on the error message.
+
+## Original Test Case:
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_tf_lu_solve_compiled_vectorized():
+    """
+    Test case for tf.linalg.lu_solve adapted from PyTorch Issue 161969.
+    
+    The original issue involves a linear algebra operation (Cholesky decomposition 
+    and matrix inversion) failing inside a compiled (torch.compile) and vectorized 
+    (torch.vmap) function on the MPS backend due to contiguity checks.
+    
+    This test adapts the logic to TensorFlow, using tf.linalg.lu and 
+    tf.linalg.lu_solve to perform the equivalent linear system solving, 
+    wrapped in tf.function (compilation) and tf.vectorized_map (vectorization).
+    """
+
+    # 1. Setup Data
+    # Mimicking the shapes from the bug report: data=(2, 5, 3), matrix=(3, 3)
+    dtype = tf.float32
+    # Create a batch of data (zeros, as in the bug report)
+    data = tf.zeros((2, 5, 3), dtype=dtype)
+    
+    # Create a diagonal matrix (positive definite)
+    # Bug: p = torch.diag(torch.tensor((20., 0.5, 5,))**2)
+    p_diag_values = tf.constant([20., 0.5, 5.], dtype=dtype) ** 2
+    matrix = tf.linalg.diag(p_diag_values)
+
+    # 2. Define the core function
+    # Bug: def logp(x, matrix): 
+    #          p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+    #          p_mat_sqrt_inv = p_mat_sqrt.inverse()
+    #          val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+    #          return -val/2
+    
+    # We replace the Cholesky/Inverse pattern with LU decomposition and Solve.
+    # Mathematically, solving A * y = x is equivalent to y = A_inverse * x.
+    def solve_and_compute(x, mat):
+        # Perform LU decomposition
+        lu, perm = tf.linalg.lu(mat)
+        
+        # Extract the specific slice used in the bug report: x[0, :]
+        # x shape is (5, 3) inside the map (mapped over dim 0 of data)
+        target = x[0, :]
+        
+        # Solve mat * y = target  =>  y = mat^-1 * target
+        # tf.linalg.lu_solve expects RHS to be at least 2D or handle broadcasting.
+        # target is (3,), we expand to (3, 1) for the solver, then squeeze.
+        y = tf.linalg.lu_solve(lu, perm, target[..., tf.newaxis])[..., 0]
+        
+        # Compute the value
+        val = tf.reduce_sum(y ** 2)
+        return -val / 2
+
+    # 3. Vectorization
+    # Bug: score_func = torch.vmap(torch.func.grad(logp, 0), (0, None))
+    # We use tf.vectorized_map. We omit the gradient part for simplicity as the bug
+    # was a runtime error in the forward pass (contiguous assertion).
+    
+    def vectorized_func(x_batch, mat):
+        # Map over the first dimension of x_batch
+        return tf.vectorized_map(lambda x: solve_and_compute(x, mat), x_batch)
+
+    # 4. Compilation
+    # Bug: compiled_function = torch.compile(...)
+    compiled_function = tf.function(vectorized_func, jit_compile=True)
+
+    # 5. Execution
+    # Bug: res = compiled_function(data, p)
+    res = compiled_function(data, matrix)
+
+    # 6. Assertions
+    # Check shape
+    assert res.shape == (2,), f"Expected shape (2,), got {res.shape}"
+    
+    # Check values (should be finite)
+    assert not tf.reduce_any(tf.math.is_nan(res)), "Result contains NaN values"
+    
+    # Check specific value (since data is zeros, result should be 0)
+    # Note: In the bug, data is zeros. 0 * inv = 0. sum(0) = 0.
+    assert tf.reduce_all(res == 0.0), f"Expected zeros, got {res}"
+
+if __name__ == "__main__":
+    test_tf_lu_solve_compiled_vectorized()
+    print("Test passed successfully.")
+```
+
+## Error Message:
+```
+Traceback (most recent call last):
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/161969_issue_to_api_7.output.py", line 2, in <module>
+    import tensorflow as tf
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow/__init__.py", line 99, in <module>
+    from tensorflow_core import *
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow_core/__init__.py", line 28, in <module>
+    from tensorflow.python import pywrap_tensorflow  # pylint: disable=unused-import
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow/__init__.py", line 50, in __getattr__
+    module = self._load()
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow/__init__.py", line 44, in _load
+    module = _importlib.import_module(self.__name__)
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/importlib/__init__.py", line 127, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow_core/python/__init__.py", line 52, in <module>
+    from tensorflow.core.framework.graph_pb2 import *
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow_core/core/framework/graph_pb2.py", line 7, in <module>
+    from google.protobuf import descriptor as _descriptor
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/google/protobuf/descriptor.py", line 47, in <module>
+    from google.protobuf.pyext import _message
+ImportError: /usr/lib/x86_64-linux-gnu/libstdc++.so.6: version `GLIBCXX_3.4.29' not found (required by /home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/google/protobuf/pyext/_message.cpython-37m-x86_64-linux-gnu.so)
+
+```
+
+## Requirements:
+1. Analyze the error message carefully
+2. Fix the test case to resolve the error
+3. Keep the test logic intact - do not change the core test functionality
+4. If the error is due to missing dependencies or environment issues, try to add mock or skip conditions
+5. Output only the fixed Python code, wrapped in ```python ... ``` blocks
+
+## Fixed Test Case:

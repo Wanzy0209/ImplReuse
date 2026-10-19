@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.compile(backend="eager") -> tf.function
@@ -18,4 +17,3 @@ inp = tf.random.normal(shape=(3))
 fn(inp, 0)
 fn(inp, 1)
 fn(inp, 2)
-```

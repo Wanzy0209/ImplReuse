@@ -1,0 +1,22 @@
+import torch
+import torch.nn.functional as F
+
+# Test case for torch.addmm with API replacements
+
+# Replacing torch.rand with torch.fliplr
+# We use torch.randn to generate the input tensor for torch.fliplr
+a = torch.fliplr(torch.randn((64, 300), dtype=torch.complex64, device="mps"))
+b = torch.fliplr(torch.randn((64, 10000), dtype=torch.complex64, device="mps"))
+c = torch.fliplr(torch.randn((10000, 300), dtype=torch.complex64, device="mps"))
+
+# Original API call: torch.addmm
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+
+# Replacing torch.testing.assert_close with torch.nn.functional.binary_cross_entropy
+# Note: binary_cross_entropy requires float inputs, so we take the real part of the complex tensors
+# to ensure the test case is runnable.
+mps_result = torch.addmm(a, b, c, alpha=1.0, beta=0.5).cpu()
+cpu_result = torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5)
+
+loss = F.binary_cross_entropy(mps_result.real, cpu_result.real)
+print(f"Binary Cross Entropy Loss: {loss}")

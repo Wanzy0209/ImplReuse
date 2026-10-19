@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 MAX = 3
@@ -30,4 +29,3 @@ out = jacfunc(x, idxs)
 # Conversion: torch.compile -> tf.function
 jacfunc = tf.function(jacfunc)
 out = jacfunc(x, idxs)
-```

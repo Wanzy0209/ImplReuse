@@ -313,7 +313,7 @@ def main():
         default=DEFAULT_OUTPUT_DIR,
         help="Output directory for fixed test cases."
     )
-    parser.add_argument("--api-key", default=os.getenv("ZHIPUAI_API_KEY", "044f2bc486d14e13aa68259fbd1970c4.hjLhKCmeXaDRt2xf"), help="Zhipu API key.")
+    parser.add_argument("--api-key", default=os.getenv("ZHIPUAI_API_KEY"), help="Zhipu API key.")
     parser.add_argument("--model", default="glm-4.7", help="LLM model.")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=8192)
@@ -328,7 +328,7 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # Create LLM IO directory
-    io_dir = args.output_dir / "llm_responses_old" / DEFAULT_IO_SUBDIR
+    io_dir = args.output_dir / "llm_responses" / DEFAULT_IO_SUBDIR
     io_dir.mkdir(parents=True, exist_ok=True)
 
     # Process cross-framework test cases

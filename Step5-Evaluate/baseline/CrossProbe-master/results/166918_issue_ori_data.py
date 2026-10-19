@@ -1,4 +1,3 @@
-```python
 import os
 import tensorflow as tf
 import json
@@ -89,4 +88,3 @@ if __name__ == "__main__":
         # TF strategy cleanup is implicit, but we can reset if needed
         if strategy:
             del strategy
-```

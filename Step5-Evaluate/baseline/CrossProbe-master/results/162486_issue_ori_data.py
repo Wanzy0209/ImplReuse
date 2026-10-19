@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: PyTorch's Dataset is typically replaced by tf.data.Dataset
@@ -56,4 +55,3 @@ def test_bug(device: str = 'cuda'):
 
 test_bug(device='cpu') # works
 test_bug(device='cuda') # throws an error in PyTorch, works in TF
-```

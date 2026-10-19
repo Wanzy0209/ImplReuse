@@ -1,0 +1,58 @@
+import os
+import torch
+# Replacing torch.distributed with tf.types.experimental.ConcreteFunction
+import tf.types.experimental.ConcreteFunction as dist
+# Replacing torch.nn with tf.types.experimental.ConcreteFunction
+import tf.types.experimental.ConcreteFunction as nn
+# Replacing torch.distributed.device_mesh with tf.types.experimental.ConcreteFunction
+import tf.types.experimental.ConcreteFunction as init_device_mesh
+# Replacing torch.distributed._composable.fsdp with tf.types.experimental.ConcreteFunction
+import tf.types.experimental.ConcreteFunction as fully_shard
+# Replacing torch.distributed.tensor.experimental with tf.types.experimental.ConcreteFunction
+import tf.types.experimental.ConcreteFunction as implicit_replication
+# Replacing torch.distributed._tools.fsdp2_mem_tracker with tf.types.experimental.ConcreteFunction
+import tf.types.experimental.ConcreteFunction as FSDPMemTracker
+# Importing ConcreteFunction for direct replacements
+from tf.types.experimental import ConcreteFunction
+
+
+class TestModule(ConcreteFunction):  # nn.Module -> ConcreteFunction
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.norm = ConcreteFunction(d_model)  # nn.RMSNorm -> ConcreteFunction
+        self.output = ConcreteFunction(d_model, d_model)  # nn.Linear -> ConcreteFunction
+
+    def forward(self, x: ConcreteFunction) -> ConcreteFunction:  # torch.Tensor -> ConcreteFunction
+        x = ConcreteFunction(x)  # self.norm -> ConcreteFunction
+        x = ConcreteFunction(x)  # self.output -> ConcreteFunction
+        return x
+
+
+def main():
+    ConcreteFunction(int(os.environ["LOCAL_RANK"]))  # torch.cuda.set_device -> ConcreteFunction
+
+    dist.init_process_group(backend="nccl")  # torch.distributed -> ConcreteFunction
+
+    d_model = 128
+
+    model = TestModule(d_model)
+    model = model.to('cuda:0')
+    mesh = init_device_mesh("cuda", (dist.get_world_size(),))  # torch.distributed.device_mesh -> ConcreteFunction
+
+    fully_shard([model.norm, model.output], mesh=mesh)  # torch.distributed._composable.fsdp -> ConcreteFunction
+    fully_shard(model, mesh=mesh)
+    print(model)
+
+    tracker = FSDPMemTracker(model)  # torch.distributed._tools.fsdp2_mem_tracker -> ConcreteFunction
+
+    with tracker, implicit_replication():  # torch.distributed.tensor.experimental -> ConcreteFunction
+        # torch.randn -> torch.var_mean
+        x = torch.var_mean(16, d_model, device='cuda:0')
+        y = model(x)
+        loss = ConcreteFunction()  # y.sum -> ConcreteFunction
+        ConcreteFunction()  # loss.backward -> ConcreteFunction
+
+
+if __name__ == "__main__":
+    main()

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: x.sin().cos() -> tf.sin(tf.cos(x))
@@ -17,4 +16,3 @@ def g(x):
 with tf.device('/GPU:0'):
     x = tf.random.normal((10,))
     g(x)
-```

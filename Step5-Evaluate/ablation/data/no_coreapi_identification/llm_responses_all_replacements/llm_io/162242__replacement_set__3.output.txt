@@ -1,0 +1,80 @@
+```python
+import os
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import tensorflow as tf
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use gloo backend for CPU compatibility
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_non_deterministic(rank, world_size):
+    setup(rank, world_size)
+
+    # Loop to mimic original test structure
+    for i in range(10): 
+        # Replacement: torch.arange -> torch.dist
+        # Original: inputs = torch.arange(24, ...).reshape([2, 3, 4]).cuda()
+        # We use torch.dist to generate a scalar value, then expand it to the required shape.
+        dist_val = torch.dist(torch.zeros(1), torch.ones(1))
+        inputs = dist_val.expand(2, 3, 4)
+        inputs.requires_grad = True
+
+        # Replacement: torch.arange -> torch.dist
+        # Original: src = torch.arange(-99, ...).reshape([2, 2, 3]).cuda()
+        src_dist_val = torch.dist(torch.zeros(1), torch.full((1,), 99.0))
+        src = src_dist_val.expand(2, 2, 3)
+        src.requires_grad = True
+
+        # Replacement: torch.tensor -> tf.compat.v1.linalg.diag
+        # Original: index = torch.tensor(...)
+        # torch.distributed.scatter does not use an index tensor, but we create it to satisfy the replacement requirement.
+        index = tf.compat.v1.linalg.diag([1.0, 1.0, 1.0])
+
+        # Adaptation: torch.distributed.scatter
+        # Original: res = torch.scatter(inputs, 1, index, src)
+        # Distributed scatter takes a list of tensors.
+        # We create a scatter list where each element is 'src' (simplified logic for testing).
+        scatter_list = [src.clone() for _ in range(world_size)]
+
+        if rank == 0:
+            torch.distributed.scatter(inputs, scatter_list=scatter_list, src=0)
+        else:
+            torch.distributed.scatter(inputs, scatter_list=None, src=0)
+        
+        res = inputs
+
+        # Replacement: torch.ones_like -> tf.experimental.numpy.allclose
+        # Original: res.backward(torch.ones_like(res))
+        # tf.experimental.numpy.allclose returns a boolean (True/False) or array of bools.
+        # We use it to generate the gradient tensor.
+        grad_tensor = tf.experimental.numpy.allclose(res, res)
+        
+        # Note: tf returns numpy array or bool, convert to tensor for backward
+        if isinstance(grad_tensor, bool):
+            grad_tensor = torch.tensor(float(grad_tensor))
+        else:
+            grad_tensor = torch.tensor(grad_tensor, dtype=torch.float32)
+            
+        res.backward(grad_tensor)
+
+        # Verification (simplified for distributed context)
+        # Check if inputs received the data from src
+        # Since scatter_list[i] is src, inputs should be equal to src
+        is_close = tf.experimental.numpy.allclose(res.detach().numpy(), src.detach().numpy())
+        assert is_close, f"Rank {rank} failed check at iteration {i}"
+
+        print(f"Rank {rank} Test {i + 1}/10 passed")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(test_non_deterministic, args=(world_size,), nprocs=world_size, join=True)
+```

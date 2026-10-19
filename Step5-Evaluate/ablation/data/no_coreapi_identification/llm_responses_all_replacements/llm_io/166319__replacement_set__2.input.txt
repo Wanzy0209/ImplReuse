@@ -1,0 +1,130 @@
+Issue ID: 166319
+Title: [Fuzzer][Eager/Compile Divergence] LoweringException assert bool(static_expr)
+Bug Description:
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1215252001)
+
+def fuzzed_program(arg_0, arg_1, arg_2, sentinel):
+    var_node_4 = arg_0 # size=(9, 1, 15, 4), stride=(60, 60, 0, 1), dtype=int32, device=cuda
+    var_node_3 = torch.squeeze(var_node_4) # size=(9, 15, 4), stride=(60, 4, 1), dtype=int32, device=cuda
+    var_node_2 = torch.chunk(var_node_3, 4, dim=2)[0] # size=(9, 15, 1), stride=(1, 1, 1), dtype=int32, device=cuda
+    var_node_1 = torch.squeeze(var_node_2) # size=(9, 15), stride=(0, 1), dtype=int32, device=cuda
+    var_node_7 = arg_1 # size=(20, 15), stride=(15, 1), dtype=int64, device=cuda
+    var_node_8 = arg_2 # size=(18, 15), stride=(15, 1), dtype=int64, device=cuda
+    _input_size_var_node_6 = var_node_7.size(0)
+    _index_var_node_6 = torch.randint(0, _input_size_var_node_6, (18, 15), device=var_node_7.device)
+    var_node_6 = torch.gather(var_node_7, 0, _index_var_node_6) # size=(18, 15), stride=(0, 0), dtype=int64, device=cuda
+    var_node_5 = torch.chunk(var_node_6, 2, dim=0)[0] # size=(9, 15), stride=(0, 1), dtype=int64, device=cuda
+    var_node_0 = torch.mul(var_node_1, var_node_5) # size=(9, 15), stride=(0, 1), dtype=int64, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad
+...
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.compile
+Similarity score: 1.0
+
+Similar API information:
+# Extracted call chain for torch.compile
+
+# --- torch.compile ---
+def compile(
+    model: _Optional[_Callable] = None,
+    *,
+    fullgraph: builtins.bool = False,
+    dynamic: _Optional[builtins.bool] = None,
+    backend: _Union[str, _Callable] = "inductor",
+    mode: _Union[str, None] = None,
+    options: _Optional[dict[str, _Union[str, builtins.int, builtins.bool]]] = None,
+    disable: builtins.bool = False,
+) -> _Union[
+    _Callable[[_Callable[_InputT, _RetT]], _Callable[_InputT, _RetT]],
+    _Callable[_InputT, _RetT],
+]:
+    """
+    Optimizes given model/function using TorchDynamo and specified backend.
+    If you are compiling an :class:`torch.nn.Module`, you can also use :meth:`torch.nn.Module.compile`
+    to compile the module inplace without changing its structure.
+
+    Concretely, for every frame executed within the compiled region, we will attempt
+    to compile it and cache the compiled result on the code object for future
+    use.  A single frame may be compiled multiple times if previous compiled
+    results are not applicable for subsequent calls (this is called a "guard
+    failure), you can use TORCH_LOGS=guards to debug these situations.
+    Multiple compiled re
+...
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
+torch.manual_seed(1215252001)
+
+def fuzzed_program(arg_0, arg_1, arg_2, sentinel):
+    var_node_4 = arg_0 # size=(9, 1, 15, 4), stride=(60, 60, 0, 1), dtype=int32, device=cuda
+    var_node_3 = torch.squeeze(var_node_4) # size=(9, 15, 4), stride=(60, 4, 1), dtype=int32, device=cuda
+    var_node_2 = torch.chunk(var_node_3, 4, dim=2)[0] # size=(9, 15, 1), stride=(1, 1, 1), dtype=int32, device=cuda
+    var_node_1 = torch.squeeze(var_node_2) # size=(9, 15), stride=(0, 1), dtype=int32, device=cuda
+    var_node_7 = arg_1 # size=(20, 15), stride=(15, 1), dtype=int64, device=cuda
+    var_node_8 = arg_2 # size=(18, 15), stride=(15, 1), dtype=int64, device=cuda
+    _input_size_var_node_6 = var_node_7.size(0)
+    _index_var_node_6 = torch.randint(0, _input_size_var_node_6, (18, 15), device=var_node_7.device)
+    var_node_6 = torch.gather(var_node_7, 0, _index_var_node_6) # size=(18, 15), stride=(0, 0), dtype=int64, device=cuda
+    var_node_5 = torch.chunk(var_node_6, 2, dim=0)[0] # size=(9, 15), stride=(0, 1), dtype=int64, device=cuda
+    var_node_0 = torch.mul(var_node_1, var_node_5) # size=(9, 15), stride=(0, 1), dtype=int64, device=cuda
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(5, 30, (484,)).to(torch.int32), (9, 1, 15, 4), (60, 60, 0, 1))
+arg_1 = torch.as_strided(torch.randint(5, 30, (300,)).to(torch.int64), (20, 15), (15, 1))
+arg_2 = torch.as_strided(torch.randint(5, 30, (270,)).to(torch.int64), (18, 15), (15, 1))
+
+args = (arg_0, arg_1, arg_2) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+The API torch.compile is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- torch.as_strided -> torch.Tensor.view (score=0.9976944923400879, source_group=pytorch_to_pytorch)
+- torch.chunk -> torch.logcumsumexp (score=0.9957140684127808, source_group=pytorch_to_pytorch)
+- torch.gather -> torch.cholesky (score=0.9984546899795532, source_group=pytorch_to_pytorch)
+- torch.manual_seed -> tf.compat.v1.assign (score=0.9964887499809265, source_group=pytorch_to_tensorflow)
+- torch.mul -> torch.sub (score=0.9965839385986328, source_group=pytorch_to_pytorch)
+- torch.randint -> torch.amin (score=0.9996843338012695, source_group=pytorch_to_pytorch)
+- torch.squeeze -> torch.nn.LazyLinear (score=0.9946479797363281, source_group=pytorch_to_pytorch)
+- torch.tensor -> torch.isinf (score=0.9955465793609619, source_group=pytorch_to_pytorch)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

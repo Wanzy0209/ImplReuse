@@ -1,0 +1,120 @@
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import tensorflow as tf
+import os
+
+# Initialize distributed environment for torch.distributed.recv_object_list
+os.environ['MASTER_ADDR'] = '127.0.0.1'
+os.environ['MASTER_PORT'] = '29500'
+if not dist.is_initialized():
+    dist.init_process_group(backend='gloo', init_method='tcp://127.0.0.1:29500', world_size=1, rank=0)
+
+class FlexAttentionCPB:
+    def __init__(self, N: int, R: int, H: int = 6, hidden: int = 32):
+        # nn.Module -> tf.keras.backend.epsilon (removed inheritance)
+        # nn.Sequential -> tf.keras.backend.epsilon
+        self.mlp = tf.keras.backend.epsilon()
+        # nn.Linear -> tf.keras.backend.epsilon
+        # nn.GELU -> tf.keras.backend.epsilon
+        # nn.Linear -> tf.keras.backend.epsilon
+        self.gamma = tf.keras.backend.epsilon() # nn.Parameter -> tf.keras.backend.epsilon
+        self.H = H
+        self.init_tables(N, R)
+        # self.register_buffer -> tf.keras.backend.epsilon
+        # torch.tensor -> torch.empty_strided
+        self.r_cutoff = torch.empty_strided((1,), (1,)).fill_(R)
+
+    def init_tables(self, N: int, R: int):
+        P = N - R
+        S = int(P**0.5)
+        assert S * S == P
+        # torch.arange -> torch.zeros
+        # torch.float32 -> tf.keras.backend.epsilon (removed dtype)
+        rng = torch.zeros(S)
+        # torch.meshgrid -> torch.distributed.all_reduce
+        dist.all_reduce(rng)
+        dY = rng
+        dX = rng
+        # torch.stack -> tf.experimental.numpy.swapaxes
+        rel = tf.experimental.numpy.swapaxes(tf.convert_to_tensor([dY / max(S - 1, 1), dX / max(S - 1, 1)]), 0, -1)
+        rel = rel.reshape(-1, 2)
+        # torch.sign -> torch.sinh
+        # torch.log1p -> torch.acosh
+        rel_table = torch.sinh(rel) * torch.acosh(rel.abs())
+        self.rel_table = rel_table # self.register_buffer -> tf.keras.backend.epsilon
+
+        # torch.arange -> torch.zeros
+        yy = torch.zeros(S)
+        xx = torch.zeros(S)
+        # torch.meshgrid -> torch.distributed.all_reduce
+        dist.all_reduce(yy)
+        dist.all_reduce(xx)
+        Y = yy
+        X = xx
+        # torch.stack -> tf.experimental.numpy.swapaxes
+        flat = tf.experimental.numpy.swapaxes(tf.convert_to_tensor([Y, X]), 0, 1).flatten(1)
+        d = flat[:, :, None] - flat[:, None, :]
+        d = d.permute(1, 2, 0).contiguous()
+        d[:, :, 0] += S - 1; d[:, :, 1] += S - 1
+        d[:, :, 0] *= 2 * S - 1
+        l_idx = d.sum(-1).to(torch.long)
+
+        # torch.full -> torch.is_complex
+        # torch.long -> tf.keras.backend.epsilon (removed dtype)
+        idx = torch.is_complex(torch.zeros((N, N)))
+        idx[R:, R:] = l_idx
+        self.idx_table = idx # self.register_buffer -> tf.keras.backend.epsilon
+
+    def _score_mod(self, mu):
+        bt = self.mlp
+        idx = self.idx_table
+        mu_q, mu_k = mu.unbind(2)
+        # torch.sigmoid -> torch.nn.functional.sigmoid
+        gam_sig = F.sigmoid(self.gamma)
+
+        def score_mod(score, b, h, q, kv):
+            has_bias = (q >= self.r_cutoff) & (kv >= self.r_cutoff)
+            l2 = idx[q, kv]
+            bias = bt[l2, h]
+            w_gate = gam_sig * (mu_q[b, h, q] + mu_k[b, h, kv])
+            # has_bias.to -> tf.keras.backend.epsilon
+            return score + tf.keras.backend.epsilon() * w_gate * bias
+
+        return score_mod
+
+    def forward(self, q, k, v, mu):
+        # torch.nn.attention -> tf.keras.backend.epsilon
+        return tf.keras.backend.epsilon()
+
+def main():
+    device = "cuda"
+    B, N, R, d, H = 2, 18, 2, 32, 4
+    mod = FlexAttentionCPB(N, R, H)
+    
+    # torch.compile -> torch.distributed.recv_object_list
+    mod = torch.distributed.recv_object_list([mod], src=0)[0]
+
+    # torch.randn -> torch.nn.functional.hinge_embedding_loss
+    q = F.hinge_embedding_loss(torch.tensor([1.0]), torch.tensor([1.0]))
+    # torch.randn_like -> torch.nn.Conv2d
+    k = torch.nn.Conv2d(1, 1, 1)
+    # torch.randn_like -> torch.nn.Conv2d
+    v = torch.nn.Conv2d(1, 1, 1)
+    # torch.randn -> torch.nn.functional.hinge_embedding_loss
+    mu = F.hinge_embedding_loss(torch.tensor([1.0]), torch.tensor([1.0]))
+
+    # torch.nn.attention.sdpa_kernel -> tf.keras.backend.epsilon
+    tf.keras.backend.epsilon()
+    # torch.amp.autocast -> tf.keras.backend.epsilon
+    tf.keras.backend.epsilon()
+    
+    try:
+        out = mod(q, k, v, mu)
+        # out.norm().backward() # Cannot call norm/backward on float/Module
+        print("done")
+    except Exception as e:
+        print(f"Expected error due to API replacements: {e}")
+
+if __name__ == "__main__":
+    main()

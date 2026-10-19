@@ -1,0 +1,48 @@
+```python
+import tensorflow as tf
+
+def test_control_dependencies_initialization():
+    """
+    Test case adapted from Issue 163915 (nvshmem triton kernels IMA silently).
+    
+    The original bug occurred because `enable_triton` required a specific naming 
+    convention in the kernel, otherwise initialization was missed, leading to 
+    silent CUDA IMA.
+    
+    This test case translates the logic to TensorFlow, replacing the source APIs
+    with `tf.control_dependencies` to ensure that initialization dependencies
+    are explicitly enforced, preventing the "silent failure" scenario.
+    """
+    with tf.compat.v1.Session() as sess:
+        # Define a variable that requires initialization (mimicking nvshmem state)
+        var = tf.Variable(0, dtype=tf.int32, name="test_var")
+        
+        # Define the initialization operation
+        init_op = tf.compat.v1.variables_initializer([var])
+
+        # Replaces: nvshmem.enable_triton()
+        # We use tf.control_dependencies to ensure the initialization happens
+        # before the kernel execution. This explicitly links the setup to the run,
+        # fixing the bug where the link was implicit (naming-based).
+        with tf.control_dependencies([init_op]):
+            
+            # Replaces: nvshmem.get(...)
+            # Inside the kernel, we use tf.control_dependencies to manage the
+            # operation that depends on the initialized state.
+            # This ensures the read operation is controlled and ordered correctly.
+            with tf.control_dependencies([var.read_value()]):
+                # The actual kernel work (e.g., incrementing or using the value)
+                result = tf.add(var, 1)
+
+        # Initialize variables and run the operation
+        # In the original bug, this would fail if the naming convention wasn't met.
+        # Here, tf.control_dependencies ensures it runs correctly.
+        sess.run(init_op)
+        output = sess.run(result)
+        
+        # Assert that the operation ran successfully and produced the expected result
+        assert output == 1, "Operation should have run successfully with initialization"
+
+if __name__ == "__main__":
+    test_control_dependencies_initialization()
+```

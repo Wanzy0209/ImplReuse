@@ -1,0 +1,17 @@
+import torch
+
+# Replacement logic: torch.randint -> torch.isreal
+# torch.isreal(input) returns a boolean tensor indicating if all elements are real.
+# We generate random real tensors to serve as inputs for torch.isreal,
+# maintaining the original tensor shapes.
+tensor1 = torch.isreal(torch.randn(9, 3, 7))
+tensor2 = torch.isreal(torch.randn(1, 6, 4, 8))
+
+# Original logic: Constructing the input list with malformed arguments
+# to test the robustness of torch.nn.MaxUnpool2d
+input = [[[], 154691921484029491302139942063978250367, ()],{},[tensor1,tensor2],{}]
+
+# Original logic: Instantiating and calling the API
+# This attempts to reproduce the segmentation fault or error handling behavior
+r1 = torch.nn.MaxUnpool2d(*input[0],**input[1])
+r2 = r1(*input[2],**input[3])

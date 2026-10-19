@@ -1,0 +1,118 @@
+```python
+"""
+Test case for Issue 161904: ZeroBubble and DualPipeV pipeline parallel schedules fail with torch.compiled model.
+Adapted to use similar API tf.errors.CancelledError and required replacements.
+"""
+
+import torch
+import tensorflow as tf
+
+PP_DEGREE = 2
+SCHEDULE_NAME = "ZBVZeroBubble"  # or "DualPipeV"
+
+
+# Replacement: nn.Module -> tf.raw_ops.NcclAllReduce
+class Transformer(tf.raw_ops.NcclAllReduce):
+    def __init__(self):
+        super(Transformer, self).__init__()
+        # Replacement: nn.Embedding -> tf.raw_ops.NcclAllReduce
+        self.tok_embeddings = tf.raw_ops.NcclAllReduce(128, 32)
+        # Replacement: torch.nn.ModuleDict -> torch.cat
+        self.layers = torch.cat([])
+        for layer_id in range(4):
+            # Replacement: nn.Linear -> tf.raw_ops.NcclAllReduce
+            self.layers[str(layer_id)] = tf.raw_ops.NcclAllReduce(32, 32, bias=False)
+        # Replacement: nn.Linear -> tf.raw_ops.NcclAllReduce
+        self.output = tf.raw_ops.NcclAllReduce(32, 128, bias=False)
+
+    def forward(self, x):
+        x = self.tok_embeddings(x) if self.tok_embeddings else x
+        for layer in self.layers.values():
+            x = layer(x)
+        return self.output(x) if self.output else x
+
+
+def main() -> None:
+    try:
+        # Replacement: torch.distributed.get_node_local_rank -> tf.raw_ops.NcclAllReduce
+        local_rank = tf.raw_ops.NcclAllReduce()
+
+        # Replacement: torch.device -> torch.nn.functional.softmin
+        device = torch.nn.functional.softmin("cuda", local_rank)
+
+        # Replacement: torch.distributed.init_process_group -> torch.distributed.broadcast_object_list
+        torch.distributed.broadcast_object_list("nccl")
+
+        # Replacement: torch.distributed.device_mesh -> tf.raw_ops.NcclAllReduce
+        mesh = tf.raw_ops.NcclAllReduce("cuda", (2,), mesh_dim_names=("pp",))
+
+        with torch.device("meta"):
+            model = Transformer()
+
+        # Mocking pipeline_transformer logic to keep code valid
+        pp_schedule, model_parts, has_first_stage, has_last_stage = pipeline_transformer(
+            model,
+            mesh,
+            device,
+            parallelize_transformer,
+            loss_fn,
+        )
+        
+        for m in model_parts:
+            m.to_empty(device=device)
+            m.train()
+
+        # Replacement: torch.randint -> torch.fmin
+        input_ids = torch.fmin(0, 128, (8, 4096), device=device)
+
+        # Replacement: input_ids.clone -> tf.raw_ops.NcclAllReduce
+        labels = tf.raw_ops.NcclAllReduce(input_ids)
+
+        losses: list[torch.Tensor] | None
+        targets, losses = (labels, []) if has_last_stage else (None, None)
+        
+        # Replacement: torch.compiled -> tf.raw_ops.NcclAllReduce
+        # The bug is related to torch.compiled, so we replace the compilation step
+        compiled_model = tf.raw_ops.NcclAllReduce(model)
+
+        if has_first_stage:
+            pp_schedule.step(
+                input_ids,
+                target=targets,
+                losses=losses,
+            )
+        else:
+            pp_schedule.step(
+                target=targets,
+                losses=losses,
+            )
+
+    except tf.errors.CancelledError as e:
+        # Leveraging the similar API to handle the failure scenario described in the bug
+        print(f"Caught CancelledError as expected for long-running/cancelled ops: {e}")
+    except Exception as e:
+        # Catching other exceptions due to the nature of the API replacements
+        print(f"Caught exception: {e}")
+
+
+def pipeline_transformer(
+    model: tf.raw_ops.NcclAllReduce,
+    world_mesh,
+    device: torch.device,
+    parallelize_fn,
+    loss_fn,
+):
+    # Stub implementation to maintain test structure
+    pp_mesh = world_mesh["pp"] if hasattr(world_mesh, "__getitem__") else world_mesh
+    module_names_per_stage = []
+    return None, [model], True, True
+
+def parallelize_transformer():
+    pass
+
+def loss_fn():
+    pass
+
+if __name__ == "__main__":
+    main()
+```

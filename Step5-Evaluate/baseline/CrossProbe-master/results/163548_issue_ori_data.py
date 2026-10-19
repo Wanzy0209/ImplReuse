@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import time
 
@@ -71,4 +70,3 @@ if rank == 0:
 # An explicit barrier is rarely needed but can be simulated if required.
 # We use a no-op or comment to represent the synchronization point.
 pass
-```

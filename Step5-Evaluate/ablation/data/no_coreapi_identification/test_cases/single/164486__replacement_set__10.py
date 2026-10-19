@@ -1,0 +1,106 @@
+import torch
+import torch.nn.functional as F
+import torch.distributed as dist
+import tensorflow as tf
+import os
+import sys
+
+# Setup for distributed communication to support torch.distributed.broadcast_object_list
+os.environ['MASTER_ADDR'] = '127.0.0.1'
+os.environ['MASTER_PORT'] = '29500'
+if not dist.is_initialized():
+    dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+# Replacement: torch.manual_seed -> tf.compat.v1.assert_variables_initialized
+# Passing an empty list to check initialization status without specific variables.
+try:
+    tf.compat.v1.assert_variables_initialized(var_list=[])
+except Exception as e:
+    print(f"TF assert_variables_initialized warning: {e}")
+
+def fuzzed_program(arg_0, sentinel):
+    # Replacement: torch.full -> torch.rand_like
+    # Original: torch.full((), 1, dtype=torch.int16)
+    # Create a reference tensor for rand_like
+    ref_tensor = torch.empty((), dtype=torch.int16)
+    var_node_2 = torch.rand_like(ref_tensor)
+
+    var_node_3 = arg_0
+
+    # Replacement: torch.add -> torch.numel
+    # Original: torch.add(var_node_2, var_node_3)
+    # numel returns an int, so we wrap it in a tensor to maintain compatibility with subsequent ops.
+    var_node_1 = torch.tensor(torch.numel(var_node_2), dtype=torch.int16)
+
+    # Replacement: torch.full -> torch.rand_like
+    # Original: torch.full((1,), 3, dtype=torch.int16)
+    ref_tensor_2 = torch.empty((1,), dtype=torch.int16)
+    var_node_5 = torch.rand_like(ref_tensor_2)
+
+    # Replacement: torch.squeeze -> torch.empty_strided
+    # Original: torch.squeeze(var_node_5)
+    var_node_4 = torch.empty_strided(var_node_5.size(), var_node_5.stride(), dtype=var_node_5.dtype)
+
+    # Original API: torch.div (Kept as is)
+    var_node_0 = torch.div(var_node_1, var_node_4)
+
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Replacement: torch.tensor -> torch.nn.functional.pdist
+# Original: torch.tensor(1.0, requires_grad=True)
+# pdist returns a tensor. We ensure requires_grad is True via the input.
+dummy_input = torch.randn(1, 2, requires_grad=True)
+sentinel = F.pdist(dummy_input)
+
+# Replacement: torch.as_strided -> torch.nn.functional.pdist
+# Replacement: torch.randn -> torch.nn.functional.cosine_embedding_loss
+# Original: torch.as_strided(torch.randn(1).to(torch.int16), (), ())
+# We first generate a tensor using cosine_embedding_loss (replacing randn),
+# then use pdist (replacing as_strided) on it.
+# cosine_embedding_loss returns a scalar, so we reshape it for pdist (which expects 2D).
+i1 = torch.randn(5, 5)
+i2 = torch.randn(5, 5)
+target = torch.ones(5)
+loss = F.cosine_embedding_loss(i1, i2, target)
+arg_0 = F.pdist(loss.unsqueeze(0).unsqueeze(0))
+
+args = (arg_0,) + (sentinel,)
+
+# Eager execution
+out_eager = fuzzed_program(*args)
+if out_eager.requires_grad:
+    out_eager.sum().backward()
+print('Eager Success! ')
+
+# Replacement: torch.compile -> torch.distributed.broadcast_object_list
+# Original: compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+# We broadcast the function object to simulate the "compilation/preparation" step.
+func_list = [fuzzed_program]
+dist.broadcast_object_list(func_list, src=0)
+compiled_program = func_list[0]
+
+# Compiled execution
+out_compiled = compiled_program(*args)
+if out_compiled.requires_grad:
+    out_compiled.sum().backward()
+print('Compile Success! ')
+
+# Comparison logic
+out_eager_sum = out_eager.sum()
+out_compiled_sum = out_compiled.sum()
+diff = (out_eager_sum - out_compiled_sum).abs().item()
+rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100
+print(f'Relative diff (sum): {rel_diff:.6f}%')
+if rel_diff > 5 and diff > 1:
+    print(f' Forward output sums differ significantly (relative and absolute)!')
+    print('out_eager_sum:', out_eager_sum.item())
+    print('out_compiled_sum:', out_compiled_sum.item())
+    print('Absolute diff:', diff)
+    print('Relative diff (%):', rel_diff)
+    sys.exit(1)

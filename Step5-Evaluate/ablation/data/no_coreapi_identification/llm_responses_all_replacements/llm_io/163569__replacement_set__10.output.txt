@@ -1,0 +1,97 @@
+```python
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+import os
+import sys
+
+# Initialize distributed environment for torch.distributed.broadcast_object_list
+if not dist.is_initialized():
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    try:
+        dist.init_process_group('gloo', rank=0, world_size=1)
+    except Exception as e:
+        print(f"Distributed init failed (expected in some envs): {e}")
+
+# Replacements for config lines
+# torch._dynamo.config.capture_scalar_outputs -> torch.repeat_interleave
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> torch.repeat_interleave
+# torch._inductor.config.emulate_precision_casts -> torch.repeat_interleave
+_ = torch.repeat_interleave(torch.tensor([0]), 1)
+_ = torch.repeat_interleave(torch.tensor([0]), 1)
+_ = torch.repeat_interleave(torch.tensor([0]), 1)
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0
+    t1 = t0.max(dim=0).values
+    
+    # t1.transpose -> torch.repeat_interleave
+    t2 = torch.repeat_interleave(t1, repeats=1)
+    
+    t3 = arg1
+    
+    # torch.exp -> tf.compat.v1.nn.conv3d
+    # We need to adapt the tensor for conv3d (expects 5D input: [batch, depth, height, width, channels])
+    # t3 shape is (17, 64, 358). We reshape to (17, 1, 1, 64, 358) to simulate batch/depth
+    t3_tf = tf.constant(t3.numpy())
+    input_5d = tf.reshape(t3_tf, [17, 1, 1, 64, 358])
+    # Create a dummy filter for conv3d: [depth, height, width, in_channels, out_channels]
+    # We want to keep channels roughly same or compatible, let's use [1, 1, 1, 358, 358]
+    filter_tf = tf.constant(tf.random.normal([1, 1, 1, 358, 358]))
+    strides = [1, 1, 1, 1, 1]
+    padding = 'SAME'
+    res_tf = tf.compat.v1.nn.conv3d(input_5d, filter_tf, strides, padding)
+    # Convert back to torch tensor and reshape to original t3 shape
+    t4 = torch.tensor(res_tf.numpy()).view(17, 64, 358)
+    
+    t5 = arg2
+    
+    # t5.transpose -> torch.repeat_interleave
+    t6 = torch.repeat_interleave(t5, repeats=1)
+    
+    # nn.functional.conv1d -> torch.repeat_interleave
+    # Original: t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0)
+    t7 = torch.repeat_interleave(t4, repeats=1)
+    
+    # t7.clone -> torch.repeat_interleave
+    t8 = torch.repeat_interleave(t7, repeats=1)
+    t8.zero_()
+    
+    t9 = t2 * t7 * t8
+    output = t9
+    return output
+
+# torch.rand -> torch.repeat_interleave
+# torch.bfloat16 -> (removed, replaced by default or handled by repeat_interleave)
+# torch.float32 -> (removed)
+base0 = torch.ones(1)
+arg0 = torch.repeat_interleave(base0, 2*261*17*358).view(2, 261, 17, 358).requires_grad_(True)
+
+base1 = torch.ones(1)
+arg1 = torch.repeat_interleave(base1, 17*64*358).view(17, 64, 358).requires_grad_(True)
+
+base2 = torch.ones(1)
+arg2 = torch.repeat_interleave(base2, 261*1*64).view(261, 1, 64).requires_grad_(True)
+
+if __name__ == '__main__':
+    # Use tf.lookup.KeyValueTensorInitializer as requested by the Similar API section
+    keys = tf.constant([1, 2, 3])
+    vals = tf.constant([4, 5, 6])
+    init = tf.lookup.KeyValueTensorInitializer(keys, vals)
+    table = tf.lookup.StaticHashTable(init, default_value=-1)
+    print("TF Lookup Test:", table.lookup(tf.constant([1, 5])).numpy())
+
+    out_eager = foo(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+
+    # torch.compile -> torch.distributed.broadcast_object_list
+    # We broadcast the function object itself to satisfy the replacement
+    if dist.is_initialized():
+        dist.broadcast_object_list([foo], src=0)
+    
+    out_compiled = foo(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+```

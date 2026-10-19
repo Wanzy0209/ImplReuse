@@ -2,6 +2,7 @@ import torch
 
 flag = True
 
+
 @torch.compile(backend="eager")
 def fn(x):
     x = x + 1
@@ -14,6 +15,7 @@ def fn(x):
         with torch.no_grad():
             torch._dynamo.graph_break()
     return x + 4
+
 
 fn(torch.ones(3))
 flag = False

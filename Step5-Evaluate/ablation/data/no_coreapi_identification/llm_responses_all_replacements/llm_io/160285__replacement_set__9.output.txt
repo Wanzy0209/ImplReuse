@@ -1,0 +1,95 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_moe_gradients_with_replacements():
+    """
+    Test case replicating the logic of the MoE gradient bug report,
+    replacing specific PyTorch APIs with tf.compat.v1.scatter_mul.
+    """
+    print("Testing with TensorFlow (simulating 2 processes)")
+
+    # Setup variables to simulate the distributed environment
+    # Replacing TorchGroupedExperts, torch.distributed.tensor.DTensor with tf.compat.v1.scatter_mul
+    # We initialize a variable and use scatter_mul to set its initial state
+    experts_w1 = tf.Variable(np.ones((2, 8, 8), dtype=np.float32))
+    indices_init = tf.constant([[0, 0, 0], [1, 1, 1]])
+    updates_init = tf.constant([1.0, 1.0])
+    tf.compat.v1.scatter_mul(experts_w1, indices_init, updates_init)
+
+    print("==================================================")
+    print("TEST 1: Without Expert Parallel Sharding")
+    print("==================================================")
+    
+    # Replacing torch.Size with tf.compat.v1.scatter_mul
+    # We simulate checking the size by updating a variable with the size info
+    size_var = tf.Variable([1.0])
+    tf.compat.v1.scatter_mul(size_var, [0], [float(np.prod([2, 8, 8]))])
+    print(f"1 experts.w1 shape (simulated): {size_var.numpy()[0]}")
+
+    # Simulate gradient computation
+    # Replacing loss.backward with tf.compat.v1.scatter_mul
+    # We simulate the backward pass by updating a gradient variable
+    grad_var = tf.Variable(np.ones((2, 8, 8), dtype=np.float32))
+    # Apply gradient updates (simulating the result of backward)
+    indices_grad = tf.constant([[0, 0, 0], [1, 1, 1]])
+    updates_grad = tf.constant([0.0013, 0.0553])
+    tf.compat.v1.scatter_mul(grad_var, indices_grad, updates_grad)
+
+    # Replacing p.grad.norm with tf.compat.v1.scatter_mul
+    # We calculate the norm and store it using scatter_mul
+    norm_var = tf.Variable([1.0])
+    current_norm = tf.norm(grad_var)
+    tf.compat.v1.scatter_mul(norm_var, [0], [current_norm])
+
+    # Replacing param.grad.to_local with tf.compat.v1.scatter_mul
+    # We simulate accessing the local shard
+    local_var = tf.Variable([1.0])
+    local_val = grad_var[0, 0, 0]
+    tf.compat.v1.scatter_mul(local_var, [0], [local_val])
+
+    print("WITHOUT EP Gradient Analysis:")
+    print(f"  experts.w1: grad_norm = {norm_var.numpy()[0]:.6f}, local_val = {local_var.numpy()[0]:.4f}")
+
+    print("==================================================")
+    print("TEST 2: With Expert Parallel Sharding")
+    print("==================================================")
+    print("Applying ExpertParallel sharding with EP size: 2")
+
+    # Replacing torch.Size with tf.compat.v1.scatter_mul
+    size_var_ep = tf.Variable([1.0])
+    tf.compat.v1.scatter_mul(size_var_ep, [0], [float(np.prod([2, 8, 8]))])
+    print(f"0 experts.w1 shape (simulated): {size_var_ep.numpy()[0]}")
+
+    # Simulate gradient computation with EP
+    # Replacing loss.backward with tf.compat.v1.scatter_mul
+    # In the bug report, gradients are doubled. We simulate this by applying doubled updates.
+    grad_var_ep = tf.Variable(np.ones((2, 8, 8), dtype=np.float32))
+    
+    # Apply gradient updates (simulating the result of backward with the bug)
+    indices_grad_ep = tf.constant([[0, 0, 0], [1, 1, 1]])
+    updates_grad_ep = tf.constant([0.0026, 0.1106]) # Doubled values
+    tf.compat.v1.scatter_mul(grad_var_ep, indices_grad_ep, updates_grad_ep)
+
+    # Replacing p.grad.norm with tf.compat.v1.scatter_mul
+    norm_var_ep = tf.Variable([1.0])
+    current_norm_ep = tf.norm(grad_var_ep)
+    tf.compat.v1.scatter_mul(norm_var_ep, [0], [current_norm_ep])
+
+    # Replacing param.grad.to_local with tf.compat.v1.scatter_mul
+    local_var_ep = tf.Variable([1.0])
+    local_val_ep = grad_var_ep[0, 0, 0]
+    tf.compat.v1.scatter_mul(local_var_ep, [0], [local_val_ep])
+
+    print("WITH EP Gradient Analysis:")
+    print(f"  experts.w1: grad_norm = {norm_var_ep.numpy()[0]:.6f}, local_val = {local_var_ep.numpy()[0]:.4f}")
+
+    # Assertions to verify the behavior matches the bug report (doubling)
+    # The bug report states gradients are exactly 2x in size.
+    # We check if our simulated EP gradients are larger than non-EP.
+    assert norm_var_ep.numpy()[0] > norm_var.numpy()[0], "EP gradients should be larger (simulating bug)"
+    assert local_var_ep.numpy()[0] > local_var.numpy()[0], "EP local gradients should be larger (simulating bug)"
+
+if __name__ == "__main__":
+    test_moe_gradients_with_replacements()
+```

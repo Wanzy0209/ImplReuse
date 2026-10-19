@@ -1,0 +1,86 @@
+```python
+import tensorflow as tf
+import os
+import numpy as np
+
+def test_os_command_injection_reproduction():
+    """
+    Test case reproducing the OS command injection logic from the PyTorch issue
+    (Issue ID: 167480) using the specified replacement APIs.
+    
+    Original Logic:
+    1. Check if header exists (os.path.exists).
+    2. Parse command/flags (shlex.split).
+    3. Execute command via shell (subprocess.check_output).
+    4. Main entry point (torch.utils.cpp_extension).
+    
+    Replaced Logic:
+    All steps are replaced by tf.keras.callbacks.LambdaCallback to simulate
+    the flow and execution within a Keras training loop context.
+    """
+    
+    # State to simulate the build process flow between callbacks
+    build_context = {
+        'header_exists': False,
+        'extra_cflags': "echo 'pwned' > /tmp/pwned.txt",  # Malicious payload
+        'parsed_args': None
+    }
+
+    # Cleanup before test
+    if os.path.exists('/tmp/pwned.txt'):
+        os.remove('/tmp/pwned.txt')
+
+    # Setup a minimal Keras model to trigger callbacks
+    model = tf.keras.models.Sequential([tf.keras.layers.Dense(1)])
+    model.compile(optimizer='sgd', loss='mse')
+
+    # 1. Replace os.path.exists with tf.keras.callbacks.LambdaCallback
+    # Simulates checking for the precompiled header
+    check_header = tf.keras.callbacks.LambdaCallback(
+        on_train_begin=lambda logs: build_context.update({'header_exists': True})
+    )
+
+    # 2. Replace shlex.split with tf.keras.callbacks.LambdaCallback
+    # Simulates parsing the user-supplied flags
+    parse_flags = tf.keras.callbacks.LambdaCallback(
+        on_epoch_begin=lambda epoch, logs: build_context.update({'parsed_args': build_context['extra_cflags'].split()})
+    )
+
+    # 3. Replace subprocess.check_output with tf.keras.callbacks.LambdaCallback
+    # Simulates the execution of the command. 
+    # In the original bug, this is where shell=True allows injection.
+    # Here, the callback executes the system command.
+    execute_command = tf.keras.callbacks.LambdaCallback(
+        on_epoch_end=lambda epoch, logs: os.system(build_context['extra_cflags']) 
+        if build_context['header_exists'] else None
+    )
+
+    # 4. Replace torch.utils.cpp_extension with tf.keras.callbacks.LambdaCallback
+    # Simulates the main API call (load_inline with use_pch=True)
+    load_inline = tf.keras.callbacks.LambdaCallback(
+        on_train_end=lambda logs: print("Build process simulated via callback")
+    )
+
+    # Dummy data for fitting
+    x_train = np.array([[1.0]])
+    y_train = np.array([[1.0]])
+
+    # Run the "build" process by fitting the model with the callbacks
+    model.fit(
+        x_train, 
+        y_train, 
+        epochs=1, 
+        callbacks=[check_header, parse_flags, execute_command, load_inline], 
+        verbose=0
+    )
+
+    # Assertion: Verify that the command injection logic executed (file created)
+    assert os.path.exists('/tmp/pwned.txt'), "OS command injection logic failed to execute"
+    
+    # Cleanup
+    os.remove('/tmp/pwned.txt')
+    print("Test passed: Command injection logic preserved.")
+
+if __name__ == "__main__":
+    test_os_command_injection_reproduction()
+```

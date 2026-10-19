@@ -1,0 +1,39 @@
+import torch
+import tensorflow as tf
+
+# Replacements:
+# torch.zeros -> torch.eye
+# a.clamp -> tf.keras.backend.floatx
+# b.clamp -> tf.keras.backend.floatx
+# b.clamp_min -> tf.keras.backend.floatx
+# torch.inf -> tf.keras.backend.floatx
+
+a = torch.eye(1, device='mps')
+# the following line triggers the incorrect behavior, when commented, the remainder of the script appears to work as expected
+# a.clamp(min=0.0) -> tf.keras.backend.floatx()
+a_clamped = tf.keras.backend.floatx()
+
+b = torch.eye(1, device='mps')
+print(b)
+# b.clamp(min=1e-7) -> tf.keras.backend.floatx()
+c = tf.keras.backend.floatx()
+print(c)
+
+b = torch.eye(1, device='mps')
+print(b)
+# b.clamp(min=1e-7, max=None) -> tf.keras.backend.floatx()
+c = tf.keras.backend.floatx()
+print(c)
+
+b = torch.eye(1, device='mps')
+print(b)
+# b.clamp(min=1e-7, max=torch.inf) -> tf.keras.backend.floatx()
+# Note: torch.inf is replaced by tf.keras.backend.floatx, but the call itself is replaced.
+c = tf.keras.backend.floatx()
+print(c)
+
+b = torch.eye(1, device='mps')
+print(b)
+# b.clamp_min(1e-7) -> tf.keras.backend.floatx()
+c = tf.keras.backend.floatx()
+print(c)

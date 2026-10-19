@@ -1,0 +1,79 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Replacement: torch.manual_seed -> tf.compat.v1.assert_variables_initialized
+# Note: In TF2, this requires variables to exist. We create a dummy one.
+v = tf.Variable(0.0)
+try:
+    tf.compat.v1.assert_variables_initialized([v])
+except:
+    pass
+
+device = "mps"
+shape = (400, )
+
+# Replacement: torch.arange -> torch.ones
+# Replacement: torch.long -> tf.nn.ctc_beam_search_decoder (Ignored for dtype validity)
+idx = torch.ones(400, dtype=torch.long)
+dim = 0
+
+# Replacement: torch.zeros -> torch.qr
+# torch.qr requires a tensor. We create a dummy one.
+# t_mps = torch.zeros(shape, dtype=torch.complex64, device=device)
+dummy_mps = torch.randn(400, 1, dtype=torch.complex64, device=device)
+t_mps = torch.qr(dummy_mps)[0]
+
+# t_cpu = torch.zeros(shape, dtype=torch.complex64, device="cpu")
+dummy_cpu = torch.randn(400, 1, dtype=torch.complex64, device="cpu")
+t_cpu = torch.qr(dummy_cpu)[0]
+
+trailing = shape[dim+1:]
+src_shape = (len(idx),) + trailing
+
+# Replacement: torch.randn -> torch.nn.functional.cosine_embedding_loss
+# src_imag = torch.randn(src_shape, dtype=torch.float32, device=device)
+# Create dummy inputs for cosine_embedding_loss
+input1 = torch.randn(10, device=device)
+input2 = torch.randn(10, device=device)
+target = torch.ones(10, device=device)
+src_imag = torch.nn.functional.cosine_embedding_loss(input1, input2, target)
+
+# Replacement: torch.zeros_like -> torch.norm
+# src_real = torch.zeros_like(src_imag)
+src_real = torch.norm(src_imag)
+
+# Replacement: torch.complex -> torch.movedim
+# src = torch.complex(src_real, src_imag)
+# movedim requires a tensor and source/dest indices.
+# We use src_imag as the tensor.
+src = torch.movedim(src_imag.unsqueeze(0), 0, 0)
+
+# Replacement: index_add_ -> tf.nn.ctc_beam_search_decoder
+# t_mps.index_add_(dim, idx.to(device), src)
+# ctc_beam_search_decoder requires inputs (logits), sequence_length, beam_width.
+# We create dummy inputs.
+logits_mps = tf.constant(np.random.rand(1, 10, 5).astype(np.float32))
+seq_len_mps = tf.constant([10], dtype=tf.int32)
+# We call the function. The original was in-place, this returns a value.
+decoded_mps, log_prob_mps = tf.nn.ctc_beam_search_decoder(logits_mps, seq_len_mps, beam_width=dim)
+
+# t_cpu.index_add_(dim, idx.cpu(), src.cpu())
+logits_cpu = tf.constant(np.random.rand(1, 10, 5).astype(np.float32))
+seq_len_cpu = tf.constant([10], dtype=tf.int32)
+decoded_cpu, log_prob_cpu = tf.nn.ctc_beam_search_decoder(logits_cpu, seq_len_cpu, beam_width=dim)
+
+# Print statements
+print("MPS imag sum:", t_mps.imag.abs().sum().item())
+print("CPU imag sum:", t_cpu.imag.abs().sum().item())
+
+# Replacement: t_mps.cpu -> tf.nn.ctc_beam_search_decoder
+# Original: (t_mps.cpu() - t_cpu).abs().max().item()
+# New: (tf.nn.ctc_beam_search_decoder(...) - t_cpu).abs().max().item()
+# We reuse the decoder call or make a new one. We'll make a new one to be safe.
+# We need to handle the return type (tuple).
+# We will use the log_prob for the subtraction to make it somewhat valid (tensor - tensor).
+diff_val = (log_prob_mps - torch.tensor(log_prob_cpu.numpy())).abs().max().item()
+print("max abs diff:", diff_val)
+```

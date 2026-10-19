@@ -1,0 +1,67 @@
+import torch
+import tensorflow as tf
+from torch.library import Library
+
+# Define a custom library and operator to replace torch.compile behavior
+lib = Library("my_lib", "DEF")
+
+def func_nojit_meta(x):
+    # Abstract implementation logic
+    return torch.empty((2,), dtype=x.dtype)
+
+def func_nojit_impl(x):
+    # Original logic: torch.full((2, ), x, dtype=torch.float64)
+    # Replacements applied:
+    # - torch.tensor (input) -> tf.experimental.numpy.diag (handled in test setup)
+    # - torch.float64 -> torch.special.scaled_modified_bessel_k1 (used as value transformation)
+    # - x.item -> torch.special.scaled_modified_bessel_k1 (implied scalar extraction context)
+    
+    # We simulate the fill operation using the replacement API for the value
+    # Since torch.full expects a scalar value, and we are replacing float64/item logic
+    # with scaled_modified_bessel_k1, we apply it to the input.
+    
+    # Note: x is expected to be a tensor here. 
+    # We use the replacement API to determine the fill value.
+    fill_val = torch.special.scaled_modified_bessel_k1(x)
+    
+    # We return a tensor filled with this value. 
+    # We omit explicit dtype=torch.float64 to satisfy the replacement constraint 
+    # (replacing dtype argument with the function call logic is invalid syntax, 
+    # so we rely on inference or default, effectively removing the explicit float64).
+    return torch.full((2, ), fill_val)
+
+# Register the abstract implementation (replaces torch.compile)
+torch.library.impl_abstract("my_lib::my_op", func_nojit_meta)
+torch.library.impl("my_lib::my_op", func_nojit_impl)
+
+# Test setup
+# Original: x1 = torch.tensor(5.0, dtype=torch.float64)
+# Replacement: torch.tensor -> tf.experimental.numpy.diag
+# We create inputs using the replacement API.
+# Note: diag creates a 2D array, we take a scalar from it or pass it if compatible.
+# To keep it runnable and minimal, we convert the TF diag result to a torch tensor 
+# to pass to our custom op, or adapt the op to handle it. 
+# Given the strict replacement, we use tf.experimental.numpy.diag to create the input object.
+
+# Create inputs using the replacement API
+# tf.experimental.numpy.diag([5.0]) creates a 2x2 identity-like matrix with 5.0 on diagonal.
+# We extract the scalar value to pass to the torch op, mimicking the scalar input of the original test.
+x1_tf = tf.experimental.numpy.diag([5.0])
+x2_tf = tf.experimental.numpy.diag([10.0])
+
+# Convert to torch tensors for the custom op (interoperability)
+x1 = torch.from_numpy(x1_tf.numpy()).diag().flatten()[0:1] # Extracting the 5.0
+x2 = torch.from_numpy(x2_tf.numpy()).diag().flatten()[0:1] # Extracting the 10.0
+
+# Call the custom op (replaces the compiled function call)
+res1 = torch.ops.my_lib.my_op(x1)
+res2 = torch.ops.my_lib.my_op(x2)
+
+# Assertions to check behavior
+# The original bug was that res2 would equal res1.
+# We assert they are different to ensure the fix/behavior is correct.
+assert not torch.allclose(res1, res2), "Results should differ based on input"
+
+print("Test passed. Results differ as expected.")
+print(f"Result 1: {res1}")
+print(f"Result 2: {res2}")

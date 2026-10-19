@@ -1,4 +1,3 @@
-```python
 import copy
 import math
 import tensorflow as tf
@@ -103,4 +102,3 @@ with tf.device(device):
     # The default signature key is usually 'serving_default'
     infer = aot_model_cuda.signatures["serving_default"]
     output_cuda = infer(input_ids=input_x_cuda, attention_mask=input_y_cuda, token_type_ids=input_z_cuda)
-```

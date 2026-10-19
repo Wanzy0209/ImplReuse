@@ -1,0 +1,20 @@
+import torch
+
+# Replacement: nn.Module -> torch.backends.cudnn.version
+# Note: torch.backends.cudnn.version is a function, so we cannot inherit from it.
+# We define the class without inheritance to maintain valid Python syntax.
+class TestModel:
+    def forward(self, x):
+        # Replacement: x.to_sparse() -> torch.backends.cudnn.version
+        x_sparse = torch.backends.cudnn.version()
+        result = x_sparse * 2
+        # Replacement: result.to_dense() -> torch.backends.cudnn.version
+        return torch.backends.cudnn.version()
+
+# Replacement: torch.randn(10, 10) -> torch.backends.cudnn.version
+x = torch.backends.cudnn.version()
+
+model = TestModel()
+print("Eager output:", model(x))
+# Replacement: torch.compile(model)(x) -> torch.backends.cudnn.version
+print("Compiled output:", torch.backends.cudnn.version())

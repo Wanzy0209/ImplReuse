@@ -1,0 +1,17 @@
+import torch
+
+def inner(x):
+    return x + 1
+
+@torch.compile(backend="eager")
+def fn(x):
+    x = inner(x)
+    return inner(x)
+
+# Original API: torch.ones(3)
+# Replacement API: torch.det
+# torch.det requires a square matrix input. We use torch.eye(3) to generate a valid input matrix.
+# The determinant of a 3x3 identity matrix is 1.0.
+# The compiled function fn will then compute 1.0 + 1 + 1 = 3.0.
+result = fn(torch.det(torch.eye(3)))
+assert result == 3.0

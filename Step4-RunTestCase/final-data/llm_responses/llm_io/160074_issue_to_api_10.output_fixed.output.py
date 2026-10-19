@@ -1,0 +1,65 @@
+import torch
+import sys
+
+# Handle missing module gracefully to prevent crash on older PyTorch versions
+try:
+    from torch.nn.attention.flex_attention import flex_attention
+except (ImportError, ModuleNotFoundError):
+    print("Skipping test: 'torch.nn.attention.flex_attention' is not available in the current PyTorch version.")
+    sys.exit(0)
+
+# Reusing the pattern from the similar API (tf.experimental.numpy.trace)
+# to trace argument information at compilation time.
+def trace(*args):
+    """Traces argument information at compilation time."""
+    print("Tracing inputs:", [arg.shape for arg in args])
+    return args
+
+def test_flex_attention_gqa_backward_compilation():
+    """
+    Test case for Issue 160074: FlexAttention backward compilation failure with GQA.
+    
+    This test reproduces the logic where torch.compile with backend="inductor"
+    fails during the backward pass when using Grouped Query Attention (GQA)
+    on specific tensor shapes and data types (bfloat16).
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # Compile flex_attention with fullgraph and inductor backend
+    # This configuration triggers the compilation failure described in the bug.
+    inductor = torch.compile(flex_attention, fullgraph=True, backend="inductor")
+
+    with torch.device("cuda"):
+        # Setup tensors for GQA (Grouped Query Attention)
+        # Query heads (32) != Key/Value heads (8)
+        batch_size = 2
+        q_heads = 32
+        kv_heads = 8
+        seq_len = 4096
+        head_dim = 128
+        
+        q = torch.randn([batch_size, q_heads, seq_len, head_dim], dtype=torch.bfloat16, requires_grad=True)
+        k = torch.randn([batch_size, kv_heads, seq_len, head_dim], dtype=torch.bfloat16, requires_grad=True)
+        v = torch.randn([batch_size, kv_heads, seq_len, head_dim], dtype=torch.bfloat16, requires_grad=True)
+
+        # Apply the trace helper (similar API pattern) to inspect inputs
+        q, k, v = trace(q, k, v)
+
+        # Forward pass
+        y = inductor(q, k, v, enable_gqa=True)
+
+        # Backward pass
+        # The bug report indicates a failure here during the Triton compilation pass.
+        y.backward(torch.randn_like(y))
+
+        # Assertions to verify execution completed successfully
+        assert q.grad is not None, "Query gradient is None"
+        assert k.grad is not None, "Key gradient is None"
+        assert v.grad is not None, "Value gradient is None"
+        
+        print("Test passed: FlexAttention backward with GQA compiled successfully.")
+
+if __name__ == "__main__":
+    test_flex_attention_gqa_backward_compilation()

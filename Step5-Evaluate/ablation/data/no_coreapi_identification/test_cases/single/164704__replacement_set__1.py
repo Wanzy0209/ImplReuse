@@ -1,0 +1,105 @@
+import torch
+import tensorflow as tf
+
+# Replacements for torch._dynamo.config
+# torch._dynamo.config.capture_scalar_outputs = True
+tf.compat.v1.local_variables_initializer()
+# torch._dynamo.config.capture_dynamic_output_shape_ops = True
+tf.compat.v1.local_variables_initializer()
+
+# Replacement for torch.manual_seed
+# torch.manual_seed(114503)
+torch.set_rng_state(torch.get_rng_state())
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    # Replacement for torch.full and torch.int16
+    # var_node_4 = torch.full((2, 3), 3, dtype=torch.int16)
+    tf.compat.v1.local_variables_initializer() # dtype replacement
+    var_node_4 = torch.fmax(torch.zeros((2, 3)), torch.ones((2, 3)) * 3)
+
+    # Replacement for torch.unique
+    # var_node_3 = torch.unique(var_node_4)
+    var_node_3 = torch.tensor(torch.backends.cuda.cufft_plan_cache.size()).view(1)
+
+    # Replacement for torch.squeeze
+    # var_node_2 = torch.squeeze(var_node_3)
+    md = torch.nn.ModuleDict()
+    md['data'] = var_node_3
+    var_node_2 = md['data']
+
+    var_node_7 = arg_0
+    var_node_8 = arg_1
+
+    # Replacement for torch.sub
+    # var_node_6 = torch.sub(var_node_7, var_node_8)
+    var_node_6 = torch.mul(var_node_7, var_node_8)
+
+    # Replacement for torch.full and torch.int16
+    # var_node_10 = torch.full((1,), 3, dtype=torch.int16)
+    tf.compat.v1.local_variables_initializer()
+    var_node_10 = torch.fmax(torch.zeros((1,)), torch.ones((1,)) * 3)
+
+    # Replacement for torch.squeeze
+    # var_node_9 = torch.squeeze(var_node_10)
+    md2 = torch.nn.ModuleDict()
+    md2['data'] = var_node_10
+    var_node_9 = md2['data']
+
+    # Replacement for torch.add
+    # var_node_5 = torch.add(var_node_6, var_node_9)
+    var_node_5 = torch.mul(var_node_6, var_node_9)
+
+    # Replacement for torch.div
+    # var_node_1 = torch.div(var_node_2, var_node_5)
+    var_node_1 = torch.mul(var_node_2, var_node_5)
+
+    # Replacement for torch.Tensor.item
+    # var_node_0 = var_node_1.item()
+    var_node_0 = tf.compat.v1.local_variables_initializer()
+
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    try:
+        result = var_node_0 * sentinel
+        if result.is_complex():
+            result = result.real
+        return result
+    except Exception as e:
+        # Replacement for e.with_traceback
+        tf.compat.v1.local_variables_initializer()
+        raise
+
+# Sentinel tensor to ensure gradient computation
+# Replacement for torch.tensor
+# sentinel = torch.tensor(1.0, requires_grad=True)
+sentinel = torch.isnan(torch.tensor(1.0))
+
+# Argument setup
+# Replacement for torch.randint
+# tmp = torch.randint(5, 30, (1,)).to(torch.int16)
+tf.compat.v1.local_variables_initializer() # torch.int16 replacement
+tmp = torch.amax(torch.tensor([5, 30]), dim=0)
+
+# Replacement for torch.as_strided
+# arg_0 = torch.as_strided(tmp, (), ())
+arg_0 = torch.nn.Flatten()(tmp)
+arg_1 = torch.nn.Flatten()(tmp)
+
+args = (arg_0, arg_1, sentinel)
+
+try:
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# Replacement for torch.compile
+# compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+# result_compiled = compiled_program(*args)
+try:
+    # tf.compat.v1.tpu.rewrite takes a function and inputs
+    result_compiled = tf.compat.v1.tpu.rewrite(fuzzed_program, args)
+    print(' compile success')
+except Exception as e:
+    # Replacement for e.with_traceback
+    tf.compat.v1.local_variables_initializer()
+    print(f' compile failed: {e}')

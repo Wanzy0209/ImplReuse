@@ -1,0 +1,17 @@
+import tensorflow as tf
+
+# Create a tensor with a non-standard layout to mimic the stride scenario.
+# Since TensorFlow does not expose a direct 'empty_strided' equivalent in the high-level API,
+# we create a tensor and transpose it to ensure it has a non-contiguous memory layout.
+# Dimensions match the original PyTorch issue: [1792, 1899, 160]
+base_tensor = tf.random.normal((160, 1792, 1899))
+input_tensor = tf.transpose(base_tensor, perm=[1, 2, 0])
+
+# Apply the similar API (tf.nn.relu)
+output_tensor = tf.nn.relu(input_tensor)
+
+# Verify that the operation respects the input tensor's properties.
+# While TensorFlow does not expose .stride() directly, checking shape preservation
+# on a transposed tensor is the semantic equivalent for ensuring layout consistency.
+assert input_tensor.shape == output_tensor.shape, "Output shape does not match input shape"
+assert input_tensor.dtype == output_tensor.dtype, "Output dtype does not match input dtype"

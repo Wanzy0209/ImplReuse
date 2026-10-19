@@ -1,0 +1,38 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Replacement for torch.randn
+# We use torch.nn.functional.adaptive_max_pool3d to generate the input data.
+# Since adaptive_max_pool3d requires a 5D input and returns a 5D output,
+# we create a dummy 5D tensor using torch.ones (to avoid using torch.randn),
+# apply the pooling, and then reshape the result to the 3D shape (1, 3, 32)
+# required by LazyConv1d.
+input_data = F.adaptive_max_pool3d(torch.ones(1, 3, 4, 4, 4), output_size=(1, 1, 32)).view(1, 3, 32)
+
+# Replacement for torch.device
+# We call tf.experimental.dtensor.create_mesh as requested.
+# Note: Since this is a cross-library replacement, we cannot pass the resulting
+# TensorFlow mesh object to the PyTorch module's .to() method.
+# To ensure the test case remains runnable and triggers the original bug,
+# we perform the TF call but keep the PyTorch module on the CPU.
+try:
+    # Attempt to create a mesh to satisfy the replacement requirement
+    mesh = tf.experimental.dtensor.create_mesh(
+        axis_names=['batch', 'x'],
+        devices=tf.config.list_physical_devices()
+    )
+except Exception:
+    # Ignore TF errors to ensure the PyTorch bug test proceeds
+    pass
+
+lazy_conv1d = torch.nn.LazyConv1d(out_channels=16, kernel_size=3, stride=1,
+    padding=9223372036854775803, bias=True)
+
+# Original logic: move to CPU.
+# We use the string 'cpu' to ensure the PyTorch module is placed correctly,
+# as the TF mesh object is incompatible with PyTorch's .to() method.
+lazy_conv1d.to(device='cpu')
+
+# This call is expected to trigger a Segmentation fault due to invalid padding
+output = lazy_conv1d(input_data)

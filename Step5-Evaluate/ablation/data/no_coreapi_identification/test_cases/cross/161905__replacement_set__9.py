@@ -1,0 +1,113 @@
+import tensorflow as tf
+import torch
+from tensorflow.keras.layers import Conv1D
+
+# Test case adapted from Issue 161905: torch.compile ResNet-18 model fails during loss.backward() on MPS backend.
+# This test case replaces the original PyTorch APIs with the specified TensorFlow/PyTorch replacements
+# while preserving the original logic structure (Setup, Data Generation, Training Step).
+
+def test_compile_resnet_replacement():
+    # Constants
+    BATCH_SIZE = 4
+    NUM_CLASSES = 10
+
+    # Use the similar API: tf.keras.backend.get_uid
+    # to track the graph state/execution context similar to how torch.compile might track graph compilation.
+    graph_uid = tf.keras.backend.get_uid('resnet_graph')
+
+    # Replacement for torch.compileResNet (Model definition)
+    # Original: model = resnet18(num_classes=NUM_CLASSES)
+    # Replacement: tf.distribute.in_cross_replica_context
+    model = tf.distribute.in_cross_replica_context
+
+    # Replacement for nn.CrossEntropyLoss
+    # Original: criterion = nn.CrossEntropyLoss()
+    # Replacement: tf.distribute.in_cross_replica_context
+    criterion = tf.distribute.in_cross_replica_context
+
+    # Replacement for torch.optim
+    # Original: optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+    # Replacement: tf.distribute.in_cross_replica_context
+    optimizer = tf.distribute.in_cross_replica_context
+
+    # Replacement for torch.nn.functional.conv2d
+    # Original: Used implicitly in ResNet
+    # Replacement: tf.keras.layers.Conv1D
+    conv_layer = Conv1D(filters=NUM_CLASSES, kernel_size=3)
+
+    # Replacement for torch.compile
+    # Original: @torch.compile def train(...)
+    # Replacement: tf.distribute.in_cross_replica_context
+    # We wrap the training logic to check the context, mimicking the compile decorator's role.
+    def compile_wrapper(func):
+        def wrapper(*args, **kwargs):
+            # Check if we are in the correct context (replacement for compile check)
+            if tf.distribute.in_cross_replica_context():
+                return func(*args, **kwargs)
+            return func(*args, **kwargs)
+        return wrapper
+
+    @compile_wrapper
+    def train(images, labels):
+        # Replacement for optimizer.zero_grad
+        # Original: optimizer.zero_grad()
+        # Replacement: tf.distribute.in_cross_replica_context
+        optimizer()
+
+        # Replacement for model(images)
+        # Original: outputs = model(images)
+        # Replacement: tf.distribute.in_cross_replica_context
+        # We also utilize the Conv1D replacement here to represent a layer pass
+        # Note: 'images' here is the result of the replacement below (list of ops), 
+        # so we strictly follow the replacement logic rather than tensor operations.
+        model_output = model()
+
+        # Replacement for criterion(outputs, labels)
+        # Original: loss = criterion(outputs, labels)
+        # Replacement: tf.distribute.in_cross_replica_context
+        loss = criterion()
+
+        # Replacement for loss.backward() / torch.autograd.backward
+        # Original: loss.backward()
+        # Replacement: tf.distribute.in_cross_replica_context
+        tf.distribute.in_cross_replica_context()
+
+        # Replacement for optimizer.step()
+        # Original: optimizer.step()
+        # Replacement: tf.distribute.in_cross_replica_context
+        optimizer()
+
+        # Use the similar API to generate a unique ID for this training step
+        return tf.keras.backend.get_uid('train_step')
+
+    # Data Generation
+    # Replacement for torch.randn
+    # Original: images = torch.randn(BATCH_SIZE, 3, 224, 224)
+    # Replacement: tf.compat.v1.summary.all_v2_summary_ops
+    images = tf.compat.v1.summary.all_v2_summary_ops()
+
+    # Replacement for torch.randint
+    # Original: labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,))
+    # Replacement: torch.bernoulli
+    # Bernoulli generates 0/1, we adapt the shape to match the batch size logic
+    labels_prob = torch.ones(BATCH_SIZE, NUM_CLASSES) * 0.5
+    labels = torch.bernoulli(labels_prob)
+
+    # Execute the training step
+    step_id = train(images, labels)
+
+    # Assertions to verify the test case ran and used the similar API
+    assert isinstance(step_id, int), "Step ID should be an integer from get_uid"
+    assert step_id > graph_uid, "Step ID should be greater than initial graph UID"
+    
+    # Verify the context checks ran (they return booleans)
+    # Note: We can't assert the return values of the replaced functions directly 
+    # as they were called for side effects in the 'train' function, 
+    # but we can verify the objects exist.
+    assert callable(model)
+    assert callable(criterion)
+    assert callable(optimizer)
+    assert isinstance(conv_layer, Conv1D)
+
+if __name__ == "__main__":
+    test_compile_resnet_replacement()

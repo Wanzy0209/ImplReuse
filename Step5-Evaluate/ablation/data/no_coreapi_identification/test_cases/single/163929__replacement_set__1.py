@@ -1,0 +1,41 @@
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+def foo(x):
+    x.tan_()
+    x = x.t()
+    # Replacement: x.argmin() -> tf.keras.backend.eval
+    # Note: Converting torch tensor to TF tensor for compatibility with eval
+    return tf.keras.backend.eval(tf.convert_to_tensor(x.numpy()))
+
+# Replacement: torch.manual_seed(0) -> torch.set_rng_state
+# Note: set_rng_state requires a ByteTensor. Using current state to ensure validity.
+torch.set_rng_state(torch.get_rng_state())
+
+# Replacement: torch.randn(4, 6) -> tf.keras.backend.eval
+# Note: Generating random data using TF to mimic randn, then evaluating.
+x1 = tf.keras.backend.eval(tf.random.normal((4, 6)))
+
+# Replacement: x1.clone() -> tf.keras.backend.eval
+# Note: x1 is numpy, eval expects TF tensor. Converting back to tensor to eval.
+x2 = tf.keras.backend.eval(tf.convert_to_tensor(x1))
+
+# Original logic: run eager
+# Note: foo expects torch tensor, x1 is numpy.
+out1 = foo(torch.from_numpy(x1))
+
+# Replacement: torch.compile(foo) -> tf.compat.v1.tpu.rewrite
+cf = tf.compat.v1.tpu.rewrite(foo)
+
+# Original logic: run compiled
+# Note: cf expects inputs, x2 is numpy. foo expects torch tensor.
+out2 = cf(torch.from_numpy(x2))
+
+# Replacement: torch.testing.assert_close(out1, out2) -> torch.nn.functional.binary_cross_entropy_with_logits
+# Note: Converting outputs to torch tensors for the loss function.
+t_out1 = torch.tensor(out1)
+t_out2 = torch.tensor(out2) if not isinstance(out2, torch.Tensor) else out2
+
+# Calling the replacement function
+F.binary_cross_entropy_with_logits(t_out1.float(), t_out2.float())

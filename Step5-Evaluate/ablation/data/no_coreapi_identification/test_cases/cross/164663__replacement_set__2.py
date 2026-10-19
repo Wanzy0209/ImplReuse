@@ -1,0 +1,65 @@
+import torch
+import tensorflow as tf
+
+# Define a custom RMSNorm to match the specific layer type in the bug report
+class RMSNorm(tf.keras.layers.Layer):
+    def __init__(self, d_model, epsilon=1e-8):
+        super(RMSNorm, self).__init__()
+        self.epsilon = epsilon
+        self.gain = tf.Variable(tf.ones([d_model]), dtype=tf.float32)
+
+    def call(self, x):
+        rms = tf.sqrt(tf.reduce_mean(tf.square(x), axis=-1, keepdims=True) + self.epsilon)
+        return x / rms * self.gain
+
+# Replacing nn.Module with tf.keras.layers.Layer
+class TestModule(tf.keras.layers.Layer):
+    def __init__(self, d_model):
+        super().__init__()
+        # Replacing nn.RMSNorm and nn.Linear instantiation logic
+        # These are now managed by the Strategy scope
+        self.norm = RMSNorm(d_model)
+        self.output = tf.keras.layers.Dense(d_model)
+
+    def call(self, x):
+        x = self.norm(x)
+        x = self.output(x)
+        return x
+
+def main():
+    # Replacing torch.distributed and init_process_group
+    strategy = tf.compat.v1.distribute.experimental.MultiWorkerMirroredStrategy()
+
+    # Replacing torch.distributed._composable.fsdp (fully_shard)
+    # and torch.distributed._tools.fsdp2_mem_tracker (FSDPMemTracker)
+    # with the Strategy scope
+    with strategy.scope():
+        d_model = 128
+        model = TestModule(d_model)
+
+        # Replacing torch.randn with tf.types.experimental.ConcreteFunction
+        @tf.function
+        def generate_input():
+            return tf.random.normal((16, d_model))
+
+        concrete_input_fn = tf.types.experimental.ConcreteFunction(generate_input)
+        x = concrete_input_fn()
+
+        optimizer = tf.keras.optimizers.SGD()
+
+        # Replacing loss.backward and y.sum logic with Strategy context
+        with tf.GradientTape() as tape:
+            y = model(x)
+            # Replacing y.sum
+            loss = tf.reduce_sum(y)
+
+        # Replacing loss.backward action
+        gradients = tape.gradient(loss, model.trainable_variables)
+        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+
+        # Assertion to verify execution
+        assert loss is not None
+        print("Test passed: Distributed execution with RMSNorm and Linear completed successfully.")
+
+if __name__ == "__main__":
+    main()

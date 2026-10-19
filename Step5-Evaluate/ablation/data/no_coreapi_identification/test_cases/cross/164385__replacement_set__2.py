@@ -1,0 +1,67 @@
+import tensorflow as tf
+import numpy as np
+
+def test_repeat_elements_complex_expression():
+    """
+    Test case adapted from Issue 164385 (FloorDiv generate sympy rational).
+    Replaces FloorDiv, sympy.Symbol, and sympy.srepr with tf.keras.backend.repeat_elements
+    to test the structural logic of the original bug report using the Keras backend API.
+    """
+    print("Testing repeat_elements with complex symbolic-like expression...")
+
+    # Create base inputs (replacing sympy.Symbol)
+    # We use repeat_elements to create the "variables" from a base constant
+    # to mimic the creation of symbolic variables.
+    base_input = tf.constant([1.0], dtype=tf.float32)
+
+    # s14 = sympy.Symbol('s14', integer=True, positive=True)
+    # Replacement: s14 = tf.keras.backend.repeat_elements(...)
+    s14 = tf.keras.backend.repeat_elements(base_input, rep=1, axis=0)
+
+    # s37 = sympy.Symbol('s37', integer=True, positive=True)
+    s37 = tf.keras.backend.repeat_elements(base_input, rep=1, axis=0)
+
+    # s46 = sympy.Symbol('s46', integer=True, positive=True)
+    s46 = tf.keras.backend.repeat_elements(base_input, rep=1, axis=0)
+
+    # Build the numerator expression step by step
+    # inner_expr = FloorDiv(s14 , 2016)
+    # Replacement: inner_expr = tf.keras.backend.repeat_elements(s14, 2016, axis=0)
+    # Note: FloorDiv divides, repeat_elements repeats. This is a structural replacement.
+    inner_expr = tf.keras.backend.repeat_elements(s14, rep=2016, axis=0)
+
+    # middle_expr = (24 * s37 + 672) * inner_expr
+    # We use standard TF ops for arithmetic
+    middle_expr = (24 * s37 + 672) * inner_expr
+
+    # numerator = middle_expr + 21
+    numerator = middle_expr + 21
+
+    # denominator = 22
+    denominator = 22
+
+    print(f"Numerator shape: {numerator.shape}")
+    print(f"Denominator: {denominator}")
+
+    # Create the FloorDiv expression
+    # result = FloorDiv(numerator, denominator)
+    # Replacement: result = tf.keras.backend.repeat_elements(numerator, denominator, axis=0)
+    result = tf.keras.backend.repeat_elements(numerator, rep=denominator, axis=0)
+
+    print(f"Result shape: {result.shape}")
+    print(f"Result dtype: {result.dtype}")
+
+    # FloorDiv result: {sympy.srepr(result)}
+    # Replacement: tf.keras.backend.repeat_elements(result, ...)
+    # We perform a final repetition to mimic the 'inspection' step
+    final_inspection = tf.keras.backend.repeat_elements(result, rep=1, axis=0)
+
+    # Assertions to ensure the operation ran and types are preserved
+    assert final_inspection is not None
+    assert isinstance(final_inspection, tf.Tensor)
+    # Check that the dtype is preserved (analogous to checking if FloorDiv preserved integer type)
+    assert final_inspection.dtype == tf.float32
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_repeat_elements_complex_expression()

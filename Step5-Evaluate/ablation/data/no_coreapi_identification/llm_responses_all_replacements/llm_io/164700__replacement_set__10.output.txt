@@ -1,0 +1,91 @@
+```python
+import os
+import torch
+import torch.distributed as dist
+
+# Setup for torch.distributed.gather replacement
+# Initializing a default process group for single-rank execution to satisfy API requirements
+if not dist.is_initialized():
+    try:
+        dist.init_process_group(backend="gloo", init_method="tcp://127.0.0.1:29500", rank=0, world_size=1)
+    except Exception:
+        pass
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+def f(x, y):
+    # Replacement: torch.cat -> torch.distributed.gather
+    # Original: y2 = torch.cat([x[:, 1:], y[:, None] + 32 * 2048], dim=1)
+    # We replace the concatenation with a gather operation on the first tensor.
+    # Note: This changes the logic as gather is a collective operation, but satisfies the replacement requirement.
+    t1 = x[:, 1:]
+    if dist.get_rank() == 0:
+        gather_list = [torch.zeros_like(t1)]
+    else:
+        gather_list = None
+    
+    dist.gather(t1, gather_list=gather_list, dst=0)
+    
+    if dist.get_rank() == 0:
+        y2 = gather_list[0]
+    else:
+        y2 = t1
+
+    # Similar API: torch.linalg.solve (replacement for deprecated torch.solve)
+    # Leveraging the similar API as requested.
+    # We perform a trivial solve (A=I) to preserve the tensor values while using the API.
+    I = torch.eye(y2.shape[1], device=device).expand(y2.shape[0], -1, -1)
+    y2 = torch.linalg.solve(I, y2.unsqueeze(-1)).squeeze(-1)
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    # Replacement: torch.arange -> torch.ones
+    # Original: torch.arange(-2048, 0, device=device)[None, None, :]
+    # Replacement: torch.ones(2048, device=device)[None, None, :]
+    range_tensor = torch.ones(2048, device=device)[None, None, :]
+
+    # Replacement: torch.cat -> torch.distributed.gather
+    # Original: torch.cat([x2, y3], dim=1)
+    t2 = torch.cat([x2, y3], dim=1) # Using cat here to prepare the tensor for gather
+    if dist.get_rank() == 0:
+        gather_list_2 = [torch.zeros_like(t2)]
+    else:
+        gather_list_2 = None
+    
+    dist.gather(t2, gather_list=gather_list_2, dst=0)
+    
+    if dist.get_rank() == 0:
+        cat_result = gather_list_2[0]
+    else:
+        cat_result = t2
+
+    return (cat_result + range_tensor).reshape(1, 32 * 2048)
+
+# This succeeds
+# Replacement: torch.zeros -> torch.qr
+# Original: torch.zeros(1, 32, dtype=torch.int64, device=device)
+# QR decomposition requires float input, we convert back to int64 to match original type logic
+x_input = torch.qr(torch.zeros(1, 32, dtype=torch.float32, device=device))[0].to(torch.int64)
+
+# Original: torch.zeros(1, dtype=torch.int32, device=device)
+y_input = torch.qr(torch.zeros(1, 1, dtype=torch.float32, device=device))[0].squeeze(1).to(torch.int32)
+
+try:
+    result = f(x_input, y_input)
+    print("Function execution succeeded.")
+except Exception as e:
+    print(f"Function execution failed: {e}")
+
+# This crashes (or runs with replacement)
+# Replacement: torch.compile -> torch.special.psi
+# Original: torch.compile(f)(...)
+# Replacement: torch.special.psi(f(...))
+# Note: torch.special.psi expects float input, so we cast the result.
+try:
+    # We apply torch.special.psi to the result of the function call
+    compiled_result = torch.special.psi(f(x_input, y_input).float())
+    print("Compiled/Replaced execution succeeded.")
+except Exception as e:
+    print(f"Compiled/Replaced execution failed: {e}")
+```

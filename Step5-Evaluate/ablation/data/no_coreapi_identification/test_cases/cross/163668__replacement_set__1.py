@@ -1,0 +1,30 @@
+import torch
+import tensorflow as tf
+
+# Replacing torch.randn with torch.var_mean
+# We create a dummy tensor to apply var_mean, as var_mean requires an input.
+# We select the variance (first element of the tuple) to serve as the input tensor x.
+dummy_input = torch.randn(3)
+x_torch = torch.var_mean(dummy_input)[0]
+
+# Convert the PyTorch tensor to a TensorFlow tensor for compatibility with TF APIs
+x = tf.convert_to_tensor(x_torch.numpy())
+
+# Replacing torch.compile with tf.compat.v1.tpu.rewrite
+# Note: tf.compat.v1.tpu.rewrite is used here to match the requested replacement,
+# preserving the decorator structure of the original test case.
+@tf.compat.v1.tpu.rewrite
+def f(x):
+    # Replacing torch._check with tf.distribute.in_cross_replica_context
+    # The original torch._check took a condition and a message.
+    # The replacement API takes no arguments and returns a boolean.
+    tf.distribute.in_cross_replica_context()
+    return x + 1
+
+# Replacing torch._dynamo.maybe_mark_dynamic with tf.distribute.in_cross_replica_context
+# The original API marked a tensor dimension as dynamic.
+# The replacement API checks the distribution context.
+tf.distribute.in_cross_replica_context()
+
+# Execute the compiled/rewritten function
+print(f(x))

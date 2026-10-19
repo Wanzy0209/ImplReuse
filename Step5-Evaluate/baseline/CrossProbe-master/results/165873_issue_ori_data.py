@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 
@@ -31,4 +30,3 @@ module = SimpleModule(0.0)
 module.load_state_dict(state_dict)
 # Conversion: .item() -> .numpy().item()
 assert module.threshold.numpy().item() == state_dict['threshold'][0].numpy().item()
-```

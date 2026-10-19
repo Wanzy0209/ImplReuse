@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from transformers import TFAutoModelForMaskedLM
 
@@ -12,4 +11,3 @@ model = TFAutoModelForMaskedLM.from_pretrained(
     attn_implementation="sdpa"
 )
 print(model)
-```

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.nested.nested_tensor -> tf.ragged.constant
@@ -9,4 +8,3 @@ x = tf.ragged.constant([tf.ones((3, 2, 3)).numpy(), tf.ones((4, 2, 3)).numpy()])
 # Conversion: torch.cat -> tf.concat
 # Concatenates the ragged tensors along the batch dimension (axis 0)
 tf.concat([x, x], axis=0)
-```

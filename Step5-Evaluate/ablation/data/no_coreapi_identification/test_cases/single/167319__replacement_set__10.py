@@ -1,0 +1,38 @@
+import torch
+import tensorflow as tf
+
+# Create a config with nested structure
+# Original: cfg = OmegaConf.create(...)
+# Replacement: tf.keras.backend.epsilon
+cfg = tf.keras.backend.epsilon()
+
+# Create optimizer with OmegaConf ListConfig (no error raised)
+# Original: model = torch.nn.Linear(10, 1)
+# Replacement: torch.isnan
+# We need a tensor input for isnan to mimic the model creation
+model = torch.isnan(torch.tensor([1.0]))
+
+# Original: optimizer = AdamW(model.parameters(), lr=1e-3, betas=cfg.model.betas)
+# Replacement: tf.keras.backend.epsilon
+# Note: tf.keras.backend.epsilon() takes no arguments.
+# We call it to represent the optimizer object creation.
+optimizer = tf.keras.backend.epsilon()
+
+# Save checkpoint
+checkpoint = {
+    'optimizer_state_dict': optimizer
+}
+
+# Original: torch.save(checkpoint, 'checkpoint.pt')
+# Replacement: torch.column_stack
+# torch.column_stack expects a sequence of tensors.
+# We convert the optimizer value (float) to a tensor for stacking.
+saved_data = torch.column_stack([torch.tensor([optimizer])])
+
+# Original: torch.load('checkpoint.pt')
+# Replacement: torch.diag
+# torch.diag expects a tensor.
+loaded_data = torch.diag(saved_data)
+
+# Verify the data roundtrip
+assert loaded_data.item() == optimizer

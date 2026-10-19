@@ -1,0 +1,73 @@
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+import tensorflow as tf
+import os
+
+def setup_distributed():
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "29500"
+    # Initialize process group with world_size=1 to allow send/recv to self
+    dist.init_process_group(backend="gloo", rank=0, world_size=1)
+
+def distributed_compile(func):
+    """
+    Replacement for torch.compile.
+    Instead of compiling, this decorator receives the input arguments 
+    via torch.distributed.recv_object_list before executing the function.
+    """
+    def wrapper():
+        # Receive the input object
+        obj_list = [None]
+        dist.recv_object_list(obj_list, src=0)
+        x = obj_list[0]
+        return func(x)
+    return wrapper
+
+@distributed_compile
+def fn(x):
+    """
+    Function leveraging the similar API (torch.nn.SyncBatchNorm) and 
+    replacing graph_break with tf.debugging.Assert.
+    """
+    # Leverage similar API: torch.nn.SyncBatchNorm
+    # Reshape input for BatchNorm (Batch, Channels, ...)
+    # x is expected to be a matrix from matrix_power, e.g., 3x3
+    x_reshaped = x.unsqueeze(0) # Shape (1, 3, 3)
+    
+    # Initialize SyncBatchNorm
+    # num_features matches the channel dimension (3)
+    sync_bn = nn.SyncBatchNorm(3)
+    
+    # Replacement for torch._dynamo.graph_break -> tf.debugging.Assert
+    # We use tf.debugging.Assert to check a condition on the tensor.
+    # This mimics the 'break' or check point in the execution flow.
+    # Convert torch tensor to tensorflow tensor for the assertion
+    x_tf = tf.constant(x.numpy())
+    
+    # Assert that the tensor is not all zeros (arbitrary check for demonstration)
+    condition = tf.reduce_any(tf.not_equal(x_tf, 0))
+    # tf.debugging.Assert ensures the condition holds, acting as a guard
+    with tf.control_dependencies([tf.debugging.Assert(condition, ["Input tensor must not be zero"])]):
+        # Pass the tensor through SyncBatchNorm
+        output = sync_bn(x_reshaped)
+        
+    return output
+
+if __name__ == "__main__":
+    setup_distributed()
+    
+    # Replacement for torch.ones -> torch.matrix_power
+    # Create a 3x3 identity matrix and raise it to the power of 2
+    base_matrix = torch.eye(3)
+    input_data = torch.matrix_power(base_matrix, 2)
+    
+    # Send the input data so it can be received by the decorated function
+    dist.send_object_list([input_data], dst=0)
+    
+    # Call the function. The decorator handles receiving the input.
+    result = fn()
+    
+    print("Test passed. Result shape:", result.shape)
+    
+    dist.destroy_process_group()

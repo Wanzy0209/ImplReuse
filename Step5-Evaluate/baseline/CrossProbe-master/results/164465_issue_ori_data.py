@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # @tf.function is the TensorFlow equivalent of torch.compile for graph optimization
@@ -51,4 +50,3 @@ x = tf.ones((1, 64), dtype=tf.int64)
 y = tf.random.normal((64, 3072), dtype=tf.bfloat16)
 
 out = f(x, y)
-```

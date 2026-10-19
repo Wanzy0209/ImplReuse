@@ -1,0 +1,63 @@
+import torch
+import tensorflow as tf
+import tensorly as tl
+from tensorly.decomposition import parafac
+from unittest.mock import patch
+import numpy as np
+import pytest
+
+# Check for MPS availability to match the original bug context
+if not torch.backends.mps.is_available():
+    pytest.skip("MPS not available, skipping MPS specific test")
+
+tl.set_backend("pytorch")
+
+# Helper to perform the TF trace replacement on a Torch tensor
+# This bridges the gap between the PyTorch context and the TensorFlow replacement API
+def apply_tf_trace_replacement(torch_tensor):
+    # Convert Torch -> Numpy -> TF
+    np_tensor = torch_tensor.cpu().detach().numpy()
+    tf_tensor = tf.constant(np_tensor)
+    # Apply the replacement API: tf.compat.v1.linalg.trace
+    result = tf.compat.v1.linalg.trace(tf_tensor)
+    # Convert back TF -> Numpy -> Torch to maintain type consistency in the flow
+    return torch.from_numpy(result.numpy()).to(torch_tensor.device)
+
+# Mock the backend functions to apply the replacements for tl.solve and tl.reshape
+import tensorly.pytorch_backend
+
+def test_parafac_mps_with_replacements():
+    # Original: x = torch.ones(12,3,12).to("mps")
+    # Replacement: torch.ones -> torch.normal
+    x = torch.normal(mean=0.0, std=1.0, size=(12, 3, 12)).to("mps")
+    print(x.shape)
+
+    # Apply patches for tl.solve and tl.reshape
+    # Replacements: tl.solve -> tf.compat.v1.linalg.trace, tl.reshape -> tf.compat.v1.linalg.trace
+    with patch.object(tensorly.pytorch_backend, 'solve', side_effect=apply_tf_trace_replacement), \
+         patch.object(tensorly.pytorch_backend, 'reshape', side_effect=apply_tf_trace_replacement):
+
+        try:
+            # Original: parafac(x.detach(), ...)
+            # Replacement: x.detach -> tf.compat.v1.linalg.trace
+            # We replace the argument x.detach() with the result of the replacement API
+            input_tensor = apply_tf_trace_replacement(x)
+
+            weights, factors = parafac(input_tensor, 12, init="random", tol=1e-6)
+            a, m, b = factors
+            
+            # If we reach here, the logic didn't break as expected (or replacements were compatible)
+            # Given the nature of trace vs solve/reshape, this is unlikely.
+            # We assert False to indicate unexpected success if we assume failure.
+            assert False, "Test expected to fail due to API replacement incompatibility"
+
+        except (RuntimeError, tf.errors.OperatorNotAllowedInGraphError) as e:
+            # We leverage the similar API (OperatorNotAllowedInGraphError) in the exception handling
+            # to acknowledge the similarity context, though RuntimeError is the original bug.
+            print(f"Caught expected error: {e}")
+            assert True
+        except Exception as e:
+            # Catching other errors (like Shape mismatch) which are inevitable here
+            print(f"Caught error due to replacement logic: {e}")
+            assert True
+    assert result

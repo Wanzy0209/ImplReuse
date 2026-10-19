@@ -1,0 +1,99 @@
+Please fix the following Python test case based on the error message.
+
+## Original Test Case:
+```python
+import tempfile
+
+import torch
+import triton
+import triton.language as tl
+from torch.library import triton_op, wrap_triton
+import torch.nn.functional as F
+
+@triton.jit
+def my_kernel(
+    out1,
+    out2,
+):
+    # the actual kernel does something more meaningful of course
+    tl.store(out1, 1.0)
+    tl.store(out2, 1.0)
+
+
+@triton_op("repro::my_triton_op", mutates_args={})
+def my_triton_op(
+    q: torch.Tensor,
+    block_size: int = 128,
+) -> torch.Tensor:
+    out1 = torch.empty((1,), device=q.device)
+    out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)
+
+    wrap_triton(my_kernel)[(1, 1)](
+        out1,
+        out2,
+    )
+
+    return out1
+
+
+class MyModule(torch.nn.Module):
+    def forward(self, q):
+        # Preserve original bug reproduction logic: call the custom Triton op
+        out = my_triton_op(q)
+        
+        # Leverage the similar API: torch.nn.functional.rrelu_
+        # We apply it to the output tensor to test interaction with in-place ops
+        # without mutating the graph inputs directly, which could cause export errors.
+        F.rrelu_(out)
+        
+        return out
+
+
+def main():
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping test.")
+        return
+
+    model = MyModule().to("cuda")
+    with torch.inference_mode():
+        q = torch.randn(1024, device="cuda")
+        # Use dynamic shapes as in the original issue
+        exported_model = torch.export.export(
+            model, 
+            (q,), 
+            dynamic_shapes=({0: torch.export.Dim("dim")},)
+        )
+        
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            torch._inductor.aoti_compile_and_package(
+                exported_model,
+                package_path=tmpdir + "/package.pt2",
+            )
+            print("Test Passed: AOT compilation succeeded.")
+        except Exception as e:
+            print(f"Test Failed: AOT compilation failed with error: {e}")
+            raise
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## Error Message:
+```
+Traceback (most recent call last):
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/160646_issue_to_api_4.output.py", line 4, in <module>
+    import triton
+ModuleNotFoundError: No module named 'triton'
+
+```
+
+## Requirements:
+1. Analyze the error message carefully
+2. Fix the test case to resolve the error
+3. Keep the test logic intact - do not change the core test functionality
+4. If the error is due to missing dependencies or environment issues, try to add mock or skip conditions
+5. Output only the fixed Python code, wrapped in ```python ... ``` blocks
+
+## Fixed Test Case:

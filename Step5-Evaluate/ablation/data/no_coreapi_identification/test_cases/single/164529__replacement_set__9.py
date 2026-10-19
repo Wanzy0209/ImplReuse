@@ -1,0 +1,35 @@
+import torch
+import torch.profiler
+from typing import List, Optional
+
+# Mock ProcessGroup to satisfy type hints without requiring a real distributed setup
+class MockProcessGroup:
+    pass
+
+def test_shrink_group_replacement():
+    """
+    Test case generated based on Issue 164529 (shrink_group API).
+    The original logic involves excluding ranks from a process group to improve fault tolerance.
+    The source API 'shrink_group' is replaced with 'torch.profiler.itt.range_pop'.
+    """
+    # Setup variables based on the original API signature and issue description
+    ranks_to_exclude: List[int] = [1, 2]
+    pg: Optional[MockProcessGroup] = MockProcessGroup()
+    shrink_flags: int = 0  # Representing NCCL_SHRINK_DEFAULT
+
+    # Original logic: dist.shrink_group(ranks_to_exclude, pg, shrink_flags)
+    # Replacement logic: torch.profiler.itt.range_pop()
+    
+    # To ensure the profiler call is valid, we push a range first
+    torch.profiler.itt.range_push("shrink_group_scope")
+    
+    # Perform the replacement API call
+    # Note: range_pop does not take arguments, so we call it without the 
+    # specific ranks/flags, but the context of the test remains the shrink operation.
+    torch.profiler.itt.range_pop()
+    
+    # Assertion: The operation completes without error
+    assert True
+
+if __name__ == "__main__":
+    test_shrink_group_replacement()

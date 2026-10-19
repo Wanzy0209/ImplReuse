@@ -1,0 +1,35 @@
+```python
+import torch
+import torch.nn.functional as F
+
+@torch.compile(fullgraph=True)
+def fn(encoder_attention_mask, encoder_hidden_states):
+    encoder_hidden_states = encoder_hidden_states.new_zeros([1, 512, 3072])
+    text_len = encoder_attention_mask.sum().item()
+    encoder_hidden_states = encoder_hidden_states[:, :text_len]
+    return encoder_hidden_states
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+# Replacement: torch.arange -> torch.zeros
+# Original: mask = (torch.arange(512) < 8).unsqueeze(0).cuda()
+# Since zeros are all < 8, the mask will be all True.
+mask = (torch.zeros(512) < 8).unsqueeze(0).cuda()
+
+# Replacement: torch.randn -> torch.nn.functional.hinge_embedding_loss
+# Original: hidden = torch.randn((1, 512, 4096)).cuda()
+# We create dummy inputs for the loss function to generate the 'hidden' variable.
+input_loss = torch.tensor([[1.0, 2.0]], device='cuda')
+target_loss = torch.tensor([1.0, -1.0], device='cuda')
+hidden = F.hinge_embedding_loss(input_loss, target_loss).cuda()
+
+# Run the function
+if torch.cuda.is_available():
+    output = fn(mask, hidden)
+    # Verify the output shape based on the logic inside fn
+    # text_len will be 512 (sum of mask), so slice is [:, :512] on [1, 512, 3072]
+    assert output.shape == (1, 512, 3072), f"Expected shape (1, 512, 3072), got {output.shape}"
+    print("Test passed successfully.")
+else:
+    print("CUDA not available, skipping test.")
+```

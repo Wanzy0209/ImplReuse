@@ -1,0 +1,61 @@
+import torch
+import torch.nn.functional as F
+import triton
+import triton.language as tl
+import unittest
+
+# Define a simple add kernel to make the test runnable
+@triton.jit
+def add_kernel(
+    x_ptr, y_ptr, output_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+class TestTritonKernels(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "requires GPU")
+    def test_triton_kernel_to_cpu(self):
+        # Replacements:
+        # torch.randn -> torch.nn.functional.adaptive_max_pool2d
+        # torch.zeros_like -> torch.stack
+
+        device = torch.device("cuda")
+
+        # Create inputs using adaptive_max_pool2d
+        # We need a base tensor to pool. Since we can't use randn, we use ones.
+        # Input to pool2d must be 3D or 4D.
+        base_x = torch.ones(1, 1, 4, 4, device=device)
+        base_y = torch.ones(1, 1, 4, 4, device=device) * 2
+
+        x = F.adaptive_max_pool2d(base_x, (4, 4))
+        y = F.adaptive_max_pool2d(base_y, (4, 4))
+
+        def f(x, y):
+            # Original: out = torch.zeros_like(x)
+            # Replacement: out = torch.stack([x, y])
+            # Note: This changes the shape of out from (1, 1, 4, 4) to (2, 1, 1, 4, 4)
+            out = torch.stack([x, y])
+
+            # Kernel call.
+            # The kernel is defined for 1D iteration (n_elements).
+            # x and y have 16 elements. out has 32 elements.
+            # We pass 16 as n_elements.
+            add_kernel[(1,)](x, y, out, 16, 16)
+
+            out_cpu = out.cpu() + 1
+            return out_cpu
+
+        eager_out = f(x, y)
+        compiled_out = torch.compile(f)(x, y)
+        self.assertTrue(torch.allclose(compiled_out, eager_out))
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,59 @@
+```python
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+import numpy as np
+
+# Replacements applied:
+# torch.rand -> tf.keras.backend.relu
+# torch.arange -> torch.eye
+# torch.as_strided -> torch.empty
+
+def test_linear_with_replacements():
+    # 1. Weight and Bias generation
+    # Original: torch.rand((768, 768), device="mps", dtype=torch.float32)
+    # Replacement: tf.keras.backend.relu
+    # We generate a random tensor in TF to serve as input to relu, mimicking the data generation of rand.
+    tf_weight = tf.random.uniform((768, 768))
+    weight = tf.keras.backend.relu(tf_weight)
+    # Convert TF tensor to PyTorch tensor on MPS
+    weight = torch.from_numpy(weight.numpy()).to("mps").float()
+
+    # Original: torch.rand((768), device="mps", dtype=torch.float32)
+    tf_bias = tf.random.uniform((768,))
+    bias = tf.keras.backend.relu(tf_bias)
+    bias = torch.from_numpy(bias.numpy()).to("mps").float()
+
+    # 2. Input generation setup
+    shape = (5, 499, 768)
+    stride = (0, 768, 1)
+    storage_offset = 0
+    # Calculate numel based on original logic
+    numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+
+    # Original: torch.arange(numel, dtype=torch.float32, device="mps")
+    # Replacement: torch.eye
+    # Note: The original numel is large (383232). torch.eye(numel) would create a massive 2D matrix (~1.5TB).
+    # Since 'base' is no longer used to create 'input' (due to as_strided -> empty replacement),
+    # we use a minimal size for torch.eye to keep the test runnable while demonstrating the API replacement.
+    base = torch.eye(1, dtype=torch.float32, device="mps")
+
+    # Original: torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+    # Replacement: torch.empty
+    # This creates a contiguous tensor, unlike the original non-contiguous strided view.
+    input = torch.empty(shape, dtype=torch.float32, device="mps")
+
+    # 3. Run the API
+    # The original bug was triggered by non-contiguous inputs on MPS.
+    # With the replacement, input is contiguous, so the specific allocation bug is bypassed,
+    # but we verify the API integration with the replaced components.
+    output = F.linear(input, weight, bias)
+
+    # Assertions
+    assert output.shape == (5, 499, 768)
+    assert output.device.type == "mps"
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_linear_with_replacements()
+```

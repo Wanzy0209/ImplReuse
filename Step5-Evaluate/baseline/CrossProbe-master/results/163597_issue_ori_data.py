@@ -1,4 +1,3 @@
-```python
 import math
 
 import tensorflow as tf
@@ -159,4 +158,3 @@ out_manual_initially_cont = manual_scaled_dot_product_attention(q_cont, k_cont, 
 
 print(f"GPU vs CPU: {tf.norm(out_cpu_initially_cont - out_gpu_initially_cont):6f}")
 print(f"Built-in vs Manual (GPU): {tf.norm(out_gpu_initially_cont - out_manual_initially_cont):6f}")
-```

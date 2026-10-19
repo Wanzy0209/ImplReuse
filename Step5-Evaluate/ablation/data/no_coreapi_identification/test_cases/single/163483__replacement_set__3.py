@@ -1,0 +1,53 @@
+import torch
+import tensorflow as tf
+import torch.distributed
+
+# torch.distributed.init_process_group -> torch.distributed.broadcast_object_list
+# We broadcast a dummy list to mimic initialization
+try:
+    torch.distributed.broadcast_object_list([None], src=0)
+except Exception:
+    pass
+
+# torch.distributed.get_rank -> tf.experimental.dtensor.check_layout
+# We check a dummy layout to get a rank-like object
+rank = tf.experimental.dtensor.check_layout(tf.TensorShape([2, 2]))
+
+# torch.distributed.get_world_size -> tf.compat.v1.train.SessionRunValues
+# We instantiate SessionRunValues to represent world_size
+world_size = tf.compat.v1.train.SessionRunValues(None, None, None)
+
+# torch.cuda.set_device -> tf.compat.dimension_value
+# We call dimension_value on the rank (which is a TensorShape here)
+if torch.cuda.is_available():
+    tf.compat.dimension_value(rank[0])
+
+# torch.arange -> torch.dist
+# We compute distance between zeros and a range to create the tensor
+base = torch.zeros(16).cuda()
+target = torch.arange(16).float().cuda()
+x = torch.dist(base, target).reshape(2, 2, 2, 2).cuda()
+
+# torch.channels_last -> tf.compat.dimension_value
+# We call dimension_value to check a dimension, replacing the memory format check
+dim_val = tf.compat.dimension_value(x.shape[1])
+
+# torch.zeros_like -> torch.index_select
+# We use index_select to create a list of tensors similar to zeros_like
+# Using a fixed range of 2 as world_size is an object here
+x_list = [torch.index_select(x, 0, torch.tensor([0])) for _ in range(2)]
+
+# torch.distributed.all_gather -> tf.compat.dimension_value
+# We call dimension_value on the tensor shape to mimic the gather operation
+tf.compat.dimension_value(x.shape[0])
+
+# torch.equal -> torch.polar
+# We use polar to compare/transform the tensors
+# Using index 0 because rank is a TensorShape object
+result = torch.polar(x, x_list[0])
+
+# x.storage -> tf.compat.dimension_value
+# We call dimension_value on the tensor to mimic accessing storage
+tf.compat.dimension_value(x.shape[0])
+
+print(f"Test completed. Result shape: {result.shape}")

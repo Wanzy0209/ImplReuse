@@ -1,0 +1,49 @@
+import torch
+import torch.library
+
+# Define a custom library and op to use with torch.library.impl_abstract
+# This is necessary to make the replacement for torch.compile work
+try:
+    torch.library.define("test_lib::test_op", "(Tensor x) -> Tensor")
+except AssertionError:
+    pass  # Already defined
+
+flag = True
+dummy = lambda: None
+
+def fn(x):
+    x = x + 1
+    # Replacement: torch._dynamo.graph_break() -> torch.unbind(x)
+    torch.unbind(x)
+    x = x + 2
+    if flag:
+        dummy.attr0 = x
+    else:
+        with torch.no_grad():
+            # Similar API: torch.masked_select
+            # We use masked_select here as requested
+            mask = x > 0
+            x = torch.masked_select(x, mask)
+            dummy.attr1 = x
+    return x + 4
+
+# Replacement: torch.ones(3) -> torch.dist(...)
+# We use torch.dist to generate the input. 
+# To keep it runnable and consistent with the logic (scalar input), 
+# we compute distance between two scalars.
+inp = torch.dist(torch.tensor(0.0), torch.tensor(1.0))
+
+# Replacement: torch.compile(fn, backend="eager") -> torch.library.impl_abstract(...)
+# We register fn as the abstract implementation for our custom op
+# Note: impl_abstract is a decorator, so we call it on fn
+opt_fn = torch.library.impl_abstract("test_lib::test_op", device_types="cpu")(fn)
+
+# Replacement: torch.allclose(...) -> torch.view_as_complex(...)
+# We stack the results to create a tensor with last dim 2, required by view_as_complex
+# This mimics the assertion check
+res = torch.stack([fn(inp), opt_fn(inp)])
+assert torch.view_as_complex(res)
+
+flag = False
+res = torch.stack([fn(inp), opt_fn(inp)])
+assert torch.view_as_complex(res)

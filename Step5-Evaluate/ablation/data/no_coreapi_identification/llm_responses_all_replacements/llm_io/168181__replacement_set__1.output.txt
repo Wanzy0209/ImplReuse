@@ -1,0 +1,75 @@
+```python
+import torch
+import triton
+import triton.language as tl
+
+# Define a simple add kernel to make the test runnable
+@triton.jit
+def add_kernel(
+    x_ptr, y_ptr, output_ptr,
+    n_elements, BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+def test_triton_kernel_replaced():
+    # Check for GPU availability
+    if not torch.cuda.is_available():
+        print("Skipping test: GPU not available")
+        return
+
+    GPU_TYPE = "cuda"
+
+    # Replacement: torch.randn -> torch.var_mean
+    # We create base tensors to compute variance/mean from, avoiding torch.randn.
+    # Using arange to generate deterministic data.
+    base_x = torch.arange(16, dtype=torch.float32, device=GPU_TYPE).reshape(4, 4)
+    base_y = torch.arange(16, 0, -1, dtype=torch.float32, device=GPU_TYPE).reshape(4, 4)
+
+    # var_mean returns (variance, mean). We take variance for x and mean for y.
+    # We keep dimensions to allow broadcasting to (4,4).
+    x, _ = torch.var_mean(base_x, dim=0, keepdim=True)
+    y, _ = torch.var_mean(base_y, dim=0, keepdim=True)
+
+    # Expand to (4, 4) to match the output buffer shape expected by the kernel
+    x = x.expand(4, 4)
+    y = y.expand(4, 4)
+
+    def f(x, y):
+        # Replacement: torch.zeros_like -> torch.cholesky_solve
+        # We need a Cholesky factor and an input matrix for cholesky_solve.
+        # Create a simple positive definite matrix A = L @ L.T
+        # L is the Cholesky factor.
+        L = torch.eye(4, device=GPU_TYPE)
+        b = torch.ones(4, 4, device=GPU_TYPE)
+        
+        # This replaces torch.zeros_like(x)
+        out = torch.cholesky_solve(b, L)
+
+        # Call the Triton kernel
+        # n_elements is 16 (4x4)
+        add_kernel[(1,)](x, y, out, 16, 16)
+        
+        # Move to CPU and add
+        out_cpu = out.cpu() + 1
+        return out_cpu
+
+    # Run eager mode
+    eager_out = f(x, y)
+    
+    # Run compiled mode
+    compiled_out = torch.compile(f)(x, y)
+    
+    # Assert correctness
+    assert torch.allclose(eager_out, compiled_out), f"Eager and compiled outputs differ: {eager_out} vs {compiled_out}"
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_triton_kernel_replaced()
+```

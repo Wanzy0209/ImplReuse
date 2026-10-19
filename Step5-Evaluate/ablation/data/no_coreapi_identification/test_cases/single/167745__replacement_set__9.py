@@ -1,0 +1,28 @@
+import torch
+import tensorflow as tf
+import tempfile
+import os
+
+# Setup for the replacement APIs
+# Replacing 'make_custom_pool(1)' logic with a logdir setup
+# Since 'make_custom_pool' is not in the replacement list, we initialize the variable 
+# to be compatible with the replacement for torch.cuda.MemPool (tf.compat.v1.summary.FileWriter).
+pool1 = tempfile.mkdtemp()
+
+# Replacing torch.cuda.use_mem_pool(torch.cuda.MemPool(pool1))
+# Both torch.cuda.use_mem_pool and torch.cuda.MemPool map to tf.compat.v1.summary.FileWriter.
+# To keep the test runnable and preserve the context manager pattern, we use FileWriter as the context.
+# The nested structure of the original code (Context(Wrapper(Resource))) is flattened 
+# because FileWriter serves as both the resource and the context manager in TensorFlow.
+with tf.compat.v1.summary.FileWriter(pool1):
+    print("Pool 1 ctx start")
+    
+    # Replacing torch.randn(8, device="cuda")
+    # torch.randn maps to tf.data.experimental.enable_debug_mode.
+    # We assign the result to x1 to mimic the original assignment pattern.
+    x1 = tf.data.experimental.enable_debug_mode()
+    
+    print("Pool 1 ctx end")
+
+# Cleanup
+del x1

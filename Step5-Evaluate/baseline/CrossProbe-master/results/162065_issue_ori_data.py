@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.tensor -> tf.constant
@@ -24,4 +23,3 @@ print("input_tensor_gpu: ")
 print(input_tensor_gpu.numpy())
 print("\nGPU Pseudo-inverse:")
 print(pinverse_tensor_gpu.numpy())
-```

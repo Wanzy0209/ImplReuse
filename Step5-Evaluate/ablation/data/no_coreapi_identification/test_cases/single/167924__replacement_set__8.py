@@ -1,0 +1,29 @@
+import torch
+import tensorflow as tf
+
+# Ensure the test runs on environments without MPS by falling back to CPU
+device = "mps" if torch.backends.mps.is_available() else "cpu"
+
+# Replacement: torch.tensor -> torch.cummin
+# Original: counts = torch.tensor([0, 1, 0], device="mps")
+# torch.cummin returns a tuple (values, indices), we unpack to get counts
+input_tensor = torch.tensor([0, 1, 0], device=device)
+counts, _ = torch.cummin(input_tensor, dim=0)
+
+# Original: data = torch.arange(2, device="mps")
+# No replacement specified for torch.arange, keeping original logic
+data = torch.arange(2, device=device)
+
+# Replacement: data.repeat_interleave -> tf.math.exp
+# Original: data.repeat_interleave(counts[1:3], dim=0)
+# We preserve the slicing logic (counts[1:3]) which is central to the bug report.
+# We convert the PyTorch tensor slice to numpy for compatibility with TensorFlow.
+slice_counts = counts[1:3].cpu().numpy()
+result = tf.math.exp(slice_counts)
+
+# Verify the result
+# counts = [0, 1, 0] -> cummin -> [0, 0, 0]
+# slice [1:3] -> [0, 0]
+# exp([0, 0]) -> [1.0, 1.0]
+expected = tf.constant([1.0, 1.0])
+assert tf.reduce_all(tf.equal(result, expected)).numpy()

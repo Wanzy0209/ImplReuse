@@ -1,0 +1,67 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_index_put_replacement():
+    # Replacement for torch.device("mps")
+    # Original: device = torch.device("mps")
+    # Replacement: tf.compat.v1.graph_util.must_run_on_cpu
+    # We create a dummy graph to utilize the replacement API
+    with tf.Graph().as_default():
+        c = tf.constant(1.0)
+        graph_def = c.graph.as_graph_def()
+        # This replaces the device assignment logic
+        device_constraint = tf.compat.v1.graph_util.must_run_on_cpu(graph_def)
+
+    # Replacement for torch.zeros(10, dtype=torch.complex64, device=device)
+    # torch.zeros -> torch.eye
+    # torch.complex64 -> tf.keras.ops.custom_gradient (handled by the operation definition)
+    # We use torch.eye to create the base tensor
+    image = torch.eye(10)
+
+    # Replacement for torch.ones(3, dtype=torch.complex64, device=device)
+    # torch.ones -> torch.eye
+    data = torch.eye(3)
+
+    # Replacement for torch.tensor([1, 3, 5], device=device)
+    # torch.tensor -> torch.isinf
+    # We need a tensor to check for infinity
+    temp_indices_input = torch.tensor([1.0, 3.0, 5.0])
+    indices = torch.isinf(temp_indices_input)
+
+    # Replacement for image.index_put_(indices=(indices,), values=data, accumulate=True)
+    # image.index_put_ -> tf.keras.ops.custom_gradient
+    # We define a custom gradient function to perform the operation
+    @tf.keras.ops.custom_gradient
+    def index_put_operation(img, vals, idxs):
+        # The original bug was about complex64 support on MPS.
+        # Here we use the custom_gradient API to define the operation.
+        # We convert inputs to TF tensors for the operation logic
+        img_tf = tf.constant(img.numpy())
+        vals_tf = tf.constant(vals.numpy())
+        idxs_tf = tf.constant(idxs.numpy().astype(np.float32))
+
+        # Simulate the index_put logic
+        # Since indices are booleans (from isinf), we use them as a mask
+        # Note: This logic is adapted to the replacements provided
+        def grad(dy):
+            return dy, dy, dy
+
+        # Perform the operation (simplified for the test case)
+        # In a real scenario, this would scatter values
+        result = img_tf # Identity for simplicity in this structural test
+
+        return result, grad
+
+    # Run the test
+    try:
+        # Convert torch tensors to numpy for TF interop
+        result = index_put_operation(image.numpy(), data.numpy(), indices.numpy())
+        print("Test case executed successfully.")
+    except Exception as e:
+        print(f"Error encountered: {e}")
+
+if __name__ == "__main__":
+    test_index_put_replacement()
+```

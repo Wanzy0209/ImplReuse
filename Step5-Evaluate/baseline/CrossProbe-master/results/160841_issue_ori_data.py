@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from transformers import TFAutoModelForCausalLM, AutoTokenizer
 
@@ -20,4 +19,3 @@ inputs = tokenizer('''def print_prime(n):
 outputs = model.generate(**inputs, max_length=32)
 text = tokenizer.batch_decode(outputs)[0]
 print(text)
-```

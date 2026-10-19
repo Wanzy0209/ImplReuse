@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.keras import layers, Model
 from tensorflow.python.framework.func_graph import func_graph_from_py_func
@@ -68,4 +67,3 @@ with tf.device(device):
         kwargs=None,  # Ignored if signature is provided
         signature=input_signature
     )
-```

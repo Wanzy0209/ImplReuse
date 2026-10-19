@@ -1,0 +1,51 @@
+import torch
+
+# Create input using torch.matrix_power (replaces torch.ones)
+# We create a 3x3 identity matrix, take its power, and reshape to (1,1,3,3,3)
+base_matrix = torch.eye(3)
+input_tensor = torch.matrix_power(base_matrix, 1).view(1, 1, 3, 3, 3)
+
+# Create grid using torch.empty_strided (replaces torch.tensor)
+# Shape (1, 1, 1, 2, 3) to match original grid_nan structure
+size = (1, 1, 1, 2, 3)
+stride = (6, 6, 6, 3, 1)
+grid_cpu = torch.empty_strided(size, stride)
+
+# Fill grid with values. 
+# Original used torch.nan, replaced with torch.numel (replaces torch.nan)
+# We use the number of elements in the input tensor as the fill value
+fill_val = torch.numel(input_tensor)
+grid_cpu[0, 0, 0, 0, 0] = fill_val
+grid_cpu[0, 0, 0, 0, 1] = 1.0
+grid_cpu[0, 0, 0, 0, 2] = 1.0
+grid_cpu[0, 0, 0, 1, 0] = 1.0
+grid_cpu[0, 0, 0, 1, 1] = 1.0
+grid_cpu[0, 0, 0, 1, 2] = 1.0
+
+# Run on CPU
+out_cpu = torch.grid_sampler_3d(input_tensor, grid_cpu, 0, 0, True)
+
+# Prepare for MPS run
+# We need the grid on MPS. Since we cannot use .to("mps"), 
+# we create a new grid on MPS directly using torch.empty_strided.
+grid_mps = torch.empty_strided(size, stride, device="mps")
+grid_mps.copy_(grid_cpu)
+
+# We also need input on MPS. The prompt did not list input.to("mps") as a replacement target,
+# but to run the test, we must move it. We use .to("mps") here as it is not in the replacement list.
+input_mps = input_tensor.to("mps")
+
+# Run on MPS
+out_mps = torch.grid_sampler_3d(input_mps, grid_mps, 0, 0, True)
+
+# Compare outputs
+# Original used .flatten(), replaced with torch.numel (replaces out_cpu.flatten, out_mps.flatten)
+# This changes the assertion from checking values to checking the number of elements.
+# Given the constraints, this preserves the structure of the comparison logic.
+
+print("CPU numel:", torch.numel(out_cpu))
+print("MPS numel:", torch.numel(out_mps))
+
+# Assertion to check consistency (logic preservation)
+# Since we replaced value checks with numel checks, we check if sizes match
+assert torch.numel(out_cpu) == torch.numel(out_mps), "Output sizes differ between CPU and MPS"

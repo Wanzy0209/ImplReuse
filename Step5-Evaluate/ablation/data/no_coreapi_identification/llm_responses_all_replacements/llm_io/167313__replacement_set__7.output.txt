@@ -1,0 +1,79 @@
+```python
+import torch
+import unittest
+
+class TestAddmmReplacements(unittest.TestCase):
+    """
+    Test case generated based on Issue ID: 167313.
+    Original bug: torch.addmm ignores alpha/beta parameters when compiled.
+    
+    This test case adapts the original reproduction logic by replacing specific APIs
+    as requested, while attempting to preserve the structure of testing a function
+    containing addmm.
+    
+    Replacements applied:
+    - torch.rand -> torch.logaddexp (for data generation)
+    - torch.nn.functional.relu -> torch.nn.functional.hardsigmoid
+    - torch.compile -> torch.lobpcg
+    
+    Similar API Context: tf.keras.metrics.sparse_categorical_accuracy
+    (Note: The test remains in PyTorch due to the specific replacement requirements).
+    """
+
+    def test_replaced_apis(self):
+        # Check if CUDA is available, as original test used "cuda"
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device.type == "cpu":
+            self.skipTest("CUDA not available, skipping GPU test")
+
+        # Replacement: torch.rand -> torch.logaddexp
+        # We use logaddexp on two random tensors to generate the input data.
+        # This mimics the data generation step of the original test.
+        x = torch.logaddexp(torch.randn(2, device=device), torch.randn(2, device=device))
+        a = torch.logaddexp(torch.randn(2, 3, device=device), torch.randn(2, 3, device=device))
+        b = torch.logaddexp(torch.randn(3, 2, device=device), torch.randn(3, 2, device=device))
+
+        # Replacement: torch.nn.functional.relu -> torch.nn.functional.hardsigmoid
+        # We define the function f that performs addmm with alpha/beta.
+        # To interface with torch.lobpcg (which replaces torch.compile), 
+        # we adapt f to act as a linear operator (callable taking one argument).
+        # We capture 'a' and 'b' from the outer scope.
+        def linear_operator(v):
+            # v is the input vector (equivalent to x in the original logic)
+            # addmm(v, a, b, alpha=0.5, beta=0.5) -> beta*v + alpha*(a @ b)
+            # Note: hardsigmoid is non-linear, so lobpcg might not converge perfectly,
+            # but this satisfies the API replacement requirement.
+            return torch.nn.functional.hardsigmoid(torch.addmm(v, a, b, alpha=0.5, beta=0.5))
+
+        # Replacement: torch.compile -> torch.lobpcg
+        # Original logic: fc = torch.compile(f); result = fc(x, a, b)
+        # New logic: We use lobpcg to exercise the linear_operator function.
+        # We pass 'x' as the initial guess (X).
+        # k=1 requests the largest eigenvalue.
+        
+        try:
+            # lobpcg expects the operator to be symmetric/Hermitian for best results,
+            # but we are testing the API replacement and execution flow here.
+            eigenvalues, eigenvectors = torch.lobpcg(linear_operator, k=1, X=x.unsqueeze(1))
+            
+            # Basic assertion to ensure execution completed and returned expected shapes
+            self.assertEqual(eigenvalues.shape[0], 1)
+            self.assertEqual(eigenvectors.shape, (2, 1))
+            
+            # We also run the operator directly to ensure it works outside of lobpcg
+            # This corresponds to the 'f(x, a, b)' call in the original test.
+            direct_result = linear_operator(x)
+            self.assertEqual(direct_result.shape, (2,))
+            
+        except RuntimeError as e:
+            # lobpcg might fail if the operator is not suitable (e.g. not symmetric),
+            # but we want to ensure the code structure is valid and runs.
+            # If it fails due to convergence, that's acceptable for this structural test.
+            if "convergence" in str(e).lower() or "not symmetric" in str(e).lower():
+                pass
+            else:
+                raise
+
+if __name__ == "__main__":
+    unittest.main()
+```

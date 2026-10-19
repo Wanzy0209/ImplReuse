@@ -1,0 +1,67 @@
+import tensorflow as tf
+import torch
+import torch.nn.functional as F
+
+# Replacement: dist.init_process_group -> torch.nn.functional.cross_entropy
+# We simulate the setup step by computing a cross entropy loss.
+_dummy_input = torch.randn(10, 5)
+_dummy_target = torch.randint(0, 5, (10,))
+_setup_loss = F.cross_entropy(_dummy_input, _dummy_target)
+
+# Replacement: nn.Module -> tf.keras.backend.dtype
+# We replace the class definition with a function that utilizes the replacement API.
+def inner_f(primals, tangents):
+    # Unpacking inputs (simulating fx_pytree.tree_flatten_spec)
+    primals_1, primals_2, tangents_1 = primals[0], primals[1], tangents[0]
+
+    # Replacement: torch.ops.aten.t.default -> tf.keras.backend.dtype
+    # Original: t = torch.ops.aten.t.default(primals_1)
+    t = tf.keras.backend.dtype(primals_1)
+
+    # Replacement: torch.ops.aten.mm.default -> tf.keras.backend.dtype
+    # Original: mm = torch.ops.aten.mm.default(primals_2, t)
+    # Note: We pass primals_2 as the tensor argument to the replacement API.
+    mm = tf.keras.backend.dtype(primals_2)
+
+    # Replacement: torch.ops.aten.new_empty.default -> tf.keras.backend.dtype
+    # Original: new_empty = torch.ops.aten.new_empty.default(mm, [16, 256], pin_memory = False)
+    new_empty = tf.keras.backend.dtype(primals_2)
+
+    # Replacement: torch.ops.aten.index_put.default -> tf.keras.backend.dtype
+    # Original: index_put = torch.ops.aten.index_put.default(new_empty, [_tensor_constant0], mm)
+    index_put = tf.keras.backend.dtype(primals_2)
+
+    # Replacement: torch.ops.aten.slice.Tensor -> tf.keras.backend.dtype
+    # Original: slice_2 = torch.ops.aten.slice.Tensor(index_put, 0, 0, -1)
+    slice_2 = tf.keras.backend.dtype(primals_2)
+
+    # Replacement: torch.ops._c10d_functional.all_to_all_single.default -> tf.keras.backend.dtype
+    # Original: all_to_all_single = torch.ops._c10d_functional.all_to_all_single.default(slice_2, ...)
+    all_to_all_single = tf.keras.backend.dtype(primals_2)
+
+    # Replacement: torch.ops._c10d_functional.wait_tensor.default -> tf.keras.backend.dtype
+    # Original: wait_tensor = torch.ops._c10d_functional.wait_tensor.default(all_to_all_single)
+    wait_tensor = tf.keras.backend.dtype(primals_2)
+
+    return wait_tensor
+
+def test_case():
+    # Leverage similar API: torch.nn.Sigmoid -> tf.nn.sigmoid
+    # We generate inputs using the Sigmoid activation to reflect the similar API context.
+    x = tf.random.normal((256, 256))
+    primals_1 = tf.nn.sigmoid(x)
+
+    y = tf.random.normal((15, 256))
+    primals_2 = tf.nn.sigmoid(y)
+
+    tangents_1 = tf.random.normal((15, 256))
+
+    # Execute the function with the replaced logic
+    result_dtype = inner_f([primals_1, primals_2], [tangents_1])
+
+    # Assertion to verify the behavior of the replacement API
+    assert result_dtype == 'float32', f"Expected dtype float32, but got {result_dtype}"
+    print("Test passed. Dtypes verified successfully.")
+
+if __name__ == "__main__":
+    test_case()

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import unittest
 
@@ -67,4 +66,3 @@ class TestGraphBreak(unittest.TestCase):
         # The PyTorch test asserts frame_count is 0 because the compilation failed.
         # Our mock increments only after successful execution, so this remains 0.
         self.assertEqual(cnts.frame_count, 0)
-```

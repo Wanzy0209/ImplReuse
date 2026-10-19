@@ -1,0 +1,72 @@
+import torch
+import torch.nn.functional as F
+
+def test_compile_dynamic_shape_regression():
+    """
+    Test case for Issue 161372: torch.compile regression in 2.8.0.
+    
+    This test verifies that torch.compile handles dynamic shapes correctly
+    when using the replacement APIs, avoiding the recompilation limit errors
+    seen in the original bug report.
+    
+    API Replacements applied:
+    - torch.where -> torch.transpose
+    - torch.rand -> torch.masked_select
+    - torch._dynamo -> torch.masked_select (focus on the API behavior)
+    """
+    
+    # Define a model that processes data with dynamic shapes
+    def forward(x):
+        # Create a mask that varies with input content
+        mask = x > 0.5
+        
+        # Replacement: torch.rand -> torch.masked_select
+        # Instead of generating random data, we select a subset of data.
+        # This operation produces a dynamic output shape (1D tensor of variable length),
+        # which is the core pattern causing the original recompilation issue.
+        selected = torch.masked_select(x, mask)
+        
+        # Handle the dynamic shape by reshaping into a 2D tensor
+        numel = selected.numel()
+        if numel == 0:
+            return torch.zeros(1, 1)
+        
+        # Calculate dimensions for reshaping
+        dim = int(torch.sqrt(torch.tensor(numel, dtype=torch.float)))
+        if dim * dim < numel:
+            dim += 1
+        
+        # Pad to ensure perfect square for reshaping
+        pad_size = dim * dim - numel
+        if pad_size > 0:
+            selected = F.pad(selected, (0, pad_size))
+        
+        reshaped = selected.view(dim, dim)
+        
+        # Replacement: torch.where -> torch.transpose
+        # The original bug report indicated issues with torch.where in the stack trace.
+        # We replace the conditional logic/transformation with torch.transpose.
+        result = torch.transpose(reshaped, 0, 1)
+        
+        return result
+
+    # Compile the model with dynamic shapes enabled
+    # This tests the interaction between torch.compile and the replaced APIs
+    compiled_forward = torch.compile(forward, dynamic=True)
+    
+    # Run with varying input sizes to trigger dynamic shape handling
+    # This simulates the "size mismatch at index 2" (expected 77, actual 78) from the bug
+    for size in [10, 20, 30]:
+        # Create input tensor
+        x = torch.randn(size, size)
+        
+        # Execute compiled function
+        res = compiled_forward(x)
+        
+        # Assertions to verify correct execution
+        assert res is not None
+        assert res.shape[0] == res.shape[1]
+
+if __name__ == "__main__":
+    test_compile_dynamic_shape_regression()
+    print("Test passed successfully.")

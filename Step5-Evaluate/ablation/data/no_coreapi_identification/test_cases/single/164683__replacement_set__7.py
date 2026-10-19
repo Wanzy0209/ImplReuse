@@ -1,0 +1,79 @@
+import torch
+import sys
+import tensorflow as tf
+
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, sentinel):
+    t0 = arg0
+    t1 = torch.tanh(t0)
+    t2 = arg1
+    t3 = t2.min()
+    t4 = t1.clone(); t4.fill_(t3.item())
+    t5 = arg2
+    # torch.nn.functional.relu -> torch.nn.functional.hardsigmoid
+    t6 = torch.nn.functional.hardsigmoid(t5)
+    # torch.nn.functional.silu -> torch.nn.functional.relu
+    t7 = torch.nn.functional.relu(t6)
+    
+    # torch.clamp -> torch.tril_indices
+    # Original: indices = torch.clamp(t4, 0, t7.size(0) - 1)
+    indices = torch.tril_indices(row=t4.size(0), col=t4.size(1), device=t4.device)
+    
+    # torch.nn.functional.embedding -> torch.nn.utils.clip_grad_norm_
+    # Original: t8 = torch.nn.functional.embedding(indices, t7)
+    # clip_grad_norm_ returns a scalar norm
+    t8 = torch.nn.utils.clip_grad_norm_([t7], 1.0)
+    
+    t9 = t8.min()
+    output = t9 + sentinel
+    return output
+
+# torch.randint -> torch.argmin
+# Original: arg0 = torch.randint(0, 1000, [4, 4], dtype=torch.int64, device='cuda')
+# Adaptation: Create a tensor, argmin it, ensure shape (4,4) for downstream compatibility
+temp0 = torch.randn(4, 4, device='cuda')
+arg0 = torch.argmin(temp0, dim=0, keepdim=True).expand(4, 4).to(torch.int64)
+
+# torch.randint -> torch.argmin
+# Original: arg1 = torch.randint(0, 1000, [5], dtype=torch.int64, device='cuda')
+temp1 = torch.randn(5, device='cuda')
+arg1 = torch.argmin(temp1).to(torch.int64)
+
+# torch.rand -> tf.nn.relu
+# Original: arg2 = torch.rand([5000, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+# Adaptation: Create TF tensor, relu, convert to Torch
+tf_tensor = tf.cast(tf.random.uniform([5000, 4]), tf.bfloat16)
+tf_tensor = tf.nn.relu(tf_tensor)
+arg2 = torch.from_numpy(tf_tensor.numpy()).to('cuda').requires_grad_(True)
+
+# torch.tensor -> torch.cummax
+# Original: sentinel = torch.tensor(0.0, dtype=torch.bfloat16, device='cuda', requires_grad=True)
+# Adaptation: Create tensor, cummax, extract value
+dummy_sentinel = torch.tensor([0.0, 0.0], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+sentinel = torch.cummax(dummy_sentinel, dim=0).values[0]
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+
+    # torch.compile -> torch.lobpcg
+    # Original: compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    # Original: out_compiled = compiled_foo(arg0, arg1, arg2, sentinel)
+    # Adaptation: lobpcg requires a symmetric matrix. We construct one and run lobpcg.
+    # We mimic the "compiled" execution by running lobpcg.
+    
+    # Create a symmetric matrix A for lobpcg
+    A = torch.randn(4, 4, device='cuda', dtype=torch.float64)
+    A = A @ A.T
+    
+    # Run lobpcg
+    eigenvalues, _ = torch.lobpcg(A, 1)
+    out_compiled = eigenvalues[0]
+    
+    # Attempt backward pass
+    out_compiled.sum().backward()
+    print('Compile Success! ')

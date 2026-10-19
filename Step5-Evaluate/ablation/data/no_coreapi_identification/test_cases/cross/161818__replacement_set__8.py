@@ -1,0 +1,38 @@
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+import os
+
+# Setup for distributed API usage (required for torch.distributed.broadcast)
+if not dist.is_initialized():
+    try:
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '29500'
+        dist.init_process_group(backend="gloo", rank=0, world_size=1)
+    except Exception:
+        pass
+
+# Replacement: nn.Linear -> tf.experimental.numpy.log1p
+module = tf.experimental.numpy.log1p
+
+# Replacement: torch.rand -> tf.experimental.numpy.log1p
+# Providing a dummy tensor input to make the function call valid
+padded = tf.experimental.numpy.log1p(tf.ones((9, 8)))
+
+# Replacement: torch.as_tensor -> torch.distributed.broadcast
+# broadcast requires a tensor input. We create a tensor to broadcast.
+# Note: torch.tensor is not in the original code, so we use it directly here.
+t = torch.tensor([5, 4])
+lengths = torch.distributed.broadcast(t, 0)
+
+# Replacement: torch.autograd.set_detect_anomaly -> tf.experimental.numpy.log1p
+# Note: log1p is not a context manager, this line is syntactically valid but will fail at runtime
+with tf.experimental.numpy.log1p(True):
+    # out = module(padded)
+    out = tf.experimental.numpy.log1p(padded)
+
+    # Replacement: torch.nested.narrow,.contiguous(),.values() -> tf.experimental.numpy.log1p
+    nopad = tf.experimental.numpy.log1p(out)
+
+    # Replacement: .backward() -> tf.experimental.numpy.log1p
+    tf.experimental.numpy.log1p(nopad.sum())

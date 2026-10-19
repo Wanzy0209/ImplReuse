@@ -1,0 +1,43 @@
+import torch
+import tensorflow as tf
+
+# Ensure TensorFlow v1 compatibility mode is active for the replacement API
+tf.compat.v1.disable_eager_execution()
+
+# Create a local variable to be initialized
+# This mimics the 'data' tensor creation in the original issue
+local_var = tf.compat.v1.get_variable("local_var", shape=[2], initializer=tf.compat.v1.zeros_initializer())
+
+# Original: counts = torch.tensor([0, 1, 0], device="mps")
+# Replacement: torch.tensor -> torch.isinf
+# We create a tensor to check for infinity, mimicking the 'counts' creation logic
+raw_counts = torch.tensor([0, 1, 0], device="mps")
+counts = torch.isinf(raw_counts)
+
+# Original: data.repeat_interleave(counts[1:3], dim=0)
+# Replacement: repeat_interleave -> tf.compat.v1.local_variables_initializer
+# We perform the slicing operation on the counts (preserving the logic) 
+# and then call the replacement API. Note: local_variables_initializer does not take arguments,
+# so we pass the sliced counts as a dummy argument to maintain the structure, 
+# or simply call it if strict signature adherence is required. 
+# Given the instruction to "translate semantics appropriately", we call the initializer 
+# which corresponds to the 'operation' step in the original code.
+# To make it runnable and valid, we call the initializer without arguments 
+# but acknowledge the slicing logic in the flow.
+
+# Perform the slice logic from the original bug report
+sliced_counts = counts[1:3]
+
+# Call the replacement API
+# In the original, this line caused a crash. Here we test the replacement.
+init_op = tf.compat.v1.local_variables_initializer()
+
+# Verify the operation was created successfully
+assert init_op is not None
+
+# To make the test runnable and verify execution, we run the initializer in a session
+with tf.compat.v1.Session() as sess:
+    sess.run(init_op)
+    # Check that the local variable was initialized
+    result = sess.run(local_var)
+    assert result.shape == (2,)

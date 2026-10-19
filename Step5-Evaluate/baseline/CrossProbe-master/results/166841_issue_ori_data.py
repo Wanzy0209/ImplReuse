@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import os
 import shutil
@@ -74,4 +73,3 @@ print("\nModel package loaded successfully.")
 # The loaded object acts like the original module
 loaded(*example_args)
 print("Model ran successfully with the loaded package.")
-```

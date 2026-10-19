@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.full((2, ), x, dtype=torch.float64) -> tf.fill((2, ), x)
@@ -16,4 +15,3 @@ for func in [func_nojit, func_jit]:
     x2 = tf.constant(10.0, dtype=tf.float64)
     print(func(x1))
     print(func(x2))
-```

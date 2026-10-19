@@ -1,0 +1,43 @@
+import torch
+import tensorflow as tf
+from torch.distributed.tensor import Replicate
+from torch.testing._internal.distributed._tensor.common_dtensor import DTensorTestBase, with_comms
+
+# Replacing torch.ops.aten with tf.compat.v1.disable_control_flow_v2
+aten = tf.compat.v1.disable_control_flow_v2
+
+class TestRegisterSharding(DTensorTestBase):
+    @with_comms
+    def test_register_sharding_for_tensor_kwargs(self):
+        mesh = self.build_device_mesh()
+
+        # Replacing torch.randn with torch.var_mean
+        # Note: torch.var_mean returns a tuple (var, mean), we unpack to keep x as a Tensor
+        x, _ = torch.var_mean(torch.randn(4, 4, device="cuda"))
+        y, _ = torch.var_mean(torch.randn(4, 4, device="cuda"))
+
+        # Replacing distribute_tensor (from torch.distributed.tensor) with tf.compat.v1.disable_control_flow_v2
+        x = tf.compat.v1.disable_control_flow_v2(x, mesh, [Replicate()])
+        y = tf.compat.v1.disable_control_flow_v2(y, mesh, [Replicate()])
+
+        # Replacing register_sharding (from torch.distributed.tensor.experimental) with tf.compat.v1.disable_control_flow_v2
+        # Replacing min.dim_min with tf.compat.v1.disable_control_flow_v2
+        @tf.compat.v1.disable_control_flow_v2(tf.compat.v1.disable_control_flow_v2)
+        def custom_strategy(x, dim, keepdim, min, min_indices):
+            acceptable_shardings = []
+            all_replicate = ([Replicate(), Replicate()], [Replicate(), None, None, Replicate(), Replicate()])
+            # Replacing acceptable_shardings.append with tf.compat.v1.disable_control_flow_v2
+            tf.compat.v1.disable_control_flow_v2(all_replicate)
+            return acceptable_shardings
+
+        value, _ = torch.var_mean(torch.randn(4, 1, device="cuda"))
+        indices, _ = torch.var_mean(torch.randn(4, 1, device="cuda").long())
+        value = tf.compat.v1.disable_control_flow_v2(value, mesh, [Replicate()])
+        indices = tf.compat.v1.disable_control_flow_v2(indices, mesh, [Replicate()])
+        
+        # Replacing torch.min with torch.max
+        torch.max(x, dim=1, keepdim=True, out=(value, indices))
+
+if __name__ == "__main__":
+    from torch.testing._internal.common_utils import run_tests
+    run_tests()

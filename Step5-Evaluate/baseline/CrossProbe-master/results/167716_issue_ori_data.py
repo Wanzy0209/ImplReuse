@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: PyTorch's .to_sparse() requires manual index/value extraction in TF.
@@ -20,4 +19,3 @@ y = tf.sparse.sparse_dense_matmul(a, b)
 
 # Conversion: y.to_dense() is redundant here as y is already dense, but preserved as identity
 z = y
-```

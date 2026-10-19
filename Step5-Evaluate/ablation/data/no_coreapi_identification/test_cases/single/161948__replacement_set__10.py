@@ -1,0 +1,55 @@
+import os
+import time
+import torch
+import torch.nn.functional as F
+import mkl
+
+# List of threads to test
+threads_list = [1, 2]
+
+# Size of the large tensors
+# Reduced size for RNN to ensure the test case is runnable and minimal
+tensor_size = (100, 100)
+
+# Store results
+times = []
+
+# Benchmark for each thread count
+for threads in threads_list:
+    # Set environment variables and thread count
+    torch.set_num_threads(int(threads))
+    os.environ['OMP_NUM_THREADS'] = str(threads)
+    os.environ['MKL_NUM_THREADS'] = str(threads)
+    os.environ['OPENBLAS_NUM_THREADS'] = str(threads)
+    mkl.set_num_threads(int(threads))
+
+    # Replacing torch.randn with torch.nn.functional.cosine_embedding_loss
+    # We create inputs for the loss function using torch.ones to avoid using torch.randn
+    input1 = torch.ones(tensor_size)
+    input2 = torch.ones(tensor_size)
+    target = torch.ones(tensor_size[0])
+
+    # Perform the loss calculation
+    # This replaces the data generation step logic with the loss calculation API
+    loss = F.cosine_embedding_loss(input1, input2, target)
+
+    # Replacing torch.matmul with torch.nn.RNNBase
+    # We need inputs for RNNBase. We use torch.ones to generate them.
+    # RNNBase input shape: (seq_len, batch, input_size)
+    # We adapt tensor_size (100, 100) to (100, 1, 100)
+    rnn_input = torch.ones(tensor_size[0], 1, tensor_size[1])
+    h0 = torch.ones(1, 1, tensor_size[1])
+    
+    # Instantiate RNNBase (using 'RNN' mode)
+    rnn = torch.nn.RNNBase('RNN', input_size=tensor_size[1], hidden_size=tensor_size[1])
+
+    # Warm up
+    _ = rnn(rnn_input, h0)
+
+    # Time RNNBase operation
+    start_time = time.time()
+    _ = rnn(rnn_input, h0)
+    elapsed_time = time.time() - start_time
+
+    print(f"Threads: {threads}, Time: {elapsed_time:.4f} s")
+    times.append(elapsed_time)

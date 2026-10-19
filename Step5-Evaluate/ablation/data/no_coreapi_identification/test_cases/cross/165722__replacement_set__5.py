@@ -1,0 +1,44 @@
+import torch
+import tensorflow as tf
+
+def test_backend_aliasing_stability():
+    """
+    Test case based on Issue 165722: RelationalGuard classes store raw PyObject* 
+    without proper reference counting.
+    
+    This test mimics the logic of the OBJECT_ALIASING class where a reference is stored,
+    a reset occurs, and the reference is accessed again. The original bug involved a 
+    dangling pointer crash because the stored PyObject* was not reference-counted.
+    
+    Replacements applied:
+    - OBJECT_ALIASINGclass,_first_tensormember -> tf.keras.backend.backend
+    - torch._dynamo.reset -> tf.keras.backend.backend
+    """
+    
+    # Step 1: Store the initial reference (mimicking _first_tensor member)
+    # In the original bug, this raw pointer was stored without Py_INCREF.
+    stored_backend = tf.keras.backend.backend()
+    
+    # Step 2: Perform a reset operation
+    # In the original bug, torch._dynamo.reset() would clear caches, potentially 
+    # deallocating the object pointed to by _first_tensor if it wasn't properly referenced.
+    # We replace torch._dynamo.reset with tf.keras.backend.backend.
+    tf.keras.backend.backend()
+    
+    # Step 3: Access the stored reference and compare
+    # In the original bug, accessing _first_tensor here would lead to a use-after-free 
+    # (dangling pointer) crash.
+    # We verify that the stored reference is still valid and accessible.
+    current_backend = tf.keras.backend.backend()
+    
+    # Assertions to verify stability
+    # 1. Check that the stored reference is still a valid string (not dangling)
+    assert isinstance(stored_backend, str), "Stored backend reference is invalid"
+    
+    # 2. Check that the value remains consistent
+    assert stored_backend == current_backend, "Backend value mismatch after reset"
+    
+    print("Test passed: Backend reference remains valid after reset sequence.")
+
+if __name__ == "__main__":
+    test_backend_aliasing_stability()

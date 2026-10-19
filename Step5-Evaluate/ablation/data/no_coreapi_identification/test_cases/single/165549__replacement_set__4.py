@@ -1,0 +1,30 @@
+import torch
+import torch.nn.functional as F
+
+# Setup: Create a tensor on the custom device.
+# Replacing torch.randn with torch.nn.functional.adaptive_max_pool2d
+# We need a 4D input for adaptive_max_pool2d.
+dummy_input = torch.ones(1, 1, 4, 4, device='privateuse1')
+t = F.adaptive_max_pool2d(dummy_input, output_size=(4, 4))
+
+# Test Case 1: torch.abs (The main API under test)
+# Bug: returns tensor with shape [0]
+result = torch.abs(t)
+assert result.shape == t.shape, f"Expected shape {t.shape}, but got {result.shape}"
+
+# Test Case 2: In-place operation
+# But these work correctly
+t_inplace = t.clone()
+t_inplace.abs_()  # Works (in-place)
+assert t_inplace.shape == t.shape
+
+# Test Case 3: Out-of-place with pre-allocated tensor
+pre_allocated_tensor = torch.empty_like(t)
+torch.abs(t, out=pre_allocated_tensor)  # Works
+assert pre_allocated_tensor.shape == t.shape
+
+# Test Case 4: Replacing torch.neg with torch.atan
+# Original: torch.neg(t) # Works (uses structured_delegate)
+# New: torch.atan(t)
+result_atan = torch.atan(t)
+assert result_atan.shape == t.shape

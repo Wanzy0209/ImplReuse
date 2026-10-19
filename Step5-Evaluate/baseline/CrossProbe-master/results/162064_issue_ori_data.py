@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Create the input tensor
@@ -31,4 +30,3 @@ with tf.device('/GPU:0'):
     print(input_tensor_gpu)
     print("\nGPU Output:")
     print(output_gpu)
-```

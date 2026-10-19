@@ -1,1 +1,0 @@
-import torch; x = torch.tensor([True, False, True]); print(torch.all(x))

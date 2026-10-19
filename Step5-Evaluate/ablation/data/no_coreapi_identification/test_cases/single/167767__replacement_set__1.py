@@ -1,0 +1,39 @@
+import torch
+import torch.nn.functional as F
+
+# Replacement: torch.zeros -> torch.ones
+a = torch.ones(1, device='mps')
+
+# Replacement: a.clamp -> torch.nn.functional.tanh
+# Note: tanh does not accept min/max arguments, so they are omitted to maintain runnability.
+a_clamped = F.tanh(a)
+
+# Replacement: torch.zeros -> torch.ones
+b = torch.ones(1, device='mps')
+print(b)
+
+# Replacement: b.clamp -> torch.nn.functional.tanh
+c = F.tanh(b)
+print(c)
+
+b = torch.ones(1, device='mps')
+print(b)
+
+# Replacement: b.clamp -> torch.nn.functional.tanh
+c = F.tanh(b)
+print(c)
+
+b = torch.ones(1, device='mps')
+print(b)
+
+# Replacement: b.clamp -> torch.nn.functional.tanh
+# Note: torch.inf replacement is omitted as tanh does not accept max argument.
+c = F.tanh(b)
+print(c)
+
+b = torch.ones(1, device='mps')
+print(b)
+
+# Replacement: b.clamp_min -> torch.nn.functional.tanh
+c = F.tanh(b)
+print(c)

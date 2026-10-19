@@ -1,0 +1,91 @@
+import torch
+import torch.nn as nn
+import numpy as np
+import unittest
+
+# Handle TensorFlow import errors due to environment issues (e.g., GLIBCXX version)
+try:
+    import tensorflow as tf
+    TF_AVAILABLE = True
+except ImportError as e:
+    TF_AVAILABLE = False
+    # Print warning for user context
+    print(f"Warning: TensorFlow import failed. Skipping TF-dependent tests. Error: {e}")
+
+class Model(nn.Module):
+    """Model from the original bug report."""
+    def __init__(self, kernel_size=3, upscale_factor=2):
+        super(Model, self).__init__()
+        self.conv = nn.Conv2d(1, 4, kernel_size=kernel_size, padding="same")
+        self.pixel_shuffle = nn.PixelShuffle(upscale_factor)
+
+    def forward(self, input):
+        x = self.conv(input)
+        x = self.pixel_shuffle(x)
+        return x
+
+if TF_AVAILABLE:
+    # Use tf.test.TestCase if TensorFlow is available
+    class TestExtractImagePatches(tf.test.TestCase):
+        def test_inverse_pixel_shuffle_logic(self):
+            # 1. Setup PyTorch model and data (Original Bug Logic)
+            model = Model()
+            model.eval()
+            
+            # Input shape from bug report: (1, 1, 128, 128)
+            x_torch = torch.ones((1, 1, 128, 128))
+            
+            with torch.no_grad():
+                # Get the output of the PyTorch model
+                # Shape: (1, 1, 256, 256) due to PixelShuffle(2)
+                y_torch = model(x_torch)
+                
+                # Get the intermediate tensor (output of Conv2d) for comparison
+                # Shape: (1, 4, 128, 128)
+                intermediate_torch = model.conv(x_torch)
+
+            # 2. Leverage Similar API: tf.raw_ops.ExtractImagePatches
+            # Convert PyTorch output (NCHW) to TensorFlow input (NHWC)
+            y_tf = tf.transpose(y_torch.numpy(), [0, 2, 3, 1])
+            
+            # Apply ExtractImagePatches to reverse the PixelShuffle operation.
+            # PixelShuffle(upscale_factor=2) rearranges (N, C*r^2, H, W) -> (N, C, H*r, W*r).
+            # ExtractImagePatches with ksizes=[1, r, r, 1] and strides=[1, r, r, 1]
+            # rearranges (N, H*r, W*r, C) -> (N, H, W, C*r^2).
+            patches = tf.raw_ops.ExtractImagePatches(
+                images=y_tf,
+                ksizes=[1, 2, 2, 1],   # Corresponds to upscale_factor=2
+                strides=[1, 2, 2, 1],  # Corresponds to upscale_factor=2
+                rates=[1, 1, 1, 1],
+                padding="VALID"
+            )
+
+            # 3. Verify Results
+            # The output of ExtractImagePatches should match the shape of the intermediate tensor
+            # from the PyTorch model (before PixelShuffle).
+            # PyTorch intermediate: (1, 4, 128, 128)
+            # TF Patches: (1, 128, 128, 4)
+            self.assertAllEqual(patches.shape, [1, 128, 128, 4])
+            
+            # Convert TF patches back to NCHW for comparison with PyTorch intermediate
+            patches_nchw = tf.transpose(patches, [0, 3, 1, 2]).numpy()
+            
+            # Verify that the spatial data is preserved (allowing for potential layout differences
+            # in channel ordering between the two implementations, we check the set of values).
+            # Since the input was ones and Conv2d weights are constant, the values should match.
+            self.assertAllClose(
+                np.sort(patches_nchw.flatten()), 
+                np.sort(intermediate_torch.numpy().flatten())
+            )
+else:
+    # Fallback to unittest.TestCase to allow the test file to run without crashing
+    class TestExtractImagePatches(unittest.TestCase):
+        @unittest.skip("TensorFlow is not available or environment is misconfigured (e.g., GLIBCXX version).")
+        def test_inverse_pixel_shuffle_logic(self):
+            pass
+
+if __name__ == "__main__":
+    if TF_AVAILABLE:
+        tf.test.main()
+    else:
+        unittest.main()

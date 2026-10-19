@@ -1,4 +1,3 @@
-```python
 import os
 import tensorflow as tf
 
@@ -89,4 +88,3 @@ for attempt in range(1, 1000):
     if not tf.reduce_all(state[:, :-2, :] == 0).numpy():
         print(f"slide_to_the_left3 attempt {attempt}", state.numpy(), tf.where(state[:, :-2, :] != 0).numpy())
         break
-```

@@ -1,0 +1,53 @@
+```python
+import torch
+import tensorflow as tf
+from torch import distributed as dist
+# Keeping original imports to ensure runnable code for the distributed parts
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh
+
+if __name__ == '__main__':
+    # Replacement: dist.init_process_group -> torch.distributed.init_process_group
+    torch.distributed.init_process_group(backend="nccl")
+    rank = dist.get_rank()
+
+    # Replacement: torch.cuda.set_device -> tf.data.experimental.to_variant
+    # Create a dummy dataset to pass to to_variant
+    ds_device = tf.data.Dataset.from_tensor_slices([rank])
+    tf.data.experimental.to_variant(ds_device)
+
+    # Replacement: torch.arange -> torch.var
+    # Original: torch.arange(12).reshape(-1, 4).float().cuda()
+    # We need to generate a tensor of size 12 using torch.var.
+    # We take variance of a random tensor along dim 0 to get 12 elements.
+    # Then reshape to 3x4.
+    dummy_input = torch.randn(10, 12).float().cuda()
+    tensor = torch.var(dummy_input, dim=0).reshape(-1, 4).float().cuda()
+
+    # Replacement: naten.mean.default (tensor.mean) -> tf.data.experimental.to_variant
+    # Original: print("Truth=", tensor.mean())
+    ds_truth = tf.data.Dataset.from_tensor_slices(tensor.cpu().numpy())
+    truth_variant = tf.data.experimental.to_variant(ds_truth)
+    print("Truth=", truth_variant)
+
+    mesh = init_device_mesh('cuda', (2,))
+    dt = distribute_tensor(tensor, device_mesh=mesh, placements=[Shard(0)])
+
+    # Replacement: dt.mean -> tf.data.experimental.to_variant
+    # Original: mean = dt.mean()
+    # We convert the local shard of dt to a TF dataset, then to variant.
+    local_tensor = dt.to_local()
+    # Handle potential empty shards due to uneven sharding (as per the bug report context)
+    if local_tensor.numel() > 0:
+        ds_mean = tf.data.Dataset.from_tensor_slices(local_tensor.cpu().numpy())
+    else:
+        ds_mean = tf.data.Dataset.from_tensor_slices(torch.empty(0, 4).numpy())
+    
+    mean = tf.data.experimental.to_variant(ds_mean)
+
+    # Original: full = mean.full_tensor()
+    # 'mean' is now a tf.Tensor (variant), not a DTensor, so it doesn't have full_tensor().
+    # We simply assign it to full to maintain the variable structure.
+    full = mean
+
+    print(rank, mean, full)
+```

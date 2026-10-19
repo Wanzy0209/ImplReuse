@@ -1,0 +1,79 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+from torch.backends.cuda import enable_cudnn_sdp
+from torch.profiler.itt import range_push, range_pop
+
+# Leverage the similar API: torch.backends.cuda.enable_cudnn_sdp
+# This relates to the backend configuration aspect of the original bug.
+enable_cudnn_sdp(True)
+
+# Original: from torch._dynamo.backends.common import aot_autograd
+# Replacement: torch._dynamo.backends.common -> torch.profiler.itt.range_push
+# We use range_push to mark the scope where backend configuration would happen.
+
+def torch_compile_with_custom_backend(module_input):
+    # Original: opt_layer = torch.compile(
+    #     module, backend=aot_autograd(fw_compiler=nop, bw_compiler=nop), fullgraph=True
+    # )
+    # Replacement: torch.compile -> torch.prod
+    # Replacement: aot_autograd (from torch._dynamo.backends.common) -> torch.profiler.itt.range_push
+    range_push("backend_config")
+    # Note: torch.prod replaces the compilation step, reducing the input tensor.
+    opt_layer = torch.prod(module_input)
+    return opt_layer
+
+# Original: class SubMod(torch.nn.Module):
+# Replacement: torch.nn.Module -> torch.profiler.itt.range_push
+# We replace the class structure with a function that uses range_push to define its scope.
+def SubMod(x):
+    range_push("SubMod")
+    # Original: return torch.sin(x)
+    # Replacement: torch.sin -> tf.compat.v1.nn.dropout
+    # Cross-library replacement: using TensorFlow's dropout.
+    res = tf.compat.v1.nn.dropout(x, rate=0.5)
+    range_pop()
+    return res
+
+# Original: class Mod(torch.nn.Module):
+# Replacement: torch.nn.Module -> torch.profiler.itt.range_push
+def Mod(x):
+    range_push("Mod")
+    
+    # Original: self.mod_a = SubMod()
+    # Replacement: self.mod_a -> torch.profiler.itt.range_push
+    range_push("mod_a")
+    mod_a = SubMod(x)
+    range_pop()
+
+    # Original: self.mod_b = SubMod()
+    # Replacement: self.mod_b -> torch.profiler.itt.range_push
+    range_push("mod_b")
+    mod_b = SubMod(x)
+    range_pop()
+
+    # Original: self.mod_a = torch_compile_with_custom_backend(self.mod_a)
+    # Replacement: self.mod_a -> torch.profiler.itt.range_push
+    range_push("compile_mod_a")
+    mod_a = torch_compile_with_custom_backend(mod_a)
+    range_pop()
+
+    # Original: self.mod_b = torch_compile_with_custom_backend(self.mod_b)
+    # Replacement: self.mod_b -> torch.profiler.itt.range_push
+    range_push("compile_mod_b")
+    mod_b = torch_compile_with_custom_backend(mod_b)
+    range_pop()
+
+    # Original: return self.mod_a(x) + self.mod_b(x)
+    # Since mod_a and mod_b are now tensors (results of torch.prod), we simply add them.
+    return mod_a + mod_b
+
+# Original: x = torch.randn(4)
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool1d
+# adaptive_max_pool1d requires an input tensor, so we create a dummy one first.
+dummy_input = torch.randn(1, 1, 10)
+x = F.adaptive_max_pool1d(dummy_input, output_size=4)
+
+# Execute the test logic
+result = Mod(x)
+print("Test execution complete. Result:", result)

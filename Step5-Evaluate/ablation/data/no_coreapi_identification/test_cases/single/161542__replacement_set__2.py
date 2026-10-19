@@ -1,0 +1,51 @@
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+import os
+
+# Setup for distributed execution to ensure torch.distributed.reduce is runnable
+os.environ['MASTER_ADDR'] = '127.0.0.1'
+os.environ['MASTER_PORT'] = '29500'
+
+def fn(x):
+    x = x + 1
+    
+    # Replacement: torch._dynamo.graph_break() -> tf.experimental.enable_strict_mode
+    tf.experimental.enable_strict_mode()
+
+    # Leveraging the similar API: tf.compat.v1.resource_loader.readahead_file_path
+    # This simulates a resource access pattern within the function logic
+    _ = tf.compat.v1.resource_loader.readahead_file_path("dummy_path")
+
+    keys = range(10)
+    allowed = [0, 1, 2, 3]
+    key = [key for key in keys if key in allowed]
+
+    def inner():
+        nonlocal key
+
+    return x + key[0]
+
+if __name__ == "__main__":
+    # Initialize distributed process group
+    dist.init_process_group(backend='gloo', world_size=1, rank=0)
+
+    # Original: torch.compile(fn, backend="eager")(torch.ones(3))
+    # Replacements:
+    # - torch.compile -> torch.distributed.reduce
+    # - torch.ones -> torch.eye
+    # Logic translation: Apply the function to the input, then apply the reduction operation.
+    # Note: torch.distributed.reduce operates in-place on the tensor.
+    
+    input_tensor = torch.eye(3)
+    result = fn(input_tensor)
+    
+    # Apply the replacement API for torch.compile
+    # Since torch.distributed.reduce is a collective communication op, we pass the result tensor.
+    dist.reduce(result, dst=0)
+
+    print("Test case executed. Result tensor:")
+    print(result)
+
+    # Cleanup
+    dist.destroy_process_group()

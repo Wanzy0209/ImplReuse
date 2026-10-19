@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from contextlib import nullcontext
 
@@ -23,4 +22,3 @@ def fn(x):
 x = tf.constant([1.0])
 y = fn(x)
 print(y)
-```

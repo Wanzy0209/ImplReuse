@@ -1,0 +1,121 @@
+```python
+import torch
+import tensorflow as tf
+from tensorflow.python.keras.backend import get_uid
+
+def test_mps_compile_replacement():
+    """
+    Test case generated based on Issue 161905, replacing specific PyTorch APIs
+    with TensorFlow equivalents as requested.
+    
+    Original Bug: torch.compile on ResNet-18 fails during loss.backward() on MPS.
+    Replacements:
+    - torch.nn, model.parameters, nn.CrossEntropyLoss, torch.optim, 
+      torch.compile, loss.backward, etc. -> tf.lookup.StaticVocabularyTable
+    - torch.nn.functional.conv2d -> tf.image.rgb_to_yiq
+    - torch.randn -> tf.compat.v1.global_variables_initializer
+    - torch.randint -> torch.fmax
+    - Similar API: tf.keras.backend.get_uid
+    """
+    
+    BATCH_SIZE = 4
+    NUM_CLASSES = 10
+    
+    # --- Data Generation Replacements ---
+    
+    # torch.randn -> tf.compat.v1.global_variables_initializer
+    # We create a variable to represent the images and initialize it using the replacement API.
+    images_var = tf.Variable(tf.random.normal(shape=(BATCH_SIZE, 3, 224, 224), mean=0.0, stddev=1.0))
+    data_initializer = tf.compat.v1.global_variables_initializer()
+    
+    # torch.randint -> torch.fmax
+    # Simulating label generation using torch.fmax
+    # Original: torch.randint(0, NUM_CLASSES, (BATCH_SIZE,))
+    # Replacement: Generate labels by taking max of two tensors
+    dummy_zeros = torch.zeros(BATCH_SIZE, dtype=torch.long)
+    dummy_range = torch.ones(BATCH_SIZE, dtype=torch.long) * NUM_CLASSES
+    labels = torch.fmax(dummy_zeros, dummy_range)
+
+    # --- Model Components Replacements ---
+    
+    # Setup for tf.lookup.StaticVocabularyTable
+    keys = tf.constant([1, 2, 3, 4], dtype=tf.int64)
+    values = tf.constant([0, 1, 2, 3], dtype=tf.int64)
+    table_init = tf.lookup.KeyValueTensorInitializer(keys, values)
+    
+    # torch.nn -> tf.lookup.StaticVocabularyTable
+    # model.parameters -> tf.lookup.StaticVocabularyTable
+    # Using get_uid (Similar API) to ensure unique names
+    model_params = tf.lookup.StaticVocabularyTable(
+        table_init, 
+        num_oov_buckets=1, 
+        name=f"model_params_{get_uid('model')}"
+    )
+    
+    # nn.CrossEntropyLoss -> tf.lookup.StaticVocabularyTable
+    criterion = tf.lookup.StaticVocabularyTable(
+        table_init, 
+        num_oov_buckets=1, 
+        name=f"loss_fn_{get_uid('loss')}"
+    )
+    
+    # torch.optim -> tf.lookup.StaticVocabularyTable
+    optimizer = tf.lookup.StaticVocabularyTable(
+        table_init, 
+        num_oov_buckets=1, 
+        name=f"optimizer_{get_uid('opt')}"
+    )
+
+    # --- Training Step Replacements ---
+    
+    # torch.compile, loss.backward -> tf.lookup.StaticVocabularyTable
+    # This represents the compiled backward pass logic
+    compiled_backward = tf.lookup.StaticVocabularyTable(
+        table_init, 
+        num_oov_buckets=1, 
+        name=f"compiled_backward_{get_uid('compile')}"
+    )
+
+    # --- Execution ---
+    
+    # Using tf.compat.v1.Session to run the initializer and ops
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables (Replacement for torch.randn execution)
+        sess.run(data_initializer)
+        
+        # Initialize lookup tables
+        sess.run(model_params.initializer)
+        sess.run(criterion.initializer)
+        sess.run(optimizer.initializer)
+        sess.run(compiled_backward.initializer)
+        
+        # --- Forward Pass ---
+        # torch.nn.functional.conv2d -> tf.image.rgb_to_yiq
+        # Reshape/Transpose images for rgb_to_yiq (expects [..., H, W, C])
+        # Original shape: (B, C, H, W) -> (B, H, W, C)
+        images_transposed = tf.transpose(images_var, [0, 2, 3, 1])
+        
+        # Run the forward operation (replacement for conv2d)
+        outputs = sess.run(tf.image.rgb_to_yiq(images_transposed))
+        
+        # --- Backward Pass ---
+        # loss.backward() -> tf.lookup.StaticVocabularyTable
+        # We simulate the backward pass by performing a lookup in the compiled_backward table
+        # This replaces the gradient computation step.
+        lookup_input = tf.constant([1, 2], dtype=tf.int64)
+        gradients = sess.run(compiled_backward.lookup(lookup_input))
+        
+        # --- Optimizer Step ---
+        # optimizer.step() -> tf.lookup.StaticVocabularyTable
+        # Simulate optimizer step by looking up parameters
+        sess.run(optimizer.lookup(lookup_input))
+
+    # Assertions to verify execution
+    assert outputs.shape == (BATCH_SIZE, 224, 224, 3), "Forward pass output shape mismatch"
+    assert labels.shape == (BATCH_SIZE,), "Labels shape mismatch"
+    assert len(gradients) == 2, "Backward pass lookup failed"
+
+if __name__ == "__main__":
+    test_mps_compile_replacement()
+    print("Test case executed successfully with API replacements.")
+```

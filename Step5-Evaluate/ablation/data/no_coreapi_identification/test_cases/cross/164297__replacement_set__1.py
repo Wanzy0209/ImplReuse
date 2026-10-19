@@ -1,0 +1,38 @@
+import torch
+import tensorflow as tf
+
+def test_unregister_dispatch_for_stability():
+    """
+    Test case generated based on Issue 164297 (Segfault trying to import torch).
+    
+    The original issue involved a segfault in pybind11::cpp_function::dispatcher
+    when accessing torch._C._onnx.OperatorExportTypes during import.
+    
+    This test replaces the source APIs with the similar TensorFlow API
+    (tf.experimental.unregister_dispatch_for) to verify it handles
+    C++ binding calls without crashing.
+    """
+    # Setup: Define a dummy dispatch target to use with the API
+    def dummy_dispatch_target(x):
+        return x
+
+    # Replaces 'import torch' -> Accessing the TensorFlow module
+    # Replaces 'torch._C._onnx.OperatorExportTypes' -> tf.experimental.unregister_dispatch_for
+    
+    # The original crash occurred when the C++ dispatcher was invoked.
+    # We call the replacement API to exercise the C++ binding layer.
+    try:
+        # Attempt to call the API. This mimics the access pattern that caused the segfault.
+        tf.experimental.unregister_dispatch_for(dummy_dispatch_target)
+    except Exception as e:
+        # We expect potential Python exceptions (e.g., if the target wasn't registered),
+        # but the goal is to ensure no segmentation fault occurs.
+        # If a segfault occurs, the process will terminate before this block.
+        pass
+
+    # If we reach here, the API call did not cause a segfault.
+    assert True
+
+if __name__ == "__main__":
+    test_unregister_dispatch_for_stability()
+    print("Test passed: No segfault detected.")

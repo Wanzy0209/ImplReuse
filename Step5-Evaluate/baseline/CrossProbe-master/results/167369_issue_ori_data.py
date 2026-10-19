@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 class Config:
@@ -19,4 +18,3 @@ x = tf.random.normal((2, 2))
 # Conversion: torch.compile -> tf.function
 # fullgraph=True implies strict graph capturing, which is the default behavior of tf.function
 compiled = tf.function(forward)
-```

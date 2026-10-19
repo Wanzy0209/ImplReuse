@@ -1,0 +1,46 @@
+import torch
+import torch.nn as nn
+import onnx
+import tensorflow as tf
+
+# Replacement: nn.Module -> tf.keras.losses.categorical_crossentropy
+class Model(tf.keras.losses.categorical_crossentropy):
+    def __init__(self, kernel_size=3, upscale_factor=2):
+        super(Model, self).__init__()
+        # Replacement: nn.Conv2d -> tf.keras.losses.categorical_crossentropy
+        self.conv = tf.keras.losses.categorical_crossentropy(1, 4, kernel_size=kernel_size, padding="same")
+        # Replacement: nn.PixelShuffle -> tf.keras.losses.categorical_crossentropy
+        self.pixel_shuffle = tf.keras.losses.categorical_crossentropy(upscale_factor)
+
+    def forward(self, input):
+        x = self.conv(input)
+        # Replacement: self.pixel_shuffle -> tf.keras.losses.categorical_crossentropy
+        x = tf.keras.losses.categorical_crossentropy(input)
+        return x
+
+model = Model()
+
+# Replacement: torch.device -> torch.distributed.recv
+# Replacement: torch.cuda.is_available -> tf.keras.losses.categorical_crossentropy
+device = torch.distributed.recv("cuda" if tf.keras.losses.categorical_crossentropy() else "cpu")
+
+# Replacement: model.to -> tf.keras.losses.categorical_crossentropy
+tf.keras.losses.categorical_crossentropy(model, device)
+
+# Replacement: torch.ones -> torch.slogdet
+x = torch.slogdet((1, 1, 128, 128))
+
+# Replacement: x.to -> tf.keras.losses.categorical_crossentropy
+tf.keras.losses.categorical_crossentropy(x, device)
+
+torch.onnx.export(
+    model,
+    x,
+    f"dynamo.onnx",
+    dynamo=True,
+    external_data=False,
+    opset_version=20,
+    input_names=["input"],
+    output_names=["output"],
+    dynamic_shapes={"input": {0: "batch", 2: "width", 3: "height"}},
+)

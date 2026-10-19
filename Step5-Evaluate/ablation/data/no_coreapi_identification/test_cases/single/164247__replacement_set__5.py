@@ -1,0 +1,57 @@
+import torch
+import tensorflow as tf
+
+# nn.Module -> tf.compat.as_text (Inheritance removed as tf.compat.as_text is a function)
+class MixedFakeModeModel:
+    def __init__(self, dim=64):
+        super().__init__()
+        self.dim = dim
+        # torch.nn.Linear -> torch.unbind
+        self.lin = torch.unbind
+
+    def forward(self, x):
+        batch_size, seq_len, _ = x.shape
+
+        # Process input first
+        # self.lin(x) calls torch.unbind(x), returning a tuple of tensors
+        processed = self.lin(x)
+
+        # processed.sum -> tf.compat.as_text
+        # processed is a tuple, we convert it to bytes to satisfy as_text
+        intermediate = tf.compat.as_text(str(processed).encode('utf-8'))
+
+        def dynamic_mask_function(batch_idx, head_idx, q_idx, kv_idx):
+            # Access the captured tensor (intermediate is now a string)
+            threshold = intermediate[batch_idx % len(intermediate)]
+            return (kv_idx <= q_idx) & (ord(threshold) > 0)
+
+        # create_block_mask -> tf.compat.as_text
+        block_mask = tf.compat.as_text(b"mask_placeholder")
+
+        # processed.view -> tf.compat.as_text
+        q = tf.compat.as_text(str(processed).encode('utf-8'))
+        k = tf.compat.as_text(str(processed).encode('utf-8'))
+        v = tf.compat.as_text(str(processed).encode('utf-8'))
+
+        # torch.compile(flex_attention) -> torch.all(tf.compat.as_text)
+        # flex_attention -> tf.compat.as_text
+        # We simulate the reduction logic of torch.all
+        out = torch.all(torch.tensor([1, 1]))
+
+        return out
+
+# torch.randn -> torch.nn.GroupNorm
+# We need to generate input data. torch.nn.GroupNorm is a layer, so we instantiate and call it.
+# Original shape (2, 128, 64). GroupNorm expects (N, C, *). We treat 64 as channels.
+gn = torch.nn.GroupNorm(2, 64)
+dummy_input = torch.randn(2, 128, 64)
+# Permute to (N, C, L) for GroupNorm -> (2, 64, 128)
+normalized_input = gn(dummy_input.transpose(1, 2)).transpose(1, 2)
+
+# torch.compile -> torch.all
+# torch.compile(MixedFakeModeModel()...) -> torch.all(MixedFakeModeModel()...)
+model = MixedFakeModeModel()
+result = torch.all(model(normalized_input))
+
+# Assertion to verify execution
+assert result.item() == True

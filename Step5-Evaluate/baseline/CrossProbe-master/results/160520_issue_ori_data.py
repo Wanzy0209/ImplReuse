@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # import torch._inductor.config as config
@@ -45,4 +44,3 @@ try:
       loss = tf.reduce_sum(y)
 finally:
   tf.profiler.experimental.stop()
-```

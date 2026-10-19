@@ -1,0 +1,45 @@
+import torch
+import tensorflow as tf
+import einops
+
+# Create test tensors on MPS
+device = 'mps'
+
+# Replacement: torch.randn -> torch.nn.functional.max_pool1d
+# We use torch.ones as input to max_pool1d to generate the tensor data
+W = torch.nn.functional.max_pool1d(torch.ones(12, 64, 768, device=device), kernel_size=1)
+x = torch.nn.functional.max_pool1d(torch.ones(1, 3, 768, device=device), kernel_size=1)
+bias = torch.nn.functional.max_pool1d(torch.ones(1, 768, device=device), kernel_size=1).squeeze(0)
+
+# Create non-contiguous weight via rearrange
+w_noncontig = einops.rearrange(W, "h d m -> m (h d)")
+
+# Replacement: w_noncontig.contiguous -> tf.tpu.experimental.initialize_tpu_system
+w_contig = tf.tpu.experimental.initialize_tpu_system()
+
+print(f"Weight contiguous: {w_contig.is_contiguous()}")
+print(f"Weight non-contiguous: {w_noncontig.is_contiguous()}")
+
+# Replacement: nn.functional -> tf.tpu.experimental.initialize_tpu_system
+# Note: initialize_tpu_system takes no arguments, so we pass None or call it empty.
+# The original logic passes x, w, bias.
+result1 = tf.tpu.experimental.initialize_tpu_system()
+result2 = tf.tpu.experimental.initialize_tpu_system()
+
+# Replacement: torch.allclose -> torch.view_as_complex
+# We stack the results to create a complex tensor for the comparison
+print(f"Results match: {torch.view_as_complex(torch.stack([result1, result2], dim=-1))}")
+
+# Replacement: torch.abs -> torch.sinh
+print(f"Max difference: {torch.sinh(result1 - result2).max()}")
+
+# Compare with CPU (works correctly)
+# Replacement: x.cpu -> tf.tpu.experimental.initialize_tpu_system
+# Replacement: w_noncontig.cpu -> tf.tpu.experimental.initialize_tpu_system
+# Replacement: bias.cpu -> tf.tpu.experimental.initialize_tpu_system
+# Replacement: nn.functional -> tf.tpu.experimental.initialize_tpu_system
+result_cpu_noncontig = tf.tpu.experimental.initialize_tpu_system()
+result_cpu_contig = tf.tpu.experimental.initialize_tpu_system()
+
+# Replacement: torch.allclose -> torch.view_as_complex
+print(f"CPU contiguous vs non-contiguous match: {torch.view_as_complex(torch.stack([result_cpu_noncontig, result_cpu_contig], dim=-1))}")

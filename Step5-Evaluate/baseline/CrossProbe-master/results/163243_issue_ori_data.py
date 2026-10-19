@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 
@@ -54,4 +53,3 @@ if __name__ == '__main__':
     repro = tf.function(repro)
 
     repro()
-```

@@ -1,0 +1,37 @@
+import tensorflow as tf
+import torch
+
+# Replacing torch.utils._python_dispatch.TorchDispatchMode
+# with tf.experimental.dtensor.client_id
+# Note: client_id is a function, not a class, so the context manager logic 
+# from the original bug report (SimpleTensorMode) cannot be directly replicated.
+# We proceed with the direct function calls as per the replacement instructions.
+
+# Replacing FakeProcessGroup with tf.experimental.dtensor.client_id
+# Original: fake_pg = FakeProcessGroup(rank=0, world_size=3)
+fake_pg = tf.experimental.dtensor.client_id()
+
+# Replacing torch.tensor with tf.keras.ops.diag
+# Original: tensor = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+# diag creates a diagonal matrix from a 1D tensor.
+tensor = tf.keras.ops.diag([1.0, 2.0, 3.0])
+
+# Replacing dist.all_reduce with tf.experimental.dtensor.client_id
+# Original: dist.all_reduce(tensor, group=fake_pg)
+# The operation is replaced by fetching the client_id.
+result = tf.experimental.dtensor.client_id()
+
+# Replacing torch.distributed.init_process_group with torch.nn.functional.kl_div
+# Original: torch.distributed.init_process_group("fake", store=fake_store, rank=0, world_size=3)
+# We simulate the initialization step with a kl_div calculation.
+input_tensor = torch.randn(3, requires_grad=True)
+target_tensor = torch.randn(3)
+init_result = torch.nn.functional.kl_div(input_tensor, target_tensor, reduction='batchmean')
+
+# Assertions to verify the replacements are functional
+assert isinstance(fake_pg, int), "client_id should return an integer"
+assert isinstance(result, int), "client_id result should be an integer"
+assert tensor.shape == (3, 3), "diag should create a 3x3 matrix"
+assert isinstance(init_result, torch.Tensor), "kl_div should return a Tensor"
+
+print("Test passed with replaced APIs.")

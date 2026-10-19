@@ -1,0 +1,44 @@
+import tensorflow as tf
+
+def test_sysconfig_build_info():
+    """
+    Test case for tf.sysconfig.get_build_info.
+    
+    Context: Based on Issue 160084 (PyTorch regression with CUDA streams).
+    The original issue involved a failure in a specific build environment (CUDA).
+    This test verifies that TensorFlow's build environment introspection API
+    correctly reports build configuration, specifically CUDA-related fields,
+    ensuring the environment details are accessible as they were relevant to the
+    original bug's context.
+    """
+    # Check if the API exists to handle compatibility with older TensorFlow versions
+    # tf.sysconfig.get_build_info was introduced in TensorFlow 2.1
+    if not hasattr(tf.sysconfig, 'get_build_info'):
+        print(f"Skipping test: tf.sysconfig.get_build_info is not available in TensorFlow version {tf.__version__}.")
+        return
+
+    # Retrieve build information
+    build_info = tf.sysconfig.get_build_info()
+
+    # Assertion 1: The API must return a dictionary
+    assert isinstance(build_info, dict), \
+        "tf.sysconfig.get_build_info should return a dictionary"
+
+    # Assertion 2: Verify presence of CUDA-related keys
+    # The original bug was specific to CUDA builds (cu128).
+    # We ensure these keys exist to validate the introspection capability.
+    cuda_keys = ['cuda_version', 'cudnn_version', 'is_cuda_build']
+    for key in cuda_keys:
+        assert key in build_info, \
+            f"Expected key '{key}' not found in build info"
+
+    # Assertion 3: If it is a CUDA build, versions should be strings
+    if build_info.get('is_cuda_build'):
+        assert isinstance(build_info.get('cuda_version'), str), \
+            "cuda_version should be a string"
+        assert isinstance(build_info.get('cudnn_version'), str), \
+            "cudnn_version should be a string"
+
+if __name__ == "__main__":
+    test_sysconfig_build_info()
+    print("Test passed successfully.")

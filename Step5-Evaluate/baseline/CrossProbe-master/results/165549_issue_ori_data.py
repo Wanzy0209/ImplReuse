@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # This fails - returns tensor with shape [0]
@@ -14,4 +13,3 @@ pre_allocated_tensor = tf.identity(t)  # Works
 t = tf.identity(t)  # Works (in-place)
 # Conversion: torch.neg -> tf.negative
 tf.negative(t)  # Works (uses structured_delegate)
-```

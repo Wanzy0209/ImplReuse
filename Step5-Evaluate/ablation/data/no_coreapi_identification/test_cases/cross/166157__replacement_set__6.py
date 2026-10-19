@@ -1,0 +1,39 @@
+import tensorflow as tf
+import numpy as np
+
+def test_allocator_stats_replacement():
+    """
+    Test case adapted from the OpenRegDeviceAllocator logic.
+    Replaces OpenRegDeviceAllocator with tf.linalg.LinearOperatorScaledIdentity.
+    Replaces stats_.allocated_bytes.size logic with tf.linalg.LinearOperatorScaledIdentity checks.
+    """
+    # Replaces: OpenRegDeviceAllocator()
+    # The allocator is represented by the LinearOperatorScaledIdentity
+    multiplier = 2.0
+    num_rows = 3
+    allocator = tf.linalg.LinearOperatorScaledIdentity(multiplier, num_rows)
+
+    # Replaces: stats_.allocated_bytes[0].increase(nbytes)
+    # We verify the "stats" (properties) of the allocator are tracked
+    assert allocator.shape == (3, 3), "Shape stats mismatch"
+    assert allocator.multiplier == 2.0, "Multiplier stats mismatch"
+
+    # Replaces: for (size_t i = 0; i < stats_.allocated_bytes.size(); ++i)
+    # The logic checking the size of the stats vector is replaced by checking the LinearOperator instance
+    assert isinstance(allocator, tf.linalg.LinearOperatorScaledIdentity), "Allocator instance check failed"
+
+    # Replaces: resetAccumulatedStats
+    # Simulating a reset by creating a new instance with default/reset values
+    reset_multiplier = 1.0
+    allocator_reset = tf.linalg.LinearOperatorScaledIdentity(reset_multiplier, num_rows)
+    assert allocator_reset.multiplier == 1.0, "Stats reset failed"
+
+    # Replaces: allocate() / copy_data() functionality check
+    # Verify the allocator (operator) works correctly with data
+    x = tf.constant([[1.0], [2.0], [3.0]])
+    y = allocator.matmul(x)
+    expected = tf.constant([[2.0], [4.0], [6.0]])
+    np.testing.assert_array_almost_equal(y.numpy(), expected.numpy())
+
+if __name__ == "__main__":
+    test_allocator_stats_replacement()

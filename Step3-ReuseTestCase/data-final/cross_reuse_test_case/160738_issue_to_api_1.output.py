@@ -1,0 +1,54 @@
+import torch
+
+def is_mps_available_and_initialized():
+    """
+    Helper function to check MPS availability, mimicking the pattern 
+    found in the similar API (torch.distributed.get_world_size).
+    """
+    if not torch.backends.mps.is_available():
+        return False
+    if not torch.backends.mps.is_built():
+        return False
+    return True
+
+def test_var_zero_dim_dim_zero():
+    """
+    Test case for Issue 160738: MPS torch.var cannot handle dim=0 on zero-dimensional input tensor.
+    
+    This test preserves the original bug reproduction logic (creating a 0-d tensor and calling var with dim=0)
+    while leveraging the availability check pattern from the similar API.
+    """
+    # Input value
+    val = 3.0
+    
+    # 1. Establish baseline behavior on CPU
+    # According to the bug report, CPU returns NaN for variance of a single element (0-d tensor)
+    x_cpu = torch.tensor(val, device="cpu")
+    try:
+        cpu_output = torch.var(x_cpu, dim=0)
+        print(f"CPU Test: Success. Output: {cpu_output}")
+        assert torch.isnan(cpu_output), "CPU variance of a single element should be NaN"
+    except Exception as e:
+        print(f"CPU Test Failed: {e}")
+        raise
+
+    # 2. Test behavior on MPS
+    # We use the helper function similar to is_dist_avail_and_initialized()
+    if is_mps_available_and_initialized():
+        x_mps = torch.tensor(val, device="mps")
+        try:
+            # This is the specific operation that failed in the bug report
+            mps_output = torch.var(x_mps, dim=0)
+            print(f"MPS Test: Success. Output: {mps_output}")
+            
+            # Verify MPS matches CPU behavior
+            assert torch.isnan(mps_output), "MPS variance of a single element should be NaN"
+            
+        except Exception as e:
+            print(f"MPS Test Failed: {e}")
+            raise
+    else:
+        print("MPS is not available or initialized. Skipping MPS test.")
+
+if __name__ == "__main__":
+    test_var_zero_dim_dim_zero()

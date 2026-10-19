@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: PyTorch input format is (N, C, D, H, W), TensorFlow is (N, D, H, W, C)
@@ -21,4 +20,3 @@ with tf.device("/GPU:0"):
 # Conversion: flatten() -> tf.reshape(..., [-1])
 print("CPU:", tf.reshape(out_cpu, [-1])) # tensor([nan, 1.])
 print("MPS:", tf.reshape(out_mps, [-1])) # tensor([1., 1.], device='mps:0')
-```

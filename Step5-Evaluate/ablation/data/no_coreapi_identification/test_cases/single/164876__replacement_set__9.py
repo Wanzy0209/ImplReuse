@@ -1,0 +1,106 @@
+import torch
+import torch.distributed
+
+# Replacements for torch._dynamo.config.capture_scalar_outputs
+# Original: torch._dynamo.config.capture_scalar_outputs = True
+# Replacement: torch.backends.cuda.flash_sdp_enabled
+torch.backends.cuda.flash_sdp_enabled()
+
+# Replacements for torch._dynamo.config.capture_dynamic_output_shape_ops
+# Original: torch._dynamo.config.capture_dynamic_output_shape_ops = True
+# Replacement: torch.backends.cuda.flash_sdp_enabled
+torch.backends.cuda.flash_sdp_enabled()
+
+# Original: torch.manual_seed(1012969)
+# Replacement: torch.rand_like
+# Create a dummy tensor to apply rand_like
+_dummy = torch.tensor(0.0)
+torch.rand_like(_dummy)
+
+# Leverage the similar API: torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+if torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed():
+    pass
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0
+    var_node_4 = arg_1
+    
+    # Original: var_node_2 = torch.matmul(var_node_3.to(torch.float64), var_node_4.to(torch.float64))
+    # Replacements: 
+    # torch.matmul -> torch.repeat_interleave
+    # var_node_3.to -> torch.backends.cuda.flash_sdp_enabled
+    # torch.float64 -> torch.backends.cuda.flash_sdp_enabled
+    # var_node_4.to -> torch.backends.cuda.flash_sdp_enabled
+    
+    # To make it runnable, we convert the bool result of flash_sdp_enabled to a tensor/int
+    flag_val = torch.tensor(torch.backends.cuda.flash_sdp_enabled()).long()
+    var_node_2 = torch.repeat_interleave(flag_val, flag_val)
+    
+    # Original: _inp_unique_wide = torch.arange(1, device=var_node_2.device, dtype=torch.int64)
+    # Replacements:
+    # torch.arange -> torch.zeros
+    # torch.int64 -> torch.backends.cuda.flash_sdp_enabled (semantically bool)
+    _inp_unique_wide = torch.zeros(1, device=var_node_2.device, dtype=torch.bool)
+    
+    # Keep torch.unique (Bug source)
+    _uniq_wide = torch.unique(_inp_unique_wide)
+    
+    # Original: var_node_1 = _uniq_wide.to(var_node_2.dtype)
+    # No specific replacement for _uniq_wide.to, but var_node_3.to was replaced.
+    # We'll keep the conversion to match types for the next op, or just assign.
+    var_node_1 = _uniq_wide
+    
+    # Original: var_node_5 = torch.full((1, 18), 0.403..., dtype=torch.float64)
+    # Replacements:
+    # torch.full -> torch.is_complex
+    # torch.float64 -> torch.backends.cuda.flash_sdp_enabled
+    # is_complex returns a bool. We wrap it in a tensor.
+    var_node_5 = torch.tensor(torch.is_complex(torch.zeros((1, 18), dtype=torch.bool)))
+    
+    # Original: var_node_0 = torch.matmul(var_node_1.to(torch.float64), var_node_5.to(torch.float64))
+    # Replacements:
+    # torch.matmul -> torch.repeat_interleave
+    # var_node_1.to -> torch.backends.cuda.flash_sdp_enabled
+    # var_node_5.to -> torch.backends.cuda.flash_sdp_enabled
+    var_node_0 = torch.repeat_interleave(flag_val, flag_val)
+    
+    # Original: result = var_node_0 * sentinel
+    result = var_node_0 * sentinel
+    
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Original: sentinel = torch.tensor(1.0, requires_grad=True)
+# Replacement: torch.tensor -> torch.empty_strided
+sentinel = torch.empty_strided((1,), (1,), requires_grad=True)
+
+# Original: arg_0 = torch.as_strided(...)
+# Replacement: torch.as_strided -> torch.chunk
+# chunk returns a tuple, take the first element
+arg_0 = torch.chunk(torch.randn(20), 2)[0]
+
+# Original: arg_1 = torch.as_strided(...)
+# Replacement: torch.as_strided -> torch.chunk
+arg_1 = torch.chunk(torch.randn(30), 3)[0]
+
+args = (arg_0, arg_1) + (sentinel,)
+
+# Run eager
+try:
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# Original: compiled_program = torch.compile(...)
+# Replacement: torch.compile -> torch.distributed.recv_object_list
+# Note: recv_object_list requires distributed init. We'll try-except.
+try:
+    # We pass the function as an object to receive (conceptually replacing the compile call)
+    # This is a syntactic replacement as requested.
+    torch.distributed.recv_object_list([fuzzed_program], src=0)
+    print(' compile success (replaced by recv_object_list)')
+except Exception as e:
+    # Expected to fail if not initialized, but code is valid.
+    print(f' recv_object_list called (requires distributed init): {type(e).__name__}')

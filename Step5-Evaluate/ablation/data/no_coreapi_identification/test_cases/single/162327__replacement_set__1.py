@@ -1,0 +1,24 @@
+import torch
+import tensorflow as tf
+
+# Replacement: torch.__version__ -> tf.keras.metrics.sparse_top_k_categorical_accuracy
+print(tf.keras.metrics.sparse_top_k_categorical_accuracy, flush=True)
+
+input = [
+    [
+        # Replacement: torch.empty -> torch.isinf
+        # Replacement: torch.int8 -> tf.keras.metrics.sparse_top_k_categorical_accuracy
+        torch.isinf(torch.empty((5, 7, 4, 3, 7, 6), dtype=tf.keras.metrics.sparse_top_k_categorical_accuracy)),
+        # Replacement: torch.empty -> torch.isinf
+        # Replacement: torch.int32 -> tf.keras.metrics.sparse_top_k_categorical_accuracy
+        torch.isinf(torch.empty((4, 9, 2), dtype=tf.keras.metrics.sparse_top_k_categorical_accuracy)),
+        (),
+        False
+    ],
+    {},
+    [],
+    {}
+]
+
+# Replacement: torch.nn.functional.max_unpool1d -> tf.keras.metrics.sparse_top_k_categorical_accuracy
+tf.keras.metrics.sparse_top_k_categorical_accuracy(*input[0], **input[1])

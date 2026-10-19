@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Note: PyTorch's 'mps' device is specific to Apple Silicon. 
@@ -8,4 +7,3 @@ a = tf.ones((2, (1 << 31) + 5), dtype=tf.int8)
 
 print(a[1, -2])
 print(a[:, -2])
-```

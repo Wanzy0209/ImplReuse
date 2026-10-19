@@ -1,0 +1,60 @@
+```python
+import torch
+import numpy as np
+
+def test_lecun_uniform_dtype_redundancy():
+    """
+    Test that tf.keras.initializers.LecunUniform correctly handles the dtype argument,
+    ensuring that redundant dtype conversions (similar to the issue reported in PyTorch)
+    are unnecessary and that the tensor maintains the correct dtype after operations.
+    """
+    try:
+        import tensorflow as tf
+    except ImportError as e:
+        print(f"Skipping test: TensorFlow import failed due to environment issues (e.g., GLIBC version mismatch). Error: {e}")
+        return False
+
+    # Setup parameters
+    shape = (4, 4)
+    target_dtype = tf.float32
+
+    # 1. Create tensor with specific dtype (Analogous to torch.zeros(..., dtype=query.dtype))
+    # This mimics the line: attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+    initializer = tf.keras.initializers.LecunUniform()
+    weights = initializer(shape=shape, dtype=target_dtype)
+
+    # Verify that the tensor is created with the correct dtype immediately
+    assert weights.dtype == target_dtype, \
+        f"Expected dtype {target_dtype}, but got {weights.dtype}"
+
+    # 2. Perform an operation that preserves dtype (Analogous to masked_fill_)
+    # In PyTorch: attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+    # In TF, we simulate an operation that doesn't change dtype.
+    # We use a mask to zero out some values, similar to the logic in the bug report.
+    mask = tf.constant([[True, False, True, False],
+                        [False, True, False, True],
+                        [True, False, True, False],
+                        [False, True, False, True]], dtype=tf.bool)
+    
+    # tf.where preserves the dtype of the input tensors if x and y are compatible
+    modified_weights = tf.where(mask, tf.zeros_like(weights), weights)
+    
+    assert modified_weights.dtype == target_dtype, \
+        f"Operation changed dtype to {modified_weights.dtype}, expected {target_dtype}"
+
+    # 3. Check for redundant conversion (Analogous to attn_bias.to(query.dtype))
+    # The bug report highlights that calling .to(query.dtype) is redundant because 
+    # the tensor is already that dtype. We verify that casting to the same dtype 
+    # is indeed a no-op regarding the type.
+    redundant_cast = tf.cast(modified_weights, target_dtype)
+
+    # Assertions to ensure the redundancy and correctness
+    assert redundant_cast.dtype == target_dtype
+    assert np.array_equal(modified_weights.numpy(), redundant_cast.numpy())
+    
+    return True
+
+if __name__ == "__main__":
+    if test_lecun_uniform_dtype_redundancy():
+        print("Test passed: LecunUniform handles dtype correctly without redundant conversions.")
+```

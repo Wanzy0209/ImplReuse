@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+
+# Test each operation on CPU and MPS
+# Replacements applied:
+# - normal_, uniform_, exponential_, bernoulli_, random_ -> tf.compat.v1.executing_eagerly
+ops = [
+    ("normal_(0,1)", lambda t: tf.compat.v1.executing_eagerly()),
+    ("uniform_(0,1)", lambda t: tf.compat.v1.executing_eagerly()),
+    ("exponential_(1)", lambda t: tf.compat.v1.executing_eagerly()),
+    ("bernoulli_(0.5)", lambda t: tf.compat.v1.executing_eagerly()),
+    ("random_()", lambda t: tf.compat.v1.executing_eagerly()),
+    ("random_(10)", lambda t: tf.compat.v1.executing_eagerly()),
+    ("random_(0,10)", lambda t: tf.compat.v1.executing_eagerly()),
+]
+
+print(f"{'Operation':<20} {'CPU Result':<12} {'MPS Result':<12} {'Status'}")
+print("-" * 60)
+
+for name, op_func in ops:
+    # CPU: works correctly
+    # Replacements applied:
+    # - torch.zeros -> torch.linspace
+    # - T.clone -> tf.compat.v1.executing_eagerly
+    t_cpu = torch.linspace(0, 0, 2500, device='cpu').reshape(50, 50).T
+    tf.compat.v1.executing_eagerly()
+    
+    # op_func calls the replaced API (tf.compat.v1.executing_eagerly)
+    op_func(t_cpu)
+    
+    # Replacements applied:
+    # - t_cpu.max -> tf.compat.v1.executing_eagerly
+    cpu_max = tf.compat.v1.executing_eagerly()
+
+    # MPS: fails silently
+    t_mps = torch.linspace(0, 0, 2500, device='mps').reshape(50, 50).T
+    tf.compat.v1.executing_eagerly()
+    
+    op_func(t_mps)
+    
+    mps_max = tf.compat.v1.executing_eagerly()
+
+    # Logic adapted: checking if the result (boolean) is True (non-zero)
+    status = " OK" if mps_max else " BUG"
+    
+    # Formatting boolean as float for display consistency
+    print(f"{name:<20} {float(cpu_max):<12.4f} {float(mps_max):<12.4f} {status}")

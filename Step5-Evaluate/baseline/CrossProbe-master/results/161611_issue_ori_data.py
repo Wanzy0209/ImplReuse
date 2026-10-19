@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.zeros -> tf.zeros. Device placement is implicit in TensorFlow context.
@@ -11,4 +10,3 @@ if is_causal:
     # Conversion: .to() returns a new tensor. Since the result is not assigned in the source, 
     # this line performs a cast but discards the result (no-op).
     tf.cast(attn_bias, query.dtype)  # Redundant! Already query.dtype, and result not assigned
-```

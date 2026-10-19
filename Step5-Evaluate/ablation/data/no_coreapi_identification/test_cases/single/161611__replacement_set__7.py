@@ -1,0 +1,44 @@
+import torch
+import tensorflow as tf
+
+def test_redundant_conversion_replacement():
+    """
+    Test case adapted from the scaled_dot_product_attention docstring bug.
+    Replaces specific PyTorch APIs with TensorFlow and other PyTorch functions
+    as requested, while preserving the logic of the bug (ineffective/redundant operations).
+    """
+    L, S = 4, 4
+    query = torch.randn(1, 8, L, 64, dtype=torch.float32)
+    is_causal = True
+
+    # Original: attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+    # torch.zeros is not in the replacement list, so it remains.
+    attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+
+    if is_causal:
+        # Original: temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+        # Replacement: torch.ones -> torch.det
+        # Note: torch.det computes the determinant. We use torch.eye to provide a square matrix.
+        # This changes the semantics from mask creation to determinant calculation.
+        temp_mask = torch.det(torch.eye(L, dtype=torch.float))
+
+        # Original: attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+        # Replacement: attn_bias.masked_fill_ -> tf.io.VarLenFeature
+        # Note: tf.io.VarLenFeature is a constructor. Calling it without assignment
+        # makes this operation ineffective, similar to the unassigned .to() in the original bug.
+        tf.io.VarLenFeature(dtype=query.dtype)
+
+        # Original: attn_bias.to(query.dtype)
+        # Replacement: attn_bias.to -> tf.io.VarLenFeature
+        # Note: Replacing the redundant conversion with another unassigned constructor call.
+        tf.io.VarLenFeature(dtype=query.dtype)
+
+    # Assertion: Verify that attn_bias remains all zeros.
+    # Since the in-place modification (masked_fill_) was replaced with an unassigned call,
+    # and the conversion (.to()) was also replaced with an unassigned call,
+    # attn_bias should not have been modified.
+    assert torch.all(attn_bias == 0), "attn_bias should remain unmodified (zeros) due to ineffective operations"
+
+if __name__ == "__main__":
+    test_redundant_conversion_replacement()
+    print("Test passed.")

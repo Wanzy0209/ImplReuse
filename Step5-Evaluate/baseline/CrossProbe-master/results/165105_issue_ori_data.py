@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Set random seed for reproducibility
@@ -205,4 +204,3 @@ print('✅ eager success')
 compiled_program = tf.function(fuzzed_program)
 result_compiled = compiled_program(*args)
 print('✅ compile success')
-```

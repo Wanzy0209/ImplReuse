@@ -1,0 +1,64 @@
+```python
+import torch
+import tensorflow as tf
+
+def test_tuple_with_none_handling():
+    """
+    Test case derived from Issue 160150: [ONNX] Exporter crashes when fx node output includes None.
+    
+    This test preserves the original bug reproduction logic (returning a tuple with None)
+    while replacing the original exporter context with torch.backends.mps.is_built
+    and leveraging tf.compat.v1.Summary.Value as the processing API.
+    """
+    
+    # Bug reproduction logic: Function returns a tuple where one element is None
+    def get_model_output(return_dict):
+        output = torch.tensor([1.0, 2.0])
+        image_tokens_masks = None  # The problematic value causing the crash
+        if not return_dict:
+            return (output, image_tokens_masks)
+        return {"output": output, "masks": image_tokens_masks}
+
+    # Replacement API: torch.backends.mps.is_built
+    # Replaces the internal exporter logic trigger with a backend availability check.
+    # We use this to conditionally determine the test flow or environment state.
+    is_mps_available = torch.backends.mps.is_built()
+    
+    print(f"MPS Available: {is_mps_available}")
+
+    # Retrieve the output tuple containing None
+    output_tuple = get_model_output(return_dict=False)
+    main_output, mask_output = output_tuple
+
+    # Similar API: tf.compat.v1.Summary.Value
+    # We leverage this API to process the output, checking if it handles the None value
+    # similarly to how the ONNX exporter was expected to (or failed to).
+    
+    # Test 1: Process the valid tensor output
+    try:
+        # Convert torch tensor to numpy for TensorFlow compatibility
+        tensor_proto = tf.make_tensor_proto(main_output.numpy())
+        summary_val = tf.compat.v1.Summary.Value(tag="output", tensor=tensor_proto)
+        print("Successfully created Summary.Value for main output.")
+        assert summary_val.tag == "output"
+    except Exception as e:
+        print(f"Failed to create Summary.Value for main output: {e}")
+        raise
+
+    # Test 2: Process the None output (The Bug Scenario)
+    # The original bug was that the exporter crashed when encountering None in the tuple.
+    # We test if tf.compat.v1.Summary.Value handles this gracefully or raises an error.
+    try:
+        # Attempting to create a Summary.Value with None as the tensor
+        summary_val_none = tf.compat.v1.Summary.Value(tag="mask", tensor=mask_output)
+        # If this succeeds, the API handles None differently than the original exporter
+        print("Successfully created Summary.Value for None output.")
+    except (TypeError, ValueError) as e:
+        # If this fails, it mimics the crash behavior of the original bug
+        print(f"Summary.Value creation failed for None output (mimicking original crash): {e}")
+        # We assert this to document the behavior
+        assert "None" in str(e) or "expected" in str(e).lower()
+
+if __name__ == "__main__":
+    test_tuple_with_none_handling()
+```

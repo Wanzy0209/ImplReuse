@@ -1,0 +1,57 @@
+```python
+import torch
+import tensorflow as tf
+
+# Define the custom autograd Function
+class MyFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        # Original: return torch.matmul(x, (torch.ones_like(x) * 10).t())
+        
+        # Replacement: torch.ones_like -> torch._dynamo.optimize
+        # To make this runnable and semantically relevant to the bug (tracing),
+        # we wrap a function that performs the tensor creation with torch._dynamo.optimize.
+        def create_ones(x):
+            return torch.ones_like(x)
+        
+        opt_create_ones = torch._dynamo.optimize(create_ones)
+        # Execute the optimized function to introduce tracing context
+        weight = opt_create_ones(x)
+        
+        # Replacement: torch.matmul -> torch.t
+        # torch.t performs a transpose. We apply it to the input x.
+        return torch.t(x)
+    
+    @staticmethod
+    def backward(ctx, grad_out):
+        return grad_out
+
+# Leverage the similar API: tf.test.Benchmark
+class TestAutogradPropagation(tf.test.Benchmark):
+    def benchmark_requires_grad(self):
+        # Original: out = torch.randn(2093, 256, requires_grad=True)
+        # Replacement: torch.randn -> torch.t
+        # torch.t requires an input tensor. We create a base tensor using torch.empty
+        # (which is not in the replacement list) to serve as the input for torch.t.
+        base = torch.empty(2093, 256, requires_grad=True)
+        out = torch.t(base)
+        
+        # Original: permuted_indices = torch.tensor([0, 1, ...])
+        # Replacement: torch.tensor -> tf.compat.v1.linalg.diag
+        # We use a short list of indices for a minimal test case.
+        indices = [0, 1, 2, 3, 4, 5]
+        permuted_indices = tf.compat.v1.linalg.diag(indices)
+        
+        # Verify that requires_grad is preserved, which is the core of the reported bug.
+        # Although we don't call MyFn.apply here (as it wasn't in the provided snippet),
+        # the setup logic reflects the issue's context.
+        assert out.requires_grad, "requires_grad was not propagated through the replaced API"
+        
+        return out, permuted_indices
+
+if __name__ == "__main__":
+    # Run the benchmark test
+    test = TestAutogradPropagation()
+    result = test.benchmark_requires_grad()
+    print("Test case executed successfully.")
+```

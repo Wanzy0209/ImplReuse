@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.autograd.Function -> Python function
@@ -42,4 +41,3 @@ for i in range(1000):
     # Conversion: torch.cuda.memory_allocated -> tf.config.experimental.get_memory_info
     mem_info = tf.config.experimental.get_memory_info('GPU:0')
     print(i, mem_info['current'] / 1024**2, "MiB")
-```

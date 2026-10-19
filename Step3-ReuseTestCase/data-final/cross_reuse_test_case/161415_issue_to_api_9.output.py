@@ -1,0 +1,20 @@
+import tensorflow as tf
+from tensorflow.keras import backend as K
+
+# Create a tensor and transpose it to establish a specific memory layout
+# (analogous to the custom stride in the PyTorch issue).
+input_tensor = tf.constant([[1.0, -2.0], [3.0, -4.0]])
+input_tensor = tf.transpose(input_tensor)
+
+# Apply the similar API
+output_tensor = K.relu(input_tensor)
+
+# Verify that the output tensor respects the input tensor's properties.
+# In TensorFlow, this translates to checking shape and dtype preservation,
+# as explicit strides are abstracted away compared to PyTorch.
+assert input_tensor.shape == output_tensor.shape, "Output shape does not match input shape"
+assert input_tensor.dtype == output_tensor.dtype, "Output dtype does not match input dtype"
+
+# Verify the operation correctness
+expected_output = tf.maximum(0.0, input_tensor)
+assert tf.reduce_all(output_tensor == expected_output).numpy(), "Output values are incorrect"

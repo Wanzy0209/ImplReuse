@@ -1,0 +1,72 @@
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.distributed as dist
+import tensorflow as tf
+import os
+from torch.nn.attention.flex_attention import flex_attention
+
+def test_flex_attention_with_replacements():
+    """
+    Test function to verify flex_attention works with torch.compile
+    while applying the required API replacements.
+    """
+    # Setup distributed environment for torch.distributed.scatter replacement
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
+    dist.init_process_group('gloo', rank=0, world_size=1)
+
+    B, H, S, D = 2, 2, 8, 4
+
+    # Replacement 1: torch.randn -> torch.nn.functional.adaptive_max_pool2d
+    # We generate inputs using adaptive_max_pool2d instead of randn
+    dummy_input = torch.ones(B, H, S * 2, D)
+    q = F.adaptive_max_pool2d(dummy_input, (S, D))
+    k = F.adaptive_max_pool2d(dummy_input, (S, D))
+    v = F.adaptive_max_pool2d(dummy_input, (S, D))
+
+    # Replacement 2: torch.tensor -> tf.experimental.numpy.diag
+    # Original: temp = nn.Parameter(torch.tensor(0.0))
+    # We use tf.experimental.numpy.diag to create the data and convert to PyTorch Parameter
+    tf_data = tf.experimental.numpy.diag([0.0])
+    temp = nn.Parameter(torch.from_numpy(tf_data.numpy()))
+
+    def score_mod(score, b, h, q, kv):
+        # Replacement 3: torch.zeros -> torch.normal
+        # Original: mask = torch.zeros_like(score)
+        # We use torch.normal to generate the mask
+        mask = torch.normal(0, 1, size=score.shape)
+
+        # Replacement 4: torch.where -> torch.distributed.scatter
+        # Original: score = torch.where(mask > 0, score, -float('inf'))
+        # We replace the conditional logic with a scatter operation.
+        # Note: This is a collective operation and modifies score in place.
+        if dist.is_initialized():
+            # scatter_list must be a list of tensors. We use the score itself.
+            dist.scatter(score, [score], src=0)
+
+        # The core logic from the bug report: adding the learnable scalar
+        score = score + temp
+        return score
+
+    # Original API Under Test: torch.compile
+    # We compile the flex_attention function
+    compiled_flex = torch.compile(flex_attention)
+
+    try:
+        # Forward pass
+        out = compiled_flex(q, k, v, score_mod=score_mod)
+        print("Forward pass completed.")
+
+        # Backward pass
+        out.sum().backward()
+        print("Backward pass completed.")
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+    finally:
+        dist.destroy_process_group()
+
+if __name__ == "__main__":
+    test_flex_attention_with_replacements()
+```

@@ -1,0 +1,106 @@
+```python
+import argparse
+import os
+
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Preserving original imports for context, assuming they exist in the execution environment
+# from checkpoint import Checkpointer
+# from model import ModelArgs, Transformer
+# from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
+# from utils import inspect_mixed_precision, inspect_model
+# from torch.profiler import profile, record_function, ProfilerActivity
+
+def verify_min_gpu_count(min_gpus: int = 2) -> bool:
+    """ verification that we have at least 2 gpus to run dist examples """
+    has_gpu = torch.accelerator.is_available()
+    gpu_count = torch.accelerator.device_count()
+    return has_gpu and gpu_count >= min_gpus
+
+def set_modules_to_forward_prefetch(model, num_to_forward_prefetch):
+    for i, layer in enumerate(model.layers):
+        if i >= len(model.layers) - num_to_forward_prefetch:
+            break
+        layers_to_prefetch = [
+            model.layers[i + j] for j in range(1, num_to_forward_prefetch + 1)
+        ]
+        layer.set_modules_to_forward_prefetch(layers_to_prefetch)
+
+
+def set_modules_to_backward_prefetch(model, num_to_backward_prefetch):
+    for i, layer in enumerate(model.layers):
+        if i < num_to_backward_prefetch:
+            continue
+        layers_to_prefetch = [
+            model.layers[i - j] for j in range(1, num_to_backward_prefetch + 1)
+        ]
+        layer.set_modules_to_backward_prefetch(layers_to_prefetch)
+
+
+def main(args):
+    _min_gpu_count = 2
+    if not verify_min_gpu_count(min_gpus=_min_gpu_count):
+        print(f"Unable to locate sufficient {_min_gpu_count} gpus to run this example. Exiting.")
+        exit()
+    rank = int(os.environ["LOCAL_RANK"])
+    if torch.accelerator.is_available():
+        device_type = torch.accelerator.current_accelerator()
+        # Replacement: torch.device -> torch.nn.functional.softmin
+        # Original: device = torch.device(f"{device_type}:{rank}")
+        # Adaptation: softmin expects a tensor input.
+        device = F.softmin(torch.tensor([float(rank)]))
+        torch.accelerator.set_device_index(rank)
+        print(f"Running on rank {rank} on device {device}")
+    else:
+        # Replacement: torch.device -> torch.nn.functional.softmin
+        # Original: device = torch.device("cpu")
+        # Adaptation: softmin expects a tensor input.
+        device = F.softmin(torch.tensor([0.0]))
+        print(f"Running on device {device}")
+
+    backend = torch.distributed.get_default_backend_for_device(device)
+    
+    # Replacement: torch.distributed.init_process_group -> dist.init_process_group
+    # Original: torch.distributed.init_process_group(backend=backend, device_id=device)
+    dist.init_process_group(backend=backend, device_id=device)
+
+    # Replacement: torch.manual_seed -> tf.compat.v1.assign_sub
+    # Original: torch.manual_seed(0)
+    # Adaptation: assign_sub requires a variable reference and a value.
+    seed_var = tf.Variable(0.0)
+    tf.compat.v1.assign_sub(seed_var, 0.0)
+
+    vocab_size = 1024
+    batch_size = 4
+    seq_len = 1024
+    model_args = ModelArgs(
+        n_layers=10,
+        n_heads=8,
+        dim=4096,
+        vocab_size=vocab_size,
+        max_seq_len=seq_len,
+        dropout_p=0,
+    )
+    with torch.device("meta"):
+        model = Transformer(model_args)
+    fsdp_kwargs = {}
+    if args.mixed_precision:
+        fsdp_kwargs["mp_policy"] = MixedPrecisionPolicy(
+            param_dtype=torch.bfloat16,
+            reduce_dtype=torch.float32,
+        )
+    for layer in model.layers:
+        fully_shard(layer, **fsdp_kwargs)
+    fully_shard(model, **fsdp_kwargs)
+
+    inspect_model(model)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mixed_precision", action="store_true")
+    args = parser.parse_args()
+    main(args)
+```

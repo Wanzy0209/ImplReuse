@@ -1,0 +1,33 @@
+import torch
+import torch.nn.functional as F
+
+# Setup: Create an input tensor on the custom device to feed into max_pool2d
+# We assume the custom backend 'privateuse1' is registered as per the bug report context.
+input_tensor = torch.randn(1, 1, 4, 4, device='privateuse1')
+
+# Replacement for torch.randn: torch.nn.functional.max_pool2d
+# The original test created 't' using randn. We now create 't' using max_pool2d.
+t = F.max_pool2d(input_tensor, kernel_size=2)
+
+# Test Case for torch.abs (The API under test)
+
+# 1. This fails - returns tensor with shape [0] (The Bug)
+result = torch.abs(t)
+# The bug causes result.shape to be torch.Size([0]) instead of t.shape
+assert result.shape == t.shape, f"Bug detected: Expected shape {t.shape}, got {result.shape}"
+
+# 2. But these work correctly
+# Pre-allocated output
+pre_allocated_tensor = torch.empty_like(t)
+torch.abs(t, out=pre_allocated_tensor)
+assert pre_allocated_tensor.shape == t.shape
+
+# In-place
+t_copy = t.clone()
+t_copy.abs_()
+assert t_copy.shape == t.shape
+
+# Replacement for torch.neg: torch.log10
+# The original test used torch.neg as a working example. We use torch.log10.
+result_log10 = torch.log10(t)
+assert result_log10.shape == t.shape

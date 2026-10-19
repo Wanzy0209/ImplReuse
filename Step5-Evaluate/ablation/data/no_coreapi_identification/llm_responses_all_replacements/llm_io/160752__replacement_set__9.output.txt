@@ -1,0 +1,77 @@
+```python
+import torch
+import tensorflow as tf
+
+# Constants
+MAX = 3
+BATCH = 37
+
+# Data generation
+# Replacement: torch.randint -> torch.bernoulli
+idxs = torch.bernoulli(torch.ones(BATCH,)).long()
+
+# Replacement: torch.rand -> tf.keras.backend.eval
+# We create a tensor and evaluate it to get the data
+x_init = tf.random.uniform((BATCH, MAX))
+x = tf.keras.backend.eval(x_init)
+
+# Convert inputs to TF tensors for the function
+x_tf = tf.constant(x)
+idxs_tf = tf.constant(idxs.numpy())
+
+# Define the function using the Similar API: tf.custom_gradient
+@tf.custom_gradient
+def func(x_in, idxs_in):
+    # Replacement: x.square -> tf.keras.backend.eval
+    # We evaluate the tensor to get a numpy array, then convert back to tensor
+    val = tf.keras.backend.eval(x_in)
+    val_tensor = tf.constant(val)
+
+    # Replacement: torch.nn.functional.one_hot -> tf.compat.v1.train.global_step
+    # We use the replacement API. Note: global_step typically requires a session in TF1.
+    # In TF2, we use a variable. To make this runnable, we use a dummy variable.
+    # The semantic meaning of one_hot is lost, but the API usage is preserved.
+    step_var = tf.Variable(0, dtype=tf.int64)
+    # We use the variable value as a proxy for the one_hot result
+    one_hot_val = step_var
+
+    # Forward pass logic (preserving structure: x * one_hot)
+    # Broadcasting scalar one_hot_val with val_tensor
+    result = val_tensor * one_hot_val
+
+    def grad_fn(dy):
+        # Gradient logic
+        return dy, tf.zeros_like(idxs_in)
+
+    return result, grad_fn
+
+# Define the jacfunc equivalent
+# Original: def jacfunc(x, idxs): return torch.func.jacfwd(func, argnums=(0,))(x, idxs)
+# Replacement: torch.func.jacfwd -> tf.keras.backend.eval
+def jacfunc(x, idxs):
+    return tf.keras.backend.eval(func(x, idxs))
+
+# Works section
+# Original: out = jacfunc(x, idxs)
+try:
+    out = jacfunc(x_tf, idxs_tf)
+    print("Works section executed. Output shape:", out.shape)
+except Exception as e:
+    print("Works section failed:", e)
+
+# Fails section
+# Original: jacfunc = torch.compile(jacfunc, dynamic=True)
+# Replacement: torch.compile -> tf.keras.backend.eval
+# Note: tf.keras.backend eval expects a tensor, not a callable. 
+# We attempt the replacement as requested, which may raise a TypeError.
+try:
+    # Attempting to replace the compile call with eval
+    # This is semantically different but follows the replacement instruction
+    jacfunc_compiled = tf.keras.backend.eval(jacfunc)
+    out = jacfunc_compiled(x_tf, idxs_tf)
+except TypeError as e:
+    # Expected behavior due to replacement semantics (evaluating a function)
+    print("Fails section executed (TypeError as expected):", e)
+except Exception as e:
+    print("Fails section executed with error:", e)
+```

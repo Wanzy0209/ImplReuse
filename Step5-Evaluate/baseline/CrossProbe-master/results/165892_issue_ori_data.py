@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.rand creates a tensor filled with random numbers from a uniform distribution on the interval [0, 1)
@@ -17,4 +16,3 @@ def linear(weight, input):
     return tf.linalg.matmul(input, weight, output_type=tf.float32)
 
 linear(A, B)
-```

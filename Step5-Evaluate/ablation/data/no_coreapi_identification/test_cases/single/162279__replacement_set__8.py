@@ -1,0 +1,47 @@
+import torch
+import torch.nn as nn
+
+class AnyDimsModelEmpty(nn.Module):
+    def __init__(self):
+        super(AnyDimsModelEmpty, self).__init__()
+
+    def forward(self, x):
+        y = torch.ops.aten.any.dims(x, [], False)
+        return y
+
+class AnyDimsModelNull(nn.Module):
+    def __init__(self):
+        super(AnyDimsModelNull, self).__init__()
+
+    def forward(self, x):
+        y = torch.ops.aten.any.dims(x, None, False)
+        return y
+
+def process(model, x):
+    # Run eager mode
+    eager_output = model(x)
+    # Export the model
+    exported_program = torch.export.export(model, (x,))
+    # Run exported mode
+    exported_output = exported_program(x)
+    return eager_output, exported_output
+
+if __name__ == "__main__":
+    # Replacing torch.ones with torch.det for input generation
+    # Original: x = torch.ones(2, 2, 2)
+    # Replacement: x = torch.det(torch.ones(2, 2, 2))
+    # This creates a tensor of shape (2,) suitable for testing the shape bug.
+    x = torch.det(torch.ones(2, 2, 2))
+
+    model_empty = AnyDimsModelEmpty()
+    model_null = AnyDimsModelNull()
+
+    # Process first model
+    eager_out_1, export_out_1 = process(model_empty, x)
+    assert eager_out_1.shape == export_out_1.shape, f"Model 1 shape mismatch: eager {eager_out_1.shape} vs export {export_out_1.shape}"
+
+    # Process second model
+    eager_out_2, export_out_2 = process(model_null, x)
+    assert eager_out_2.shape == export_out_2.shape, f"Model 2 shape mismatch: eager {eager_out_2.shape} vs export {export_out_2.shape}"
+    
+    print("Test passed.")

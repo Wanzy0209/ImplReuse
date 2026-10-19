@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import unittest
 import gc, psutil
@@ -43,4 +42,3 @@ class TestLeafGradMaxCUDA(unittest.TestCase):
 
 if __name__ == "__main__":
       unittest.main()
-```

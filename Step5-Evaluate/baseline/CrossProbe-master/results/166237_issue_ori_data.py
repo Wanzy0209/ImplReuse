@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # x_cpu = torch.randn((5, ), requires_grad=True)
@@ -36,4 +35,3 @@ with tf.device('/GPU:0'):
 # torch.testing.assert_close(out_cpu, out_mps.cpu())
 # Conversion: tf.debugging.assert_near checks for numerical closeness.
 tf.debugging.assert_near(out_cpu, out_mps)
-```

@@ -1,0 +1,30 @@
+import torch
+import tensorflow as tf
+
+# Create a base tensor to serve as input for pdist
+# pdist requires a 2D tensor, so we adapt the original dimensions
+base_tensor = torch.randn(1792, 1899 * 160)
+
+# Replacement: torch.empty_strided -> torch.nn.functional.pdist
+input_tensor = torch.nn.functional.pdist(base_tensor)
+
+# Replacement: torch.rand_like -> torch.trace
+# Note: torch.trace requires a 2D tensor, but pdist returns 1D.
+# To make the test runnable as requested, we reshape the input to 2D.
+# This adapts the semantics to allow the operation to proceed.
+input_2d = input_tensor.view(-1, 1) 
+output_tensor = torch.trace(input_2d)
+
+# Replacement: input_tensor.stride -> tf.keras.ops.add
+# Replacement: output_tensor.stride -> tf.keras.ops.add
+# We adapt the semantics to perform an addition operation on the tensors.
+# Converting torch tensors to tensorflow tensors for the operation.
+input_tf = tf.convert_to_tensor(input_tensor.numpy())
+output_tf = tf.convert_to_tensor(output_tensor.numpy())
+
+# Performing the replacement operation
+input_check = tf.keras.ops.add(input_tf, 0)
+output_check = tf.keras.ops.add(output_tf, 0)
+
+# Assert equality
+assert tf.reduce_all(tf.equal(input_check, output_check))

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 worker_name = "trace"
@@ -17,4 +16,3 @@ with tf.device('/GPU:0'):
 
 # Conversion: profile.stop() maps to tf.profiler.experimental.stop
 tf.profiler.experimental.stop()
-```

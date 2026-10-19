@@ -1,0 +1,41 @@
+import torch
+import tensorflow as tf
+from torch.distributed.device_mesh import init_device_mesh
+
+# torch.distributed.init_process_group("nccl")
+# Replacement: torch.nn.functional.cross_entropy
+# Using dummy inputs to make it runnable as cross_entropy requires input and target
+dummy_input = torch.randn(1, 10)
+dummy_target = torch.randint(0, 10, (1,))
+torch.nn.functional.cross_entropy(dummy_input, dummy_target)
+
+# global mesh1
+mesh1 = init_device_mesh(
+    "cuda", (1, 4, 2), mesh_dim_names=("a", "b", "c")
+)
+mesh1_c = mesh1["c"]
+
+# _mesh_resources.get_root_mesh(mesh1_c)
+# Replacement: tf.linalg.lu_solve
+# tf.linalg.lu_solve expects (lower_upper, perm, rhs). 
+# We pass mesh1_c to preserve the logic of operating on the mesh object.
+if tf.experimental.dtensor.client_id() == 0:
+    print(tf.linalg.lu_solve(mesh1_c, mesh1_c, mesh1_c).shape)
+
+# global mesh2
+mesh2 = init_device_mesh(
+    "cuda", (2, 2, 2), mesh_dim_names=("a", "b", "c")
+)
+mesh2_c = mesh2["c"]
+
+if tf.experimental.dtensor.client_id() == 0:
+    print(tf.linalg.lu_solve(mesh1_c, mesh1_c, mesh1_c).shape)
+
+# raise error here
+# assert _mesh_resources.get_root_mesh(mesh1_c) is mesh1
+# Replacement:
+assert tf.linalg.lu_solve(mesh1_c, mesh1_c, mesh1_c) is mesh1
+
+# torch.distributed.destroy_process_group()
+# Replacement: tf.linalg.lu_solve
+tf.linalg.lu_solve(mesh1_c, mesh1_c, mesh1_c)

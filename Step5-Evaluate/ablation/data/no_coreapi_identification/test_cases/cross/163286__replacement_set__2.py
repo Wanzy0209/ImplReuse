@@ -1,0 +1,102 @@
+import torch
+import tensorflow as tf
+import os
+
+def test_tpu_initialization_with_dtype_view_replacements():
+    """
+    Test case adapted from Issue 163286 (PyTorch Inductor as_strided/view bug).
+    
+    The original issue describes a scenario where `as_strided` lowering discards 
+    `.view(dtype)` information, leading to incorrect dtypes (e.g., float8 instead of uint8)
+    being passed to kernels like `torch._grouped_mm`.
+
+    This test case translates the logic to TensorFlow, using:
+    - Similar API: tf.tpu.experimental.initialize_tpu_system (replaces torch._grouped_mm context)
+    - Replacement API: tf.experimental.dtensor.name_based_save (replaces specific tensor ops and types)
+    """
+    
+    # Setup a temporary directory for saving layouts (required by name_based_save)
+    temp_dir = "/tmp/tf_dtensor_test"
+    if not os.path.exists(temp_dir):
+        os.makedirs(temp_dir)
+
+    # Create a dummy tensor to serve as the base data
+    # In the original bug, this would be the input tensor 'x' or weights 'w1'
+    base_data = tf.constant([[1.0, 2.0], [3.0, 4.0]], dtype=tf.float32)
+
+    # --- Replacements based on the prompt requirements ---
+
+    # Original: x.bfloat16()
+    # Replacement: tf.experimental.dtensor.name_based_save
+    x_processed = tf.experimental.dtensor.name_based_save(base_data, os.path.join(temp_dir, "x_layout"))
+
+    # Original: w1.bfloat16()
+    # Replacement: tf.experimental.dtensor.name_based_save
+    w_processed = tf.experimental.dtensor.name_based_save(base_data, os.path.join(temp_dir, "w_layout"))
+
+    # Original: self.ffn_norm
+    # Replacement: tf.experimental.dtensor.name_based_save
+    norm_result = tf.experimental.dtensor.name_based_save(base_data, os.path.join(temp_dir, "norm_layout"))
+
+    # Original: self.experts
+    # Replacement: tf.experimental.dtensor.name_based_save
+    experts_result = tf.experimental.dtensor.name_based_save(norm_result, os.path.join(temp_dir, "experts_layout"))
+
+    # Original: torch.uint8 (dtype context)
+    # Replacement: tf.experimental.dtensor.name_based_save
+    # Simulating the view operation to uint8
+    uint8_view_op = tf.experimental.dtensor.name_based_save(experts_result, os.path.join(temp_dir, "uint8_view"))
+
+    # Original: torch.int32 (dtype context)
+    # Replacement: tf.experimental.dtensor.name_based_save
+    int32_view_op = tf.experimental.dtensor.name_based_save(experts_result, os.path.join(temp_dir, "int32_view"))
+
+    # Original: as_strided_default_1
+    # Replacement: tf.experimental.dtensor.name_based_save
+    # Simulating the strided operation logic
+    as_strided_result = tf.experimental.dtensor.name_based_save(uint8_view_op, os.path.join(temp_dir, "as_strided_layout"))
+
+    # Original: torch.float8_e8m0fnu (dtype context)
+    # Replacement: tf.experimental.dtensor.name_based_save
+    float8_dtype_op = tf.experimental.dtensor.name_based_save(as_strided_result, os.path.join(temp_dir, "float8_dtype"))
+
+    # Original: float8.e8m0fnu (specific instance)
+    # Replacement: tf.experimental.dtensor.name_based_save
+    float8_instance_op = tf.experimental.dtensor.name_based_save(float8_dtype_op, os.path.join(temp_dir, "float8_instance"))
+
+    # --- Similar API Execution ---
+    
+    # Original API Under Test: torch._grouped_mm
+    # Similar API: tf.tpu.experimental.initialize_tpu_system
+    # We call this to represent the system initialization/kernel execution phase.
+    
+    tpu_initialized = False
+    try:
+        # Initialize the TPU system
+        tf.tpu.experimental.initialize_tpu_system()
+        tpu_initialized = True
+        print("TPU system initialized successfully.")
+    except tf.errors.NotFoundError:
+        print("TPU hardware not found. Skipping hardware initialization.")
+    except Exception as e:
+        print(f"An error occurred during TPU initialization: {e}")
+
+    # --- Assertions ---
+    
+    # Verify that the replacement operations (saving layouts) were executed.
+    # In the original bug, the assertion would check that the dtype is preserved (uint8).
+    # Here, we check that the layout files (representing the state) were generated.
+    assert x_processed is not None, "x.bfloat16 replacement failed"
+    assert w_processed is not None, "w1.bfloat16 replacement failed"
+    assert uint8_view_op is not None, "torch.uint8 replacement failed"
+    assert as_strided_result is not None, "as_strided_default_1 replacement failed"
+    assert float8_instance_op is not None, "float8.e8m0fnu replacement failed"
+
+    # If on TPU, assert initialization happened
+    if tpu_initialized:
+        assert tf.config.list_physical_devices('TPU'), "TPU devices not listed after initialization"
+
+    print("Test case completed.")
+
+if __name__ == "__main__":
+    test_tpu_initialization_with_dtype_view_replacements()

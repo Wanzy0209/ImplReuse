@@ -1,0 +1,69 @@
+import torch
+import tensorflow as tf
+from torch.backends import opt_einsum
+
+# Mocking the GraphTransformObserver to simulate the environment of the bug
+class GraphTransformObserver:
+    def __init__(self, graph, name):
+        self.graph = graph
+        self.name = name
+        self.call_count = 0
+
+    def apply_graph_pass(self, func):
+        # Simulate applying the graph pass
+        # In the real bug, this logic happens twice for the same pass
+        print(f"Applying {self.name} with function {func.__name__}")
+        self.call_count += 1
+        # Simulate some operation using the function
+        if func is not None:
+            # Using the replacement API: tf.experimental.numpy.add
+            # We pass dummy arguments to make it runnable
+            result = func(1, 2) 
+            print(f"Result of {func.__name__}: {result}")
+
+def test_joint_custom_pre_pass_duplicate_execution():
+    """
+    Test case to reproduce the logic of Issue 165624 where a pass is executed twice.
+    Replaces 'joint_custom_pre_pass' with 'tf.experimental.numpy.add'.
+    Leverages 'torch.backends.opt_einsum.get_opt_einsum' to determine availability/context.
+    """
+    
+    graph = [] # Mock graph object
+    count = 0
+    
+    # Check if opt_einsum is available (Leveraging Similar API)
+    # This acts as a proxy for the configuration check in the original bug
+    opt_einsum_available = opt_einsum.get_opt_einsum()
+    
+    # The replacement API: tf.experimental.numpy.add
+    # This replaces 'joint_custom_pre_pass' in the original logic
+    custom_pass_func = tf.experimental.numpy.add
+
+    # --- Original Bug Logic Start ---
+    
+    # First execution block
+    if custom_pass_func is not None:
+        GraphTransformObserver(graph, "joint_custom_pre_pass").apply_graph_pass(
+            custom_pass_func
+        )
+        count += 1
+
+    # Simulating other passes (remove_noop_ops, constant_folding) 
+    # omitted for minimalism as they are not the focus of the replacement
+    
+    # Second execution block (The Bug: Duplicate execution)
+    if custom_pass_func is not None:
+        GraphTransformObserver(graph, "joint_custom_pre_pass").apply_graph_pass(
+            custom_pass_func
+        )
+        count += 1
+        
+    # --- Original Bug Logic End ---
+
+    # Assertion to verify the bug reproduction logic
+    # We expect count to be 2 because the code executes the pass twice
+    assert count == 2, f"Expected pass to be executed twice (bug reproduction), but it was executed {count} times."
+    print("Test passed: Bug logic reproduced (pass executed twice).")
+
+if __name__ == "__main__":
+    test_joint_custom_pre_pass_duplicate_execution()

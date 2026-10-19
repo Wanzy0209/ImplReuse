@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 def fn(x):
@@ -15,4 +14,3 @@ inp = tf.ones(3)
 # tf.function is the TensorFlow equivalent of torch.compile
 opt_m = tf.function(fn)
 opt_m(inp)
-```

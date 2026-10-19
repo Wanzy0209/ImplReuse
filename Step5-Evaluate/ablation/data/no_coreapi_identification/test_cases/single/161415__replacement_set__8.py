@@ -1,0 +1,21 @@
+import torch
+import tensorflow as tf
+
+# Create a base tensor with the specific size and stride mentioned in the bug report
+# We use as_strided to set up the memory layout without using torch.empty_strided
+base = torch.randn(1792, 1899, 160)
+strided_base = base.as_strided(size=[1792, 1899, 160], stride=(303872, 160, 1))
+
+# Replacement: torch.empty_strided -> torch.logcumsumexp
+# Apply logcumsumexp to the strided input
+input_tensor = torch.logcumsumexp(strided_base, dim=1)
+
+# Replacement: torch.rand_like -> torch.fmin
+# Use fmin with a random tensor to simulate the 'like' behavior
+output_tensor = torch.fmin(input_tensor, torch.randn_like(input_tensor))
+
+# Replacement: input_tensor.stride -> tf.nn.relu
+# Replacement: output_tensor.stride -> tf.nn.relu
+# Convert torch tensors to numpy for TensorFlow compatibility
+# The original assertion checked stride equality, now we check ReLU output equality
+assert tf.reduce_all(tf.equal(tf.nn.relu(input_tensor.numpy()), tf.nn.relu(output_tensor.numpy()))).numpy()

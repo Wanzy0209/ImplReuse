@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.python.compiler.tensorrt.test.test_utils import experimental_feature_scope
 from tensorflow.python.summary.writer.event_file_writer import get_logdir
@@ -30,4 +29,3 @@ n = Model()
 # Conversion: torch.jit.script -> image_data_format
 # Note: image_data_format() takes no arguments.
 image_data_format()
-```

@@ -1,0 +1,75 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Replacement: torch.manual_seed(0) -> tf.compat.v1.assign
+# We create a variable to assign the seed value to, mimicking the seed setting action.
+seed_var = tf.Variable(0, dtype=tf.int32)
+tf.compat.v1.assign(seed_var, 0)
+
+device = "mps"
+shape = (400, )
+dim = 0
+
+# Replacement: torch.arange(400, dtype=torch.long) -> torch.std
+# torch.std requires an input tensor. We pass a tensor of ones to calculate std.
+# Note: torch.long -> tf.linalg.LinearOperatorBlockDiag replacement is skipped as it is syntactically invalid for a dtype.
+idx = torch.std(torch.ones(400, dtype=torch.float32))
+
+# Replacement: torch.zeros(...) -> torch.eye
+# We use torch.eye to initialize the tensors.
+# Note: dtype=torch.complex64 is preserved as it's not in the replacement list, but torch.float32/long were.
+t_mps = torch.eye(400, dtype=torch.complex64)
+t_cpu = torch.eye(400, dtype=torch.complex64)
+
+trailing = shape[dim+1:]
+# idx is now a scalar (result of std), so len(idx) would fail.
+# We preserve the original logic's intent for shape by using the original size 400.
+src_shape = (400,) + trailing
+
+# Replacement: torch.randn(...) -> tf.random.stateless_truncated_normal
+# We use TensorFlow's stateless random normal generator.
+# Note: dtype=torch.float32 replacement is skipped.
+src_imag = tf.random.stateless_truncated_normal(src_shape, seed=(0, 0))
+
+# Replacement: torch.zeros_like(src_imag) -> torch.nn.LazyLinear
+# LazyLinear is a PyTorch module. We need to convert src_imag (TF tensor) to Torch tensor first.
+src_imag_torch = torch.from_numpy(src_imag.numpy())
+# We instantiate LazyLinear and apply it to src_imag_torch.
+# LazyLinear initializes weights, so this introduces randomness, but we use it as the replacement for zeros_like.
+lazy_linear = torch.nn.LazyLinear(1)
+src_real = lazy_linear(src_imag_torch.unsqueeze(1)).squeeze(1)
+
+# Replacement: torch.complex(src_real, src_imag) -> torch.equal
+# We compare src_real and src_imag (converted to Torch).
+# This returns a boolean tensor, replacing the complex tensor construction.
+src = torch.equal(src_real, src_imag_torch)
+
+# Replacement: t_mps.index_add_(...) -> tf.linalg.LinearOperatorBlockDiag
+# We convert the PyTorch tensors to TensorFlow tensors to use the TF LinearOperator.
+t_mps_tf = tf.convert_to_tensor(t_mps.numpy())
+src_tf = tf.convert_to_tensor(src.numpy())
+
+# We use LinearOperatorBlockDiag to compose the tensors, replacing the index_add operation.
+# The original logic modifies t_mps in place. Here we create a new operator.
+op_mps = tf.linalg.LinearOperatorBlockDiag([t_mps_tf, src_tf])
+
+# Replacement: t_cpu.index_add_(...) -> tf.linalg.LinearOperatorBlockDiag
+t_cpu_tf = tf.convert_to_tensor(t_cpu.numpy())
+op_cpu = tf.linalg.LinearOperatorBlockDiag([t_cpu_tf, src_tf])
+
+# Compute the dense matrices to verify results
+mat_mps = op_mps.to_dense()
+mat_cpu = op_cpu.to_dense()
+
+# Print statements to compare results, preserving the original check logic
+print("MPS imag sum:", tf.reduce_sum(tf.abs(tf.math.imag(mat_mps))).numpy())
+print("CPU imag sum:", tf.reduce_sum(tf.abs(tf.math.imag(mat_cpu))).numpy())
+print("max abs diff:", tf.reduce_max(tf.abs(mat_mps - mat_cpu)).numpy())
+
+# Assertion to check consistency (similar to the original bug report's intent)
+# Since we used the same inputs for both "mps" and "cpu" versions in this TF context,
+# and the operation is deterministic, the difference should be negligible.
+assert tf.reduce_max(tf.abs(mat_mps - mat_cpu)).numpy() < 1e-5
+```

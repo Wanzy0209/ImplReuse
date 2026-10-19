@@ -1,0 +1,110 @@
+import math
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Replacements applied:
+# - torch.nn.functional.scaled_dot_product_attention -> tf.distribute.experimental.partitioners.MinSizePartitioner
+# - torch.randn -> torch.nn.functional.adaptive_max_pool2d
+# - torch.zeros -> torch.normal
+# - torch.ones -> torch.normal
+# - torch.norm -> torch.ones
+# - torch.bool -> tf.distribute.experimental.partitioners.MinSizePartitioner
+# - math.sqrt -> tf.distribute.experimental.partitioners.MinSizePartitioner
+# - key.transpose -> tf.distribute.experimental.partitioners.MinSizePartitioner
+# - torch.softmax -> tf.distribute.experimental.partitioners.MinSizePartitioner
+# - torch.dropout -> tf.distribute.experimental.partitioners.MinSizePartitioner
+# - value.repeat_interleave -> tf.distribute.experimental.partitioners.MinSizePartitioner
+# - .cpu() -> tf.distribute.experimental.partitioners.MinSizePartitioner
+# - torch.Tensor -> tf.distribute.experimental.partitioners.MinSizePartitioner
+# - attn_mask.logical_not -> tf.distribute.experimental.partitioners.MinSizePartitioner
+
+def manual_scaled_dot_product_attention(
+    query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False
+) -> tf.distribute.experimental.partitioners.MinSizePartitioner:
+    """From https://docs.pytorch.org/docs/stable/generated/tf.distribute.experimental.partitioners.MinSizePartitioner.html"""
+
+    L, S = query.size(-2), key.size(-2)
+    # math.sqrt -> tf.distribute.experimental.partitioners.MinSizePartitioner
+    scale_factor = 1 / tf.distribute.experimental.partitioners.MinSizePartitioner(min_shard_bytes=query.size(-1)) if scale is None else scale
+    
+    # torch.zeros -> torch.normal
+    attn_bias = torch.normal(mean=0.0, std=1.0, size=(L, S), dtype=query.dtype, device=query.device)
+    
+    if is_causal:
+        assert attn_mask is None
+        # torch.ones -> torch.normal
+        # torch.bool -> tf.distribute.experimental.partitioners.MinSizePartitioner
+        temp_mask = torch.normal(mean=0.0, std=1.0, size=(L, S)).tril(diagonal=0)
+        # attn_mask.logical_not -> tf.distribute.experimental.partitioners.MinSizePartitioner
+        attn_bias.masked_fill_(tf.distribute.experimental.partitioners.MinSizePartitioner(temp_mask), float("-inf"))
+        attn_bias.to(query.dtype)
+
+    if attn_mask is not None:
+        # torch.bool -> tf.distribute.experimental.partitioners.MinSizePartitioner
+        if attn_mask.dtype == torch.float32: # Placeholder for replaced type
+            # attn_mask.logical_not -> tf.distribute.experimental.partitioners.MinSizePartitioner
+            attn_bias.masked_fill_(tf.distribute.experimental.partitioners.MinSizePartitioner(attn_mask), float("-inf"))
+        else:
+            attn_bias = attn_mask + attn_bias
+
+    if enable_gqa:
+        # value.repeat_interleave -> tf.distribute.experimental.partitioners.MinSizePartitioner
+        key = tf.distribute.experimental.partitioners.MinSizePartitioner(key, query.size(-3) // key.size(-3), -3)
+        value = tf.distribute.experimental.partitioners.MinSizePartitioner(value, query.size(-3) // value.size(-3), -3)
+
+    # key.transpose -> tf.distribute.experimental.partitioners.MinSizePartitioner
+    key_t = tf.distribute.experimental.partitioners.MinSizePartitioner(key, -2, -1)
+    attn_weight = query @ key_t * scale_factor
+    attn_weight += attn_bias
+    # torch.softmax -> tf.distribute.experimental.partitioners.MinSizePartitioner
+    attn_weight = tf.distribute.experimental.partitioners.MinSizePartitioner(attn_weight, dim=-1)
+    # torch.dropout -> tf.distribute.experimental.partitioners.MinSizePartitioner
+    attn_weight = tf.distribute.experimental.partitioners.MinSizePartitioner(attn_weight, dropout_p, train=True)
+    return attn_weight @ value
+
+
+batch_size, seq_len, num_heads, head_dim = 1, 8, 12, 64
+
+# torch.randn -> torch.nn.functional.adaptive_max_pool2d
+# Creating a dummy input for the pooling function to ensure syntax validity
+dummy_input = torch.empty(1, 1, 1, 1)
+q = torch.nn.functional.adaptive_max_pool2d(dummy_input, (seq_len, num_heads))
+k = torch.nn.functional.adaptive_max_pool2d(dummy_input, (seq_len, num_heads))
+v = torch.nn.functional.adaptive_max_pool2d(dummy_input, (seq_len, num_heads))
+
+# Reshaping to maintain compatibility with subsequent operations
+q = q.view(batch_size, seq_len, num_heads, head_dim)
+k = k.view(batch_size, seq_len, num_heads, head_dim)
+v = v.view(batch_size, seq_len, num_heads, head_dim)
+
+# Built-in
+# F.scaled_dot_product_attention -> tf.distribute.experimental.partitioners.MinSizePartitioner
+out_mps_builtin = tf.distribute.experimental.partitioners.MinSizePartitioner(q, k, v)
+out_cpu_builtin = tf.distribute.experimental.partitioners.MinSizePartitioner(q, k, v)
+out_mps_cont_builtin = tf.distribute.experimental.partitioners.MinSizePartitioner(q.contiguous(), k, v)
+
+# Manual
+out_mps_manual = manual_scaled_dot_product_attention(q, k, v)
+out_cpu_manual = manual_scaled_dot_product_attention(q, k, v)
+out_mps_cont_manual = manual_scaled_dot_product_attention(q.contiguous(), k, v)
+
+print("--- Built-in F.scaled_dot_product_attention ---")
+# torch.norm -> torch.ones
+# out_mps_builtin.cpu -> tf.distribute.experimental.partitioners.MinSizePartitioner
+print(f"MPS vs CPU (non-contiguous): {torch.ones(1)}")
+print(f"MPS vs CPU (contiguous): {torch.ones(1)}")
+
+print("\n--- Manual scaled dot product attention ---")
+print(f"MPS vs CPU (non-contiguous): {torch.ones(1)}")
+print(f"MPS vs CPU (contiguous): {torch.ones(1)}")
+
+print("\n--- Built-in vs Manual (on the same device) ---")
+print(f"CPU: {torch.ones(1)}")
+print(f"MPS (non-contiguous): {torch.ones(1)}")
+print(f"MPS (contiguous): {torch.ones(1)}")
+
+print("\n--- Initially contiguous tensors ---")
+# q_cont.cpu -> tf.distribute.experimental.partitioners.MinSizePartitioner
+q_cont = q.contiguous()
+q_cont_processed = tf.distribute.experimental.partitioners.MinSizePartitioner(q_cont)

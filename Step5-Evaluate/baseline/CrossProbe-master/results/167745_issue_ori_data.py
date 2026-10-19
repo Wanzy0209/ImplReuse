@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion Note: TensorFlow manages memory automatically via the BFC allocator.
@@ -13,4 +12,3 @@ with tf.device('/GPU:0'):
     x1 = tf.random.normal((8,))
     print("Pool 1 ctx end")
 del x1
-```

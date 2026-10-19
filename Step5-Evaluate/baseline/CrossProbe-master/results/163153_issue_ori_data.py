@@ -1,4 +1,3 @@
-```python
 # distributed/FSDP2/example.py
 import argparse
 import os
@@ -124,4 +123,3 @@ if __name__ == "__main__":
     parser.add_argument("--dcp-api", action="store_true", default=False)
     args = parser.parse_args()
     main(args)
-```

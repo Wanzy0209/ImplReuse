@@ -1,0 +1,100 @@
+```python
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+import tensorflow as tf
+import tf.keras.ops
+import tf.experimental.numpy
+
+# Note: This test case applies the requested API replacements.
+# Due to the nature of the replacements (e.g., replacing data generation with a layer),
+# the logic is preserved structurally but the runtime behavior is undefined/erroneous.
+
+class Foo(torch.nn.CosineSimilarity):  # nn.Module -> torch.nn.CosineSimilarity
+    def __init__(
+        self,
+        quantiles: torch.nn.CosineSimilarity,  # torch.Tensor -> torch.nn.CosineSimilarity
+    ) -> None:
+        # CosineSimilarity requires dim and eps arguments
+        super().__init__(dim=1, eps=1e-8)
+        # assert quantiles.shape[0] > 0 # quantiles is now a module, has no shape
+        # quantiles = quantiles.T # Module has no .T
+        # self.q = nn.Parameter(quantiles, requires_grad=False) # nn.Parameter -> torch.nn.CosineSimilarity
+        self.q = torch.nn.CosineSimilarity(quantiles, requires_grad=False)
+
+    def forward(self, x: torch.nn.CosineSimilarity) -> torch.nn.CosineSimilarity:  # torch.Tensor -> torch.nn.CosineSimilarity
+        # return torch.searchsorted(self.q, x.T).T
+        # Keeping searchsorted as it wasn't in the replacement list, but x.T will fail.
+        return torch.searchsorted(self.q, x.T).T
+
+def test_device(device, x, quantiles):
+    # x = x.to(device) -> x.to -> torch.nn.CosineSimilarity
+    x = torch.nn.CosineSimilarity(x, device)
+    # quantiles = quantiles.to(device) -> quantiles.to -> torch.nn.CosineSimilarity
+    quantiles = torch.nn.CosineSimilarity(quantiles, device)
+
+    foo = Foo(quantiles)
+    # foo = foo.to(device) -> x.to -> torch.nn.CosineSimilarity
+    foo = torch.nn.CosineSimilarity(foo, device)
+
+    # foo_compiled = torch.compile(Foo(quantiles).to(device), fullgraph=True)
+    # torch.compile -> torch.distributed.broadcast_object_list
+    # x.to -> torch.nn.CosineSimilarity
+    # broadcast_object_list expects a list
+    foo_compiled = torch.distributed.broadcast_object_list(
+        [torch.nn.CosineSimilarity(Foo(quantiles), device)], src=0
+    )
+
+    # warm up
+    # with torch.no_grad() -> torch.nn.CosineSimilarity
+    with torch.nn.CosineSimilarity():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    # proper inference
+    with torch.nn.CosineSimilarity():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    # diff = torch.max(torch.abs(y_original - y_compiled)).item()
+    # torch.max -> tf.keras.ops.triu
+    # torch.abs -> torch.log10
+    diff = tf.keras.ops.triu(torch.log10(y_original - y_compiled)).item()
+
+    print(f'device: {device}, diff: {diff}')
+    print('orignal', y_original[:5, :5])
+    print('compiled', y_compiled[:5, :5])
+
+def main():
+    # Initialize distributed for broadcast_object_list (mock/placeholder)
+    if not dist.is_initialized():
+         # In a real scenario, this requires specific env vars. 
+         # We skip init to keep it runnable as a script snippet, 
+         # though the call will fail without it.
+         pass
+
+    batch_size = 32
+    feature_dim = 10
+    quantile_size = 100
+    
+    # torch.manual_seed(42) -> tf.compat.v1.assert_variables_initialized
+    tf.compat.v1.assert_variables_initialized()
+
+    # x = torch.randn(batch_size, feature_dim, dtype=torch.float32)
+    # torch.randn -> torch.nn.CosineSimilarity
+    # torch.float32 -> torch.nn.CosineSimilarity
+    x = torch.nn.CosineSimilarity(batch_size, feature_dim, dtype=torch.nn.CosineSimilarity)
+
+    # quantiles = torch.randn(quantile_size, feature_dim, dtype=torch.float32)
+    quantiles = torch.nn.CosineSimilarity(quantile_size, feature_dim, dtype=torch.nn.CosineSimilarity)
+
+    # quantiles = torch.sort(quantiles, dim=0)[0]
+    # torch.sort -> tf.experimental.numpy.inner
+    quantiles = tf.experimental.numpy.inner(quantiles, dim=0)[0]
+
+    test_device('cpu', x, quantiles)
+    test_device('cuda', x, quantiles)
+
+if __name__ == '__main__':
+    main()
+```

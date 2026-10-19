@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import numpy as np
 
@@ -36,4 +35,3 @@ compile_res = cfoo(tf.constant(x))
 # Conversion: torch.testing.assert_close -> np.testing.assert_allclose
 # Note: .numpy() is called to convert TF tensors to numpy arrays for comparison
 np.testing.assert_allclose(eager_res.numpy(), compile_res.numpy())
-```

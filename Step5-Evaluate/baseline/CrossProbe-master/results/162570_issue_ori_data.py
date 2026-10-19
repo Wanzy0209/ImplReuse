@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.nn.Module -> tf.Module
@@ -34,4 +33,3 @@ loaded_result = loaded_net(x, y)
 
 print("tf_result", tf_result)
 print("loaded_result", loaded_result)
-```

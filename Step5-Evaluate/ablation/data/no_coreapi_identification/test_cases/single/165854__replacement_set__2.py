@@ -1,0 +1,80 @@
+import torch
+import tensorflow as tf
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask, noop_mask
+
+
+def tf_to_torch(tf_tensor, device, requires_grad=False):
+    """Helper to convert TensorFlow tensor to PyTorch tensor."""
+    # TF tensors are usually on CPU, need to move to numpy then torch
+    np_tensor = tf_tensor.numpy()
+    torch_tensor = torch.from_numpy(np_tensor).to(device)
+    if requires_grad:
+        torch_tensor.requires_grad_(True)
+    return torch_tensor
+
+
+def run_with_head_count(compiled_fa, H, device, dtype):
+    """Run flex attention with a specific head count, creating a captured buffer sized by H."""
+    B, S, D = 2, 256, 64
+
+    # Create captured buffer that depends on dynamic H
+    # Replacement: torch.randn -> tf.random.stateless_truncated_normal
+    tf_dtype = tf.float16 if dtype == torch.float16 else tf.float32
+    head_scale_tf = tf.random.stateless_truncated_normal(
+        shape=[H], seed=[0, 0], mean=0.0, stddev=1.0, dtype=tf_dtype
+    )
+    head_scale = tf_to_torch(head_scale_tf, device, requires_grad=True)
+
+    def score_mod(score, batch, head, token_q, token_kv):
+        return score * head_scale[head]
+
+    print(f"  Running with H={H}, head_scale.shape={head_scale.shape}")
+
+    # Run multiple iterations with the same head_scale
+    for i in range(5):
+        # Replacement: torch.randn -> tf.random.stateless_truncated_normal
+        q_tf = tf.random.stateless_truncated_normal(
+            shape=[B, H, S, D], seed=[0, 0], mean=0.0, stddev=1.0, dtype=tf_dtype
+        )
+        q = tf_to_torch(q_tf, device, requires_grad=True)
+
+        # Replacement: torch.randn_like -> torch.full_like
+        k = torch.full_like(q, fill_value=0.0, requires_grad=True)
+
+        # Replacement: torch.randn_like -> torch.full_like
+        v = torch.full_like(q, fill_value=0.0, requires_grad=True)
+
+        block_mask = create_block_mask(noop_mask, B, 1, S, S, device=device)
+
+        outputs = compiled_fa(q, k, v, score_mod=score_mod, block_mask=block_mask)
+        loss = outputs.sum()
+        loss.backward()
+
+    print(f"   Completed {i+1} iterations")
+
+
+def main():
+    device = "cuda"
+    dtype = torch.float16
+
+    # Replacement: torch.manual_seed -> tf.compat.v1.assign
+    # Note: This is a direct API replacement as requested, though semantically different.
+    tf_var = tf.Variable(0.0)
+    tf.compat.v1.assign(tf_var, 0.0)
+
+    # Test with different head counts - this makes H a dynamic dimension
+    # and the captured buffer (head_scale) changes size with H
+    head_counts = [4, 8, 4, 16, 4]
+
+    compiled_fa = torch.compile(flex_attention, fullgraph=True, dynamic=True)
+
+    print(f"Running flex-attention with dynamic head counts on {device}, dtype={dtype}")
+    print(f"Testing head counts: {head_counts}\n")
+
+    for iteration, H in enumerate(head_counts, start=1):
+        print(f"Iteration {iteration}:")
+        run_with_head_count(compiled_fa, H, device, dtype)
+
+
+if __name__ == "__main__":
+    main()

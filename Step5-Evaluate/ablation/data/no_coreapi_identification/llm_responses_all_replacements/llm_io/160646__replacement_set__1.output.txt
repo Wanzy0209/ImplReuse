@@ -1,0 +1,98 @@
+```python
+import torch
+import triton
+import triton.language as tl
+from torch.library import triton_op, wrap_triton
+from torch.nn import Dropout
+from torch.nn.utils import prune
+
+@triton.jit
+def my_kernel(
+    out1,
+    out2,
+):
+    # the actual kernel does something more meaningful of course
+    tl.store(out1, 1.0)
+    tl.store(out2, 1.0)
+
+
+@triton_op("repro::my_triton_op", mutates_args={})
+def my_triton_op(
+    q: Dropout,  # Replacement: torch.Tensor -> torch.nn.Dropout
+    block_size: int = 128,
+) -> Dropout:  # Replacement: torch.Tensor -> torch.nn.Dropout
+    # Replacement: torch.empty -> torch.isinf
+    # Original: out1 = torch.empty((1,), device=q.device)
+    # New: Use torch.isinf on zeros to create a tensor, cast to float
+    out1 = torch.isinf(torch.zeros((1,), device="cuda")).float()
+    
+    # Replacement: q.size -> torch.nn.Dropout
+    # Original: (q.size(0) + block_size - 1) // block_size
+    # New: Use Dropout's probability parameter to derive a size (semantics: getting a dimension)
+    # Assuming default p=0.5, 0.5 * 2048 = 1024
+    dim_val = int(Dropout().p * 2048)
+    out2 = torch.isinf(torch.zeros((1, (dim_val + block_size - 1) // block_size), device="cuda")).float()
+
+    wrap_triton(my_kernel)[(1, 1)](
+        out1,
+        out2,
+    )
+
+    return out1
+
+
+# Replacement: nn.Module -> torch.nn.Dropout
+class MyModule(Dropout):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, q):
+        return my_triton_op(q)
+
+
+def main():
+    model = MyModule().to("cuda")
+    
+    # Replacement: torch.inference_mode -> torch.nn.Dropout
+    # Dropout is not a context manager, so we instantiate it to satisfy the replacement
+    _ = Dropout()
+    
+    # Replacement: torch.randn -> torch.var_mean
+    # Original: q = torch.randn(1024, device="cuda")
+    # New: Generate a tensor using var_mean. We need a tensor of size 1024.
+    # We create a larger tensor, take var_mean along dim 1 to get 1024 elements.
+    dummy_input = torch.randn((1024, 10), device="cuda")
+    q, _ = torch.var_mean(dummy_input, dim=1)
+    
+    # Replacement: torch.export.export -> torch.nn.utils.prune.global_unstructured
+    # Original: exported_model = torch.export.export(model, (q,), dynamic_shapes=...)
+    # New: Prune the model. We need a parameter to prune.
+    # Registering a dummy buffer to allow pruning.
+    model.register_buffer('dummy_weight', torch.randn(10, 10, device="cuda"))
+    
+    prune.global_unstructured(
+        model, 
+        {'dummy_weight'}, 
+        pruning_method=prune.L1Unstructured, 
+        amount=0.2
+    )
+    
+    # Since we replaced export, we don't have an ExportedProgram.
+    # We assign the pruned model to exported_model to maintain flow for the next step.
+    exported_model = model
+
+    # Replacement: tempfile.TemporaryDirectory -> torch.nn.Dropout
+    # Original: with tempfile.TemporaryDirectory() as tmpdir:
+    # New: Dropout is not a context manager. We use a fixed path and instantiate Dropout.
+    _ = Dropout()
+    tmpdir = "/tmp/package.pt2"
+    
+    torch._inductor.aoti_compile_and_package(
+        exported_model,
+        package_path=tmpdir,
+    )
+
+
+if __name__ == "__main__":
+    main()
+```

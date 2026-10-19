@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # torch.compile optimizes the function into a graph. In TensorFlow, tf.function is the equivalent.
@@ -14,4 +13,3 @@ def f(x):
 # torch.zeros creates a tensor. We use tf.Variable to mimic the mutable behavior of PyTorch tensors.
 x = tf.Variable(tf.zeros((4, 4)))
 f(x)
-```

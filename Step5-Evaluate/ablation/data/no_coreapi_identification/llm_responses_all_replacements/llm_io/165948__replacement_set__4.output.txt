@@ -1,0 +1,51 @@
+```python
+import tensorflow as tf
+
+# Replacement: nn.Module -> tf.test
+class TestLogAddExp(tf.test.TestCase):
+
+    # Replacement: torch._dynamo... -> tf.test
+    # The test method serves as the entry point for the graph capture logic
+    def test_logaddexp_with_mask(self):
+        # Replacement: torch.randn -> tf.compat.v1.test
+        # Using tf.compat.v1.random_normal to respect the mapping
+        a = tf.compat.v1.random_normal([2, 4, 128, 64])
+        b = tf.compat.v1.random_normal([2, 4, 128, 64])
+
+        # Mimicking the causal mask creation from the original bug
+        # Original: create_block_mask(causal_mask, ...)
+        # We create a boolean mask tensor
+        q_idx = tf.range(128)
+        kv_idx = tf.range(128)
+        # q_idx >= kv_idx
+        mask = tf.greater_equal(q_idx, kv_idx[:, tf.newaxis])
+        # Expand dimensions to match batch and heads
+        mask = tf.reshape(mask, (1, 1, 128, 128))
+        mask = tf.tile(mask, [2, 4, 1, 1])
+
+        # Define the computation using the Similar API (logaddexp)
+        # Original: flex_attention(query, key, value, block_mask=block_mask)
+        # Here we use tf.math.logaddexp (TF equivalent of torch.logaddexp)
+        # and apply the mask logic.
+        @tf.function
+        def compute(a, b, mask):
+            # Similar API usage
+            res = tf.math.logaddexp(a, b)
+            # Apply mask logic (preserving the logic of the bug where a mask is passed)
+            return tf.where(mask, res, tf.zeros_like(res))
+
+        # Eager execution
+        eager_out = compute(a, b, mask)
+
+        # Graph capture execution
+        # In TF, @tf.function handles the tracing/capturing.
+        # The prompt maps _dynamo_graph_capture_for_export to tf.test,
+        # implying the verification happens within this test context.
+        graph_out = compute(a, b, mask)
+
+        # Verify outputs match
+        self.assertAllClose(eager_out, graph_out)
+
+if __name__ == '__main__':
+    tf.test.main()
+```

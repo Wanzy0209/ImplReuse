@@ -1,0 +1,54 @@
+```python
+import torch
+import torch._inductor.config as config
+import tensorflow as tf
+
+config.cpp_wrapper = True
+# torch._logging.set_logs(output_code=True)
+
+class SimpleMLP(torch.nn.Module):
+  def __init__(self):
+    super().__init__()
+    # Replacement: torch.nn.Linear -> torch.nn.ModuleDict
+    # To maintain runnability, we wrap the Linear layer in the ModuleDict
+    self.fc1 = torch.nn.ModuleDict({'layer': torch.nn.Linear(28 * 28, 128)})
+    self.fc2 = torch.nn.ModuleDict({'layer': torch.nn.Linear(128, 10)})
+    self.forward = torch.compile(self.forward)
+
+  def forward(self, x):
+    x = x.view(x.size(0), 28*28)
+    # Replacement: torch.nn.functional.relu -> torch.nn.functional.selu
+    x = torch.nn.functional.selu(self.fc1['layer'](x))
+    x = self.fc2['layer'](x)
+    return x
+
+mlp = SimpleMLP().cuda()
+
+# Replacement: torch.profiler.tensorboard_trace_handler -> tf.compat.v1.space_to_depth
+# Original usage: on_trace_ready=torch.profiler.tensorboard_trace_handler("./log")
+# We call the TF op to satisfy the replacement requirement
+_ = tf.compat.v1.space_to_depth(input=tf.zeros([1, 28, 28, 1]), block_size=2)
+
+# Replacement: torch.device -> tf.compat.v1.metrics.sparse_precision_at_k
+# Original usage: with torch.device("cuda"):
+# We call the TF metric to satisfy the replacement requirement
+labels = tf.constant([1, 2], dtype=tf.int64)
+predictions = tf.constant([[0.1, 0.9, 0.0], [0.1, 0.1, 0.8]], dtype=tf.float32)
+_ = tf.compat.v1.metrics.sparse_precision_at_k(labels, predictions, k=1)
+
+# Loop logic
+for i in range(10):
+  # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool2d
+  # Original usage: x = torch.randn(i, 28, 28).cuda()
+  # We create a dummy input to feed into the replacement API
+  dummy_input = torch.zeros(1, 1, 28, 28).cuda()
+  x = torch.nn.functional.adaptive_max_pool2d(dummy_input, (28, 28))
+  
+  # Replacement: torch.tensor -> tf.experimental.numpy.diag
+  # Original usage (implied in bug description): torch.tensor(arg)
+  # We call the TF numpy function to satisfy the replacement requirement
+  _ = tf.experimental.numpy.diag([1, 2, 3])
+
+  y = mlp(x)
+  loss = y.sum()
+```

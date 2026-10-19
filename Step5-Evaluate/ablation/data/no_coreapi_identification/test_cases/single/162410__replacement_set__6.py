@@ -1,0 +1,32 @@
+import torch
+import torch.nn.functional as F
+import torch.nn.utils.rnn as rnn_utils
+import torch._inductor.config as inductor_config
+
+def f(x, y):
+    x.copy_(x.flip(1))
+    y = y.sum(dim=1, keepdim=True) + y
+    return x + y
+
+# Replacement: torch.randn -> torch.nn.functional.max_pool1d
+# We create a base tensor to apply max_pool1d, maintaining the target shape (20, 1024*1024)
+base_x = torch.ones(20, 1, 1024 * 1024, device="cuda")
+base_y = torch.ones(20, 1, 1024 * 1024, device="cuda")
+
+x = F.max_pool1d(base_x, kernel_size=3, stride=1, padding=1).squeeze(1)
+x_copy = x.clone()
+y = F.max_pool1d(base_y, kernel_size=3, stride=1, padding=1).squeeze(1)
+
+opt_f = torch.compile(f)
+ref = f(x, y)
+act = opt_f(x_copy, y)
+
+# Replacement: torch.testing.assert_close -> torch.nn.utils.rnn.pack_sequence
+# We convert the result tensors to a list of sequences to pack them
+ref_list = [ref[i] for i in range(ref.size(0))]
+act_list = [act[i] for i in range(act.size(0))]
+
+packed_ref = rnn_utils.pack_sequence(ref_list)
+packed_act = rnn_utils.pack_sequence(act_list)
+
+print(f"{torch._inductor.metrics.generated_kernel_count=}")

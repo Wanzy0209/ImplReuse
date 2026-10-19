@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from collections import namedtuple
 
@@ -15,4 +14,3 @@ aminmax(
     min=tf.constant(-3),
     max=tf.constant(5)
 )
-```

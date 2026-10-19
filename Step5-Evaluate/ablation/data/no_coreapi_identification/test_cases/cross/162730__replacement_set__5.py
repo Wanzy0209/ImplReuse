@@ -1,0 +1,67 @@
+import torch
+import tensorflow as tf
+import einops
+
+# Create test tensors on MPS
+device = 'mps'
+
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool3d
+# We use a base tensor of ones to apply the pooling operation, simulating data generation.
+base_W = torch.ones(12, 64, 768, device=device)
+W = torch.nn.functional.adaptive_max_pool3d(base_W.unsqueeze(0).unsqueeze(0), output_size=(12, 64, 768)).squeeze(0).squeeze(0)
+
+base_x = torch.ones(1, 3, 768, device=device)
+x = torch.nn.functional.adaptive_max_pool3d(base_x.unsqueeze(0).unsqueeze(0), output_size=(1, 3, 768)).squeeze(0).squeeze(0)
+
+base_bias = torch.ones(768, device=device)
+bias = torch.nn.functional.adaptive_max_pool3d(base_bias.unsqueeze(0).unsqueeze(0), output_size=(768)).squeeze(0).squeeze(0)
+
+# Create non-contiguous weight via rearrange
+w_noncontig = einops.rearrange(W, "h d m -> m (h d)")
+
+# Replacement: w_noncontig.contiguous -> tf.keras.metrics.MeanSquaredLogarithmicError
+w_contig = tf.keras.metrics.MeanSquaredLogarithmicError()
+
+# Note: is_contiguous() is a tensor method. Since w_contig is now a Metric object, 
+# we comment out the check to avoid immediate AttributeError, preserving the structure.
+# print(f"Weight contiguous: {w_contig.is_contiguous()}")
+print(f"Weight non-contiguous: {w_noncontig.is_contiguous()}")
+
+# Replacement: nn.functional -> tf.keras.metrics.MeanSquaredLogarithmicError
+# Original: torch.nn.functional.linear(x, w_noncontig, bias)
+result1 = tf.keras.metrics.MeanSquaredLogarithmicError(x, w_noncontig, bias)
+result2 = tf.keras.metrics.MeanSquaredLogarithmicError(x, w_contig, bias)
+
+# Replacement: torch.allclose -> tf.compat.v1.metrics.sparse_precision_at_k
+# Original: torch.allclose(result1, result2, atol=1e-5)
+# sparse_precision_at_k returns (metric, update_op). We use k=1 as a placeholder.
+match_op, _ = tf.compat.v1.metrics.sparse_precision_at_k(result1, result2, 1)
+print(f"Results match: {match_op}")
+
+# Replacement: torch.abs -> torch.atan
+# Original: torch.abs(result1 - result2)
+# Note: result1 and result2 are Metric objects, so arithmetic operations will fail at runtime.
+# We strictly follow the replacement instruction.
+print(f"Max difference: {torch.atan(result1 - result2).max()}")
+
+# Compare with CPU (works correctly)
+# Replacement: x.cpu -> tf.keras.metrics.MeanSquaredLogarithmicError
+x_cpu = tf.keras.metrics.MeanSquaredLogarithmicError()
+
+# Replacement: w_noncontig.cpu -> tf.keras.metrics.MeanSquaredLogarithmicError
+w_noncontig_cpu = tf.keras.metrics.MeanSquaredLogarithmicError()
+
+# Replacement: bias.cpu (implied by context of x.cpu, w_noncontig.cpu) -> tf.keras.metrics.MeanSquaredLogarithmicError
+bias_cpu = tf.keras.metrics.MeanSquaredLogarithmicError()
+
+# Replacement: nn.functional -> tf.keras.metrics.MeanSquaredLogarithmicError
+result_cpu_noncontig = tf.keras.metrics.MeanSquaredLogarithmicError(x_cpu, w_noncontig_cpu, bias_cpu)
+
+# Replacement: w_contig.cpu -> tf.keras.metrics.MeanSquaredLogarithmicError
+w_contig_cpu = tf.keras.metrics.MeanSquaredLogarithmicError()
+
+result_cpu_contig = tf.keras.metrics.MeanSquaredLogarithmicError(x_cpu, w_contig_cpu, bias_cpu)
+
+# Replacement: torch.allclose -> tf.compat.v1.metrics.sparse_precision_at_k
+match_op_cpu, _ = tf.compat.v1.metrics.sparse_precision_at_k(result_cpu_noncontig, result_cpu_contig, 1)
+print(f"CPU contiguous vs non-contiguous match: {match_op_cpu}")

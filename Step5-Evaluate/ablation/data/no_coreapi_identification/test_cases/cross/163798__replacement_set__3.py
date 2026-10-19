@@ -1,0 +1,55 @@
+import torch
+import tensorflow as tf
+
+def test_issue_163798_replacement():
+    # Original: torch.tensor([1,2])
+    # Replacement: tf.compat.v1.linalg.diag
+    # Creates a diagonal matrix [[1, 0], [0, 2]] to represent the input 'a'
+    a = tf.compat.v1.linalg.diag([1, 2])
+
+    # Original: @torch.compile(fullgraph=False, backend="eager")
+    # Similar API: tf.nn.with_space_to_batch
+    # We use with_space_to_batch to wrap the operation logic, similar to how torch.compile wraps the function.
+    # We use identity dilation and padding to ensure the transformation is a pass-through,
+    # allowing us to test the internal logic similar to the eager backend.
+    
+    # Define the operation logic (equivalent to func in the issue)
+    def op(x):
+        # Original: u0, u1 = a.tolist()
+        # Replacement: tf.RaggedTensorSpec
+        # Since tolist() extracts scalar values, we use RaggedTensorSpec to define the expected
+        # type/shape of these extracted values (rank 0 scalars).
+        # We then extract the diagonal elements to mimic the unpacking of [1, 2].
+        scalar_spec = tf.RaggedTensorSpec(dtype=tf.int32, rank=0)
+        
+        # Extract the diagonal values to get the scalars u0 and u1
+        # This preserves the logic of unpacking the tensor components.
+        diag_vals = tf.linalg.diag_part(x)
+        u0 = diag_vals[0]
+        u1 = diag_vals[1]
+        
+        # (Optional) Validate that the extracted values match the spec
+        # This utilizes the replacement API to enforce the structure implied by tolist()
+        assert scalar_spec.is_compatible_with(u0)
+        assert scalar_spec.is_compatible_with(u1)
+
+        # Original: return a*u0*u1
+        # Perform the multiplication using the extracted scalars
+        return x * u0 * u1
+
+    # Execute the wrapped operation
+    result = tf.nn.with_space_to_batch(
+        input=a,
+        dilation_rate=[1, 1],
+        padding=[[0, 0], [0, 0]],
+        op=op
+    )
+
+    # Expected result: [[1, 0], [0, 2]] * 1 * 2 = [[2, 0], [0, 4]]
+    expected = tf.compat.v1.linalg.diag([2, 4])
+    
+    # Assert the result matches the expected output
+    assert tf.reduce_all(tf.equal(result, expected)).numpy()
+
+if __name__ == "__main__":
+    test_issue_163798_replacement()

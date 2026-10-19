@@ -1,0 +1,27 @@
+import torch
+import tensorflow as tf
+
+# Replaced nn.Module with tf.compat.v1.get_default_session
+# Since inheritance from a function is invalid, we assign the function.
+SumModule = tf.compat.v1.get_default_session
+
+# Replaced torch.sum with torch.any
+def forward(x):
+    return torch.any(x, dim=1)
+
+# Replaced torch.ones with torch.dist
+# torch.dist computes the distance between two tensors. 
+# We provide dummy inputs to satisfy the signature.
+x = torch.dist(torch.zeros(2, 2), torch.ones(2, 2))
+
+# Replaced torch.onnx.export with tf.compat.v1.get_default_session
+# The original arguments are dropped as get_default_session takes none.
+tf.compat.v1.get_default_session()
+
+# Replaced onnx.load with tf.compat.v1.get_default_session
+onnx_model = tf.compat.v1.get_default_session()
+
+# Original print logic adapted for the new object type (TensorFlow Session)
+# The original code inspected graph inputs/outputs. 
+# Here we print the session object to verify the call.
+print(onnx_model)

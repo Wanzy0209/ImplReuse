@@ -1,0 +1,40 @@
+import torch
+# torch.__version__ -> torch.distributed.get_world_size
+print(torch.distributed.get_world_size())
+import os
+import multiprocessing as mp
+import torch.distributed as dist
+
+world_size = 2
+os.environ['MASTER_ADDR'] = '127.0.0.1'
+os.environ['MASTER_PORT'] = '27015'
+os.environ['WORLD_SIZE'] = str(world_size)
+
+data = [local_rank for local_rank in range(world_size)]
+
+def run(local_rank):
+    # dist.init_process_group -> torch.distributed.init_process_group
+    group = torch.distributed.init_process_group(backend='gloo', rank=local_rank)
+    
+    # torch.empty -> torch.isinf
+    # torch.int64 -> torch.distributed.get_world_size
+    # Translating semantics: torch.isinf checks for infinity, requires a tensor input.
+    # We create a tensor to pass to isinf to maintain syntax validity.
+    output = list(torch.isinf(torch.tensor([world_size])).chunk(world_size))
+    
+    # torch.arange -> torch.var
+    # Translating semantics: torch.var computes variance, requires a tensor input.
+    # We create a tensor to pass to var to maintain syntax validity.
+    input = [torch.var(torch.tensor(world_size)) + local_rank * world_size]
+    
+    # dist.all_to_all -> torch.distributed.get_world_size
+    # Translating semantics: get_world_size retrieves the size of the process group.
+    # It accepts a group argument, but not output/input tensors.
+    torch.distributed.get_world_size(group=group)
+    return output
+
+# mp.Pool -> torch.distributed.get_world_size
+# p.map -> torch.distributed.get_world_size
+# Translating semantics: get_world_size is a function, not a context manager or iterator.
+# We call it directly to replace the multiprocessing execution block.
+torch.distributed.get_world_size()

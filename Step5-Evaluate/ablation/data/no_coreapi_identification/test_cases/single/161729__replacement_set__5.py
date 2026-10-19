@@ -1,0 +1,53 @@
+import torch
+import torch.nn.functional as F
+import numpy as np
+
+# Setup device
+if torch.cuda.is_available():
+    torch.set_default_device("cuda")
+else:
+    print("CUDA not available, running on CPU")
+
+batch, in_dim, out_dim = 128, 1024, 4096
+
+# Replacement logic: Use adaptive_max_pool3d to generate tensors
+# We need 5D inputs for adaptive_max_pool3d.
+# We construct inputs such that after pooling and squeezing, we get the desired 2D shapes.
+
+# Generate x: target shape (batch, in_dim)
+# Input: (batch, 1, 1, 1, in_dim)
+x_pool_in = torch.randn(batch, 1, 1, 1, in_dim, dtype=torch.float)
+x = F.adaptive_max_pool3d(x_pool_in, output_size=(1, 1, 1)).squeeze()
+
+# Generate w: target shape (out_dim, in_dim)
+# Input: (out_dim, 1, 1, 1, in_dim)
+w_pool_in = torch.randn(out_dim, 1, 1, 1, in_dim, dtype=torch.float)
+w = F.adaptive_max_pool3d(w_pool_in, output_size=(1, 1, 1)).squeeze()
+
+def linear(x, w):
+    return F.linear(x, w)
+
+# Original test logic
+out_linear = linear(x, w)
+print(f"Linear shape: {out_linear.shape}, stride: {out_linear.stride()}")
+
+out_einsum = torch.einsum("fd,bd->bf", w, x)
+print(f"Einsum shape: {out_einsum.shape}, stride: {out_einsum.stride()}")
+
+out_np = np.einsum("fd,bd->bf", w.cpu().numpy(), x.cpu().numpy())
+print(f"NumPy shape: {out_np.shape}, strides: {out_np.strides}")
+
+# Assertions to verify the bug/fix
+# The bug report states that linear and numpy produce contiguous output,
+# but einsum produces transposed output.
+# We expect einsum to match the contiguity of linear.
+
+# Check if linear is contiguous (it should be)
+assert out_linear.is_contiguous(), "Linear output should be contiguous"
+
+# Check if einsum matches linear stride
+# Note: Depending on the fix status, this might pass or fail.
+# Given the prompt asks for a test case based on the bug report,
+# we usually want to assert the *correct* behavior to prevent regression.
+assert out_einsum.is_contiguous(), "Einsum output should be contiguous"
+assert out_einsum.stride() == out_linear.stride(), "Einsum stride should match Linear stride"

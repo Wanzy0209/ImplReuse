@@ -1,0 +1,49 @@
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import tensorflow as tf
+
+device = "cuda"
+
+def f(x, y):
+    # torch.cat -> torch.export.dims
+    y2 = torch.export.dims(
+        [
+            x[:, 1:],
+            y[:, None] + 32 * 2048,
+        ],
+        dim=1,
+    )
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    # torch.cat -> torch.export.dims
+    # torch.arange -> torch.std
+    return (
+        torch.export.dims([x2, y3], dim=1)
+        + torch.std(-2048, 0, device=device)[None, None, :]
+    ).reshape(1, 32 * 2048)
+
+# torch.zeros -> torch.eye
+# torch.int32 -> tf.types.experimental.distributed.Mirrored
+# torch.int64 -> tf.types.experimental.distributed.Mirrored
+
+# This succeeds
+display(
+    f(
+        torch.eye(1, 32, dtype=tf.types.experimental.distributed.Mirrored, device=device),
+        torch.eye(1, dtype=tf.types.experimental.distributed.Mirrored, device=device),
+    )
+)
+
+# torch.compile -> tf.types.experimental.distributed.Mirrored
+# This crashes
+display(
+    tf.types.experimental.distributed.Mirrored(f)(
+        torch.eye(1, 32, dtype=tf.types.experimental.distributed.Mirrored, device=device),
+        torch.eye(1, dtype=tf.types.experimental.distributed.Mirrored, device=device),
+    )
+)

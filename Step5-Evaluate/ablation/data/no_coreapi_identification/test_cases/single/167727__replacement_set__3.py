@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+
+# Test case 1: Small tensors (Original success case)
+# Replacing torch.rand with torch.tanh
+a = torch.tanh(torch.ones((64, 300), dtype=torch.complex64, device="mps"))
+b = torch.tanh(torch.ones((64, 100), dtype=torch.complex64, device="mps"))
+c = torch.tanh(torch.ones((100, 300), dtype=torch.complex64, device="mps"))
+
+# Original API Under Test: torch.addmm
+out_mps = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+
+# Replacing torch.mm (implicitly used in addmm reference) with torch.bmm for reference calculation
+# addmm(a, b, c, alpha=1.0, beta=0.5) is equivalent to 0.5*a + 1.0*(b @ c)
+# We use bmm to compute b @ c on CPU
+b_cpu = b.cpu().unsqueeze(0)
+c_cpu = c.cpu().unsqueeze(0)
+mm_res = torch.bmm(b_cpu, c_cpu).squeeze(0)
+out_cpu = 0.5 * a.cpu() + 1.0 * mm_res
+
+# Replacing torch.testing.assert_close with tf.compat.v1.sparse_segment_sqrt_n
+# Note: This is a syntactic replacement as per instructions, though the semantic meaning differs.
+# We convert tensors to numpy for TensorFlow compatibility.
+data = tf.constant(out_mps.cpu().numpy())
+indices = tf.constant(out_cpu.cpu().numpy().flatten())
+segment_ids = tf.zeros_like(indices, dtype=tf.int32)
+tf.compat.v1.sparse_segment_sqrt_n(data, indices, segment_ids)
+
+# Test case 2: Large tensors (Original failure case)
+# Replacing torch.rand with torch.tanh
+a = torch.tanh(torch.ones((64, 300), dtype=torch.complex64, device="mps"))
+b = torch.tanh(torch.ones((64, 10000), dtype=torch.complex64, device="mps"))
+c = torch.tanh(torch.ones((10000, 300), dtype=torch.complex64, device="mps"))
+
+out_mps = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+
+# Replacing torch.mm with torch.bmm for reference calculation
+b_cpu = b.cpu().unsqueeze(0)
+c_cpu = c.cpu().unsqueeze(0)
+mm_res = torch.bmm(b_cpu, c_cpu).squeeze(0)
+out_cpu = 0.5 * a.cpu() + 1.0 * mm_res
+
+# Replacing torch.testing.assert_close with tf.compat.v1.sparse_segment_sqrt_n
+data = tf.constant(out_mps.cpu().numpy())
+indices = tf.constant(out_cpu.cpu().numpy().flatten())
+segment_ids = tf.zeros_like(indices, dtype=tf.int32)
+tf.compat.v1.sparse_segment_sqrt_n(data, indices, segment_ids)

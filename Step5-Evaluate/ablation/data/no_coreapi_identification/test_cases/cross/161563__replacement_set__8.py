@@ -1,0 +1,54 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_issue_161563_replacement():
+    """
+    Test case generated based on Issue ID: 161563.
+    Replaces specific PyTorch APIs with tf.compat.v1.nn.depthwise_conv2d_native
+    while preserving the original logic structure.
+    """
+
+    # Setup dummy inputs to simulate the "pretrained" model loading context
+    # Replacing AutoTokenizer.from_pretrained("google/gemma-3-270m-it")
+    # We interpret the loading process as a convolution operation on initial data.
+    input_data = np.random.rand(1, 28, 28, 3).astype(np.float32)
+    filter_data = np.random.rand(3, 3, 3, 2).astype(np.float32)
+
+    # Replacement: AutoTokenizer.from_pretrained -> tf.compat.v1.nn.depthwise_conv2d_native
+    tokenizer = tf.compat.v1.nn.depthwise_conv2d_native(
+        input=input_data,
+        filter=filter_data,
+        strides=[1, 1, 1, 1],
+        padding='SAME'
+    )
+
+    # Setup model and inputs
+    # AutoModelForCausalLM is not in the replacement list, but we need a 'model' object
+    # to pass to the next step. We simulate the model weights.
+    # Note: The input channels for the model filter must match the output channels of the tokenizer op.
+    # Tokenizer output channels = 3 * 2 = 6.
+    model = np.random.rand(3, 3, 6, 1).astype(np.float32)
+
+    # Original: inputs = tokenizer.apply_chat_template(...)
+    # We use the output of the previous op as input.
+    inputs = tokenizer
+
+    # Replacement: torch.export.export -> tf.compat.v1.nn.depthwise_conv2d_native
+    # Original: ep = torch.export.export(model, example_inputs)
+    # We map 'model' to 'filter' and 'example_inputs' to 'input' for the convolution.
+    ep = tf.compat.v1.nn.depthwise_conv2d_native(
+        input=inputs,
+        filter=model,
+        strides=[1, 1, 1, 1],
+        padding='VALID'
+    )
+
+    # Assertions to verify the test runs and produces expected shapes
+    assert ep is not None
+    # Input shape: (1, 28, 28, 6). Filter: (3, 3, 6, 1). Strides: 1. Padding: VALID.
+    # Output shape: (1, 26, 26, 6)
+    assert ep.shape == (1, 26, 26, 6)
+
+if __name__ == "__main__":
+    test_issue_161563_replacement()

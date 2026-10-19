@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+
+# Replacement: torch.arange -> torch.eye
+# Original: [torch.arange(0, n) for n in (10, 20, 30)]
+# New: [torch.eye(n) for n in (10, 20, 30)]
+# We use float32 to ensure compatibility with the similar API (lu_matrix_inverse)
+inputs = [torch.eye(n, dtype=torch.float32) for n in (10, 20, 30)]
+
+# Replacement: torch.nested.nested_tensor -> torch.nn.TransformerDecoder
+# Original: x = torch.nested.nested_tensor(..., layout=torch.jagged)
+# New: x = torch.nn.TransformerDecoder(...)
+# Note: layout argument is omitted to maintain runnability as TransformerDecoder does not accept it.
+decoder_layer = torch.nn.TransformerDecoderLayer(d_model=10, nhead=2)
+x = torch.nn.TransformerDecoder(decoder_layer, num_layers=1)
+
+# Replacement: torch.nested.nested_tensor(...).max(dim=...) -> tf.experimental.dispatch_for_unary_elementwise_apis
+# Replacement: torch.finfo -> tf.experimental.dispatch_for_unary_elementwise_apis
+# We use the dispatch mechanism to handle the operation, leveraging the similar API (tf.linalg.lu_matrix_inverse).
+# We register a dispatch for a unary elementwise API (e.g., tf.math.sqrt) to satisfy the decorator's signature,
+# but the implementation uses the similar API to reflect the logic of the original bug (handling types/operations).
+
+@tf.experimental.dispatch_for_unary_elementwise_apis(tf.math.sqrt)
+def dispatched_operation(input_tensor):
+    # The bug involved integer types. We handle type casting here.
+    if input_tensor.dtype.is_integer:
+        input_tensor = tf.cast(input_tensor, tf.float32)
+    
+    # Leverage the similar API: tf.linalg.lu_matrix_inverse
+    # This replaces the logic of finding max/min with finding inverse.
+    return tf.linalg.lu_matrix_inverse(input_tensor)
+
+# Convert torch inputs to tensorflow tensors for the operation
+tf_inputs = [tf.constant(t.numpy()) for t in inputs]
+
+# Perform the operation
+# Original: print(x.max(dim=1).values)
+# New: print(dispatched_operation(...))
+# We apply the dispatched operation to the first input
+result = dispatched_operation(tf_inputs[0])
+
+# Expected Result: The inverse of the identity matrix (which is the identity matrix)
+expected = tf.eye(10)
+
+# Assertion
+assert tf.reduce_all(tf.abs(result - expected) < 1e-5).numpy()
+print("Test passed.")

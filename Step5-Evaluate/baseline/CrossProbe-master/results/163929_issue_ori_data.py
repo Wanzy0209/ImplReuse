@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 def foo(x):
@@ -27,4 +26,3 @@ out2 = cf(x2)
 
 # Conversion: torch.testing.assert_close checks if two tensors are close
 tf.debugging.assert_near(out1, out2)
-```

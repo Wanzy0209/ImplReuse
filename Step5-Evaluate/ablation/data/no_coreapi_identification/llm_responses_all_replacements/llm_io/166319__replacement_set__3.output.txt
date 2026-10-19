@@ -1,0 +1,92 @@
+```python
+import torch
+import tensorflow as tf
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+# Replacement: torch.manual_seed -> tf.compat.v1.assign_sub
+# We create a dummy variable to perform the operation
+seed_var = tf.Variable(1215252001, dtype=tf.int32)
+tf.compat.v1.assign_sub(seed_var, 0)
+
+def fuzzed_program(arg_0, arg_1, arg_2, sentinel):
+    var_node_4 = arg_0 # size=(9, 1, 15, 4), stride=(60, 60, 0, 1), dtype=int32, device=cuda
+    
+    # Replacement: torch.squeeze -> torch.index_select
+    # Original: squeeze(var_node_4) removes dim 1 (size 1).
+    # Replacement: index_select on dim 1 with index 0 keeps the dimension but selects the slice.
+    # To match shape (9, 15, 4), we select index 0 from dim 1.
+    var_node_3 = torch.index_select(var_node_4, 1, torch.tensor([0], device=var_node_4.device))
+    
+    # Replacement: torch.chunk -> torch.narrow
+    # Original: chunk(var_node_3, 4, dim=2)[0]. var_node_3 size dim 2 is 4. Chunk size 1.
+    # Replacement: narrow(var_node_3, 2, 0, 1).
+    var_node_2 = torch.narrow(var_node_3, 2, 0, 1)
+    
+    # Replacement: torch.squeeze -> torch.index_select
+    # Original: squeeze(var_node_2) removes dim 2 (size 1).
+    # Replacement: index_select on dim 2 with index 0.
+    var_node_1 = torch.index_select(var_node_2, 2, torch.tensor([0], device=var_node_2.device))
+    
+    var_node_7 = arg_1 # size=(15, 15), dtype=float32, device=cuda (Modified for cholesky_inverse)
+    var_node_8 = arg_2 # size=(18, 15), dtype=int64, device=cuda
+    
+    _input_size_var_node_6 = var_node_7.size(0)
+    
+    # Replacement: torch.randint -> torch.fmin
+    # Original: randint(0, _input_size_var_node_6, (18, 15))
+    # Replacement: fmin of two tensors to generate a tensor of shape (18, 15).
+    # We use zeros and a tensor filled with the size to mimic the range, though fmin is element-wise min.
+    _index_var_node_6 = torch.fmin(
+        torch.zeros(18, 15, device=var_node_7.device),
+        torch.full((18, 15), _input_size_var_node_6, device=var_node_7.device)
+    )
+    
+    # Replacement: torch.gather -> torch.cholesky_inverse
+    # Original: gather(var_node_7, 0, _index_var_node_6)
+    # Replacement: cholesky_inverse(var_node_7). Requires square matrix.
+    var_node_6 = torch.cholesky_inverse(var_node_7)
+    
+    # Replacement: torch.chunk -> torch.narrow
+    # Original: chunk(var_node_6, 2, dim=0)[0]. var_node_6 is (15, 15). Chunk size 7 or 8.
+    # We want to match the original output size of (9, 15) if possible, or just split.
+    # Original var_node_6 was (18, 15), chunk 2 -> (9, 15).
+    # Here var_node_6 is (15, 15). We narrow to 9 to match the downstream shape requirement of var_node_1 (9, 15).
+    var_node_5 = torch.narrow(var_node_6, 0, 0, 9)
+    
+    # Replacement: torch.mul -> torch.add
+    var_node_0 = torch.add(var_node_1, var_node_5)
+    
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Replacement: torch.tensor -> tf.compat.v1.linalg.diag
+# Create TF tensor, then convert to PT for compatibility in the function
+sentinel_tf = tf.compat.v1.linalg.diag([1.0])
+sentinel = torch.from_numpy(sentinel_tf.numpy()).to(torch.float32).requires_grad_(True)
+
+# Replacement: torch.as_strided -> torch.empty_strided
+# arg_0: (9, 1, 15, 4), int32
+arg_0 = torch.empty_strided((9, 1, 15, 4), (60, 60, 0, 1), dtype=torch.int32, device='cuda')
+
+# arg_1: (15, 15), float (required for cholesky_inverse)
+# Original was (20, 15). Changed to square for cholesky_inverse.
+# We initialize it to be positive definite to avoid runtime errors in cholesky_inverse.
+arg_1 = torch.empty_strided((15, 15), (15, 1), dtype=torch.float32, device='cuda')
+arg_1.copy_(torch.eye(15, device='cuda')) # Make it invertible
+
+# arg_2: (18, 15), int64
+arg_2 = torch.empty_strided((18, 15), (15, 1), dtype=torch.int64, device='cuda')
+
+args = (arg_0, arg_1, arg_2) + (sentinel,)
+
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+```

@@ -1,0 +1,89 @@
+import torch
+import torch.distributed
+import torch.profiler
+import torch.nn.functional as F
+from torch.nn import RNN
+
+# Replacements applied:
+# functools.partial -> torch.profiler.itt.range_pop
+# torch.compile -> torch.distributed.broadcast_object_list
+# torch.matmul -> torch.nn.RNNBase (using RNN as concrete implementation)
+# torch.randn -> torch.nn.functional.cosine_embedding_loss
+# torch.sigmoid -> torch.nn.functional.sigmoid
+# torch.utils.checkpoint -> torch.profiler.itt.range_pop
+
+# Mocking classes/functions from torch.utils.checkpoint since the module usage is replaced
+class CheckpointPolicy:
+    MUST_SAVE = 1
+
+def create_selective_checkpoint_contexts(policy):
+    # Dummy implementation to maintain structure
+    return lambda: None
+
+class CustomPolicy:
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, ctx, out, func, *args, **kwargs):
+        return CheckpointPolicy.MUST_SAVE
+
+def f(x, y):
+    # torch.matmul -> torch.nn.RNNBase
+    # torch.sigmoid -> torch.nn.functional.sigmoid
+    
+    # RNNBase is abstract, so we use RNN (subclass) for the replacement logic
+    # x, y are (4, 4). RNN expects (N, L, H_in) or (L, N, H_in).
+    # We adapt the inputs to fit the RNN API to keep the test runnable.
+    x_rnn = x.unsqueeze(1) # (4, 1, 4)
+    h0 = y.unsqueeze(0)    # (1, 4, 4)
+    
+    rnn = RNN(input_size=4, hidden_size=4, batch_first=True)
+    out, hn = rnn(x_rnn, h0)
+    
+    # Remove sequence dimension to match original shape logic
+    out = out.squeeze(1)
+    
+    # torch.sigmoid -> torch.nn.functional.sigmoid
+    return F.sigmoid(out) * y
+
+# functools.partial -> torch.profiler.itt.range_pop
+context_fn1 = torch.profiler.itt.range_pop
+
+def context_fn2():
+    return create_selective_checkpoint_contexts(CustomPolicy())
+
+# torch.compile -> torch.distributed.broadcast_object_list
+# Replaced decorator with a function call inside the body
+def g(x, y):
+    # torch.distributed.broadcast_object_list replacement
+    # We check for initialization to allow running in a non-distributed environment
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.broadcast_object_list([x, y], src=0)
+    
+    # torch.utils.checkpoint -> torch.profiler.itt.range_pop
+    # Replaced the checkpoint call with range_pop
+    torch.profiler.itt.range_pop()
+    
+    # Explicitly call f to preserve the original logic of running the function
+    return f(x, y)
+
+# torch.randn -> torch.nn.functional.cosine_embedding_loss
+# We generate the inputs a and b using the cosine_embedding_loss function
+# and reshape them to 4x4 to be compatible with the rest of the test logic.
+dummy_input1 = torch.randn(4, 4, requires_grad=True)
+dummy_input2 = torch.randn(4, 4, requires_grad=True)
+dummy_target = torch.ones(4)
+
+loss_a = F.cosine_embedding_loss(dummy_input1, dummy_input2, dummy_target)
+a = loss_a.unsqueeze(0).expand(4, 4).detach().requires_grad_(True)
+
+loss_b = F.cosine_embedding_loss(dummy_input2, dummy_input1, dummy_target)
+b = loss_b.unsqueeze(0).expand(4, 4).detach().requires_grad_(True)
+
+# Run the test
+try:
+    result = g(a, b)
+    result.sum().backward()
+    print("Test case executed successfully with API replacements.")
+except Exception as e:
+    print(f"Test case execution failed: {e}")

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import time
 
@@ -28,4 +27,3 @@ for _ in range(iters):
 _ = c.numpy()
 t1 = time.perf_counter()
 print(f"{1e6 * (t1 - t0)/iters}")
-```

@@ -1,0 +1,42 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+
+def func_nojit(x):
+    # Replacing torch.float64 with torch.nn.functional.adaptive_avg_pool1d
+    # Note: torch.full expects a dtype, but we are passing a function object here.
+    return torch.full((2, ), x, dtype=F.adaptive_avg_pool1d)
+
+# Replacing torch.compile with torch.distributed.send_object_list
+# Note: send_object_list sends a list of objects to a destination and returns None.
+# We wrap this in a try-except block in case the distributed environment is not initialized.
+try:
+    func_jit = dist.send_object_list([func_nojit], 0)
+except Exception:
+    # Fallback to None if distributed is not set up, to allow the script to continue
+    func_jit = None
+
+for func in [func_nojit, func_jit]:
+    # Replacing torch.tensor with torch.cummin
+    # Note: torch.cummin expects a tensor input. Passing a list [5.0] might work in some versions 
+    # or raise an error. We use it here to satisfy the replacement requirement.
+    x1 = torch.cummin([5.0], 0)
+    x2 = torch.cummin([10.0], 0)
+
+    # Replacing x.item (usage of x) with torch.nn.functional.adaptive_avg_pool1d
+    # We apply the pooling function to the input before passing it to func.
+    # Note: x1 is a tuple (values, indices) from cummin, so we pass x1[0] (values) to the pooling function.
+    # This is an attempt to translate semantics appropriately to keep the code runnable.
+    val1 = F.adaptive_avg_pool1d(x1[0].unsqueeze(0), 1) if isinstance(x1, tuple) else F.adaptive_avg_pool1d(x1, 1)
+    val2 = F.adaptive_avg_pool1d(x2[0].unsqueeze(0), 1) if isinstance(x2, tuple) else F.adaptive_avg_pool1d(x2, 1)
+
+    if callable(func):
+        try:
+            print(func(val1))
+            print(func(val2))
+        except Exception as e:
+            print(f"Error executing function: {e}")
+    else:
+        print("func_jit is not callable (returned None from send_object_list)")
+```

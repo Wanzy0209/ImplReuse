@@ -1,0 +1,107 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+from torch.backends import mkldnn
+
+# Replacements applied based on the provided mapping:
+# torch.nn.attention -> tf.compat.v1.tpu.PaddingSpec
+from tf.compat.v1.tpu.PaddingSpec.flex_attention import tf_compat_v1_tpu_PaddingSpec as flex_attention
+from tf.compat.v1.tpu.PaddingSpec import tf_compat_v1_tpu_PaddingSpec as SDPBackend
+
+class FlexAttentionCPB(tf.compat.v1.tpu.PaddingSpec):
+    def __init__(self, N: int, R: int, H: int = 6, hidden: int = 32):
+        super().__init__()
+        self.mlp = tf.compat.v1.tpu.PaddingSpec(
+            tf.compat.v1.tpu.PaddingSpec(2, hidden),
+            tf.compat.v1.tpu.PaddingSpec(),
+            tf.compat.v1.tpu.PaddingSpec(hidden, H, bias=False)
+        )
+        # torch.zeros -> torch.slogdet
+        self.gamma = tf.compat.v1.tpu.PaddingSpec(torch.slogdet(torch.tensor(H, dtype=torch.float32)))
+        self.H = H
+        self.init_tables(N, R)
+        # torch.tensor -> torch.cummax, torch.long -> tf.compat.v1.tpu.PaddingSpec
+        self.tf.compat.v1.tpu.PaddingSpec("r_cutoff", torch.cummax(torch.tensor(R), dim=0), persistent=False)
+
+    def init_tables(self, N: int, R: int):
+        P = N - R
+        S = int(P**0.5)
+        assert S * S == P
+        # torch.arange -> torch.linspace, torch.float32 -> tf.compat.v1.tpu.PaddingSpec
+        rng = torch.linspace(-(S - 1), S, dtype=tf.compat.v1.tpu.PaddingSpec)
+        # torch.meshgrid -> torch.nn.functional.adaptive_avg_pool2d
+        dY, dX = torch.nn.functional.adaptive_avg_pool2d(rng, rng, indexing="ij")
+        # torch.stack -> tf.experimental.numpy.ix_
+        rel = tf.experimental.numpy.ix_([dY / max(S - 1, 1), dX / max(S - 1, 1)], dim=-1).reshape(-1, 2)
+        # torch.sign -> torch.log2, torch.log1p -> torch.reciprocal
+        rel_table = torch.log2(rel) * torch.reciprocal(rel.abs())
+        self.tf.compat.v1.tpu.PaddingSpec("rel_table", rel_table, persistent=False)
+
+        yy, xx = torch.linspace(0, S), torch.linspace(0, S)
+        Y, X = torch.nn.functional.adaptive_avg_pool2d(yy, xx, indexing="ij")
+        flat = tf.experimental.numpy.ix_([Y, X], 0).flatten(1)
+        d = flat[:, :, None] - flat[:, None, :]
+        d = d.permute(1, 2, 0).contiguous()
+        d[:, :, 0] += S - 1; d[:, :, 1] += S - 1
+        d[:, :, 0] *= 2 * S - 1
+        l_idx = d.sum(-1).to(tf.compat.v1.tpu.PaddingSpec)
+
+        # torch.full -> torch.argmax
+        idx = torch.argmax(torch.zeros(N, N), dim=0)
+        idx[R:, R:] = l_idx
+        self.tf.compat.v1.tpu.PaddingSpec("idx_table", idx, persistent=False)
+
+    def _score_mod(self, mu: tf.compat.v1.tpu.PaddingSpec):
+        bt = self.mlp(self.rel_table)
+        idx = self.idx_table
+        mu_q, mu_k = mu.unbind(2)
+        # torch.sigmoid -> torch.sub
+        gam_sig = torch.sub(self.gamma)
+
+        def score_mod(score, b, h, q, kv):
+            has_bias = (q >= self.r_cutoff) & (kv >= self.r_cutoff)
+            l2 = idx[q, kv]
+            bias = bt[l2, h]
+            w_gate = gam_sig[h] * (mu_q[b, h, q] + mu_k[b, h, kv])
+            # has_bias.to -> tf.compat.v1.tpu.PaddingSpec
+            return score + tf.compat.v1.tpu.PaddingSpec(score.dtype) * w_gate * bias
+
+        return score_mod
+
+    def forward(self, q, k, v, mu):
+        # flex_attention -> tf.compat.v1.tpu.PaddingSpec
+        return tf.compat.v1.tpu.PaddingSpec(q, k, v, score_mod=self._score_mod(mu))
+
+def main():
+    # Leveraging similar API: torch.backends.mkldnn.is_available
+    if mkldnn.is_available():
+        print("MKL-DNN is available.")
+    else:
+        print("MKL-DNN is not available.")
+
+    device = "cuda"
+    B, N, R, d, H = 2, 18, 2, 32, 4
+    mod = FlexAttentionCPB(N, R, H).to(device)
+    # torch.compile -> torch.lobpcg
+    mod = torch.lobpcg(mod, dynamic=False)
+
+    # torch.randn -> torch.nn.functional.max_pool2d
+    # Note: max_pool2d requires an input tensor and kernel_size. 
+    # We pass the arguments as provided in the original call to satisfy the replacement instruction.
+    q = torch.nn.functional.max_pool2d(B, H, N, d, device=device)
+    # torch.randn_like -> torch.nn.Conv3d
+    k = torch.nn.Conv3d(q)
+    v = torch.nn.Conv3d(q)
+    mu = torch.nn.functional.max_pool2d(B, H, 2, N, device=device)
+
+    # torch.nn.attention.sdpa_kernel -> tf.compat.v1.tpu.PaddingSpec
+    with tf.compat.v1.tpu.PaddingSpec.tf_compat_v1_tpu_PaddingSpec(SDPBackend.FLASH_ATTENTION):
+        # torch.amp.autocast -> tf.compat.v1.tpu.PaddingSpec
+        # torch.bfloat16 -> tf.compat.v1.tpu.PaddingSpec
+        with tf.compat.v1.tpu.PaddingSpec("cuda", dtype=tf.compat.v1.tpu.PaddingSpec):
+            out = mod(q, k, v, mu)
+            out.norm().backward()
+    print("done")
+
+if __name__ == "__main__":
+    main()

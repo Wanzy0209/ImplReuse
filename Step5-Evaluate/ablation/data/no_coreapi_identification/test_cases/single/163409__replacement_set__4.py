@@ -1,0 +1,34 @@
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+
+# Replacement: torch.__version__ -> torch.distributed.is_torchelastic_launched
+print(torch.distributed.is_torchelastic_launched())
+
+# Replacement: torch.empty -> torch.nn.LazyLinear
+# Original: torch.empty((9, 6, 3, 6, 9), dtype=torch.complex128, device='cuda')
+# Adapted: torch.nn.LazyLinear(9, device='cuda') (Using first dim of shape as out_features)
+# Original: torch.empty((5, 7, 9, 8, 5), dtype=torch.uint32, device='cuda')
+# Adapted: torch.nn.LazyLinear(5, device='cuda')
+
+input = [
+    [()],
+    {},
+    [
+        torch.nn.LazyLinear(9, device='cuda'),
+        torch.nn.LazyLinear(5, device='cuda')
+    ],
+    {}
+]
+
+# Replacement: nn.MaxUnpool3d -> torch.distributed.is_torchelastic_launched
+r1 = torch.distributed.is_torchelastic_launched(*input[0], **input[1])
+
+# Original logic: r2 = r1(*input[2], **input[3])
+# r1 is a boolean. input[2] contains two modules.
+# This will raise TypeError.
+try:
+    r2 = r1(*input[2], **input[3])
+except TypeError as e:
+    # Expected behavior given the API mismatch
+    pass

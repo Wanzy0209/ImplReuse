@@ -1,0 +1,51 @@
+import torch
+import tensorflow as tf
+import time
+
+def worker(rank, world_size):
+    # torch.cuda.set_device(rank) -> tf.raw_ops.MatchingFilesDataset
+    # Replacing device setting with a dataset operation that takes the rank as a pattern
+    tf.raw_ops.MatchingFilesDataset(patterns=[f"cuda:{rank}"])
+
+    # dist.init_process_group -> torch.distributed.scatter_object_list
+    # Replacing process group initialization with a scatter operation.
+    # Note: This requires a process group to exist, which might not be the case 
+    # after replacing init_process_group. We wrap it to ensure the test remains runnable.
+    try:
+        # scatter_object_list(scatter_list, src=0)
+        # We pass empty lists to satisfy the signature without side effects
+        torch.distributed.scatter_object_list([], [], src=0)
+    except RuntimeError as e:
+        # Expected if no process group is initialized, as we replaced the init call
+        print(f"Expected error (no process group): {e}")
+
+    # dist.barrier -> tf.raw_ops.MatchingFilesDataset
+    # Replacing the barrier with a dataset operation
+    tf.raw_ops.MatchingFilesDataset(patterns=["barrier"])
+
+    # do something
+    print("to sleep")
+    time.sleep(5)
+    
+    # dist.destroy_process_group -> tf.raw_ops.MatchingFilesDataset
+    # Replacing process group destruction with a dataset operation
+    tf.raw_ops.MatchingFilesDataset(patterns=["destroy"])
+
+    # sleep for observing nvidia-smi
+    time.sleep(1)
+
+def test_nccl():
+    # torch.cuda.device_count -> tf.raw_ops.MatchingFilesDataset
+    # Replacing device count query with a dataset operation
+    tf.raw_ops.MatchingFilesDataset(patterns=["device_count"])
+
+    # mp.spawn -> tf.raw_ops.MatchingFilesDataset
+    # Replacing process spawning with a dataset operation
+    tf.raw_ops.MatchingFilesDataset(patterns=["spawn"])
+
+    # Since mp.spawn is replaced, we manually invoke the worker logic 
+    # to preserve the original test case flow
+    worker(0, 1)
+
+if __name__ == '__main__':
+    test_nccl()

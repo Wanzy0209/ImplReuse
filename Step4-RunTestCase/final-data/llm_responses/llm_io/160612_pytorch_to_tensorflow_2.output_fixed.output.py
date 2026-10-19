@@ -1,0 +1,26 @@
+import tensorflow as tf
+import tensorflow.data as tf_data
+
+# Create a dataset
+# Analogous to creating the Linear layer in the PyTorch example
+dataset = tf_data.Dataset.from_tensor_slices([1, 2, 3, 4, 5])
+
+# Define the scan function
+# This function updates the state and produces an output for each element
+def scan_func(state, element):
+    new_state = state + element
+    return new_state, new_state
+
+# Define initial state
+initial_state = 0
+
+# Apply the scan transformation
+# The dataset.scan() method was introduced in TensorFlow 2.4.
+# For older versions (indicated by the DatasetV1Adapter error), we use tf.data.experimental.scan.
+scanned_dataset = dataset.apply(tf.data.experimental.scan(initial_state, scan_func))
+
+# Verify the result
+# Analogous to inspecting the model 'm' in the original test case
+result = list(scanned_dataset.as_numpy_iterator())
+assert result == [1, 3, 6, 10, 15], f"Expected [1, 3, 6, 10, 15], got {result}"
+print(result)

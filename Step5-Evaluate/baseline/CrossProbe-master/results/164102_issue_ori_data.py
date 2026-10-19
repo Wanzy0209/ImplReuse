@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import sys
 
@@ -80,4 +79,3 @@ if __name__ == '__main__':
         
     grads = tape.gradient(loss, inputs)
     print('Compile Success! ✅')
-```

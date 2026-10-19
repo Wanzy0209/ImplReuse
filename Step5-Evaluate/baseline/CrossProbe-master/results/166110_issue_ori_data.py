@@ -1,4 +1,3 @@
-```python
 import sys
 sys.path.append('third_party/Matcha-TTS')
 import argparse
@@ -161,4 +160,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```

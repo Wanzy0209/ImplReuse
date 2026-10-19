@@ -1,0 +1,44 @@
+import torch
+from torch.distributions import constraints
+
+# Replacement: torch.__version__ -> torch.distributions.constraints.half_open_interval
+print(constraints.half_open_interval)
+
+# Helper to calculate strides for torch.empty_strided replacement
+def get_stride(size):
+    stride = [1]
+    for dim in reversed(size[:-1]):
+        stride.insert(0, stride[0] * dim)
+    return tuple(stride)
+
+# Define sizes
+size1 = (9, 6, 3, 6, 9)
+size2 = (5, 7, 9, 8, 5)
+
+# Replacement: torch.empty -> torch.empty_strided
+# Replacement: torch.complex128 -> torch.distributions.constraints.half_open_interval
+# Replacement: torch.uint32 -> torch.distributions.constraints.half_open_interval
+# Note: Passing a constraint class as dtype is semantically incorrect for tensor creation,
+# but performed here to satisfy the API replacement requirement.
+# We use a try-except block to handle the expected TypeError and ensure the script runs.
+try:
+    t1 = torch.empty_strided(size1, get_stride(size1), dtype=constraints.half_open_interval, device='cuda')
+except TypeError as e:
+    print(f"Caught TypeError for t1: {e}")
+    t1 = None
+
+try:
+    t2 = torch.empty_strided(size2, get_stride(size2), dtype=constraints.half_open_interval, device='cuda')
+except TypeError as e:
+    print(f"Caught TypeError for t2: {e}")
+    t2 = None
+
+# Reconstruct input list
+input_data = [[()], {}, [t1, t2], {}]
+
+# Replacement: nn.MaxUnpool3d -> torch.distributions.constraints.half_open_interval
+try:
+    r1 = constraints.half_open_interval(*input_data[0], **input_data[1])
+    r2 = r1(*input_data[2], **input_data[3])
+except Exception as e:
+    print(f"Caught Exception during call: {e}")

@@ -1,0 +1,154 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Replacing os.environ["CUDA_VISIBLE_DEVICES"] = ""
+# TensorFlow handles device placement, but we ensure CPU usage if needed by not setting GPU growth
+# or relying on system defaults. We proceed with the logic flow.
+
+print("Device: CPU/CUDA")
+
+# Replacing datasets.MNIST with tf.raw_ops.ExtractImagePatches
+# We simulate the dataset by generating random image-like data and processing it with the op.
+# This replaces the data loading mechanism with the specified API.
+raw_images = tf.random.uniform((6000, 28, 28, 1), minval=0, maxval=1)
+train_data = tf.raw_ops.ExtractImagePatches(
+    images=raw_images, 
+    sizes=[1, 28, 28, 1], 
+    strides=[1, 28, 28, 1], 
+    rates=[1, 1, 1, 1], 
+    padding='VALID'
+)
+
+test_images = tf.random.uniform((1000, 28, 28, 1), minval=0, maxval=1)
+test_data = tf.raw_ops.ExtractImagePatches(
+    images=test_images, 
+    sizes=[1, 28, 28, 1], 
+    strides=[1, 28, 28, 1], 
+    rates=[1, 1, 1, 1], 
+    padding='VALID'
+)
+
+# Replacing nn.Sequential, nn.Flatten, nn.Linear, nn.ReLU with tf.raw_ops.ExtractImagePatches
+# We define a model function that chains the specified operation to mimic the layer structure.
+def model(x):
+    # nn.Flatten replacement: Extract the whole image as a patch
+    x = tf.raw_ops.ExtractImagePatches(
+        images=x, 
+        sizes=[1, 28, 28, 1], 
+        strides=[1, 28, 28, 1], 
+        rates=[1, 1, 1, 1], 
+        padding='VALID'
+    )
+    # nn.Linear replacement: Extract 3x3 patches to simulate feature extraction
+    x = tf.raw_ops.ExtractImagePatches(
+        images=x, 
+        sizes=[1, 3, 3, 1], 
+        strides=[1, 1, 1, 1], 
+        rates=[1, 1, 1, 1], 
+        padding='SAME'
+    )
+    # nn.ReLU replacement: Identity pass-through via the op (semantically closest possible replacement)
+    x = tf.raw_ops.ExtractImagePatches(
+        images=x, 
+        sizes=[1, 1, 1, 1], 
+        strides=[1, 1, 1, 1], 
+        rates=[1, 1, 1, 1], 
+        padding='SAME'
+    )
+    return x
+
+# Replacing nn.CrossEntropyLoss with tf.raw_ops.ExtractImagePatches
+def loss_fn(pred, target):
+    # Calculate a dummy loss value
+    loss_val = tf.reduce_mean(pred)
+    # Wrap the loss calculation in the specified op
+    return tf.raw_ops.ExtractImagePatches(
+        images=tf.expand_dims(tf.expand_dims(loss_val, 0), 0), 
+        sizes=[1, 1, 1, 1], 
+        strides=[1, 1, 1, 1], 
+        rates=[1, 1, 1, 1], 
+        padding='SAME'
+    )
+
+# Replacing torch.optim.SGD with tf.raw_ops.ExtractImagePatches
+# We define a step function that performs the "optimization" via the op.
+def opt_step(loss):
+    return tf.raw_ops.ExtractImagePatches(
+        images=loss, 
+        sizes=[1, 1, 1, 1], 
+        strides=[1, 1, 1, 1], 
+        rates=[1, 1, 1, 1], 
+        padding='SAME'
+    )
+
+print("=== TRAIN ===")
+# Replacing torch.utils.data.DataLoader loop
+# We iterate over the tensor data directly
+for i in range(1): # Single epoch
+    # Get a batch
+    X = train_data[:64]
+    y = tf.zeros((64, 1)) # Dummy labels
+
+    # Replacing X.to(device)
+    X = tf.raw_ops.ExtractImagePatches(
+        images=X, 
+        sizes=[1, 1, 1, 1], 
+        strides=[1, 1, 1, 1], 
+        rates=[1, 1, 1, 1], 
+        padding='SAME'
+    )
+
+    pred = model(X)
+    loss = loss_fn(pred, y)
+
+    # Replacing loss.backward()
+    _ = tf.raw_ops.ExtractImagePatches(
+        images=loss, 
+        sizes=[1, 1, 1, 1], 
+        strides=[1, 1, 1, 1], 
+        rates=[1, 1, 1, 1], 
+        padding='SAME'
+    )
+
+    # Replacing opt.step()
+    _ = opt_step(loss)
+    
+    # Replacing opt.zero_grad() (implied in loop logic, but not in replacement list, so skipped)
+
+print("=== EVAL (CRASH HERE) ===")
+
+# Replacing torch.no_grad()
+# We call the op to signify entering the no_grad context
+_ = tf.raw_ops.ExtractImagePatches(
+    images=tf.constant([[[[1.0]]]]), 
+    sizes=[1, 1, 1, 1], 
+    strides=[1, 1, 1, 1], 
+    rates=[1, 1, 1, 1], 
+    padding='SAME'
+)
+
+for batch in range(1):
+    print("batch", batch)
+    X = test_data[:64]
+    y = tf.zeros((64, 1))
+
+    # Replacing X.to(device)
+    X = tf.raw_ops.ExtractImagePatches(
+        images=X, 
+        sizes=[1, 1, 1, 1], 
+        strides=[1, 1, 1, 1], 
+        rates=[1, 1, 1, 1], 
+        padding='SAME'
+    )
+
+    # Replacing model(X) in evaluation loop with torch.no_grad
+    # This is the critical section where the original bug occurred.
+    pred = tf.raw_ops.ExtractImagePatches(
+        images=X, 
+        sizes=[1, 1, 1, 1], 
+        strides=[1, 1, 1, 1], 
+        rates=[1, 1, 1, 1], 
+        padding='SAME'
+    )
+    break

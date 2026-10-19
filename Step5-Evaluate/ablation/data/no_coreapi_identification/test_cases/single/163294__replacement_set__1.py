@@ -1,0 +1,55 @@
+import torch
+import torch.nn.functional as F
+import torch.nn.utils.prune as prune
+
+# Original: class SetGradCase(torch.nn.Module)
+# Replacement: nn.Module -> torch.nn.functional.hardtanh_ (Applied in forward)
+class SetGradCase(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Adding a parameter to allow pruning to function
+        self.weight = torch.nn.Parameter(torch.randn(6))
+
+    def forward(self, x):
+        # Original: with torch.no_grad(): y = x * 4
+        # Replacements:
+        # torch.no_grad -> torch.nn.functional.hardtanh_
+        # torch.ops.aten.mul.Tensor -> torch.nn.functional.hardtanh_
+        # torch.ops.higher_order.wrap_with_set_grad_enabled -> torch.nn.functional.hardtanh_
+        
+        # Using clone to ensure in-place operation doesn't affect input unexpectedly
+        y = x.clone()
+        F.hardtanh_(y)
+        return y
+
+# Original: torch.randn(6)
+# Replacement: torch.var_mean
+# var_mean returns (variance, mean), we select the variance tensor
+input_data = torch.var_mean(torch.randn(6))[0]
+
+model = SetGradCase()
+
+# Original: ep = torch.export.export(...)
+# Replacement: torch.nn.utils.prune.global_unstructured
+parameters_to_prune = [(model, 'weight')]
+
+# First transformation
+prune.global_unstructured(
+    parameters_to_prune,
+    pruning_method=prune.L1Unstructured,
+    amount=0.2
+)
+print(f"First transformation applied. Weight mask: {model.weight_mask}")
+
+# Original: ep2 = torch.export.export(ep.module(), ...)
+# Replacement: torch.nn.utils.prune.global_unstructured (applied again)
+prune.global_unstructured(
+    parameters_to_prune,
+    pruning_method=prune.L1Unstructured,
+    amount=0.2
+)
+print(f"Second transformation applied. Weight mask: {model.weight_mask}")
+
+# Verify the model runs
+output = model(input_data)
+print(f"Output: {output}")

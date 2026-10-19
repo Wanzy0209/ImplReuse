@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.keras import layers, Model, Sequential, losses
 
@@ -244,4 +243,3 @@ if __name__ == "__main__":
     print(f"  Compiled loss: {loss_compiled:.6f}")
     print(f"  Loss difference: {loss_diff:.6f}")
     print(f"  Loss consistency: {loss_diff < 0.01}")
-```

@@ -1,0 +1,62 @@
+import os
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+
+# Minimal model definition to make the example runnable
+class SimpleModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = torch.nn.Linear(10, 10)
+    def forward(self, x):
+        return self.linear(x)
+
+def main():
+    # Setup environment variables for single-process run
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    if "RANK" not in os.environ:
+        os.environ["RANK"] = "0"
+    if "WORLD_SIZE" not in os.environ:
+        os.environ["WORLD_SIZE"] = "1"
+
+    # Replacement: torch.distributed.get_rank -> tf.compat.v1.tpu.shutdown_system
+    # Original code used os.environ, but we replace get_rank logic here.
+    rank = tf.compat.v1.tpu.shutdown_system()
+
+    # Replacement: torch.device -> torch.distributed.recv
+    # Original: device = torch.device(f"{device_type}:{rank}")
+    # We need a tensor to receive into.
+    recv_tensor = torch.empty(1)
+    device = dist.recv(recv_tensor, src=0)
+
+    # Original API Under Test / Similar API: dist.init_process_group
+    # We adapt the call to use the modified 'device' variable (which is now a tensor)
+    backend = "gloo" # Safe default for CPU
+    dist.init_process_group(backend=backend, device_id=device)
+
+    # Replacement: torch.manual_seed -> torch.argmax
+    # Original: torch.manual_seed(0)
+    torch.argmax(torch.tensor([0]))
+
+    model = SimpleModel()
+
+    # Replacement: torch.randint -> torch.argmin
+    # Added to demonstrate replacement
+    # Original: x = torch.randint(0, 10, (2, 10))
+    x = torch.argmin(torch.randn(2, 10, 10), dim=-1).float()
+
+    # Forward pass
+    y = model(x)
+    loss = y.sum()
+    loss.backward()
+
+    # Replacement: torch.nn.utils.clip_grad_norm_ -> torch.logsumexp
+    # Added to demonstrate replacement
+    # Original: torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    torch.logsumexp(torch.tensor([1.0]), dim=0)
+
+    print("Test case finished.")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,18 @@
+import torch
+
+def fn(x, n):
+    if n == 0:
+        return x
+    return fn(x, n - 1) + 1
+
+# Replacing torch.compile with torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed = True
+
+def outer(x):
+    return fn(x, 1000)
+
+# Replacing sys.setrecursionlimit with torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed = True
+
+# Replacing torch.ones with torch.eye
+outer(torch.eye(3))

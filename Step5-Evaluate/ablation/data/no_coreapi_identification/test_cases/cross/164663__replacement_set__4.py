@@ -1,0 +1,87 @@
+import torch
+import tensorflow as tf
+import numpy as np
+import os
+
+# Define RMSNorm as TensorFlow does not have a native RMSNorm layer in standard Keras
+# This corresponds to nn.RMSNorm in the original bug report
+class RMSNorm(tf.keras.layers.Layer):
+    def __init__(self, d_model, **kwargs):
+        super(RMSNorm, self).__init__(**kwargs)
+        self.d_model = d_model
+        self.scale = self.add_weight(
+            name='scale',
+            shape=(d_model,),
+            initializer='ones',
+            trainable=True
+        )
+
+    def call(self, x):
+        # RMSNorm(x) = x / sqrt(mean(x^2) + eps) * scale
+        norm = tf.sqrt(tf.reduce_mean(tf.square(x), axis=-1, keepdims=True) + 1e-8)
+        return x / norm * self.scale
+
+# Corresponds to nn.Module
+class TestModule(tf.keras.Model):
+    def __init__(self, d_model):
+        super(TestModule, self).__init__()
+        self.norm = RMSNorm(d_model)
+        # Corresponds to nn.Linear
+        self.output = tf.keras.layers.Dense(d_model)
+
+    def call(self, x):
+        x = self.norm(x)
+        x = self.output(x)
+        return x
+
+def main():
+    # Setup for MultiWorkerMirroredStrategy
+    # In a real distributed setting, TF_CONFIG environment variable would be set.
+    # For the purpose of this test case generation, we instantiate the strategy.
+    # This replaces torch.distributed and init_process_group
+    strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy()
+
+    d_model = 128
+
+    # Replaces model.to('cuda') and fully_shard logic
+    # The strategy scope handles the distribution of the model components
+    with strategy.scope():
+        model = TestModule(d_model)
+        optimizer = tf.keras.optimizers.SGD(learning_rate=0.01)
+
+        # Define the training step logic
+        # This corresponds to the forward and backward pass logic
+        @tf.function
+        def train_step(inputs):
+            x = inputs
+            
+            with tf.GradientTape() as tape:
+                y = model(x)
+                # Corresponds to y.sum()
+                loss = tf.reduce_sum(y)
+
+            # Corresponds to loss.backward()
+            gradients = tape.gradient(loss, model.trainable_variables)
+            optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+            return loss
+
+        # Leverage the similar API: tf.types.experimental.ConcreteFunction
+        # We explicitly get the concrete function to test the graph execution
+        # which relates to the FSDPMemTracker's interaction with the graph in the original bug.
+        concrete_fn = train_step.get_concrete_function(
+            tf.TensorSpec(shape=(16, d_model), dtype=tf.float32)
+        )
+
+        # Corresponds to torch.randn
+        x = tf.random.normal((16, d_model))
+
+        # Execute the concrete function
+        # This tests the RMSNorm + Linear interaction within the distributed strategy
+        loss_val = concrete_fn(x)
+
+        # Assertion to ensure execution completed without KeyError
+        assert loss_val is not None
+        print("Test passed: ConcreteFunction executed successfully with MultiWorkerMirroredStrategy.")
+
+if __name__ == "__main__":
+    main()

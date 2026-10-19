@@ -1,0 +1,75 @@
+```python
+import torch
+import sys
+
+# Replacements for config lines
+# torch._dynamo.config.capture_scalar_outputs -> torch.randint_like
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> torch.randint_like
+# torch._inductor.config.emulate_precision_casts -> torch.randint_like
+_dummy = torch.randint_like(torch.empty(1), 0, 1)
+_dummy = torch.randint_like(torch.empty(1), 0, 1)
+_dummy = torch.randint_like(torch.empty(1), 0, 1)
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0
+    t1 = arg1
+    t2 = arg2
+    # Original: t3 = torch.nn.functional.group_norm(t0, 1, weight=t2, bias=t2)
+    # Similar API: torch.quantile
+    # Replacements: nn.functional -> torch.randint_like (Ignored for core op to use Similar API)
+    t3 = torch.quantile(t0, t1, dim=0)
+    
+    t4 = t3.max(dim=0).values
+    # Replacement: torch.sigmoid -> torch.randint_like
+    t5 = torch.randint_like(t4, 0, 10)
+    output = t5
+    return output
+
+# Replacements for data generation
+# torch.rand -> torch.randint_like
+# torch.bfloat16 -> torch.randint_like (Dtype replacement - removed dtype arg)
+ref0 = torch.empty([3, 395, 202, 357], device='cuda')
+arg0 = torch.randint_like(ref0, 0, 10, device='cuda', requires_grad=True)
+
+# torch.randint -> torch.imag
+c_ref = torch.randn([1], dtype=torch.complex64, device='cuda')
+arg1 = torch.imag(c_ref)
+
+ref2 = torch.empty([395], device='cuda')
+arg2 = torch.randint_like(ref2, 0, 10, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2)
+    # Replacement: out_eager.sum -> torch.randint_like
+    torch.randint_like(out_eager, 0, 10).sum().backward()
+    print('Eager Success! ✅')
+    
+    # Replacement: torch.compile -> torch.set_rng_state
+    torch.set_rng_state(torch.get_rng_state())
+    out_compiled = foo(arg0, arg1, arg2)
+    torch.randint_like(out_compiled, 0, 10).sum().backward()
+    print('Compile Success! ✅')
+    
+    # Compare outputs (forward)
+    # Replacement: out_eager.sum -> torch.randint_like
+    out_eager_sum = torch.randint_like(out_eager, 0, 10)
+    out_compiled_sum = torch.randint_like(out_compiled, 0, 10)
+    
+    diff = (out_eager_sum - out_compiled_sum).abs()
+    # Replacement: out_eager_sum.item -> torch.randint_like
+    # Replacement: out_compiled_sum.item -> torch.randint_like
+    # Note: Replacing .item() (scalar) with randint_like (tensor) changes logic flow.
+    # We sum the result to get a scalar for the division.
+    denom = torch.randint_like(out_eager_sum.abs(), 0, 10).sum() + 1e-12
+    rel_diff = diff.sum() / denom * 100
+    
+    print(f'Relative diff (sum): {rel_diff:.6f}%')
+    if rel_diff > 5:
+        print(f'❌ Forward output sums differ significantly (relative)!')
+        # Replacement: out_eager_sum.item -> torch.randint_like
+        print('out_eager_sum:', torch.randint_like(out_eager_sum, 0, 10).sum().item())
+        print('out_compiled_sum:', torch.randint_like(out_compiled_sum, 0, 10).sum().item())
+        print('Absolute diff:', diff.sum().item())
+        print('Relative diff (%):', rel_diff.item())
+        sys.exit(1)
+```

@@ -1,0 +1,48 @@
+import tensorflow as tf
+
+def test_issue_163915_replacement():
+    """
+    Test case generated based on Issue 163915 (nvshmem triton kernels IMA silently).
+    This test replaces the original nvshmem APIs with tf.compat.v1.executing_eagerly
+    to verify the structural logic of setup and execution.
+    """
+
+    # Original: @triton.jit
+    # def foo(...):
+    #     nvshmem.get(...)
+    #
+    # Replacement: nvshmem.get -> tf.compat.v1.executing_eagerly
+    def foo():
+        # In the original context, this performs a get operation.
+        # Here, we replace it with the execution context check.
+        return tf.compat.v1.executing_eagerly()
+
+    # Original: def run():
+    #     nvshmem.enable_triton()
+    #     foo[(1, )]()
+    #
+    # Replacement: nvshmem.enable_triton -> tf.compat.v1.executing_eagerly
+    def run():
+        # In the original context, this enables the Triton integration.
+        # Here, we replace it with the execution context check.
+        # We capture the result to verify the call was made.
+        setup_check = tf.compat.v1.executing_eagerly()
+        
+        # Execute the kernel
+        # Original syntax: foo[(1, )]()
+        # Translated semantics: Direct function call
+        kernel_check = foo()
+
+        # Assertions to ensure the test logic holds
+        # tf.compat.v1.executing_eagerly returns a boolean
+        assert isinstance(setup_check, bool), "Setup check should return a boolean"
+        assert isinstance(kernel_check, bool), "Kernel check should return a boolean"
+        
+        # In a consistent environment (eager or graph), both checks should return the same value
+        assert setup_check == kernel_check, "Execution context should be consistent"
+
+    # Run the test logic
+    run()
+
+if __name__ == "__main__":
+    test_issue_163915_replacement()

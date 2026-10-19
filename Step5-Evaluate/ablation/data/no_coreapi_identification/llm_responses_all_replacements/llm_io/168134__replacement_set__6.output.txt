@@ -1,0 +1,45 @@
+```python
+import torch
+import torch.nn as nn
+import torch.nn.utils.prune as prune
+import unittest
+
+class TestStridedShardReplacement(unittest.TestCase):
+    def test_strided_shard_bug(self):
+        # Setup
+        # Note: In a real distributed scenario, world_size would be determined by the launcher.
+        # Here we assume a mock or single-process context for the sake of the replacement logic.
+        world_size = 2 
+        
+        # Original: global_tensor = torch.Tensor([0, 1, 2, 3, 4])
+        global_tensor = torch.Tensor([0, 1, 2, 3, 4])
+
+        # Original: dtensor = distribute_tensor(global_tensor, device_mesh, (Replicate(), )).redistribute(device_mesh, (_StridedShard(0, split_factor=2),))
+        # Replacement: torch.nn.SyncBatchNorm
+        # We replace the distribution and sharding logic with a SyncBatchNorm layer.
+        # The tensor has 5 elements, so we set num_features=5.
+        # This mimics the "operation" on the tensor.
+        layer = torch.nn.SyncBatchNorm(5)
+        
+        # To make the test runnable and verify the "operation", we pass the tensor through the layer.
+        # SyncBatchNorm expects (N, C) or (N, C, L), so we reshape (5,) to (1, 5).
+        input_reshaped = global_tensor.unsqueeze(0)
+        output_tensor = layer(input_reshaped)
+
+        # Original: import time; time.sleep(torch.distributed.get_rank())
+        # Replacement: torch.nn.SyncBatchNorm (for time.sleep) and torch.nn.utils.prune.L1Unstructured (for get_rank)
+        # We replace the sleep operation with an instantiation of SyncBatchNorm.
+        # We replace the get_rank() call with the L1Unstructured class.
+        # Since SyncBatchNorm constructor requires an int, we cannot pass the class directly.
+        # We execute them sequentially to maintain the "logic" of the original block without crashing.
+        torch.nn.SyncBatchNorm(5) # Replaces time.sleep
+        rank_replacement = torch.nn.utils.prune.L1Unstructured # Replaces torch.distributed.get_rank()
+
+        # Original: print(f"{torch.distributed.get_rank()=} {dtensor._local_tensor=}")
+        # Replacement: torch.distributed.get_rank -> torch.nn.utils.prune.L1Unstructured
+        # We print the replacement class and the result of our layer operation.
+        print(f"{rank_replacement=} {output_tensor.squeeze(0)=}")
+
+if __name__ == '__main__':
+    unittest.main()
+```

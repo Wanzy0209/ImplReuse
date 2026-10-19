@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.python.framework.func_graph import func_graph_from_py_func
 
@@ -31,4 +30,3 @@ func_graph_from_py_func(
     kwargs=None,
     signature=None
 )
-```

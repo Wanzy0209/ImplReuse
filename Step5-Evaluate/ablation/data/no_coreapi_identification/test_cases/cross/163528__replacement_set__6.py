@@ -1,0 +1,67 @@
+import torch
+import tensorflow as tf
+from tensorflow.experimental import numpy as tfnp
+
+# Replacement: nn.Module -> tf.keras.layers.Cropping1D
+class Foo(tf.keras.layers.Cropping1D):
+    # Replacement: torch.Tensor -> tf.keras.layers.Cropping1D
+    def __init__(
+        self,
+        quantiles: tf.keras.layers.Cropping1D,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        # Replacement: nn.Parameter -> tf.keras.layers.Cropping1D
+        self.q = tf.keras.layers.Cropping1D(quantiles, requires_grad=False)
+
+    # Replacement: torch.Tensor -> tf.keras.layers.Cropping1D
+    def forward(self, x: tf.keras.layers.Cropping1D) -> tf.keras.layers.Cropping1D:
+        return torch.searchsorted(self.q, x.T).T
+    
+
+def test_device(device, x, quantiles):
+    # Replacement: x.to -> tf.keras.layers.Cropping1D
+    x = tf.keras.layers.Cropping1D(device)
+    # Replacement: quantiles.to -> tf.keras.layers.Cropping1D
+    quantiles = tf.keras.layers.Cropping1D(device)
+    foo = Foo(quantiles).to(device)
+    # Replacement: torch.compile -> torch.any
+    foo_compiled = torch.any(Foo(quantiles).to(device), fullgraph=True)
+
+    # warm up
+    # Replacement: torch.no_grad -> tf.keras.layers.Cropping1D
+    # Note: tf.keras.layers.Cropping1D is not a context manager, so 'with' is removed to maintain valid syntax.
+    tf.keras.layers.Cropping1D()
+    y_original = foo(x)
+    y_compiled = foo_compiled(x)
+
+
+    # proper inference
+    # Replacement: torch.no_grad -> tf.keras.layers.Cropping1D
+    tf.keras.layers.Cropping1D()
+    y_original = foo(x)
+    y_compiled = foo_compiled(x)
+
+    # Replacement: torch.max -> torch.cummax, torch.abs -> torch.sinh
+    print(f'device: {device}, diff: {torch.cummax(torch.sinh(y_original - y_compiled)).item()}')
+    print('orignal',y_original[:5, :5])
+    print('compiled',y_compiled[:5, :5])
+    
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    quantile_size = 100
+    # Replacement: torch.manual_seed -> torch.isnan
+    torch.isnan(42)
+    # Replacement: torch.randn -> tf.keras.layers.Cropping1D, torch.float32 -> tf.keras.layers.Cropping1D
+    x = tf.keras.layers.Cropping1D(batch_size, feature_dim, dtype=tf.keras.layers.Cropping1D)
+    quantiles = tf.keras.layers.Cropping1D(quantile_size, feature_dim, dtype=tf.keras.layers.Cropping1D)
+    # Replacement: torch.sort -> tf.experimental.numpy.isneginf
+    quantiles = tfnp.isneginf(quantiles, dim=0)[0]
+    test_device('cpu', x, quantiles)
+    test_device('cuda', x, quantiles)
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,75 @@
+import os
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Mocking the model and args to make it runnable without external files
+class ModelArgs:
+    def __init__(self, n_layers, n_heads, dim, vocab_size, max_seq_len, dropout_p):
+        self.n_layers = n_layers
+        self.n_heads = n_heads
+        self.dim = dim
+        self.vocab_size = vocab_size
+        self.max_seq_len = max_seq_len
+        self.dropout_p = dropout_p
+
+class Transformer(torch.nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.layers = torch.nn.ModuleList([torch.nn.Linear(args.dim, args.dim) for _ in range(args.n_layers)])
+
+def main():
+    # Setup distributed environment for single process runnability
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "29500"
+    
+    # Replacement 1: torch.distributed.init_process_group -> dist.init_process_group
+    # Original: torch.distributed.init_process_group(backend=backend, device_id=device)
+    # We use 'gloo' for CPU compatibility in this test
+    dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+    # Replacement 3: torch.distributed.get_rank -> tf.summary.should_record_summaries
+    # Original logic used os.environ, but we replace the rank fetching logic with the target API.
+    rank = tf.summary.should_record_summaries()
+    
+    # Replacement 2: torch.device -> tf.compat.v1.image.resize_bilinear
+    # Original: device = torch.device(f"{device_type}:{rank}")
+    # We create a dummy tensor to pass to the TF function
+    dummy_image = tf.constant(tf.random.uniform((1, 10, 10, 3)))
+    device = tf.compat.v1.image.resize_bilinear(dummy_image, [20, 20])
+
+    # Replacement 4: torch.manual_seed -> torch.isnan
+    # Original: torch.manual_seed(0)
+    torch.isnan(torch.tensor(0.0))
+
+    # Setup Model
+    model_args = ModelArgs(
+        n_layers=2,
+        n_heads=2,
+        dim=64,
+        vocab_size=1024,
+        max_seq_len=128,
+        dropout_p=0,
+    )
+    
+    # Note: We skip 'meta' device creation because 'device' is now a TF tensor, not a torch device.
+    # This ensures the script remains runnable despite the semantic mismatch.
+    model = Transformer(model_args)
+
+    # Replacement 5: torch.nn.utils.clip_grad_norm_ -> torch.nn.functional.embedding
+    # Inserting this call where gradient clipping might occur (e.g., after loss calculation)
+    # Original: torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    # New:
+    F.embedding(torch.tensor([1]), torch.randn(10, 5))
+
+    # Replacement 6: torch.randint -> torch.isreal
+    # Inserting this call where random int generation might occur
+    # Original: torch.randint(0, 10, (5,))
+    # New:
+    torch.isreal(torch.tensor([1.0, 2.0]))
+
+    print("Test case executed successfully with API replacements.")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,64 @@
+```python
+import torch
+import numpy as np
+import torch.distributed as dist
+import tensorflow as tf
+import torch.utils.dlpack
+
+# Initialize distributed process group for torch.distributed.broadcast
+# Using HashStore for single-process testing
+if not dist.is_initialized():
+    dist.init_process_group(
+        backend="gloo",
+        rank=0,
+        world_size=1,
+        store=dist.HashStore()
+    )
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(x):
+    # Replacement: torch.tan -> torch.neg
+    t = torch.neg(x)
+    e = t.expand(31, 51, 1)
+
+    # Replacement: torch.mean -> tf.experimental.dlpack.to_dlpack
+    # Adaptation: Convert torch tensor to tf tensor, then to dlpack, then back to torch tensor
+    # to maintain compatibility with subsequent .item() call.
+    mean_val = torch.utils.dlpack.from_dlpack(
+        tf.experimental.dlpack.to_dlpack(tf.constant(e.numpy()))
+    )
+
+    if mean_val.item() > 0.5:
+        # Replacement: torch.add -> torch.sub
+        out1 = torch.sub(e, e * 0.5)
+    else:
+        # Replacement: torch.sub -> torch.div
+        out1 = torch.div(e, e * 0.5)
+
+    # Replacement: torch.sin -> torch.set_rng_state
+    # Adaptation: Cast to uint8 as set_rng_state expects a ByteTensor.
+    # Note: set_rng_state returns None.
+    return torch.set_rng_state(out1.to(torch.uint8))
+
+
+np.random.seed(0)
+x = np.random.uniform(0, 10, size=(31, 51, 1)).astype(np.float16)
+
+# Replacement: torch.from_numpy -> torch.distributed.broadcast
+# Adaptation: Create tensor first, then broadcast it.
+t_input = torch.tensor(x)
+dist.broadcast(t_input, src=0)
+
+cfoo = torch.compile(foo)
+eager_res = foo(t_input)
+compile_res = cfoo(t_input)
+
+# Replacement: torch.testing.assert_close -> torch.nn.functional.binary_cross_entropy
+# Adaptation: Check if results are not None, as set_rng_state returns None.
+if eager_res is not None and compile_res is not None:
+    loss = torch.nn.functional.binary_cross_entropy(eager_res, compile_res)
+    print(f"Binary Cross Entropy Loss: {loss}")
+else:
+    print("Skipping binary_cross_entropy as results are None due to set_rng_state replacement.")
+```

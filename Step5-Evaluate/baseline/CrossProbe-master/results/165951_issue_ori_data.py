@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 # Conversion: torch._dynamo.config.patch -> tensorflow.python.tools.saved_model_aot_compile.freeze_model
 from tensorflow.python.tools.saved_model_aot_compile import freeze_model
@@ -61,4 +60,3 @@ def aot_export_joint_with_descriptors_alone(model, inputs, kwargs=None):
         return model
 
 gm = graph_capture_and_aot_export_joint_with_descriptors(model, inputs, kwargs=kwargs)
-```

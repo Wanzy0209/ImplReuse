@@ -1,0 +1,34 @@
+import triton
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Replacements applied based on requirements:
+# torch.randn -> torch.var_mean
+# torch.addmm -> torch.nn.functional.softshrink
+# torch._inductor.config -> tf.keras.callbacks.TerminateOnNaN
+
+m = 20120
+k = 1536
+n = 512
+
+# Original: a = torch.randn((m, n)).requires_grad_(False).cuda()
+# Replacement: torch.var_mean
+# We generate random data to feed into var_mean to get a tensor result (variance)
+a = torch.var_mean(torch.randn((m, n)))[0].requires_grad_(False).cuda()
+mat1 = torch.var_mean(torch.randn((m, k)))[0].requires_grad_(False).cuda()
+mat2 = torch.var_mean(torch.randn((k, n)))[0].requires_grad_(False).cuda()
+
+# Original: f = lambda a, mat1, mat2: torch.addmm(a, mat1, mat2)
+# Replacement: torch.nn.functional.softshrink
+# softshrink takes one input, we apply it to 'a' to adapt the logic
+f = lambda a, mat1, mat2: F.softshrink(a)
+
+# Original: with inductor_config.patch(...)
+# Replacement: tf.keras.callbacks.TerminateOnNaN
+# TerminateOnNaN is a class, not a context manager. We instantiate it to replace the config usage.
+callback = tf.keras.callbacks.TerminateOnNaN()
+
+# Original compilation and execution logic
+compiled = torch.compile(f, dynamic=False)
+compiled(a, mat1, mat2)

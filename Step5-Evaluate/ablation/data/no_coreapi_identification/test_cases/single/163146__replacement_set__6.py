@@ -1,0 +1,42 @@
+import torch
+import torch.nn as nn
+import unittest
+
+class SlicingModel(nn.Module):
+    """
+    Minimal model reproducing the data-dependent slicing error 
+    described in the bug report.
+    """
+    def forward(self, item_embedding, max_item_num):
+        # The problematic operation from the traceback:
+        # selected_item_embedding = item_embedding[:, :max_item_num, :]
+        # This fails because max_item_num is a Tensor, making the slice data-dependent.
+        return item_embedding[:, :max_item_num, :]
+
+class TestExportDataDependentSlice(unittest.TestCase):
+    def test_export_with_dynamic_slice(self):
+        model = SlicingModel()
+
+        # Generate input data.
+        # Requirement: Replace torch.arange with torch.eye.
+        # Original logic might have been: 
+        # item_embedding = torch.arange(10 * 64 * 64).reshape(10, 64, 64).float()
+        # Replacement using torch.eye:
+        item_embedding = torch.eye(64).unsqueeze(0).expand(10, 64, 64).float()
+
+        # max_item_num is a scalar tensor, which introduces data dependency in the slice
+        max_item_num = torch.tensor(5)
+
+        # Attempt to export the model.
+        # According to the bug report, this raises a "Data dependent error" 
+        # because the slice index depends on the value of the tensor max_item_num.
+        with self.assertRaises(Exception) as context:
+            torch.export.export(model, (item_embedding, max_item_num))
+        
+        # Verify the error message relates to data dependency or constraints
+        self.assertTrue("Data dependent" in str(context.exception) or 
+                        "Constraints" in str(context.exception) or
+                        "symbolic" in str(context.exception))
+
+if __name__ == "__main__":
+    unittest.main()

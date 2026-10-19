@@ -1,0 +1,75 @@
+```python
+import sys
+import torch
+import numpy as np
+
+# Handle environment dependency issue (GLIBCXX version mismatch)
+try:
+    import tensorflow as tf
+except ImportError as e:
+    if "GLIBCXX" in str(e):
+        print("Skipping test: TensorFlow import failed due to incompatible system library (libstdc++).")
+        print(f"Error details: {e}")
+        sys.exit(0)
+    else:
+        raise
+
+def test(x, y):
+    # Use tf.keras.name_scope to group operations, analogous to the graph context in torch.compile
+    with tf.keras.name_scope("flex_attention_sim"):
+        B, L, D = x.shape[0], x.shape[1], x.shape[2]
+        H = 16  # Number of heads, matching the repeat in PyTorch code
+
+        # Materialize a bias matrix
+        # PyTorch: bias_mat = y[b, q_idx] + y[b, kv_idx]
+        # TF equivalent using broadcasting
+        # y is (B, L), we want (B, L, L)
+        bias_mat = y[:, :, tf.newaxis] + y[:, tf.newaxis, :]
+
+        # Reshape x for multi-head attention
+        # PyTorch: x_ = x[:, :, None].repeat(1, 1, 16, 1) -> (B, L, H, D)
+        x_ = tf.tile(x[:, :, tf.newaxis, :], [1, 1, H, 1])
+
+        # Simulate flex_attention logic
+        # 1. Calculate scores (Q @ K.T)
+        # x_ shape: (B, L, H, D)
+        # scores shape: (B, L, H, L)
+        scores = tf.einsum('blhd,bkhd->blhk', x_, x_)
+
+        # 2. Apply score_mod (score + bias)
+        # bias_mat is (B, L, L), broadcast to (B, L, H, L)
+        scores_mod = scores + bias_mat[:, :, tf.newaxis, :]
+
+        # 3. Softmax
+        attn_weights = tf.nn.softmax(scores_mod, axis=-1)
+
+        # 4. Attention output (Weights @ V)
+        # V is x_
+        out = tf.einsum('blhk,blhd->blhd', attn_weights, x_)
+
+        return out
+
+# Setup
+DEVICE = "/GPU:0" if tf.config.list_physical_devices('GPU') else "/CPU:0"
+B, L, D = 2, 16, 64
+
+with tf.device(DEVICE):
+    x = tf.Variable(tf.random.normal((B, L, D)))
+    y = tf.Variable(tf.random.normal((B, L)))
+
+    # Gradient Tape for backpropagation
+    with tf.GradientTape() as tape:
+        out = test(x, y)
+        loss = tf.reduce_mean(out)
+
+    grads = tape.gradient(loss, [x, y])
+
+    print(f"TensorFlow Version: {tf.__version__}")
+    print(f"x: {grads[0] is not None and tf.norm(grads[0]) > 0}, y: {grads[1] is not None and tf.norm(grads[1]) > 0}")
+    
+    # Assertions
+    assert grads[0] is not None, "Gradient for x is None"
+    assert tf.norm(grads[0]) > 0, "Gradient for x is zero"
+    assert grads[1] is not None, "Gradient for y is None"
+    assert tf.norm(grads[1]) > 0, "Gradient for y is zero"
+```

@@ -1,0 +1,80 @@
+import torch
+import tensorflow as tf
+import sys
+
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, sentinel):
+    t0 = arg0
+    # Original API: torch.tanh (Similar API: torch.tanh)
+    t1 = torch.tanh(t0)
+    t2 = arg1
+    t3 = t2.min()
+    t4 = t1.clone()
+    t4.fill_(t3.item())
+    t5 = arg2
+    
+    # Replacement: torch.nn.functional.relu -> torch.nn.functional.celu
+    t6 = torch.nn.functional.celu(t5)
+    
+    # Replacement: torch.nn.functional.silu -> torch.nn.functional.hardsigmoid
+    t7 = torch.nn.functional.hardsigmoid(t6)
+    
+    # Replacement: torch.clamp -> torch.vander
+    # torch.clamp(t4, 0, t7.size(0) - 1) -> torch.vander(t4, t7.size(0))
+    # vander expects 1D input, so we flatten t4. It returns a 2D matrix.
+    # We take the first column to get 1D indices for the next step.
+    vander_res = torch.vander(t4.flatten().to(torch.float32), t7.size(0))
+    indices = vander_res[:, 0].to(torch.long)
+    
+    # Replacement: torch.nn.functional.embedding -> torch.nn.functional.binary_cross_entropy_with_logits
+    # embedding(indices, t7) -> binary_cross_entropy_with_logits(indices, t7)
+    # Adjust shapes to be compatible for broadcasting (16, 1) and (16, 4)
+    t8 = torch.nn.functional.binary_cross_entropy_with_logits(indices.float().unsqueeze(1), t7[:len(indices), :])
+    
+    t9 = t8.min()
+    output = t9 + sentinel
+    return output
+
+# Setup arguments
+# Replacement: torch.randint -> torch.fmin
+# arg0 = torch.randint(0, 1000, [4, 4], dtype=torch.int64, device='cuda')
+a0 = torch.full((4, 4), 1000, dtype=torch.int64, device='cuda')
+b0 = torch.full((4, 4), 500, dtype=torch.int64, device='cuda')
+arg0 = torch.fmin(a0, b0)
+
+# arg1 = torch.randint(0, 1000, [5], dtype=torch.int64, device='cuda')
+a1 = torch.full((5,), 1000, dtype=torch.int64, device='cuda')
+b1 = torch.full((5,), 200, dtype=torch.int64, device='cuda')
+arg1 = torch.fmin(a1, b1)
+
+# Replacement: torch.rand -> torch.unique
+# arg2 = torch.rand([5000, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+# We generate a random tensor first to apply unique on it.
+raw_rand = torch.randn(5000, 4, dtype=torch.bfloat16, device='cuda', requires_grad=True)
+arg2 = torch.unique(raw_rand)
+
+# Replacement: torch.tensor -> tf.compat.v1.linalg.diag
+# sentinel = torch.tensor(0.0, dtype=torch.bfloat16, device='cuda', requires_grad=True)
+# Create TF tensor, convert to numpy, then to torch tensor.
+tf_sentinel = tf.compat.v1.linalg.diag([0.0])
+sentinel = torch.from_numpy(tf_sentinel.numpy()).to(dtype=torch.bfloat16, device='cuda')
+sentinel.requires_grad = True
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+    
+    # Replacement: torch.compile -> torch.prod
+    # Original: compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    # We replace the compilation step with a reduction step using torch.prod.
+    # To maintain the test structure (calling compiled_foo), we wrap it.
+    def compiled_foo(a, b, c, d):
+        return torch.prod(foo(a, b, c, d))
+        
+    out_compiled = compiled_foo(arg0, arg1, arg2, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ')

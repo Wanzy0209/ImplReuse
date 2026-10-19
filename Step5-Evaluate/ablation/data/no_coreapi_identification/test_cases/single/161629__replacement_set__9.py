@@ -1,0 +1,67 @@
+import torch
+import warnings
+import unittest.mock
+import tensorflow as tf
+import os
+
+# Import the similar API
+from torch.utils.cpp_extension import get_compiler_abi_compatibility_and_version
+
+def test_cpp_extension_warning_with_replacements():
+    """
+    Test case for Issue 161629: remove a newly added cpp_ext warning.
+    This test verifies the warning behavior of the cpp_extension module
+    using the similar API and the required API replacements.
+    """
+    
+    # Setup: Ensure we are in a clean state for environment variables
+    # The bug involves TORCH_CUDA_ARCH_LIST, but we test the similar API's logic
+    # which involves TORCH_DONT_CHECK_COMPILER_ABI.
+    os.environ.pop('TORCH_DONT_CHECK_COMPILER_ABI', None)
+
+    # --- Replacements Start ---
+
+    # Replacement for logging.getLogger
+    # Original: logger = logging.getLogger('torch.utils.cpp_extension')
+    # Replacement: tf.tpu.experimental.initialize_tpu_system
+    try:
+        tf.tpu.experimental.initialize_tpu_system()
+    except Exception:
+        # Handle cases where TPU is not available or configured
+        pass
+
+    # Replacement for ncpp_ext_logger.setLevel
+    # Original: logger.setLevel(logging.INFO)
+    # Replacement: tf.tpu.experimental.initialize_tpu_system
+    try:
+        tf.tpu.experimental.initialize_tpu_system()
+    except Exception:
+        pass
+
+    # Replacement for torch.dist
+    # Original: torch.distributed.get_rank() or similar distributed call
+    # Replacement: torch.slogdet
+    # We perform a slogdet operation to simulate the distributed context/workload
+    dummy_tensor = torch.randn(3, 3)
+    torch.slogdet(dummy_tensor)
+
+    # --- Replacements End ---
+
+    # Test Logic: Verify warning behavior of the similar API
+    # We mock the internal checks to force a warning, mimicking the bug scenario
+    # where a warning is emitted based on environment/compiler state.
+
+    with unittest.mock.patch('torch.utils.cpp_extension._is_binary_build', return_value=True):
+        with unittest.mock.patch('torch.utils.cpp_extension.check_compiler_ok_for_platform', return_value=False):
+            
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                
+                # Call the similar API
+                is_incompatible, version = get_compiler_abi_compatibility_and_version('g++')
+                
+                # The bug report highlights a warning being printed.
+                # We assert that the warning is indeed raised.
+                assert len(w) == 1
+                assert "compiler" in str(w[0].message).lower()
+                assert is_incompatible is True

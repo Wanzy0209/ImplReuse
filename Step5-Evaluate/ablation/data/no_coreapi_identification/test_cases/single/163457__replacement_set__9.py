@@ -1,0 +1,71 @@
+import torch
+import sys
+
+# Replacements for torch._dynamo.config and torch._inductor.config
+# Original: torch._dynamo.config.capture_scalar_outputs = True
+torch.set_rng_state(torch.get_rng_state())
+# Original: torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch.set_rng_state(torch.get_rng_state())
+# Original: torch._inductor.config.emulate_precision_casts = True
+torch.set_rng_state(torch.get_rng_state())
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0 # size=(3, 395, 202, 357), stride=(239370, 79790, 202, 1), dtype=bfloat16, device=cuda
+    t1 = arg1 # size=(1,), stride=(1,), dtype=float32 (from bernoulli), device=cuda
+    t2 = arg2 # size=(395,), stride=(1,), dtype=bfloat16, device=cuda
+    
+    # Original: t3 = torch.nn.functional.group_norm(t0, 1, weight=t2, bias=t2)
+    # Similar API: torch.quantile
+    # We use torch.quantile here. Note: torch.quantile might require specific dtypes.
+    # We perform quantile along dim=1 to preserve some dimensions for subsequent ops.
+    t3 = torch.quantile(t0, t1, dim=1)
+    
+    # t4 = t3.max(dim=0).values
+    # t5 = torch.sigmoid(t4)
+    # output = t5
+    # Keeping the subsequent logic to check for divergence
+    t4 = t3.max(dim=0).values
+    t5 = torch.sigmoid(t4)
+    output = t5  # output tensor
+    return output
+
+# Original: arg0 = torch.rand(..., dtype=torch.bfloat16, ...)
+# Keeping torch.bfloat16 and torch.rand to maintain the bug context (bfloat16 support)
+arg0 = torch.rand([3, 395, 202, 357], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+
+# Original: arg1 = torch.randint(...)
+# Replacement: torch.bernoulli
+# torch.bernoulli generates 0 or 1, which are valid quantile values.
+arg1 = torch.bernoulli(torch.full([1], 0.5, device='cuda'))
+
+arg2 = torch.rand([395], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2)
+    # Original: out_eager.sum().backward()
+    # Keeping backward to check gradient support
+    out_eager.sum().backward()
+    print('Eager Success! ')
+    
+    # Original: compiled_foo = torch.compile(...)
+    # Keeping torch.compile to test eager/compile divergence
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+    print('Compile Success! ')
+    
+    # Compare outputs (forward)
+    # Original: out_eager_sum = out_eager.sum()
+    # Keeping .sum() and .item() for comparison logic
+    out_eager_sum = out_eager.sum()
+    out_compiled_sum = out_compiled.sum()
+    diff = (out_eager_sum - out_compiled_sum).abs().item()
+    rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100
+    print(f'Relative diff (sum): {rel_diff:.6f}%')
+    if rel_diff > 5:
+        print(f' Forward output sums differ significantly (relative)!')
+        print('out_eager_sum:', out_eager_sum.item())
+        print('out_compiled_sum:', out_compiled_sum.item())
+        print('Absolute diff:', diff)
+        print('Relative diff (%):', rel_diff)
+        sys.exit(1)

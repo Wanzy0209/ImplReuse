@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: Implementing rotary_embedding logic to replace torch.ops._C.rotary_embedding
@@ -52,4 +51,3 @@ optimized_fn = tf.function(call_rotary)
 # Conversion: torch.randn(1, 10, 32, 64) -> tf.random.normal
 x = tf.random.normal((1, 10, 32, 64))  # CPU tensor
 optimized_fn(x)
-```

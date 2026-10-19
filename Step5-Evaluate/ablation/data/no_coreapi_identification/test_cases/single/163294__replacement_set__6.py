@@ -1,0 +1,33 @@
+import torch
+import tensorflow as tf
+
+# Replacement: torch.randn -> torch.nn.functional.max_pool1d
+# Original: torch.randn(6)
+# To use max_pool1d, we need a 3D input (N, C, L). We create a dummy input to pool.
+# We aim for a final shape compatible with the next operation.
+dummy_input = torch.randn(1, 1, 6)
+x_torch = torch.nn.functional.max_pool1d(dummy_input, kernel_size=1)
+# Reshape to 2D for trace operation compatibility
+x_torch = x_torch.squeeze(0).squeeze(0).reshape(2, 3)
+
+# Replacement: nn.Module, torch.no_grad, torch.ops.aten.mul.Tensor -> tf.keras.ops.trace
+# The original logic was encapsulated in a class. We replace the class definition and its logic
+# with the direct usage of the replacement API.
+# Original: y = x * 4 inside no_grad
+# We convert to TensorFlow tensor for the TF operation
+x_tf = tf.constant(x_torch.numpy())
+y = tf.keras.ops.trace(x_tf)
+
+# Replacement: torch.export.export -> torch.library.opcheck
+# Original: ep = torch.export.export(...)
+# We perform an operator check on the PyTorch equivalent of the logic (trace)
+# to satisfy the API replacement requirement.
+print("First check:")
+torch.library.opcheck(torch.ops.aten.trace.default, (x_torch,))
+
+# Replacement: Second torch.export.export -> Second torch.library.opcheck
+# Original: ep2 = torch.export.export(ep.module(), ...)
+print("Second check:")
+torch.library.opcheck(torch.ops.aten.trace.default, (x_torch,))
+
+print("Test completed.")

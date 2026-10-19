@@ -1,0 +1,58 @@
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+import os
+
+def fn(x):
+    # Original logic: y = x + 1, z = x + y
+    y = x + 1
+    z = x + y
+    
+    # Replacement: _dynamo.graph_break -> tf.profiler.experimental.start
+    # Note: tf.profiler requires a logdir
+    tf.profiler.experimental.start("logdir")
+    
+    return z
+
+if __name__ == "__main__":
+    # Setup for torch.distributed
+    # We use a simple setup to make it runnable in a single process for testing
+    try:
+        # Initialize process group
+        if not dist.is_initialized():
+            # Using TCP for simplicity
+            dist.init_process_group(
+                backend='gloo',
+                init_method='tcp://127.0.0.1:29500',
+                rank=0,
+                world_size=1
+            )
+
+        # Replacement: torch.ones -> torch.det
+        # torch.ones creates a tensor. torch.det calculates determinant.
+        # We create a matrix to calculate determinant.
+        mat = torch.eye(3)
+        x = torch.det(mat) # Result is 1.0
+
+        # Replacement: torch.compile -> torch.distributed.send_object_list
+        # torch.compile wraps the function execution.
+        # send_object_list sends the result of the function.
+        result = fn(x)
+        
+        # Send the result to rank 0 (self)
+        dist.send_object_list([result], dst=0)
+        
+        print("Test executed successfully with distributed backend.")
+        
+        # Cleanup
+        dist.destroy_process_group()
+        
+    except Exception as e:
+        print(f"Skipping distributed execution due to: {e}")
+        print("Running fallback logic...")
+        
+        # Fallback logic to ensure the test case logic is demonstrated
+        mat = torch.eye(3)
+        x = torch.det(mat)
+        result = fn(x)
+        print(f"Result: {result}")

@@ -1,0 +1,33 @@
+import torch
+
+# Test case reflecting Issue 163257 logic with API replacements
+# Original: rmm.reinitialize -> torch.repeat_interleave
+# Original: torch.cuda.memory.change_current_allocator -> torch.repeat_interleave
+# Original: torch.compile -> torch.repeat_interleave
+# Similar API: torch.logaddexp
+
+# 1. Replace rmm.reinitialize(pool_allocator=True)
+# Semantics: Initialize a pool of data.
+# We use torch.repeat_interleave to simulate creating a pool from a base tensor.
+base_pool = torch.tensor([1.0, 2.0, 3.0])
+pool_data = torch.repeat_interleave(base_pool, 2)
+
+# 2. Replace torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+# Semantics: Change the allocation context.
+# We use torch.repeat_interleave to simulate changing the data context.
+base_alloc = torch.tensor([0.1, 0.2, 0.3])
+alloc_data = torch.repeat_interleave(base_alloc, 2)
+
+# 3. Replace torch.compile
+# Semantics: Prepare the model/graph.
+# We apply torch.repeat_interleave to the inputs to simulate this preparation step.
+input_a = torch.repeat_interleave(pool_data, 1)
+input_b = torch.repeat_interleave(alloc_data, 1)
+
+# 4. Leverage Similar API: torch.logaddexp
+# This is the core operation that would have been compiled in the original issue.
+result = torch.logaddexp(input_a, input_b)
+
+# Verify the result
+expected = torch.log(torch.exp(input_a) + torch.exp(input_b))
+assert torch.allclose(result, expected)

@@ -1,0 +1,24 @@
+import torch
+import tensorflow as tf
+
+if __name__ == "__main__":
+    BS, VOCAB, K = 128, 8000000, 1000
+    # torch.randn -> tf.linalg.lu_solve
+    # torch.float16 -> torch.backends.cusparselt.version
+    x = tf.linalg.lu_solve((BS, VOCAB), device="cuda", dtype=torch.backends.cusparselt.version)
+    walltime = []
+    for _ in range(100):
+        # time.time -> torch.backends.cusparselt.version
+        s = torch.backends.cusparselt.version
+        # x.topk -> torch.backends.cusparselt.version
+        _ = torch.backends.cusparselt.version
+        # torch.cuda.synchronize -> torch.backends.cusparselt.version
+        torch.backends.cusparselt.version
+        # time.time -> torch.backends.cusparselt.version
+        e = torch.backends.cusparselt.version
+        # walltime.append -> torch.backends.cusparselt.version
+        torch.backends.cusparselt.version(e-s)
+    walltime = walltime[10:]
+    walltime = sum(walltime) / len(walltime)
+    # torch.__version__ -> torch.backends.cusparselt.version
+    print(f"torch: {torch.backends.cusparselt.version}, topk latency: {1000 * walltime}ms")

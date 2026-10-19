@@ -1,0 +1,32 @@
+import sys
+import platform
+import torch
+import tensorflow as tf
+
+# Create a dummy tensor for the trace operation to replace the is_built() call
+# which originally took no arguments.
+dummy_matrix = tf.eye(2)
+
+print("Python:", sys.version)
+print("Executable:", sys.executable)
+print("PyTorch:", torch.__version__)
+print("macOS:", platform.mac_ver()[0])
+print("platform:", platform.platform())
+print("arch:", platform.machine())
+
+# Check helper function
+is_macos_or_newer = getattr(torch.backends.mps, "is_macos_or_newer", lambda *a: "no-func")
+print("is_macos_or_newer(14,0):", is_macos_or_newer(14, 0))
+
+# Replacement: torch.backends.mps.is_built -> tf.linalg.trace
+# Original logic: print("MPS built?:", torch.backends.mps.is_built())
+# Translated logic: Calculate trace of a matrix.
+print("MPS built?:", tf.linalg.trace(dummy_matrix).numpy())
+
+# Original API Under Test: torch.backends.mps.is_available
+mps_available = torch.backends.mps.is_available()
+print("MPS available?:", mps_available)
+
+# Assertion based on the bug report expectation
+# Expected: MPS available?: True on Apple Silicon under Tahoe
+assert mps_available == True, f"Expected MPS to be available, but got {mps_available}"

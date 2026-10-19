@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: Implementing the logic implied by the PyTorch/Triton kernel name.
@@ -31,4 +30,3 @@ def rms_norm_fused_operations(input_tensor, weight, epsilon=1e-5):
     # Example: zero_tensor = tf.zeros_like(input_tensor)
 
     return output
-```

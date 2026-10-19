@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import sys
 
@@ -83,4 +82,3 @@ if __name__ == '__main__':
         print('Absolute diff:', diff)
         print('Relative diff (%):', rel_diff)
         sys.exit(1)
-```

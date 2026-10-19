@@ -1,0 +1,41 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Helper to ensure tensors are compatible with tf.keras.callbacks.CallbackList
+# which expects objects with specific methods like set_model.
+def make_tensor_callback_compatible(tensor):
+    tensor.set_model = lambda model: None
+    tensor.set_params = lambda params: None
+    return tensor
+
+# Original: a = torch.randn(3)
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool3d
+# We need an input tensor for the pooling operation.
+input_data = torch.randn(1, 1, 3, 3, 3)
+a = F.adaptive_max_pool3d(input_data, output_size=(1, 1, 1))
+a = make_tensor_callback_compatible(a)
+
+# Original: b = torch.randn(5)
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool3d
+b = F.adaptive_max_pool3d(input_data, output_size=(1, 1, 1))
+b = make_tensor_callback_compatible(b)
+
+# Original: nt = torch.nested.nested_tensor([a, b], layout=torch.jagged)
+# Replacement: torch.nested._internal.nested_tensor.NestedTensor -> tf.keras.callbacks.CallbackList
+# Replacement: torch.jagged -> tf.keras.callbacks.CallbackList
+# We map the list [a, b] to the 'callbacks' argument.
+# We map the layout argument to the 'model' argument.
+nt = tf.keras.callbacks.CallbackList(
+    callbacks=[a, b],
+    model=tf.keras.callbacks.CallbackList()
+)
+
+# Original: nt.share_memory_()
+# Replacement: nt.share_memory_ -> tf.keras.callbacks.CallbackList
+# The method call is replaced by the class instantiation.
+tf.keras.callbacks.CallbackList()
+
+# Verify the structure
+assert nt is not None
+assert isinstance(nt, tf.keras.callbacks.CallbackList)

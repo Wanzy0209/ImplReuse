@@ -1,0 +1,70 @@
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import tensorflow as tf
+import os
+
+def test_issue_161944_replaced():
+    # Leverage similar API: Check for ROCm support (similar to checking for CUDA in original)
+    if not tf.test.is_built_with_rocm():
+        print("Test skipped: Not built with ROCm")
+        return
+
+    # Initialize distributed for send_object_list replacement
+    # Using a simple setup for single process execution if possible
+    try:
+        if not dist.is_initialized():
+            os.environ['MASTER_ADDR'] = '127.0.0.1'
+            os.environ['MASTER_PORT'] = '29500'
+            dist.init_process_group(backend='gloo', rank=0, world_size=1)
+    except Exception as e:
+        print(f"Could not initialize distributed group: {e}")
+        return
+
+    # Replacement: torch.set_default_device('cuda') -> tf.keras.constraints.serialize
+    # We call it to satisfy the replacement requirement.
+    tf.keras.constraints.serialize(tf.keras.constraints.MaxNorm())
+
+    # Replacement: torch.randn(8192) -> torch.nn.functional.max_pool3d
+    # Create dummy input for max_pool3d
+    dummy_input = torch.randn(1, 1, 8, 8, 8)
+    inp = F.max_pool3d(dummy_input, kernel_size=2)
+
+    # Replacement: torch.exp -> tf.keras.constraints.serialize
+    func = tf.keras.constraints.serialize
+
+    # out1 = func(inp)
+    # func expects a constraint. We use a dummy constraint to make it runnable.
+    # The original logic applies func to inp. Here we apply func to a constraint.
+    constraint = tf.keras.constraints.MaxNorm()
+    out1 = func(constraint)
+
+    # out2 = torch.compile(func)(inp)
+    # Replacement: torch.compile -> torch.distributed.send_object_list
+    # We simulate the execution by getting the result and then sending it.
+    # Note: send_object_list doesn't return the value, so we capture it first.
+    result_val = func(constraint)
+    torch.distributed.send_object_list([result_val], dst=0)
+    out2 = result_val
+
+    # out3_high = func(inp.to(torch.float64))
+    # Replacement: inp.to -> serialize, torch.float64 -> serialize
+    # We interpret this as calling serialize (func) on a serialized constraint (high precision equivalent?)
+    # Since serialize returns a dict/string, we just call func on a constraint again.
+    out3_high = func(constraint)
+
+    # Original logic: print((out3_high - out1).abs().max())
+    # Since outputs are now dicts/strings, we cannot subtract.
+    # We adapt the logic to check equality (preserving the "correctness check" logic).
+    print(f"out1: {out1}")
+    print(f"out2: {out2}")
+    print(f"out3_high: {out3_high}")
+
+    # Assert equality to mimic the "no difference" expected behavior (or difference in original bug)
+    # In the original bug, out2 differed. Here, since we replaced exp with serialize (deterministic),
+    # they should be equal.
+    assert out1 == out2, "out1 and out2 should match"
+    assert out1 == out3_high, "out1 and out3_high should match"
+
+if __name__ == "__main__":
+    test_issue_161944_replaced()

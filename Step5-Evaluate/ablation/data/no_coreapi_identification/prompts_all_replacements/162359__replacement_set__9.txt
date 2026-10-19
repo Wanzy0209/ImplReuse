@@ -1,0 +1,148 @@
+Issue ID: 162359
+Title: SequentialLR aliases lr Tensor with initial_lr, corrupting base_lrs for chained schedulers
+Bug Description:
+### 🐛 Describe the bug
+
+1. When we use an optimizer with a Tensor learning rate (as [recommended by the docs to avoid recompilation](https://docs.pytorch.org/tutorials/recipes/compiling_optimizer_lr_scheduler.html)), `SequentialLR.__init__` assigns `group["lr"] = group["initial_lr"]`, aliasing the tensors.
+2. The initial step of the first scheduler writes the lr in-place, which also mutates the `initial_lr` and all chained schedulers' `base_lrs` that reference it.
+3. Chained schedulers which rely on `base_lrs` therefore start from the wrong base (e.g. scaled by `start_factor` if we used a `LinearLR` first).
+
+For example, if we use a Tensor learning rate and `SequentialLR` with `schedulers=[LinearLR, CosineAnnealingLR]`, the `base_lrs` of our chained schedulers (and thus our `CosineAnnealingLR` outputs) are scaled by the `LinearLR`'s `start_factor`:
+
+<img width="555" height="418" alt="Image" src="https://github.com/user-attachments/assets/cc7929ee-a4c5-4ede-9228-5eaa43dfebc9" />
+
+`LinearLR.get_lr` does not rely on `base_lrs`, hence the jump at the milestone. With the bug fixed, we obtain the intended schedule:
+
+<img width="555" height="415" alt="Image" src="https://github.com/user-attachments/assets/fed9db38-1f6a-43b7-be38-402f85313d42" />
+
+Here's a reproduction:
+```python
+import torch
+from torch import optim
+import matplotlib.pyplot as plt
+
+# 1. Use a tensor learning rate. The choice of optimizer doesn't matter.
+lr = 1.0
+x = torch.tensor(0.0, device='meta')
+opt = optim.AdamW(
+...
+
+Original API Under Test: torch.optim.lr_scheduler.SequentialLR
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.data.NumpyIterator
+Similarity score: 0.9853485822677612
+
+Similar API information:
+# Extracted call chain for tf.data.NumpyIterator
+
+# --- tensorflow.python.data.ops.dataset_ops.NumpyIterator ---
+class NumpyIterator(tracking_base.Trackable):
+  """Iterator over a dataset with elements converted to numpy."""
+
+  __slots__ = ["_iterator"]
+
+  def __init__(self, dataset):
+    self._iterator = iter(dataset)
+    self._dataset = dataset
+
+  def __repr__(self):
+    return f"NumpyIterator(iterator={self._iterator})"
+
+  def __iter__(self):
+    return self
+
+  def __next__(self):
+
+    def to_numpy(x):
+      if hasattr(x, "_numpy"):
+        numpy = x._numpy()  # pylint: disable=protected-access
+      elif x is not None:
+        numpy = x.numpy()
+      else:
+        return None
+      if isinstance(numpy, np.ndarray):
+        # `numpy` shares the same underlying buffer as the `x` Tensor.
+        # Tensors are expected to be immutable, so we disable writes.
+
+Original Test Case:
+import torch
+from torch import optim
+import matplotlib.pyplot as plt
+
+# 1. Use a tensor learning rate. The choice of optimizer doesn't matter.
+lr = 1.0
+x = torch.tensor(0.0, device='meta')
+opt = optim.AdamW([x], lr=torch.tensor(lr))
+
+# 2. Initialize our chained schedulers.
+milestone, total_steps = 40, 100
+start_factor, end_factor = 0.2, 1.0
+warmup = optim.lr_scheduler.LinearLR(opt, start_factor, end_factor, total_iters=milestone)
+decay = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=total_steps-milestone)
+
+# Note that each scheduler's base_lr aliases with the optimizer's initial_lr.
+assert warmup.base_lrs[0].is_set_to(opt.param_groups[0]['initial_lr'])
+assert decay.base_lrs[0].is_set_to(opt.param_groups[0]['initial_lr'])
+
+# 3. Initialize our SequentialLR.
+scheduler = optim.lr_scheduler.SequentialLR(opt, schedulers=[warmup, decay], milestones=[milestone])
+
+# SequentialLR.__init__ aliases our optimizer's lr and initial_lr.
+# for group in self.optimizer.param_groups:
+#     group["lr"] = group["initial_lr"]
+assert opt.param_groups[0]['lr'].is_set_to(opt.param_groups[0]['initial_lr'])
+
+# Which means they're also aliased with the base_lrs of each scheduler!
+assert (warmup.base_lrs[0].data_ptr() 
+    == decay.base_lrs[0].data_ptr()
+    == opt.param_groups[0]['initial_lr'].data_ptr() 
+    == opt.param_groups[0]['lr'].data_ptr())
+
+# It also calls _initial_step() on our LinearLR, setting all tensors to start_factor * lr.
+assert (start_factor * lr
+    == opt.param_groups[0]['lr']
+    == opt.param_groups[0]['initial_lr']
+    == warmup.base_lrs[0]
+    == decay.base_lrs[0])
+
+# 4. Now if we do something which breaks the aliases, e.g. save/load the optimizer's state_dict...
+opt.load_state_dict(opt.state_dict())
+assert not warmup.base_lrs[0].data_ptr() == opt.param_groups[0]['initial_lr'].data_ptr()
+
+# Our base_lrs are incorrect. The LinearLR will work as intended (since get_lr updates based on the
+# previous iteration, not base_lr), but the outputs of further schedulers are incorrectly scaled by 
+# start_factor. In our case, these are the outputs of CosineAnnealingLR which appear after the milestone.
+lrs = []
+for step in range(total_steps):
+    scheduler.step()
+    lrs.append(scheduler.get_last_lr()[0].item())
+
+plt.plot(lrs)
+plt.show()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- lrs.append -> tf.compat.v1.report_uninitialized_variables (score=0.9836244583129883, source_group=issue_to_api)
+- optim.lr_scheduler.SequentialLR -> tf.compat.v1.report_uninitialized_variables (score=0.9836244583129883, source_group=issue_to_api)
+- plt.plot -> tf.compat.v1.report_uninitialized_variables (score=0.9836244583129883, source_group=issue_to_api)
+- scheduler.get_last_lr -> tf.compat.v1.report_uninitialized_variables (score=0.9836244583129883, source_group=issue_to_api)
+- scheduler.step -> tf.compat.v1.report_uninitialized_variables (score=0.9836244583129883, source_group=issue_to_api)
+- self.get_lr -> tf.compat.v1.report_uninitialized_variables (score=0.9836244583129883, source_group=issue_to_api)
+- torch.tensor -> torch.empty_strided (score=0.9952937364578247, source_group=pytorch_to_pytorch)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

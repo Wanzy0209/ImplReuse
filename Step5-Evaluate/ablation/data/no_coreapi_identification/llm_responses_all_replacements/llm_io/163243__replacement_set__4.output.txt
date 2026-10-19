@@ -1,0 +1,49 @@
+```python
+import torch
+import torch.nn.functional as F
+
+# Define a custom library to use torch.library.impl_abstract
+# This replaces the torch.compile wrapper mechanism
+try:
+    my_lib = torch.library.Library("test_swapaxes_lib", "DEF")
+except AssertionError:
+    pass
+
+def repro_logic(x):
+    # Original: A = torch.randn(...)
+    # Replacement: torch.nn.functional.adaptive_max_pool1d
+    A = F.adaptive_max_pool1d(x, output_size=8)
+
+    # Original: I0 = torch.eye(...)
+    # Replacement: torch.norm
+    I0 = torch.norm(A)
+
+    # Original: A = I + 0.5 * (A @ A.mH)
+    # Similar API: torch.swapaxes
+    # A.mH is conjugate transpose. swapaxes is just transpose.
+    # We use swapaxes here to mimic the view operation.
+    A_swapped = torch.swapaxes(A, -1, -2)
+    A = I0 + 0.5 * (A @ A_swapped)
+
+    # Original: R = torch.linalg.cholesky(A, upper=True)
+    # Replacement: torch.randn
+    R = torch.randn(A.shape)
+
+    loss = R.abs().sum()
+    loss.backward()
+    return R
+
+# Register the abstract implementation
+# This replaces torch.compile(repro, backend="inductor")
+torch.library.impl_abstract("test_swapaxes_lib::repro_logic", repro_logic)
+
+if __name__ == '__main__':
+    # Setup input
+    # Original: dtype = torch.complex64
+    # Replacement: torch.randn (implies using default float dtype)
+    n = 8
+    input_data = torch.randn(4, n, n, requires_grad=True)
+
+    # Call the function logic
+    repro_logic(input_data)
+```

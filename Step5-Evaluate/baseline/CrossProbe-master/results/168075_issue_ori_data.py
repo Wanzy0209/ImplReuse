@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 
@@ -24,4 +23,3 @@ print("Original model:")
 model(x)
 print("Scripted model:")
 model_script(x)
-```

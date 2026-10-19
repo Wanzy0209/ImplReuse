@@ -1,0 +1,38 @@
+import torch
+import tensorflow as tf
+import unittest
+
+class TestCrossedColumnAccess(unittest.TestCase):
+    """
+    Test case to verify that accessing and using tf.feature_column.crossed_column
+    does not cause a segfault, similar to the issue reported with 
+    torch._C._onnx.OperatorExportTypes.
+    """
+    
+    def test_crossed_column_instantiation(self):
+        """
+        Reproduces the logic of accessing a C++ bound object and attempting to use it.
+        Original: import torch -> torch._C._onnx.OperatorExportTypes (segfault on __int__)
+        Replacement: import tensorflow -> tf.feature_column.crossed_column
+        """
+        # Access the API (replaces torch._C._onnx.OperatorExportTypes)
+        crossed_column_fn = tf.feature_column.crossed_column
+        
+        # Attempt to use the API to trigger the underlying C++ binding logic.
+        # This mimics the __int__ call or initialization that caused the crash in PyTorch.
+        try:
+            # Create a simple crossed column instance
+            keys = ['feature_a', 'feature_b']
+            hash_bucket_size = 100
+            column = crossed_column_fn(keys=keys, hash_bucket_size=hash_bucket_size)
+            
+            # Assert that the object was created successfully (no segfault)
+            self.assertIsNotNone(column)
+            
+        except Exception as e:
+            # If a standard Python exception occurs, we fail the test with that exception.
+            # If a segfault occurs, the test runner will report a crash.
+            self.fail(f"Exception raised while accessing crossed_column: {e}")
+
+if __name__ == '__main__':
+    unittest.main()

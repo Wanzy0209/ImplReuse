@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: @torch.compile(fullgraph=True) -> @tf.function
@@ -30,4 +29,3 @@ mask = tf.expand_dims(tf.range(512) < 8, axis=0)
 hidden = tf.random.normal((1, 512, 4096))
 
 fn(mask, hidden)
-```

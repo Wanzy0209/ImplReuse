@@ -1,0 +1,38 @@
+import torch
+
+# Replacement: torch._dynamo.config.capture_scalar_outputs -> torch.median
+# Note: Replacing a config setting with a function call is semantically void, 
+# so we omit the config line to keep the test valid and runnable.
+
+def foo(arg0, arg1):
+    t0 = arg0
+    t1 = arg1
+    # Replacement: fill_diagonal_ -> torch.median
+    # Original: t2 = t0.clone(); t2.fill_diagonal_(t1.item())
+    # New: t2 = torch.median(t0, dim=int(t1.item()))
+    # t1 is a bool tensor (from isnan replacement). int(True)=1, int(False)=0.
+    # t0 is (1, 1). dim 0 or 1 is valid.
+    # torch.median returns (values, indices). We return values to match tensor return type.
+    t2 = torch.median(t0, dim=int(t1.item()))
+    return t2[0]
+
+# Replacement: torch.empty -> torch.isnan
+# Original: arg0 = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True)
+# New: arg0 = torch.isnan(torch.zeros([1, 1], dtype=torch.float32, device='cuda'))
+# We use zeros to ensure determinism. isnan returns False.
+# requires_grad=True is removed because isnan is not differentiable.
+arg0 = torch.isnan(torch.zeros([1, 1], dtype=torch.float32, device='cuda'))
+arg1 = torch.isnan(torch.zeros([], dtype=torch.float32, device='cuda'))
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1)
+    # out_eager.sum().backward() # Removed, not differentiable
+    print('Eager Success! ')
+
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    # out_compiled.sum().backward() # Removed
+    print('Compile Success! ')
+
+    # Check equality
+    assert torch.equal(out_eager, out_compiled)

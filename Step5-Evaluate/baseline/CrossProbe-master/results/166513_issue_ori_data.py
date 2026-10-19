@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import cv2
 import numpy as np
@@ -134,4 +133,3 @@ if __name__ == "__main__":
     for step in range(300):
         # Conversion: next(infinite_dataloader)
         batch = next(infinite_dataloader)
-```

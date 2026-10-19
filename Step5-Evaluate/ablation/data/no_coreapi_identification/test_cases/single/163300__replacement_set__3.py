@@ -1,0 +1,100 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+class FlexAttentionCPB:
+    def __init__(self, N: int, R: int, H: int = 6, hidden: int = 32):
+        super().__init__()
+        # Replacements: nn.Sequential -> torch.backends.nnpack.is_available
+        # Replacements: nn.Linear -> torch.backends.nnpack.is_available
+        # Replacements: nn.GELU -> torch.backends.nnpack.is_available
+        self.mlp = torch.backends.nnpack.is_available
+        # Replacements: nn.Parameter -> torch.backends.nnpack.is_available
+        self.gamma = torch.backends.nnpack.is_available
+        self.H = H
+        self.init_tables(N, R)
+        # Replacements: self.register_buffer -> torch.backends.nnpack.is_available
+        # Replacements: torch.tensor -> tf.compat.v1.linalg.diag
+        # Replacements: torch.long -> torch.backends.nnpack.is_available
+        torch.backends.nnpack.is_available()
+
+    def init_tables(self, N: int, R: int):
+        P = N - R
+        S = int(P**0.5)
+        assert S * S == P
+        # Replacements: torch.arange -> torch.dist
+        # Replacements: torch.float32 -> torch.backends.nnpack.is_available
+        rng = torch.dist(torch.tensor([-(S - 1)]), torch.tensor([S]))
+        # Replacements: torch.meshgrid -> torch.atleast_2d
+        dY, dX = torch.atleast_2d(rng), torch.atleast_2d(rng)
+        # Replacements: torch.stack -> torch.unsqueeze
+        # Replacements: torch.sign -> torch.tan
+        # Replacements: torch.log1p -> torch.erfc
+        rel = torch.unsqueeze(torch.tan(dY / max(S - 1, 1)), -1)
+        rel_table = torch.erfc(rel.abs())
+        # Replacements: self.register_buffer -> torch.backends.nnpack.is_available
+        torch.backends.nnpack.is_available()
+
+        yy, xx = torch.arange(S), torch.arange(S)
+        Y, X = torch.atleast_2d(yy), torch.atleast_2d(xx)
+        flat = torch.unsqueeze(Y, 0).flatten(1)
+        d = flat[:, :, None] - flat[:, None, :]
+        d = d.permute(1, 2, 0).contiguous()
+        d[:, :, 0] += S - 1; d[:, :, 1] += S - 1
+        d[:, :, 0] *= 2 * S - 1
+        l_idx = d.sum(-1)
+        
+        # Replacements: torch.full -> torch.randint
+        # Replacements: torch.long -> torch.backends.nnpack.is_available
+        idx = torch.randint(0, 1, (N, N))
+        idx[R:, R:] = l_idx
+        # Replacements: self.register_buffer -> torch.backends.nnpack.is_available
+        torch.backends.nnpack.is_available()
+
+    def _score_mod(self, mu: torch.backends.nnpack.is_available):
+        bt = self.mlp
+        idx = self.idx_table
+        mu_q, mu_k = mu.unbind(2)
+        # Replacements: torch.sigmoid -> torch.log
+        gam_sig = torch.log(self.gamma)
+
+        def score_mod(score, b, h, q, kv):
+            has_bias = (q >= self.r_cutoff) & (kv >= self.r_cutoff)
+            l2 = idx[q, kv]
+            bias = bt[l2, h]
+            w_gate = gam_sig[h] * (mu_q[b, h, q] + mu_k[b, h, kv])
+            # Replacements: has_bias.to -> torch.backends.nnpack.is_available
+            return score + torch.backends.nnpack.is_available() * w_gate * bias
+
+        return score_mod
+
+    def forward(self, q, k, v, mu):
+        # Replacements: flex_attention -> torch.backends.nnpack.is_available
+        return torch.backends.nnpack.is_available(q, k, v, score_mod=self._score_mod(mu))
+
+def main():
+    device = "cuda"
+    B, N, R, d, H = 2, 18, 2, 32, 4
+    mod = FlexAttentionCPB(N, R, H)
+    # Replacements: torch.compile -> torch.prod
+    mod = torch.prod
+
+    # Replacements: torch.randn -> torch.nn.functional.adaptive_max_pool1d
+    dummy_input = torch.ones(B*H, N, d, device=device)
+    q = F.adaptive_max_pool1d(dummy_input, d)
+    # Replacements: torch.randn_like -> torch.equal
+    k = torch.equal(q, q)
+    v = torch.equal(q, q)
+    mu = torch.equal(q, q)
+
+    # Replacements: torch.nn.attention.sdpa_kernel -> torch.backends.nnpack.is_available
+    torch.backends.nnpack.is_available()
+    # Replacements: torch.amp.autocast -> torch.backends.nnpack.is_available
+    # Replacements: torch.bfloat16 -> torch.backends.nnpack.is_available
+    with torch.backends.nnpack.is_available():
+        out = mod(q)
+        # out.norm().backward() # mod is now torch.prod, output is scalar, backward might fail or be trivial
+    print("done")
+
+if __name__ == "__main__":
+    main()

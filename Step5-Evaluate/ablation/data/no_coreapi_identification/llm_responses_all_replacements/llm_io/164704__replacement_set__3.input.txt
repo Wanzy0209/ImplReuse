@@ -1,0 +1,147 @@
+Issue ID: 164704
+Title: [Fuzzer][Eager/Compile Divergence] cpp_fused_mul_2(primals_3, buf10, u1) RuntimeError: expected int arg but got float
+Bug Description:
+### 🐛 Describe the bug
+
+```
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(114503)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_4 = torch.full((2, 3), 3, dtype=torch.int16) # size=(2, 3), stride=(3, 1), dtype=int16, device=cuda
+    var_node_3 = torch.unique(var_node_4) # size=(1,), stride=(1,), dtype=int16, device=cuda
+    var_node_2 = torch.squeeze(var_node_3) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_7 = arg_0 # size=(), stride=(), dtype=int16, device=cuda
+    var_node_8 = arg_1 # size=(), stride=(), dtype=int16, device=cuda
+    var_node_6 = torch.sub(var_node_7, var_node_8) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_10 = torch.full((1,), 3, dtype=torch.int16) # size=(1,), stride=(1,), dtype=int16, device=cuda
+    var_node_9 = torch.squeeze(var_node_10) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_5 = torch.add(var_node_6, var_node_9) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_1 = torch.div(var_node_2, var_node_5) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_0 = var_node_1.item() # dtype=int16
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg
+...
+
+Original API Under Test: torch.item
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.compat.v1.local_variables_initializer
+Similarity score: 0.9830480217933655
+
+Similar API information:
+# Extracted call chain for tf.compat.v1.local_variables_initializer
+
+# --- tensorflow.python.ops.variables.local_variables_initializer ---
+def local_variables_initializer():
+  """Returns an Op that initializes all local variables.
+
+  This is just a shortcut for `variables_initializer(local_variables())`
+
+  @compatibility(TF2)
+  In TF2, variables are initialized immediately when they are created. There is
+  no longer a need to run variable initializers before using them.
+  @end_compatibility
+
+  Returns:
+    An Op that initializes all local variables in the graph.
+  """
+  if context.executing_eagerly():
+    return control_flow_ops.no_op(name="local_variables_initializer")
+  return variables_initializer(local_variables())
+
+# --- tensorflow.python.eager.context.executing_eagerly ---
+def executing_eagerly():
+  """Checks whether the current thread has eager execution enabled.
+
+  Eager execution is enabled by default and this API returns `True`
+  in most of cases. However, this API might return `False` in the following use
+  cases.
+
+  *  Executing inside `tf.function`, unless under `tf.init_scope` or
+     `tf.config.run_functions_eagerly(True)` is previously called.
+
+Original Test Case:
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+torch.manual_seed(114503)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_4 = torch.full((2, 3), 3, dtype=torch.int16) # size=(2, 3), stride=(3, 1), dtype=int16, device=cuda
+    var_node_3 = torch.unique(var_node_4) # size=(1,), stride=(1,), dtype=int16, device=cuda
+    var_node_2 = torch.squeeze(var_node_3) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_7 = arg_0 # size=(), stride=(), dtype=int16, device=cuda
+    var_node_8 = arg_1 # size=(), stride=(), dtype=int16, device=cuda
+    var_node_6 = torch.sub(var_node_7, var_node_8) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_10 = torch.full((1,), 3, dtype=torch.int16) # size=(1,), stride=(1,), dtype=int16, device=cuda
+    var_node_9 = torch.squeeze(var_node_10) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_5 = torch.add(var_node_6, var_node_9) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_1 = torch.div(var_node_2, var_node_5) # size=(), stride=(), dtype=int16, device=cuda
+    var_node_0 = var_node_1.item() # dtype=int16
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+sentinel = torch.tensor(1.0, requires_grad=True)
+
+arg_0 = torch.as_strided(torch.randint(5, 30, (1,)).to(torch.int16), (), ())
+arg_1 = torch.as_strided(torch.randint(5, 30, (1,)).to(torch.int16), (), ())
+
+args = (arg_0, arg_1) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print('✅ compile success')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- e.with_traceback -> tf.compat.v1.executing_eagerly (score=0.9810792207717896, source_group=issue_to_api)
+- torch._dynamo(torch.compile),torch.Tensor.item -> tf.compat.v1.executing_eagerly (score=0.9810792207717896, source_group=issue_to_api)
+- torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.compat.v1.executing_eagerly (score=0.9810792207717896, source_group=issue_to_api)
+- torch._dynamo.config.capture_scalar_outputs -> tf.compat.v1.executing_eagerly (score=0.9810792207717896, source_group=issue_to_api)
+- torch._dynamo.exc.UserError -> tf.compat.v1.executing_eagerly (score=0.9810792207717896, source_group=issue_to_api)
+- torch.add -> torch.div (score=0.9952563047409058, source_group=pytorch_to_pytorch)
+- torch.as_strided -> torch.empty_strided (score=0.9959619641304016, source_group=pytorch_to_pytorch)
+- torch.compile -> torch.prod (score=0.9944407939910889, source_group=pytorch_to_pytorch)
+- torch.div -> torch.add (score=0.9952563047409058, source_group=pytorch_to_pytorch)
+- torch.full -> torch.randint (score=0.9988011717796326, source_group=pytorch_to_pytorch)
+- torch.int16 -> tf.compat.v1.executing_eagerly (score=0.9810792207717896, source_group=issue_to_api)
+- torch.manual_seed -> tf.compat.v1.assign_sub (score=0.9963008165359497, source_group=pytorch_to_tensorflow)
+- torch.randint -> torch.fmin (score=0.9995984435081482, source_group=pytorch_to_pytorch)
+- torch.squeeze -> torch.index_select (score=0.9945927858352661, source_group=pytorch_to_pytorch)
+- torch.sub -> torch.add (score=0.9956862926483154, source_group=pytorch_to_pytorch)
+- torch.tensor -> tf.compat.v1.linalg.diag (score=0.9954932928085327, source_group=pytorch_to_tensorflow)
+- torch.unique -> tf.compat.v1.global_variables_initializer (score=0.9829548597335815, source_group=issue_to_api)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

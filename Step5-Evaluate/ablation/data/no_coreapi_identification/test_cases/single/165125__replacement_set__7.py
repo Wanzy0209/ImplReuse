@@ -1,0 +1,18 @@
+import torch
+
+def test_range_push_return_type():
+    """
+    Test case based on Issue 165125: Type "str" is not assignable to return type "None".
+    Original API: torch.utils.cpp_extension._jit_compile (returned str/module, typed None).
+    Replacement API: torch.profiler.itt.range_push.
+    This test verifies the return type of the replacement API to ensure it matches
+    the expected behavior (or catches the bug if it existed).
+    """
+    # Call the replacement API
+    result = torch.profiler.itt.range_push("test_message")
+    
+    # The original bug was that the function returned a string or module but was typed as None.
+    # We check the return value here. 
+    # For torch.profiler.itt.range_push, the expected return type is None.
+    # If it returned a string or handle (like the original bug), this assertion would catch it.
+    assert result is None, f"Expected return type None, but got {type(result)}"

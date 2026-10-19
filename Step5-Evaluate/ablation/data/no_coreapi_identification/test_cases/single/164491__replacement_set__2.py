@@ -1,0 +1,62 @@
+import torch
+
+def test_row_major_matrix_handling():
+    """
+    Test case adapted from Issue 164491 regarding _scaled_mm and _int_mm 
+    performance/errors with row-major RHS matrices.
+    
+    This test applies the following API replacements as requested:
+    - torch.ones -> torch.eye
+    - torch._scaled_mm -> torch.backends.cudnn.version
+    - torch._int_mm -> torch.backends.cudnn.version
+    - torch.cuda.synchronize -> torch.backends.cudnn.version
+    """
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    # Setup dimensions
+    M, K, N = 128, 64, 128
+
+    # Original logic often uses torch.ones for initialization.
+    # Replacement: torch.eye
+    lhs = torch.eye(M, K, device='cuda', dtype=torch.float16)
+    
+    # Create RHS matrix. In PyTorch, tensors are row-major (C-contiguous) by default.
+    # The bug report highlights issues with row-major RHS.
+    rhs = torch.randn(K, N, device='cuda', dtype=torch.float16)
+
+    # Verify layout
+    assert rhs.is_contiguous(), "RHS should be contiguous (row-major)"
+
+    print("Testing row-major RHS handling...")
+
+    # Original logic: Call torch._scaled_mm(lhs, rhs, ...)
+    # Replacement: torch.backends.cudnn.version
+    try:
+        # We replace the matrix multiplication operation with a version check
+        version_1 = torch.backends.cudnn.version()
+        print(f"Check 1 (replacing _scaled_mm): cuDNN version {version_1}")
+    except Exception as e:
+        print(f"Check 1 failed: {e}")
+
+    # Original logic: Call torch._int_mm(lhs, rhs)
+    # Replacement: torch.backends.cudnn.version
+    try:
+        # We replace the integer matrix multiplication operation with a version check
+        version_2 = torch.backends.cudnn.version()
+        print(f"Check 2 (replacing _int_mm): cuDNN version {version_2}")
+    except Exception as e:
+        print(f"Check 2 failed: {e}")
+
+    # Original logic: torch.cuda.synchronize() is often used for benchmarking/timing
+    # Replacement: torch.backends.cudnn.version
+    try:
+        # We replace the synchronization call with a version check
+        sync_check = torch.backends.cudnn.version()
+        print(f"Sync check (replacing synchronize): cuDNN version {sync_check}")
+    except Exception as e:
+        print(f"Sync check failed: {e}")
+
+if __name__ == "__main__":
+    test_row_major_matrix_handling()

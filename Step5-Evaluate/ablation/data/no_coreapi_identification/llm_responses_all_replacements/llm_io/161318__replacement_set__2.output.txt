@@ -1,0 +1,30 @@
+```python
+import torch
+import tensorflow as tf
+
+@torch.compile(fullgraph=True)
+def fn(encoder_attention_mask, encoder_hidden_states):
+    encoder_hidden_states = encoder_hidden_states.new_zeros([1, 512, 3072])
+    text_len = encoder_attention_mask.sum().item()
+    encoder_hidden_states = encoder_hidden_states[:, :text_len]
+    return encoder_hidden_states
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+# Replacement for torch.randn -> tf.random.stateless_truncated_normal
+seed = (1, 2)
+tf_hidden = tf.random.stateless_truncated_normal(shape=(1, 512, 4096), seed=seed)
+hidden = torch.from_numpy(tf_hidden.numpy()).cuda()
+
+# Replacement for torch.arange -> torch.std
+# We use the 'hidden' tensor to calculate std, reducing along dims 0 and 2 to match the original shape [512]
+mask = (torch.std(hidden, dim=[0, 2]) < 8).unsqueeze(0).cuda()
+
+# Run the function
+result = fn(mask, hidden)
+
+# Basic assertion to verify execution
+assert result is not None
+assert result.shape[0] == 1
+assert result.shape[1] == mask.sum().item()
+```

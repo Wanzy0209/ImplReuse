@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # torch.set_default_device('cuda') sets the default device for tensor creation.
@@ -27,4 +26,3 @@ with tf.device('/GPU:0'):
 
     # print((out3_high - out2).abs().max())
     print(tf.reduce_max(tf.abs(out3_high - out2)))
-```

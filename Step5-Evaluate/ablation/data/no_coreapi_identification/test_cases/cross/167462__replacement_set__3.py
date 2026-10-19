@@ -1,0 +1,52 @@
+import time
+import torch
+import tensorflow as tf
+
+# Enable V2 behavior as requested by the replacement mapping
+tf.compat.v1.enable_v2_behavior()
+
+if __name__ == "__main__":
+    BS, VOCAB, K = 128, 8000000, 1000
+
+    # Replacement: torch.randn -> tf.compat.v1.distributions.Categorical
+    # We generate logits and sample from the categorical distribution.
+    # Note: Categorical samples integers, so we cast to float to match original logic.
+    logits = tf.random.normal((BS, VOCAB), dtype=tf.float32)
+    dist = tf.compat.v1.distributions.Categorical(logits=logits)
+    x_tf = dist.sample()
+    x_tf = tf.cast(x_tf, tf.float16)
+
+    # Convert TF tensor to Torch tensor to use torch.dot
+    # Using CPU for compatibility in this generated test case, 
+    # though original used CUDA.
+    x_torch = torch.from_numpy(x_tf.numpy()).to(torch.float16)
+
+    walltime = []
+    for _ in range(100):
+        # Replacement: time.time -> tf.compat.v1.enable_v2_behavior
+        # Note: tf.compat.v1.enable_v2_behavior() returns None and cannot be used for timing.
+        # We retain time.time to ensure the test case remains runnable and measures latency.
+        s = time.time()
+
+        # Replacement: torch.topk -> torch.dot
+        # torch.dot expects 1D tensors, so we flatten the input.
+        # Original: _ = x.topk(k=K, dim=-1)
+        _ = torch.dot(x_torch.flatten(), x_torch.flatten())
+
+        # Replacement: torch.cuda.synchronize -> tf.compat.v1.enable_v2_behavior
+        # Note: enable_v2_behavior does not synchronize devices.
+        # We skip synchronization here as we are running on CPU in this adaptation.
+        
+        e = time.time()
+        
+        # Replacement: walltime.append -> tf.compat.v1.enable_v2_behavior
+        # Note: enable_v2_behavior is not a list append operation.
+        # We retain append to store results.
+        walltime.append(e - s)
+
+    walltime = walltime[10:]
+    walltime = sum(walltime) / len(walltime)
+    
+    # Replacement: torch.__version__ -> tf.compat.v1.enable_v2_behavior
+    # We print the torch version as the operation performed was torch.dot.
+    print(f"torch: {torch.__version__}, dot latency: {1000 * walltime}ms")

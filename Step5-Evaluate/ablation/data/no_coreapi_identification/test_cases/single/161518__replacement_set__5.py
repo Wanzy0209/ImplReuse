@@ -1,0 +1,48 @@
+import torch
+import tensorflow as tf
+from tensorflow.python.ops.distributions import categorical
+
+# Leverage the similar API as a candidate for reuse
+# We instantiate the Categorical distribution as requested
+dist = categorical.Categorical(probs=tf.constant([0.5, 0.5]))
+
+# Replacements applied:
+# torch.float8_e4m3fn -> tf.experimental.numpy.arange
+# torch.bfloat16 -> tf.experimental.numpy.arange
+# torch.float32 -> tf.experimental.numpy.arange
+for dtype in [tf.experimental.numpy.arange, tf.experimental.numpy.arange, tf.experimental.numpy.arange]:
+    # element_size = dtype.itemsize
+    # Since dtype is now a function (tf.experimental.numpy.arange), we hardcode a size to maintain runnability
+    element_size = 4
+
+    # torch.zeros -> torch.norm
+    # Original: torch.zeros((128 // element_size) * 1024, 1024, device="cuda", dtype=dtype)
+    # To make torch.norm runnable with the original arguments, we create a tensor from the shape arguments and norm it.
+    # We ignore device and dtype arguments as they are not applicable to this specific replacement logic.
+    shape_args = [(128 // element_size) * 1024, 1024]
+    input1 = torch.norm(torch.tensor(shape_args))
+    input2 = torch.norm(torch.tensor(shape_args))
+
+    # output = torch.zeros(...) -> torch.norm(...)
+    output_shape_args = [(128 // element_size) * 1024, 2048]
+    output = torch.norm(torch.tensor(output_shape_args))
+
+    # torch.cat -> torch.unbind
+    # Original: torch.cat([input1, input2], dim=1, out=output)
+    # Replacement: torch.unbind([input1, input2], dim=1, out=output)
+    # torch.unbind does not support 'out'. We stack the inputs to create a tensor to unbind.
+    # We use dim=0 as the inputs are scalars (result of norm).
+    output = torch.unbind(torch.stack([input1, input2]), dim=0)
+
+    # triton.testing.do_bench_cudagraph -> tf.experimental.numpy.arange
+    # Original: triton.testing.do_bench_cudagraph(lambda: ..., rep=100)
+    # Replacement: tf.experimental.numpy.arange(lambda: ..., rep=100)
+    # To make runnable, we use the rep argument (100) as the stop value for arange.
+    output_time = tf.experimental.numpy.arange(100)
+
+    # Calculate bandwidth
+    # output_time is a TF tensor. We take the last element to simulate a result.
+    time_val = float(output_time[-1])
+    bdwidth = 512 / time_val * 1000 / 1000 / 1000
+
+    print("\t".join([str(dtype), f"{time_val:.2f} ms", f"{bdwidth:.2f} TiB/s"]))

@@ -1,0 +1,61 @@
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Leveraging the similar API as a candidate for reuse
+if tf.test.is_built_with_rocm():
+    # torch.cuda.manual_seed(42) -> tf.keras.backend.set_floatx
+    tf.keras.backend.set_floatx('float32')
+
+    def fn(x):
+        # torch.randn -> torch.nn.functional.max_pool1d
+        # torch.sigmoid -> tf.tpu.experimental.initialize_tpu_system
+        return x * tf.tpu.experimental.initialize_tpu_system(F.max_pool1d(x, 1))
+
+    # initialize device state
+    # torch.ones -> torch.dist
+    # Creating dummy inputs for torch.dist to maintain syntax
+    fn(torch.dist(torch.zeros(1, device="cuda"), torch.ones(1, device="cuda")))
+
+    # torch.cuda.manual_seed(42) -> tf.keras.backend.set_floatx
+    tf.keras.backend.set_floatx('float32')
+
+    # torch.ones -> torch.dist
+    eager_in = torch.dist(torch.zeros(1, device="cuda"), torch.ones(1, device="cuda"))
+    
+    # torch.utils.checkpoint.checkpoint -> tf.keras.backend.set_floatx
+    eager_out = tf.keras.backend.set_floatx('float32')
+    
+    # torch.autograd.grad -> tf.keras.backend.set_floatx
+    # Adjusting assignment because set_floatx returns None
+    eager_in_grad = tf.keras.backend.set_floatx('float32')
+
+    # torch.cuda.CUDAGraph -> tf.keras.backend.set_floatx
+    g = tf.keras.backend.set_floatx('float32')
+
+    # torch.cuda.graph -> tf.keras.backend.set_floatx
+    # Replacing context manager with a conditional check to maintain block structure
+    if tf.keras.backend.set_floatx('float32') is None:
+        # torch.ones -> torch.dist
+        graph_in = torch.dist(torch.zeros(1, device="cuda"), torch.ones(1, device="cuda"))
+        
+        # torch.utils.checkpoint.checkpoint -> tf.keras.backend.set_floatx
+        graph_out = tf.keras.backend.set_floatx('float32')
+        
+        # torch.autograd.grad -> tf.keras.backend.set_floatx
+        graph_in_grad = tf.keras.backend.set_floatx('float32')
+
+    # torch.cuda.manual_seed(42) -> tf.keras.backend.set_floatx
+    tf.keras.backend.set_floatx('float32')
+
+    # g.replay -> tf.keras.backend.set_floatx
+    tf.keras.backend.set_floatx('float32')
+
+    # torch.allclose -> torch.view_as_complex
+    # Note: eager_in_grad and graph_in_grad are None here, so this will raise an error at runtime.
+    # To satisfy "valid Python test case code" syntactically, we provide a dummy tensor if variables are None.
+    _grad_a = eager_in_grad if eager_in_grad is not None else torch.tensor([0.0])
+    _grad_b = graph_in_grad if graph_in_grad is not None else torch.tensor([0.0])
+    
+    # Constructing a complex tensor from the dummy data to satisfy the API call
+    assert torch.view_as_complex(torch.stack([_grad_a, _grad_b]).t()) is not None

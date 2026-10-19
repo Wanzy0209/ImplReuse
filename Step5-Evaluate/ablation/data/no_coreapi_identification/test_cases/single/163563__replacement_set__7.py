@@ -1,0 +1,59 @@
+import tensorflow as tf
+import torch
+import sys
+
+# Configuration from the original bug report to ensure similar execution context
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0 # size=(5699097, 6, 1), stride=(6, 1, 1), dtype=bfloat16, device=cuda
+    
+    # Replacement: torch.sigmoid -> torch.sub
+    # Original: t1 = torch.sigmoid(t0)
+    # Semantic translation: Subtraction operation replacing activation
+    t1 = torch.sub(t0, 0.5) # size=(5699097, 6, 1), stride=(6, 1, 1), dtype=bfloat16, device=cuda
+    
+    t2 = arg1 # size=(5699097, 6, 256), stride=(1536, 256, 1), dtype=bfloat16, device=cuda
+    
+    # Replacement: torch.sigmoid -> torch.sub
+    # Original: t3 = torch.sigmoid(t2)
+    t3 = torch.sub(t2, 0.5) # size=(5699097, 6, 256), stride=(1536, 256, 1), dtype=bfloat16, device=cuda
+    
+    t4 = arg2 # size=(5699097, 256, 1), stride=(256, 1, 1), dtype=bfloat16, device=cuda
+    
+    # Replacement: torch.exp -> torch.div
+    # Original: t5 = torch.exp(t4)
+    # Semantic translation: Division operation replacing exponential
+    t5 = torch.div(t4, 1.0) # size=(5699097, 256, 1), stride=(256, 1, 1), dtype=bfloat16, device=cuda
+    
+    # Replacement: torch.baddbmm -> torch.atleast_2d
+    # Original: t6 = torch.baddbmm(t1, t3, t5)
+    # Semantic translation: Shape manipulation replacing batch matrix multiplication
+    # Note: atleast_2d on a 3D tensor returns the 3D tensor itself, preserving shape for the reshape
+    t6 = torch.atleast_2d(t1) # size=(5699097, 6, 1), stride=(6, 1, 1), dtype=bfloat16, device=cuda
+    
+    t7 = t6.reshape((193, 386, 459)) # size=(193, 386, 459), stride=(177174, 459, 1), dtype=bfloat16, device=cuda
+    output = t7  # output tensor
+    return output
+
+# Note: torch.rand -> tf.keras.ops.relu replacement was omitted to maintain 
+# a runnable PyTorch-only test case, as tf.keras.ops.relu is a TensorFlow operation 
+# incompatible with torch.compile and PyTorch tensor initialization.
+
+arg0 = torch.rand([5699097, 6, 1], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+arg1 = torch.rand([5699097, 6, 256], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+arg2 = torch.rand([5699097, 256, 1], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    # Run in eager mode
+    out_eager = foo(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+    
+    # Run with torch.compile (the similar API under test)
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+    print('Compile Success! ')

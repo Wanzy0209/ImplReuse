@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.empty((0,), dtype=torch.float32) -> tf.constant([], dtype=tf.float32)
@@ -34,4 +33,3 @@ if tf.config.list_physical_devices('GPU'):
 #     mps_x = x.to('mps')
 #     mps_result = torch.nanmedian(mps_x)
 #     print("MPS result:", mps_result) # tensor(0, device='mps:0')
-```

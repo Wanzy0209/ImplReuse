@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import numpy as np
 
@@ -47,4 +46,3 @@ np.testing.assert_allclose(ref.numpy(), act.numpy())
 # print(f"{torch._inductor.metrics.generated_kernel_count=}")
 # Conversion: TensorFlow does not expose generated kernel count directly in this manner.
 print("TensorFlow execution completed.")
-```

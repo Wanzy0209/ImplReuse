@@ -1,0 +1,44 @@
+import torch
+import torch.nn.functional as F
+from typing import List, Optional
+
+def test_shrink_group_replaced_with_softplus():
+    """
+    Test case adapted from the shrink_group RFC.
+    Replaces shrink_group with torch.nn.functional.softplus.
+    
+    Original Logic:
+    shrink_group(ranks_to_exclude: List[int],
+                Pg: Optional[ProcessGroup] = None,
+                shrink_flags : int = NCCL_SHRINK_DEFAULT)
+    
+    Translated Logic:
+    Apply softplus activation to a tensor derived from ranks_to_exclude.
+    Map 'shrink_flags' to 'beta' parameter of softplus.
+    """
+    
+    # Setup inputs based on the original test case structure
+    ranks_to_exclude: List[int] = [1, 2, 3]
+    # Pg (ProcessGroup) is not applicable to softplus, so we omit it or treat it as context
+    Pg: Optional[object] = None 
+    # Map shrink_flags to beta (default 1)
+    shrink_flags: int = 1 
+
+    # Convert the list of ranks to a tensor for the softplus operation
+    input_tensor = torch.tensor(ranks_to_exclude, dtype=torch.float32)
+
+    # Call the replacement API: torch.nn.functional.softplus
+    # We map 'ranks_to_exclude' to 'input' and 'shrink_flags' to 'beta'
+    result = F.softplus(input=input_tensor, beta=shrink_flags)
+
+    # Calculate expected value manually for assertion
+    # softplus(x) = log(1 + exp(x))
+    expected = torch.log1p(torch.exp(input_tensor))
+
+    # Assert that the result matches the expected calculation
+    assert torch.allclose(result, expected), f"Softplus calculation failed. Expected {expected}, got {result}"
+    
+    print("Test passed: softplus executed successfully with mapped arguments.")
+
+if __name__ == "__main__":
+    test_shrink_group_replaced_with_softplus()

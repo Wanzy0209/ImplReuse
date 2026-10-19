@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.nn.Linear(5, 7) -> tf.keras.layers.Dense(7, input_shape=(5,))
@@ -27,4 +26,3 @@ pruned_weights = weights * mask
 m.set_weights([pruned_weights.numpy(), bias])
 
 m
-```

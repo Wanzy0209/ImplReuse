@@ -1,0 +1,26 @@
+import torch
+
+# Replacement for: torch._inductor.config.combo_kernels = True
+torch.library.get_ctx("combo_kernels", "API")
+
+# Replacement for: @torch.compile
+torch.library.get_ctx("compile", "API")
+
+def fn(x, y, z):
+    # Replacement for: x.sum(1)
+    # Replacement for: z.cumsum(1)
+    # y.mean(1) remains as per original logic
+    return torch.library.get_ctx("sum", "API"), y.mean(1), torch.library.get_ctx("cumsum", "API")
+
+# Replacement for: torch.rand(...)
+inps = (
+    torch.backends.cuda.is_flash_attention_available(),
+    torch.backends.cuda.is_flash_attention_available(),
+    torch.backends.cuda.is_flash_attention_available(),
+)
+
+# Execution
+# Note: y.mean(1) will fail at runtime because y is a bool, 
+# but this preserves the structure requested by the replacement rules.
+if torch.cuda.is_available():
+    fn(*inps)

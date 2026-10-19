@@ -1,0 +1,40 @@
+import torch
+import tensorflow as tf
+
+# Replacements for torch._dynamo.config
+tf.keras.losses.serialize = True
+tf.keras.losses.serialize = True
+
+# Replacement for torch.manual_seed
+torch.isnan(19990)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = arg_0
+    # Replacement for torch.squeeze -> torch.as_strided
+    # Adding size and stride arguments to make torch.as_strided runnable
+    var_node_1 = torch.as_strided(var_node_2, var_node_2.size(), var_node_2.stride())
+    var_node_0 = var_node_1.item()
+    # Replacement for aten.mul.Tensor -> tf.keras.losses.serialize
+    result = tf.keras.losses.serialize(var_node_0, sentinel)
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Replacement for torch.tensor -> tf.linalg.diag
+# Removing requires_grad as it is not applicable to tf.linalg.diag
+sentinel = tf.linalg.diag(1.0)
+
+# Replacement for torch.randint -> torch.isreal
+# Replacement for torch.bool -> tf.keras.losses.serialize
+# Adapting arguments to make torch.isreal runnable
+arg_0 = torch.isreal(torch.tensor([0.0])) > 0
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print(' eager success')
+
+# Replacement for torch.compile -> torch.any
+# Removing fullgraph and dynamic kwargs as they are not supported by torch.any
+compiled_program = torch.any(fuzzed_program)
+result_compiled = compiled_program(*args)
+print(' compile success')

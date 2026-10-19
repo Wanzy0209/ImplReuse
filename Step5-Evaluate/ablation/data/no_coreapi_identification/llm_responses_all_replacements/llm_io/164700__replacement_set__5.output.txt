@@ -1,0 +1,58 @@
+```python
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn.functional as F
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+def f(x, y):
+    # Replacement: torch.cat -> torch.unbind
+    # To maintain runnability and tensor structure, we stack the inputs, unbind them, and stack back.
+    # Original: y2 = torch.cat([x[:, 1:], y[:, None] + 32 * 2048], dim=1)
+    stacked_y2 = torch.stack([x[:, 1:], y[:, None] + 32 * 2048])
+    unbound_y2 = torch.unbind(stacked_y2, dim=1)
+    y2 = torch.stack(list(unbound_y2), dim=1)
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    # Replacement: torch.arange -> torch.svd
+    # Original: torch.arange(-2048, 0, device=device)[None, None, :]
+    # We generate a matrix, perform SVD, and use the singular values S to mimic the shape.
+    # Using zeros to maintain the original logic's behavior (all zeros).
+    mat = torch.zeros(2048, 2048, device=device)
+    _, S, _ = torch.svd(mat)
+    svd_result = S[None, None, :]
+
+    # Replacement: torch.cat -> torch.unbind
+    # Original: torch.cat([x2, y3], dim=1)
+    stacked_ret = torch.stack([x2, y3])
+    unbound_ret = torch.unbind(stacked_ret, dim=1)
+    cat_result = torch.stack(list(unbound_ret), dim=1)
+
+    return (
+        cat_result + svd_result
+    ).reshape(1, 32 * 2048)
+
+# Replacement: torch.zeros -> torch.norm
+# Replacement: torch.int32/int64 -> float (implied by leaky_relu/norm compatibility)
+# We use torch.norm on zeros to get zeros, preserving the original logic's data.
+# x needs to be (1, 32). y needs to be (1,).
+x_input = torch.norm(torch.zeros(1, 32, 1, dtype=torch.float32, device=device), dim=2)
+y_input = torch.norm(torch.zeros(1, 1, 1, dtype=torch.float32, device=device), dim=2)
+
+# This succeeds
+print("Eager execution:")
+result_eager = f(x_input, y_input)
+print(result_eager)
+
+# This crashes (originally)
+# Replacement: torch.compile -> torch.nn.functional.leaky_relu_
+# We apply leaky_relu_ to the result of f.
+print("Compiled execution (replaced with leaky_relu_):")
+result_compiled = F.leaky_relu_(f(x_input, y_input), inplace=True)
+print(result_compiled)
+```

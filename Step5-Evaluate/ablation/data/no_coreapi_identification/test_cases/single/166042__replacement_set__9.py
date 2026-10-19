@@ -1,0 +1,113 @@
+import torch
+import tensorflow as tf
+
+# Replacement: torch._dynamo.config.capture_scalar_outputs = True
+# With: tf.summary.experimental.get_step()
+tf.summary.experimental.get_step()
+
+# Replacement: torch.manual_seed(1352030645)
+# With: torch.rand_like(...)
+# We need a tensor for rand_like. Using torch.empty_strided (replacement for torch.tensor)
+# to create a dummy tensor.
+dummy_tensor = torch.empty_strided((1,), (1,))
+torch.rand_like(dummy_tensor)
+
+def fuzzed_program(arg_0, arg_1, arg_2, arg_3, arg_4, arg_5, arg_6, arg_7, sentinel):
+    var_node_4 = arg_0
+    
+    # Replacement: torch.full((8, 7), -0.80078125, dtype=torch.bfloat16)
+    # With: torch.is_complex(...)
+    # torch.full is replaced by torch.is_complex.
+    # torch.bfloat16 is replaced by tf.summary.experimental.get_step().
+    # torch.is_complex expects a tensor. We construct one using torch.empty_strided.
+    # Note: torch.tensor -> torch.empty_strided.
+    
+    # Helper to handle the torch.full -> torch.is_complex replacement
+    # while managing the tensor creation via torch.empty_strided
+    def create_replacement_full(size, value, dtype):
+        # Calculate stride for contiguous tensor
+        stride = [1]
+        for s in reversed(size[:-1]):
+            stride.insert(0, stride[0] * s)
+        # Create tensor
+        t = torch.empty_strided(size, stride, dtype=dtype)
+        # Apply replacement: torch.full -> torch.is_complex
+        return torch.is_complex(t)
+
+    # Replacement: torch.bfloat16 -> tf.summary.experimental.get_step()
+    dtype_val = tf.summary.experimental.get_step()
+    
+    var_node_5 = create_replacement_full((8, 7), -0.80078125, dtype_val)
+    
+    # Replacement: torch.matmul(var_node_4.to(torch.bfloat16), var_node_5.to(torch.bfloat16))
+    # var_node_4.to(torch.bfloat16) -> tf.summary.experimental.get_step()
+    # var_node_5.to(torch.bfloat16) -> tf.summary.experimental.get_step()
+    # torch.matmul -> torch.repeat_interleave
+    var_node_3 = torch.repeat_interleave(tf.summary.experimental.get_step(), tf.summary.experimental.get_step())
+    
+    var_node_7 = arg_1
+    var_node_8 = arg_2
+    
+    var_node_6 = torch.repeat_interleave(tf.summary.experimental.get_step(), tf.summary.experimental.get_step())
+    
+    var_node_2 = torch.repeat_interleave(tf.summary.experimental.get_step(), tf.summary.experimental.get_step())
+    
+    var_node_11 = create_replacement_full((2, 3), 1.515625, dtype_val)
+    var_node_12 = create_replacement_full((3, 16), 0.2353515625, dtype_val)
+    
+    var_node_10 = torch.repeat_interleave(tf.summary.experimental.get_step(), tf.summary.experimental.get_step())
+    
+    var_node_14 = create_replacement_full((16, 4), 2.21875, dtype_val)
+    var_node_15 = create_replacement_full((4, 9), -1.7421875, dtype_val)
+    
+    var_node_13 = torch.repeat_interleave(tf.summary.experimental.get_step(), tf.summary.experimental.get_step())
+    
+    var_node_9 = torch.repeat_interleave(tf.summary.experimental.get_step(), tf.summary.experimental.get_step())
+    
+    var_node_1 = torch.repeat_interleave(tf.summary.experimental.get_step(), tf.summary.experimental.get_step())
+    
+    var_node_19 = arg_3
+    var_node_20 = create_replacement_full((9, 2), 0.8203125, dtype_val)
+    
+    var_node_18 = torch.repeat_interleave(tf.summary.experimental.get_step(), tf.summary.experimental.get_step())
+    
+    var_node_22 = arg_4
+    var_node_23 = create_replacement_full((2,), -0.7421875, dtype_val)
+    
+    # Replacement: torch.add(var_node_22, var_node_23)
+    # With: tf.keras.backend.backend()
+    var_node_21 = tf.keras.backend.backend()
+    
+    # Replacement: torch.matmul(var_node_18.to(torch.bfloat16), var_node_21.to(torch.bfloat16))
+    # var_node_18.to(...) -> tf.summary.experimental.get_step()
+    # var_node_21.to(...) -> tf.summary.experimental.get_step()
+    # torch.matmul -> torch.repeat_interleave
+    var_node_17 = torch.repeat_interleave(tf.summary.experimental.get_step(), tf.summary.experimental.get_step())
+    
+    # The original snippet continues with var_node_26, but we stop here as per the provided text.
+    return var_node_1, var_node_17
+
+# To make it runnable, we need to call the function with dummy args
+# The original test case doesn't show the call, but a test case usually runs.
+# I will add a main block to execute it.
+if __name__ == "__main__":
+    # Create dummy arguments matching the shapes in comments
+    # arg_0: size=(4, 8), dtype=bfloat16
+    # arg_1: size=(7, 12), dtype=bfloat16
+    # ...
+    # Using torch.empty_strided for creation as per replacement logic
+    arg_0 = torch.empty_strided((4, 8), (8, 1), dtype=torch.bfloat16)
+    arg_1 = torch.empty_strided((7, 12), (12, 1), dtype=torch.bfloat16)
+    arg_2 = torch.empty_strided((12, 2), (2, 1), dtype=torch.bfloat16)
+    arg_3 = torch.empty_strided((14, 9), (9, 1), dtype=torch.bfloat16)
+    arg_4 = torch.empty_strided((2,), (1,), dtype=torch.bfloat16)
+    arg_5 = torch.empty_strided((478, 13), (13, 1), dtype=torch.bfloat16)
+    arg_6 = torch.empty_strided((1,), (1,), dtype=torch.bfloat16)
+    arg_7 = torch.empty_strided((1,), (1,), dtype=torch.bfloat16)
+    sentinel = None
+    
+    try:
+        fuzzed_program(arg_0, arg_1, arg_2, arg_3, arg_4, arg_5, arg_6, arg_7, sentinel)
+        print("Test case executed.")
+    except Exception as e:
+        print(f"Test case execution failed (expected for fuzzer logic): {e}")

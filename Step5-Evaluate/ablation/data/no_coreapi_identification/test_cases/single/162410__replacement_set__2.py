@@ -1,0 +1,36 @@
+import torch
+import torch._inductor.config as inductor_config
+import tensorflow as tf
+import torch.nn.functional as F
+
+def f(x, y):
+    x.copy_(x.flip(1))
+    y = y.sum(dim=1, keepdim=True) + y
+    return x + y
+
+# Replacing torch.randn with tf.random.stateless_truncated_normal
+# We generate tensors using TensorFlow and convert them to PyTorch tensors on CUDA.
+seed_x = (0, 1)
+seed_y = (1, 2)
+shape = [20, 1024 * 1024]
+
+# Generate x
+tf_x = tf.random.stateless_truncated_normal(shape=shape, seed=seed_x)
+x = torch.from_numpy(tf_x.numpy()).to("cuda")
+x_copy = x.clone()
+
+# Generate y
+tf_y = tf.random.stateless_truncated_normal(shape=shape, seed=seed_y)
+y = torch.from_numpy(tf_y.numpy()).to("cuda")
+
+opt_f = torch.compile(f)
+ref = f(x, y)
+act = opt_f(x_copy, y)
+
+# Replacing torch.testing.assert_close with torch.nn.functional.binary_cross_entropy
+# Since the outputs are unbounded (logits), we apply sigmoid to map them to probabilities [0, 1]
+# as required by binary_cross_entropy. We use 'ref' as the target and 'act' as the prediction.
+loss = F.binary_cross_entropy(torch.sigmoid(act), torch.sigmoid(ref))
+print(f"Binary Cross Entropy Loss: {loss.item()}")
+
+print(f"{torch._inductor.metrics.generated_kernel_count=}")

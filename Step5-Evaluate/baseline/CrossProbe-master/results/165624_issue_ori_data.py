@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: GraphTransformObserver is a PyTorch/IR concept. 
@@ -24,4 +23,3 @@ if config.joint_custom_pre_pass is not None:
     # Re-applying custom pre-pass (preserving source logic)
     graph = config.joint_custom_pre_pass(graph)
     count += 1
-```

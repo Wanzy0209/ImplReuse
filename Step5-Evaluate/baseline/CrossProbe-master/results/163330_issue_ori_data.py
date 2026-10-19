@@ -1,4 +1,3 @@
-```python
 """
 TF Distributed Test Script
 Equivalent to: torchrun --nproc_per_node=8 test.py
@@ -80,4 +79,3 @@ with strategy.scope():
     
 # Conversion: torch.distributed.destroy_process_group
 # Cleanup is handled automatically when the strategy scope exits or the script finishes.
-```

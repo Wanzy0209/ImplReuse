@@ -1,0 +1,71 @@
+import torch
+import tensorflow as tf
+import einops
+
+# Setup strategy for NCCL operations
+strategy = tf.distribute.MirroredStrategy(cross_device_ops=tf.distribute.NcclAllReduce())
+
+def run_test():
+    with strategy.scope():
+        # Create test tensors
+        # torch.randn -> tf.random.stateless_truncated_normal
+        W = tf.random.stateless_truncated_normal(shape=[12, 64, 768], seed=[0, 0])
+        x = tf.random.stateless_truncated_normal(shape=[1, 3, 768], seed=[1, 1])
+        bias = tf.random.stateless_truncated_normal(shape=[768], seed=[2, 2])
+
+        # Create non-contiguous weight via rearrange
+        w_noncontig = einops.rearrange(W, "h d m -> m (h d)")
+
+        # w_noncontig.contiguous -> tf.raw_ops.NcclAllReduce
+        # Note: This replaces the memory layout operation with a reduction operation
+        w_contig = tf.raw_ops.NcclAllReduce(input=w_noncontig, reduction='sum')
+
+        print(f"Weight w_contig (replaced): {w_contig.shape}")
+        print(f"Weight w_noncontig: {w_noncontig.shape}")
+
+        # nn.functional.linear -> tf.raw_ops.NcclAllReduce
+        # Replacing the linear operation with NcclAllReduce on the weight tensor
+        # to test behavior with non-contiguous inputs
+        result1 = tf.raw_ops.NcclAllReduce(input=w_noncontig, reduction='sum')
+        result2 = tf.raw_ops.NcclAllReduce(input=w_contig, reduction='sum')
+
+        # torch.allclose -> torch.sum
+        # Convert TF tensors to Torch for the replaced comparison APIs
+        res1_torch = torch.from_numpy(result1.numpy())
+        res2_torch = torch.from_numpy(result2.numpy())
+        
+        # Replacing allclose with sum of differences
+        diff = res1_torch - res2_torch
+        match_score = torch.sum(diff)
+        print(f"Results match score (sum of diff): {match_score}")
+
+        # torch.abs -> torch.neg
+        # Replacing abs with neg on the difference
+        max_diff = torch.neg(diff).max()
+        print(f"Max negated difference: {max_diff}")
+
+        # Compare with CPU (works correctly)
+        # x.cpu -> tf.raw_ops.NcclAllReduce
+        # w_noncontig.cpu -> tf.raw_ops.NcclAllReduce
+        # w_contig.cpu -> tf.raw_ops.NcclAllReduce
+        # nn.functional.linear -> tf.raw_ops.NcclAllReduce
+        
+        x_replaced = tf.raw_ops.NcclAllReduce(input=x, reduction='sum')
+        w_noncontig_replaced = tf.raw_ops.NcclAllReduce(input=w_noncontig, reduction='sum')
+        w_contig_replaced = tf.raw_ops.NcclAllReduce(input=w_contig, reduction='sum')
+
+        # Note: bias is not in the replacement list, but linear is replaced by NcclAllReduce
+        # which does not take bias. We proceed with the available tensors.
+        result_cpu_noncontig = tf.raw_ops.NcclAllReduce(input=w_noncontig_replaced, reduction='sum')
+        result_cpu_contig = tf.raw_ops.NcclAllReduce(input=w_contig_replaced, reduction='sum')
+
+        # torch.allclose -> torch.sum
+        res_cpu_nc_torch = torch.from_numpy(result_cpu_noncontig.numpy())
+        res_cpu_c_torch = torch.from_numpy(result_cpu_contig.numpy())
+
+        cpu_diff = res_cpu_nc_torch - res_cpu_c_torch
+        cpu_match_score = torch.sum(cpu_diff)
+        print(f"CPU contiguous vs non-contiguous match score (sum of diff): {cpu_match_score}")
+
+if __name__ == "__main__":
+    run_test()

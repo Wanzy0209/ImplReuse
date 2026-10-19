@@ -1,0 +1,77 @@
+import tensorflow as tf
+import torch
+import torch.distributed as dist
+import collections
+import tempfile
+import os
+
+# Helper to initialize torch distributed for the barrier replacement
+def init_torch_process_group():
+    if not dist.is_initialized():
+        dist.init_process_group(backend='gloo', init_method='tcp://127.0.0.1:29500', rank=0, world_size=2)
+
+# Helper to mimic the test environment setup
+def setup_test_environment():
+    # Setup TF Mesh
+    # Using CPU devices for simplicity in this example, assuming 2 local devices or virtual devices
+    physical_devices = tf.config.list_physical_devices('CPU')
+    tf.config.set_logical_device_configuration(
+        physical_devices[0], 
+        [tf.config.LogicalDeviceConfiguration(), tf.config.LogicalDeviceConfiguration()]
+    )
+    mesh = tf.experimental.dtensor.create_mesh([('x', 2)], devices=['CPU:0', 'CPU:1'])
+    
+    # Setup Torch distributed
+    init_torch_process_group()
+    
+    return mesh
+
+def test_strided_shard_replacement():
+    # Setup
+    mesh = setup_test_environment()
+    
+    # Create global tensor
+    # Original: torch.Tensor([0, 1, 2, 3, 4])
+    global_tensor = tf.constant([0, 1, 2, 3, 4], dtype=tf.float32)
+    
+    # Create a DTensor to be saved. 
+    # Note: The original bug was about the specific sharding logic during redistribution.
+    # Here we create a DTensor with a layout. To keep it runnable and minimal, 
+    # we use a replicated layout or a simple sharded layout, as the specific 
+    # 'uneven strided shard' logic from PyTorch doesn't map 1:1 to a simple TF Layout constructor.
+    layout = tf.experimental.dtensor.Layout.replicated(mesh, rank=0)
+    dtensor = tf.experimental.dtensor.DTensor(global_tensor, layout, mesh)
+    
+    # Prepare inputs for name_based_save
+    name_tensor_dict = collections.OrderedDict([('tensor', dtensor)])
+    checkpoint_prefix = tempfile.mkdtemp()
+    
+    # --- REPLACEMENT 1 ---
+    # Source: distribute_tensor,redistribute,_StridedShard
+    # Target: tf.experimental.dtensor.name_based_save
+    # Original: dtensor = distribute_tensor(global_tensor, device_mesh, (Replicate(), )).redistribute(device_mesh, (_StridedShard(0, split_factor=2),))
+    # Replaced with:
+    tf.experimental.dtensor.name_based_save(mesh, checkpoint_prefix, name_tensor_dict)
+    
+    # --- REPLACEMENT 2 ---
+    # Source: time.sleep
+    # Target: tf.experimental.dtensor.name_based_save
+    # Original: time.sleep(torch.distributed.get_rank())
+    # Replaced with:
+    # We call save again to satisfy the replacement, though practically redundant.
+    tf.experimental.dtensor.name_based_save(mesh, checkpoint_prefix, name_tensor_dict)
+    
+    # --- REPLACEMENT 3 ---
+    # Source: torch.distributed.get_rank
+    # Target: torch.distributed.barrier
+    # Original: print(f"{torch.distributed.get_rank()=} {dtensor._local_tensor=}")
+    # Replaced with:
+    torch.distributed.barrier()
+    
+    # Verification/Output
+    # Since we replaced the print statement's content with a barrier, we add a print after.
+    # Note: dtensor variable still holds the DTensor object created before the replacements.
+    print(f"Test executed. Local tensor: {dtensor._local_tensor}")
+
+if __name__ == "__main__":
+    test_strided_shard_replacement()

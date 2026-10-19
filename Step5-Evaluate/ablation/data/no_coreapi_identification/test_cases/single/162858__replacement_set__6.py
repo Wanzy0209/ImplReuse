@@ -1,0 +1,40 @@
+import torch
+import tensorflow as tf
+
+# Setup for the replacement of torch._dynamo.graph_break
+# We need a variable to set a value into.
+debug_state = tf.Variable(0.0)
+
+# Original: torch.ones(3)
+# Replacement: torch.dist
+# We create two tensors to compute the distance, which serves as the input x.
+input_a = torch.zeros(3)
+input_b = torch.ones(3)
+x = torch.dist(input_a, input_b)
+
+# Original: @torch.compile
+# Replacement: torch.any
+# Since torch.any is not a decorator, we define the function normally.
+# We will use torch.any to wrap the function call later to satisfy the replacement.
+def fn(x):
+    y = x + 1
+    z = x + y
+
+    # Original: torch._dynamo.graph_break()
+    # Replacement: tf.keras.backend.set_value
+    # We update the debug_state variable.
+    tf.keras.backend.set_value(debug_state, 1.0)
+
+    return z
+
+# Original: fn(torch.ones(3))
+# Replacement: torch.any(fn(x))
+# We wrap the function call with torch.any.
+# This executes the function (including the set_value) and applies torch.any to the result.
+result = torch.any(fn(x))
+
+# Assertions to verify the test case logic
+# fn(x) returns a scalar > 0, so torch.any should return True.
+assert result == True
+# Verify that the set_value call worked.
+assert tf.keras.backend.get_value(debug_state) == 1.0

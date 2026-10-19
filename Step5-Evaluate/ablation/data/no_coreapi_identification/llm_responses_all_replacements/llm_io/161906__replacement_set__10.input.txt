@@ -1,0 +1,145 @@
+Issue ID: 161906
+Title: torch.compilefails withaten.complex.defaultsize/stride assertion when using STFT output recombined into complex tensor
+Bug Description:
+### 🐛 Describe the bug
+
+## Issue Description
+A simple model using `torch.stft` followed by recombination of real/imag parts into a complex tensor works fine in eager mode.
+However, when compiled with `torch.compile` (Inductor backend), runtime fails with a stride assertion inside `aten.complex.default`.
+
++ Eager execution: ok! produces correct complex tensor
+
++ Compiled execution: error! AssertionError in assert_size_stride for torch.ops.aten.complex.default
+
+## Minimal Reproduction Script
+```python
+import torch
+import torch.nn as nn
+
+class M(nn.Module):
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft, self.hop, self.win = n_fft, hop, win
+        # Register window as buffer so it moves with .to(device)
+        self.register_buffer("window", torch.hann_window(win))
+        # Introduce parameter for broadcasting / stride ops
+        self.p = nn.Parameter(torch.tensor(2.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        S = torch.stft(
+            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,
+            return_complex=True, window=self.window, pad_mode="constant"
+        )
+        R = torch.abs(S.real)   # unary op on real
+        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)
+        Z = torch.complex(R, I) # recombine -> triggers aten.complex.default
+        return Z
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(0)
+...
+
+Original API Under Test: torch.complex
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.nn.relu
+Similarity score: 0.9755957722663879
+
+Similar API information:
+# Extracted call chain for tf.nn.relu
+
+# --- tensorflow.python.framework.experimental.nn_ops.relu ---
+def relu(a, name=None):
+  ctx = context.get_default()
+  return _nn_ops.relu(ctx, a, name)
+
+# --- tensorflow.python.framework.experimental._nn_ops.relu ---
+def relu(a, name=None):
+  ctx = context.get_default()
+  return _nn_ops.relu(ctx, a, name)
+
+# --- tensorflow.python.framework.experimental.context_stack.get_default ---
+def get_default():
+  """Returns the default execution context."""
+  return _default_ctx_stack.peek()
+
+Original Test Case:
+import torch
+import torch.nn as nn
+
+class M(nn.Module):
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft, self.hop, self.win = n_fft, hop, win
+        # Register window as buffer so it moves with .to(device)
+        self.register_buffer("window", torch.hann_window(win))
+        # Introduce parameter for broadcasting / stride ops
+        self.p = nn.Parameter(torch.tensor(2.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        S = torch.stft(
+            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win,
+            return_complex=True, window=self.window, pad_mode="constant"
+        )
+        R = torch.abs(S.real)   # unary op on real
+        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)
+        Z = torch.complex(R, I) # recombine -> triggers aten.complex.default
+        return Z
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(0)
+
+    x = torch.randn(1, 16000, device=device)
+    m = M().to(device)
+
+    # Eager: works fine
+    z_eager = m(x)
+    assert z_eager.is_complex()
+    print("eager mode OK:", z_eager.shape, z_eager.is_complex())
+
+    # Compile: runtime stride assertion in aten.complex.default
+    m_c = torch.compile(m)
+    z_compiled = m_c(x)
+
+if __name__ == "__main__":
+    main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- nn.Module -> tf.keras.ops.add (score=0.9727963209152222, source_group=issue_to_api)
+- nn.Parameter -> tf.keras.ops.add (score=0.9727963209152222, source_group=issue_to_api)
+- self.register_buffer -> tf.keras.ops.add (score=0.9727963209152222, source_group=issue_to_api)
+- torch.Size -> tf.keras.ops.add (score=0.9727963209152222, source_group=issue_to_api)
+- torch.Tensor -> tf.keras.ops.add (score=0.9727963209152222, source_group=issue_to_api)
+- torch.abs -> torch.log10 (score=0.9999415874481201, source_group=pytorch_to_pytorch)
+- torch.compile -> torch.distributed.broadcast_object_list (score=0.994113028049469, source_group=pytorch_to_pytorch)
+- torch.compilefails -> tf.keras.ops.add (score=0.9727963209152222, source_group=issue_to_api)
+- torch.complex,torch.stft,torch.ops.aten.complex.default -> tf.keras.ops.add (score=0.9727963209152222, source_group=issue_to_api)
+- torch.cuda.is_available -> tf.keras.ops.add (score=0.9727963209152222, source_group=issue_to_api)
+- torch.hann_window -> torch.cummin (score=0.9931598901748657, source_group=pytorch_to_pytorch)
+- torch.library.opcheck -> tf.config.get_soft_device_placement (score=0.9948843121528625, source_group=pytorch_to_tensorflow)
+- torch.manual_seed -> tf.compat.v1.assert_variables_initialized (score=0.9955167770385742, source_group=pytorch_to_tensorflow)
+- torch.nn -> tf.keras.ops.add (score=0.9727963209152222, source_group=issue_to_api)
+- torch.ops.aten.complex.default -> tf.keras.ops.add (score=0.9727963209152222, source_group=issue_to_api)
+- torch.randn -> torch.nn.functional.cosine_embedding_loss (score=0.9851728677749634, source_group=pytorch_to_pytorch)
+- torch.stft -> torch.nn.functional.max_unpool3d (score=0.9940183758735657, source_group=pytorch_to_pytorch)
+- torch.tensor -> torch.nn.functional.pdist (score=0.9952460527420044, source_group=pytorch_to_pytorch)
+- z_eager.is_complex -> tf.keras.ops.add (score=0.9727963209152222, source_group=issue_to_api)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

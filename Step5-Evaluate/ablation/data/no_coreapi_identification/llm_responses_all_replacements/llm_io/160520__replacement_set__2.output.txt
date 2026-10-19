@@ -1,0 +1,54 @@
+```python
+import torch
+import torch._inductor.config as config
+import torch._logging
+import tensorflow as tf
+import functools
+
+# Configure inductor
+config.cpp_wrapper = True
+torch._logging.set_logs(output_code=True)
+
+class SimpleMLP(torch.nn.Module):
+  def __init__(self):
+    super().__init__()
+    # Replacement: torch.nn.Linear -> torch.export.dims
+    # Note: torch.export.dims is a function for dynamic dimensions, not a Module layer.
+    # This replacement is performed as requested, though it alters the model logic significantly.
+    self.fc1 = torch.export.dims
+    self.fc2 = torch.export.dims
+    self.forward = torch.compile(self.forward)
+
+  def forward(self, x):
+    x = x.view(x.size(0), 28*28)
+    # Replacement: torch.nn.functional.relu -> torch.nn.functional.relu6
+    x = torch.nn.functional.relu6(self.fc1(x))
+    x = self.fc2(x)
+    return x
+
+mlp = SimpleMLP().cuda()
+
+# Replacement: torch.profiler.tensorboard_trace_handler -> tf.saved_model.experimental.read_fingerprint
+# Note: read_fingerprint reads a model fingerprint, it does not handle traces.
+# We wrap it to match the expected signature of on_trace_ready.
+trace_handler = lambda prof: tf.saved_model.experimental.read_fingerprint("./log")
+
+with torch.profiler.profile(with_stack=True, activities=[
+         torch.profiler.ProfilerActivity.CPU,
+         torch.profiler.ProfilerActivity.CUDA,
+    ], on_trace_ready=trace_handler,
+) as prof:
+    # Replacement: torch.device -> tf.compat.v1.graph_util.must_run_on_cpu
+    # Note: must_run_on_cpu is a utility function, not a context manager.
+    # We call it directly to satisfy the replacement requirement.
+    tf.compat.v1.graph_util.must_run_on_cpu(None, None)
+
+    for i in range(10):
+        # Replacement: torch.randn -> tf.random.stateless_truncated_normal
+        # Note: Generates a TF tensor, which we convert to a PyTorch tensor.
+        tf_tensor = tf.random.stateless_truncated_normal([i, 28, 28], seed=[0, 0])
+        x = torch.from_numpy(tf_tensor.numpy()).cuda()
+        
+        y = mlp(x)
+        loss = y.sum()
+```

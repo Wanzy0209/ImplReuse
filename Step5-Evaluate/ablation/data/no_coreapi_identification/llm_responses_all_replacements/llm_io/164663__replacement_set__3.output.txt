@@ -1,0 +1,87 @@
+```python
+import tensorflow as tf
+import os
+
+# Replacing nn.RMSNorm with a custom TensorFlow layer
+# The original bug involved RMSNorm, so we must include it.
+class RMSNorm(tf.keras.layers.Layer):
+    def __init__(self, d_model, **kwargs):
+        super().__init__(**kwargs)
+        self.scale = self.add_weight(
+            name='scale',
+            shape=(d_model,),
+            initializer='ones',
+            trainable=True
+        )
+
+    def call(self, x):
+        # RMS(x) = sqrt(mean(x^2))
+        rms = tf.sqrt(tf.reduce_mean(tf.square(x), axis=-1, keepdims=True))
+        return x / rms * self.scale
+
+# Replacing nn.Module with tf.keras.Model
+class TestModule(tf.keras.Model):
+    def __init__(self, d_model):
+        super().__init__()
+        # Replacing nn.Linear with tf.keras.layers.Dense
+        # Replacing self.norm with the RMSNorm layer
+        self.norm = RMSNorm(d_model)
+        self.output = tf.keras.layers.Dense(d_model)
+
+    def call(self, x):
+        x = self.norm(x)
+        x = self.output(x)
+        return x
+
+def main():
+    # Replacing torch.distributed / init_process_group / mesh
+    # with tf.distribute.MultiWorkerMirroredStrategy
+    strategy = tf.distribute.MultiWorkerMirroredStrategy()
+
+    d_model = 128
+
+    # Replacing model.to('cuda') and fully_shard logic
+    # with strategy.scope()
+    with strategy.scope():
+        model = TestModule(d_model)
+        optimizer = tf.keras.optimizers.SGD(learning_rate=0.01)
+
+    # Replacing FSDPMemTracker with tf.function (ConcreteFunction)
+    # The bug was about tracking memory during backward.
+    # Here we trace the function to ensure the graph (ConcreteFunction) is valid.
+    @tf.function
+    def train_step(inputs):
+        with tf.GradientTape() as tape:
+            y = model(inputs, training=True)
+            # Replacing y.sum with tf.reduce_sum
+            loss = tf.reduce_sum(y)
+
+        # Replacing loss.backward with tape.gradient
+        gradients = tape.gradient(loss, model.trainable_variables)
+        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+        return loss
+
+    # Replacing torch.randn with tf.random.normal
+    # Note: The replacement list suggested tf.compat.v1...Strategy for randn,
+    # but semantically we need data. We use tf.random.normal.
+    x = tf.random.normal((16, d_model))
+
+    # Get the ConcreteFunction to reflect the Similar API relationship
+    # This ensures the graph is captured correctly, similar to how FSDPMemTracker
+    # inspects the graph/execution.
+    concrete_fn = train_step.get_concrete_function(
+        tf.TensorSpec(shape=(16, d_model), dtype=tf.float32)
+    )
+    
+    # Verify the API type
+    assert isinstance(concrete_fn, tf.types.experimental.ConcreteFunction)
+
+    # Execute the step
+    # Replacing the execution context with strategy.run
+    loss = strategy.run(train_step, args=(x,))
+
+    print("Test passed. ConcreteFunction generated and executed successfully.")
+
+if __name__ == "__main__":
+    main()
+```

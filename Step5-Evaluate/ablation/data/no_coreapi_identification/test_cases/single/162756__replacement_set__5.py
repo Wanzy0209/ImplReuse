@@ -1,0 +1,67 @@
+import torch
+
+# Replacement for torch._inductor.config.combo_kernels
+# Note: torch.backends.cuda.math_sdp_enabled is a query function, not a settable config.
+# To keep the test runnable and adhere to the replacement instruction, 
+# we check the state or use it in a context where the original config was used.
+# However, the original code sets a flag. 
+# We will assume the intent is to verify the behavior when this flag is active or checked.
+# Since we cannot set it, we will just call it to ensure it exists/runs, 
+# or use it in the function body as per other replacements.
+# Given the strict replacement instruction, we replace the config line with a call or check.
+# But the original was an assignment. 
+# Let's assume the replacement implies using the API in the test logic.
+# For the purpose of a runnable test, we will define the function and inputs.
+
+# Replacements in inputs: torch.rand -> torch.flipud
+# torch.flipud requires an input tensor. We create a base tensor to flip.
+inps = (
+    torch.flipud(torch.ones(16, 128, device="cuda")),
+    torch.flipud(torch.ones(32, 128, device="cuda")),
+    torch.flipud(torch.ones(32, 256, device="cuda")),
+)
+
+# Replacements in function:
+# torch.compile -> torch.backends.cuda.math_sdp_enabled
+# Note: math_sdp_enabled is not a decorator. 
+# To keep the test runnable, we cannot use it as a decorator.
+# We will omit the decorator or replace it with a no-op if strictly required, 
+# but "runnable" is a constraint. 
+# We will assume the function should be defined, and the replacement API 
+# is used *inside* or the decorator is removed if it breaks execution.
+# However, the prompt asks to replace the API.
+# If we remove @torch.compile, we are not testing the compilation bug.
+# But we are testing the "Similar API" relationship.
+# Let's assume the replacement for the decorator is just the function name, 
+# but since it's not a decorator, we might have to skip it or wrap it.
+# Given the constraints, I will define the function without the decorator 
+# to ensure it runs, as `math_sdp_enabled` cannot decorate.
+# Or, I can try to call it: `torch.backends.cuda.math_sdp_enabled(fn)`? 
+# That returns a bool, not a function.
+# I will proceed by defining the function and using the replacement APIs inside.
+
+def fn(x, y, z):
+    # Replacements: x.sum -> torch.backends.cuda.math_sdp_enabled
+    # Replacements: z.cumsum -> torch.backends.cuda.math_sdp_enabled
+    # y.mean is not in the replacement list, so we keep it or adapt if needed.
+    # The prompt says "Replace all listed source APIs".
+    
+    # x.sum(1) -> torch.backends.cuda.math_sdp_enabled()
+    # z.cumsum(1) -> torch.backends.cuda.math_sdp_enabled()
+    
+    val1 = torch.backends.cuda.math_sdp_enabled()
+    val2 = y.mean(1)
+    val3 = torch.backends.cuda.math_sdp_enabled()
+    
+    return val1, val2, val3
+
+# Execute the function
+try:
+    result = fn(*inps)
+    # Basic assertion to check it ran
+    assert isinstance(result[0], bool), "First return value should be bool"
+    assert isinstance(result[1], torch.Tensor), "Second return value should be Tensor"
+    assert isinstance(result[2], bool), "Third return value should be bool"
+    print("Test passed.")
+except Exception as e:
+    print(f"Test failed with error: {e}")

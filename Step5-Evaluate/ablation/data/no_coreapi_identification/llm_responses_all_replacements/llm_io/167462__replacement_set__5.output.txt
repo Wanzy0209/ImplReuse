@@ -1,0 +1,58 @@
+```python
+import time
+import torch
+import tensorflow as tf
+
+if __name__ == "__main__":
+    # Parameters from the original issue
+    BS, VOCAB, K = 128, 8000000, 1000
+    
+    # --- Test Case 1: tf.nn.ctc_beam_search_decoder (replaces x.topk) ---
+    # CTC decoder expects [max_time, batch_size, num_classes]
+    # We adapt the shape to fit the API requirements
+    MAX_TIME = 50 
+    
+    # Replacing torch.randn with tf.random.normal (semantically appropriate for data generation)
+    # Note: Using float32 as float16 might not be supported on all platforms for this op
+    x_tf = tf.random.normal((MAX_TIME, BS, VOCAB), dtype=tf.float32)
+    seq_len = tf.fill([BS], MAX_TIME)
+
+    walltime_tf = []
+    print(f"Running benchmark for tf.nn.ctc_beam_search_decoder...")
+    for _ in range(100):
+        s = time.time()
+        # Replacing x.topk with tf.nn.ctc_beam_search_decoder
+        _ = tf.nn.ctc_beam_search_decoder(x_tf, seq_len, beam_width=K)
+        # Replacing torch.cuda.synchronize with a TF sync equivalent (e.g. running a dummy op or just relying on eager execution)
+        # Explicit synchronization is not typically needed in TF eager mode for timing, 
+        # but we can use tf.debugging.assert_all_finite to ensure execution.
+        # However, to keep it minimal and runnable, we skip explicit sync.
+        e = time.time()
+        walltime_tf.append(e-s)
+    
+    walltime_tf = walltime_tf[10:]
+    avg_time_tf = sum(walltime_tf) / len(walltime_tf)
+    # Replacing torch.__version__ with tf.__version__
+    print(f"tensorflow: {tf.__version__}, ctc_beam_search_decoder latency: {1000 * avg_time_tf}ms")
+
+    # --- Test Case 2: torch.tensordot (replaces torch.topk) ---
+    # Replacing torch.randn with torch.randn (keeping original for torch part)
+    x_torch = torch.randn((BS, VOCAB), device="cuda" if torch.cuda.is_available() else "cpu", dtype=torch.float16)
+    y_torch = torch.randn((VOCAB, BS), device="cuda" if torch.cuda.is_available() else "cpu", dtype=torch.float16)
+
+    walltime_torch = []
+    print(f"Running benchmark for torch.tensordot...")
+    for _ in range(100):
+        s = time.time()
+        # Replacing torch.topk with torch.tensordot
+        # tensordot requires two tensors and dims. We perform a contraction.
+        _ = torch.tensordot(x_torch, y_torch, dims=([1], [0]))
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        e = time.time()
+        walltime_torch.append(e-s)
+
+    walltime_torch = walltime_torch[10:]
+    avg_time_torch = sum(walltime_torch) / len(walltime_torch)
+    print(f"torch: {torch.__version__}, tensordot latency: {1000 * avg_time_torch}ms")
+```

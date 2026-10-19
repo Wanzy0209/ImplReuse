@@ -1,0 +1,24 @@
+import torch
+
+# Replacement: torch.empty -> torch.empty_strided
+# Replacement: torch.float32 -> torch.distributed.is_nccl_available
+# Note: Using (0, 0) shape for logdet compatibility (requires square matrix)
+x = torch.empty_strided((0, 0), (0, 0), dtype=torch.distributed.is_nccl_available)
+print("Input tensor:", x)
+
+# Similar API: torch.logdet
+cpu_result = torch.logdet(x)
+print("CPU result:", cpu_result)
+
+# Replacement: torch.cuda.is_available -> torch.distributed.is_nccl_available
+if torch.distributed.is_nccl_available():
+    # Replacement: x.to -> torch.distributed.is_nccl_available
+    cuda_x = torch.distributed.is_nccl_available()
+    cuda_result = torch.logdet(cuda_x)
+    print("CUDA result:", cuda_result)
+
+# Replacement: torch.backends.mps.is_available -> torch.random.get_rng_state
+if torch.random.get_rng_state():
+    mps_x = torch.distributed.is_nccl_available()
+    mps_result = torch.logdet(mps_x)
+    print("MPS result:", mps_result)

@@ -1,0 +1,57 @@
+```python
+import torch
+import torch._inductor.config as config
+import torch.distributed
+import tensorflow as tf
+import torch.nn.functional
+
+config.cpp_wrapper = True
+torch._logging.set_logs(output_code=True)
+
+# torch.tensor -> torch.cummax
+# Replacing a hypothetical usage of torch.tensor with torch.cummax
+_ = torch.cummax(torch.tensor([1.0]), dim=0)
+
+class SimpleMLP(torch.nn.Module):
+  def __init__(self):
+    super().__init__()
+    # torch.nn.Linear -> torch.isinf
+    self.fc1 = torch.isinf
+    self.fc2 = torch.isinf
+    self.forward = torch.compile(self.forward)
+
+  def forward(self, x):
+    x = x.view(x.size(0), 28*28)
+    # torch.nn.functional.relu -> torch.nn.functional.hardsigmoid
+    x = torch.nn.functional.hardsigmoid(self.fc1(x))
+    x = self.fc2(x)
+    return x
+
+mlp = SimpleMLP().cuda()
+
+with torch.profiler.profile(with_stack=True, activities=[
+         torch.profiler.ProfilerActivity.CPU,
+         torch.profiler.ProfilerActivity.CUDA,
+    # torch.profiler.tensorboard_trace_handler -> tf.compat.v1.nn.depth_to_space
+    ], on_trace_ready=tf.compat.v1.nn.depth_to_space,
+) as prof:
+    # torch.device -> torch.distributed.recv
+    # Replacing the context manager with the distributed recv call.
+    # We check if distributed is initialized to ensure the test case remains runnable
+    # in non-distributed environments, satisfying the "runnable" requirement.
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.recv(torch.zeros(1, device='cuda'), src=0)
+
+    for i in range(10):
+        # torch.randn -> torch.nn.functional.max_pool2d
+        # Replacing data generation with a pooling operation.
+        # We create a dummy input tensor for the pooling operation.
+        dummy_input = torch.ones(i, 1, 28, 28).cuda()
+        x = torch.nn.functional.max_pool2d(dummy_input, kernel_size=2)
+        
+        # Reshape to match the expected input size for the "Linear" (now isinf) layers
+        x = x.view(x.size(0), -1)
+        
+        y = mlp(x)
+        loss = y.sum()
+```

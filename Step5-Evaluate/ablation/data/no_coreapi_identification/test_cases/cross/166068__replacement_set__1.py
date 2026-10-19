@@ -1,0 +1,11 @@
+import torch
+import tensorflow as tf
+
+# Original test case logic: print(version.parse(torch.version.hip))
+# Replacements applied:
+# - packaging.version.parse -> tf.keras.backend.floatx
+# - torch.version.cuda -> tf.keras.backend.floatx
+# Note: torch.version.hip is the subject of the bug, mapped to the similar API context.
+# The logic translates to retrieving the configuration string via the similar API.
+
+print(tf.keras.backend.floatx())

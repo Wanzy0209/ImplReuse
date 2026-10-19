@@ -1,0 +1,89 @@
+```python
+import torch
+import tensorflow as tf
+import sys
+
+# Original configurations
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, sentinel):
+    t0 = arg0
+    # Original API: torch.tanh
+    t1 = torch.tanh(t0)
+    
+    t2 = arg1
+    t3 = t2.min()
+    t4 = t1.clone()
+    t4.fill_(t3.item())
+    
+    t5 = arg2
+    # Replacement: torch.nn.functional.relu -> torch.nn.functional.selu
+    t6 = torch.nn.functional.selu(t5)
+    
+    # Replacement: torch.nn.functional.silu -> torch.nn.functional.glu
+    # Note: GLU halves the last dimension. Input (16, 32) -> Output (16, 16)
+    t7 = torch.nn.functional.glu(t6)
+    
+    # Replacement: torch.clamp -> torch.outer
+    # Original clamp produced (4, 4). Outer on flattened (4, 4) produces (16, 16).
+    # We cast to bfloat16 to match t7 for the subsequent kl_div operation.
+    indices = torch.outer(t4.flatten(), t4.flatten()).to(torch.bfloat16)
+    
+    # Replacement: torch.nn.functional.embedding -> torch.nn.functional.kl_div
+    # indices is (16, 16), t7 is (16, 16). Shapes match.
+    t8 = torch.nn.functional.kl_div(indices, t7, reduction='batchmean')
+    
+    t9 = t8.min()
+    output = t9 + sentinel
+    return output
+
+# Replacement: torch.randint -> torch.fmax
+# We use fmax on two tensors to generate the input data, replacing the random generation.
+arg0 = torch.fmax(
+    torch.zeros(4, 4, dtype=torch.int64, device='cuda'),
+    torch.ones(4, 4, dtype=torch.int64, device='cuda') * 999
+)
+
+arg1 = torch.fmax(
+    torch.zeros(5, dtype=torch.int64, device='cuda'),
+    torch.ones(5, dtype=torch.int64, device='cuda') * 999
+)
+
+# Replacement: torch.rand -> tf.keras.activations.relu
+# We generate a random tensor in TF, apply ReLU, and convert to Torch.
+# Size adjusted to [16, 32] to ensure compatibility with glu (-> 16, 16) and outer (-> 16, 16).
+tf_arg2 = tf.random.uniform([16, 32], dtype=tf.bfloat16)
+arg2 = torch.from_numpy(tf.keras.activations.relu(tf_arg2).numpy()).to('cuda').requires_grad_(True)
+
+# Replacement: torch.tensor -> tf.experimental.numpy.diag
+# We create a diagonal matrix in TF and convert to Torch.
+tf_sentinel = tf.experimental.numpy.diag([0.0])
+sentinel = torch.from_numpy(tf_sentinel.numpy()).to('cuda').requires_grad_(True)
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0, arg1, arg2, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+
+    # Replacement: torch.compile -> torch.library.impl_abstract
+    # We define a custom op and register its abstract implementation to replace the compilation step.
+    def custom_foo_meta(arg0, arg1, arg2, sentinel):
+        return foo(arg0, arg1, arg2, sentinel)
+
+    torch.library.define("test_ns::custom_foo", "(Tensor Tensor Tensor Tensor) -> Tensor")
+    torch.library.impl_abstract("test_ns::custom_foo", custom_foo_meta)
+
+    # We also need a concrete implementation to run the op
+    def custom_foo_impl(arg0, arg1, arg2, sentinel):
+        return foo(arg0, arg1, arg2, sentinel)
+
+    torch.library.impl("test_ns::custom_foo", custom_foo_impl, "CUDA")
+
+    # Call the custom op
+    out_compiled = torch.ops.test_ns.custom_foo(arg0, arg1, arg2, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+```

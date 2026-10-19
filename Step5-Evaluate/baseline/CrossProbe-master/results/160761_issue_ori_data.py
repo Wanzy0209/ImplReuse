@@ -1,4 +1,3 @@
-```python
 import os
 from pathlib import Path
 
@@ -43,4 +42,3 @@ graph = func_graph_from_py_func(
 )
 
 print("TF FuncGraph generated from model")
-```

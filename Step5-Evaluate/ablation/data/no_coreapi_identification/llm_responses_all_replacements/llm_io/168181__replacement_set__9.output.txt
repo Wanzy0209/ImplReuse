@@ -1,0 +1,55 @@
+```python
+import torch
+import torch.nn.functional as F
+import triton
+import triton.language as tl
+
+# Define the kernel to make the test runnable standalone
+@triton.jit
+def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+def test_triton_kernel_replacement():
+    device = 'cuda'
+    
+    # Replacement 1: torch.randn -> torch.nn.functional.hinge_embedding_loss
+    # We generate inputs for the loss function using linspace to avoid torch.randn
+    inp_x = torch.linspace(0, 2, 16, device=device).view(4, 4)
+    inp_y = torch.linspace(1, 3, 16, device=device).view(4, 4)
+    target = torch.ones(4, 4, device=device)
+    
+    x = F.hinge_embedding_loss(inp_x, target, reduction='none')
+    y = F.hinge_embedding_loss(inp_y, target, reduction='none')
+
+    def f(x, y):
+        # Replacement 2: torch.zeros_like -> torch.searchsorted
+        # We use searchsorted to generate the output buffer.
+        # We sort x to use as the sequence, and search for y.
+        # We reshape and cast to float to match the kernel's expectations.
+        sorted_x, _ = x.flatten().sort()
+        out = torch.searchsorted(sorted_x, y.flatten()).view_as(x).float()
+        
+        # Call the kernel
+        add_kernel[(1,)](x, y, out, 16, 16)
+        
+        # Move to CPU and add 1
+        out_cpu = out.cpu() + 1
+        return out_cpu
+
+    eager_out = f(x, y)
+    compiled_out = torch.compile(f)(x, y)
+    
+    # Assert equality
+    assert torch.allclose(compiled_out, eager_out)
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_triton_kernel_replacement()
+```

@@ -1,0 +1,69 @@
+```python
+import torch
+import tensorflow as tf
+
+# Setup for tf.compat.v1.train.global_step replacement
+# Note: tf.compat.v1.train.global_step requires a session and variable context.
+tf.compat.v1.disable_eager_execution()
+sess = tf.compat.v1.Session()
+global_step_tensor = tf.compat.v1.Variable(0, dtype=tf.int64, name="global_step")
+sess.run(tf.compat.v1.global_variables_initializer())
+
+# Define a custom operator to use with torch.library.impl_abstract
+# This replaces the function definition context of the original test case.
+torch.library.define("test_ns::custom_op", "(Tensor x) -> Tensor")
+
+# Replacement for @torch.compile
+# We register the abstract implementation for the custom operator.
+@torch.library.impl_abstract("test_ns::custom_op")
+def fn(x):
+    # Leverage logic from the similar API (torch.nn.SyncBatchNorm)
+    # which checks for contiguous memory layout.
+    if not x.is_contiguous():
+        x = x.contiguous()
+
+    # Original logic from the bug report
+    y = x + 1
+    z = x + y
+
+    # Replacement for torch._dynamo.graph_break()
+    # This call increments the global step variable in the TensorFlow session.
+    tf.compat.v1.train.global_step(sess, global_step_tensor)
+
+    return z
+
+# Concrete implementation to ensure the test case is runnable
+@torch.library.impl("test_ns::custom_op", "CPU")
+def fn_cpu(x):
+    if not x.is_contiguous():
+        x = x.contiguous()
+    y = x + 1
+    z = x + y
+    tf.compat.v1.train.global_step(sess, global_step_tensor)
+    return z
+
+# Replacement for torch.ones(3)
+# Using torch.normal to generate input data.
+input_data = torch.normal(mean=0.0, std=1.0, size=(3,))
+
+# Execute the test
+# We call the custom operator which triggers the abstract and concrete implementations.
+try:
+    output = torch.ops.test_ns.custom_op(input_data)
+    
+    # Verify the computation logic: z = x + (x + 1) = 2x + 1
+    expected = 2 * input_data + 1
+    assert torch.allclose(output, expected), "Computation logic mismatch"
+    
+    # Verify the side effect of the graph_break replacement (global step increment)
+    # It should have been incremented once.
+    step_value = sess.run(global_step_tensor)
+    assert step_value == 1, f"Global step should be 1, got {step_value}"
+    
+    print("Test passed successfully.")
+    print(f"Output: {output}")
+    print(f"Global Step: {step_value}")
+
+finally:
+    sess.close()
+```

@@ -1,0 +1,64 @@
+```python
+import torch
+import tensorflow as tf
+
+flag = True
+dummy = lambda: None
+
+def fn(x):
+    x = x + 1
+    # Replacement: torch._dynamo.graph_break -> torch.isinf
+    torch.isinf(x)
+    x = x + 2
+    if flag:
+        dummy.attr0 = x
+    else:
+        with torch.no_grad():
+            dummy.attr1 = x
+    return x + 4
+
+# Replacement: torch.ones -> torch.norm
+# Using a literal tensor to avoid using torch.ones
+base_tensor = torch.tensor([1.0, 1.0, 1.0])
+inp = torch.norm(base_tensor)
+
+# Replacement: torch.compile -> torch.prod
+opt_fn = torch.prod
+
+# Replacement: torch.allclose -> tf.compat.v1.metrics.sparse_precision_at_k
+# Prepare inputs for the metric API
+# fn(inp) and opt_fn(inp) are scalars.
+# sparse_precision_at_k expects labels (int) and predictions (float, rank >= 2).
+res_fn = fn(inp)
+res_opt = opt_fn(inp)
+
+# Reshaping for compatibility
+# labels: [batch_size]
+labels = res_fn.int().unsqueeze(0)
+# predictions: [batch_size, num_classes]
+predictions = res_opt.unsqueeze(0).unsqueeze(0)
+
+# Initialize local variables for the metric
+tf.compat.v1.local_variables_initializer()
+
+# Call the replacement API
+precision, update_op = tf.compat.v1.metrics.sparse_precision_at_k(
+    labels=labels,
+    predictions=predictions,
+    k=1
+)
+
+flag = False
+
+# Second execution block
+res_fn = fn(inp)
+res_opt = opt_fn(inp)
+labels = res_fn.int().unsqueeze(0)
+predictions = res_opt.unsqueeze(0).unsqueeze(0)
+
+precision, update_op = tf.compat.v1.metrics.sparse_precision_at_k(
+    labels=labels,
+    predictions=predictions,
+    k=1
+)
+```

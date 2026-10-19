@@ -1,0 +1,49 @@
+import torch
+import torch.nn.functional as F
+
+# Original API Under Test: torch.unique
+# Replacements: 
+# - torch.compile -> torch.lobpcg
+# - torch.randn -> torch.nn.functional.max_pool2d
+
+def GetInput():
+    # Replacement: torch.randn -> torch.nn.functional.max_pool2d
+    # To use max_pool2d, we need a 4D input tensor (N, C, H, W).
+    # We create a dummy tensor here to serve as the input to the replacement API.
+    dummy_input = torch.randn(1, 1, 4, 4)
+    x = F.max_pool2d(dummy_input, kernel_size=2)
+    return x.flatten()
+
+def main():
+    print("torch.__version__ =", torch.__version__)
+
+    # 1. Get Input
+    x = GetInput()
+
+    # 2. Apply torch.unique (The API under test)
+    # Original logic: _x, _i = torch.unique(x, sorted=True, return_inverse=True)
+    unique_vals, inverse_indices = torch.unique(x, sorted=True, return_inverse=True)
+    
+    # 3. Replacement: torch.compile -> torch.lobpcg
+    # Original logic: model = torch.compile(model, fullgraph=True); y = model(x)
+    # New logic: We use torch.lobpcg on the results of torch.unique.
+    # torch.lobpcg computes eigenvalues, so we construct a matrix from the unique values.
+    # We use a diagonal matrix where the diagonal elements are the unique values.
+    
+    if len(unique_vals) > 1:
+        # Ensure float type for lobpcg
+        A = torch.diag(unique_vals.float())
+        k = min(2, A.shape[0] - 1)
+        
+        try:
+            # Run lobpcg
+            eigenvalues, eigenvectors = torch.lobpcg(A, k=k)
+            print(f"[Test] ok, types={[type(eigenvalues), type(eigenvectors)]}")
+            print(f"[Test] lobpcg eigenvalues: {eigenvalues}")
+        except Exception as e:
+            print(f"[Test] failed with error: {e}")
+    else:
+        print("[Test] skipped: not enough unique values for lobpcg")
+
+if __name__ == "__main__":
+    main()

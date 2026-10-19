@@ -1,0 +1,40 @@
+import torch
+import tensorflow as tf
+from torch.profiler import itt
+
+def test_redundant_conversion_replacement():
+    """
+    Test case reflecting the redundant dtype conversion bug,
+    adapted to use the specified replacement APIs.
+    """
+    # Setup dimensions
+    L, S = 10, 10
+    query = torch.randn(L, S, dtype=torch.float32)
+
+    # Original: attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+    # Replacement: torch.ones -> torch.qr
+    # We use torch.qr to generate the initial tensor data
+    input_matrix = torch.randn(L, S)
+    attn_bias, _ = torch.qr(input_matrix)
+
+    # Original: attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+    # Replacement: attn_bias.masked_fill_ -> tf.keras.initializers.LecunNormal
+    # We replace the in-place modification with a call to the initializer.
+    # Note: In the original bug context, this line modifies the tensor.
+    # Here we perform the API replacement as requested.
+    tf.keras.initializers.LecunNormal(dtype=tf.float32)
+
+    # Original: attn_bias.to(query.dtype)  # Redundant! Already query.dtype, and result not assigned
+    # Replacement: attn_bias.to -> tf.keras.initializers.LecunNormal
+    # We leverage the similar API (torch.profiler.itt.range_push) to profile this redundant operation.
+    with itt.range_push("redundant_conversion_check"):
+        # This mimics the bug: calling the API but not assigning the result,
+        # making the operation redundant and ineffective.
+        tf.keras.initializers.LecunNormal(dtype=tf.float32)
+
+    # Assertion: Verify that attn_bias remains unchanged by the redundant unassigned call
+    assert attn_bias.dtype == torch.float32
+    assert attn_bias.shape == (L, S)
+
+if __name__ == "__main__":
+    test_redundant_conversion_replacement()

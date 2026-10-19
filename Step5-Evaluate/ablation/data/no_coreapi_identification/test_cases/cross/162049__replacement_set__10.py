@@ -1,0 +1,28 @@
+import torch
+import tensorflow as tf
+
+# Replacements applied:
+# torch.arange -> torch.ones
+# torch.nested.nested_tensor -> tf.compat.v1.metrics.false_positives
+# layout=torch.jagged -> layout=tf.compat.v1.global_variables_initializer
+# torch.nested.nested_tensor(...).max(dim=...) -> tf.compat.v1.global_variables_initializer
+
+# Construct data using torch.ones instead of torch.arange
+data = [torch.ones(n) for n in (10, 20, 30)]
+
+# Create the object using the replacement API
+# Note: tf.compat.v1.metrics.false_positives expects predictions and labels.
+# We pass the data as predictions and None for labels to maintain structure.
+# The layout argument is replaced as specified.
+x = tf.compat.v1.metrics.false_positives(
+    predictions=data,
+    labels=None,
+    layout=tf.compat.v1.global_variables_initializer
+)
+
+# The operation x.max(dim=1).values is replaced by tf.compat.v1.global_variables_initializer
+# based on the mapping for the full chain.
+result = tf.compat.v1.global_variables_initializer
+
+# Output the result
+print(result)

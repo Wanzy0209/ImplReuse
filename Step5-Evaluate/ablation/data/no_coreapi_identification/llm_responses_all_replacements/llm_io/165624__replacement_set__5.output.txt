@@ -1,0 +1,66 @@
+```python
+import tensorflow as tf
+
+# Mock configuration object to simulate the config used in the bug report
+class Config:
+    def __init__(self, apply_relu_pass, constant_folding):
+        self.apply_relu_pass = apply_relu_pass
+        self.constant_folding = constant_folding
+
+def test_duplicate_relu_execution():
+    """
+    Test case to reproduce the logic of Issue 165624 (Duplicate execution of a pass).
+    Replaces 'joint_custom_pre_pass' with 'tf.keras.backend.relu'.
+    """
+    # Setup configuration
+    config = Config(apply_relu_pass=True, constant_folding=True)
+    
+    # Input tensor with negative values to verify ReLU behavior
+    input_tensor = tf.constant([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=tf.float32)
+    
+    # Variable to track execution count, mimicking 'count' in the original code
+    count = 0
+    
+    # --- Start of logic mirroring joint_graph.py ---
+    
+    # First execution block
+    if config.apply_relu_pass:
+        # Replacing GraphTransformObserver(...).apply_graph_pass(config.joint_custom_pre_pass)
+        input_tensor = tf.keras.backend.relu(input_tensor)
+        count += 1
+
+    # Intermediate operations (mimicking remove_noop_ops and constant_fold_uniform_value)
+    # Using simple TF operations to ensure the code is runnable
+    input_tensor = tf.square(input_tensor)  # Represents remove_noop_ops
+
+    if config.constant_folding:
+        # Represents constant_fold_uniform_value
+        input_tensor = input_tensor * 1.0 
+
+    # Second execution block (The Bug: Duplicate logic)
+    if config.apply_relu_pass:
+        # Replacing GraphTransformObserver(...).apply_graph_pass(config.joint_custom_pre_pass)
+        input_tensor = tf.keras.backend.relu(input_tensor)
+        count += 1
+        
+    # --- End of logic mirroring joint_graph.py ---
+
+    # Assertions to verify the bug behavior
+    # 1. Verify that the operation was executed twice
+    assert count == 2, "Expected the operation to be executed twice (count == 2), but got count == {}".format(count)
+    
+    # 2. Verify the tensor transformation matches the double-application logic
+    # Step 1: ReLU([-2, -1, 0, 1, 2]) -> [0, 0, 0, 1, 2]
+    # Step 2: Square([0, 0, 0, 1, 2]) -> [0, 0, 0, 1, 4]
+    # Step 3: ReLU([0, 0, 0, 1, 4]) -> [0, 0, 0, 1, 4]
+    expected_tensor = tf.constant([0.0, 0.0, 0.0, 1.0, 4.0], dtype=tf.float32)
+    
+    # Check if the result matches the expected output of the buggy flow
+    assert tf.reduce_all(tf.equal(input_tensor, expected_tensor)).numpy(), \
+        "Tensor output does not match the expected result of the duplicate execution logic."
+
+    print("Test passed: Duplicate execution logic preserved and verified.")
+
+if __name__ == "__main__":
+    test_duplicate_relu_execution()
+```

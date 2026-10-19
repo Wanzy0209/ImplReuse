@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.manual_seed(2025) -> tf.random.set_seed(2025)
@@ -35,4 +34,3 @@ cres = cfoo(cx)
 
 # Conversion: torch.testing.assert_close -> tf.debugging.assert_near
 tf.debugging.assert_near(res, cres)
-```

@@ -1,0 +1,58 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import tensorflow as tf
+
+B, H, W, C = 20, 2, 2, 128
+
+# Replacement for torch.randn
+# We use adaptive_max_pool1d to generate the input tensor x.
+# adaptive_max_pool1d expects input of shape (N, C, L).
+# We create a dummy tensor to feed into it.
+dummy_x = torch.randn(B, C, H * W, requires_grad=True)
+x_pooled = F.adaptive_max_pool1d(dummy_x, H * W)
+# Reshape the output to match the original (B, H, W, C) shape
+x = x_pooled.permute(0, 2, 1).view(B, H, W, C)
+
+linear = nn.Linear(C, C, bias=False)
+
+values = linear(x)
+values.retain_grad()
+
+values_view = values.view(B, H * W, C)
+values_view.retain_grad()
+
+
+def log_grad(name):
+    def hook(grad):
+        print(f"{name} hook - shape: {grad.shape}, stride: {grad.stride()}")
+        return grad
+
+    return hook
+
+
+print("forward strides", values_view.shape, values_view.stride())
+values_view.register_hook(log_grad("values_view"))
+
+# Replacement for torch.randn
+# We use adaptive_max_pool1d to generate the weights tensor.
+dummy_w = torch.randn(B, C, H * W)
+w_pooled = F.adaptive_max_pool1d(dummy_w, H * W)
+weights = w_pooled.permute(0, 2, 1)
+
+result = torch.einsum("bhc,bhc->bc", weights, values_view)
+
+# Replacement for torch.ones_like
+# We use tf.experimental.numpy.allclose to generate the gradient tensor.
+# allclose returns a scalar boolean (True if arrays are equal).
+# We multiply the result by this scalar to create a valid gradient tensor
+# that preserves the shape and layout of result.
+is_close = tf.experimental.numpy.allclose(result.numpy(), result.numpy())
+grad_tensor = result * is_close
+
+result.backward(grad_tensor)
+
+# Assertion to check if the gradient stride matches the activation stride
+# This verifies the fix for the bug where einsum calculated wrong stride for gradient.
+assert values_view.grad.stride() == values_view.stride(), \
+    f"Gradient stride mismatch: {values_view.grad.stride()} != {values_view.stride()}"

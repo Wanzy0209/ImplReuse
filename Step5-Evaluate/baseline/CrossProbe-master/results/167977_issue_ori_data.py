@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.experimental import dtensor
 import unittest
@@ -47,4 +46,3 @@ class TestRegisterSharding(tf.test.TestCase):
 if __name__ == "__main__":
     # Conversion: run_tests() -> tf.test.main()
     tf.test.main()
-```

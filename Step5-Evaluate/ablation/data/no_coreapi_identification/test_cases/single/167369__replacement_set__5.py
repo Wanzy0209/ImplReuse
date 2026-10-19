@@ -1,0 +1,35 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Replacing torch.nn with tf.keras.layers.serialize context (import)
+# import torch.nn as nn  <-- Removed
+
+class Config:
+    # To make tf.keras.layers.serialize work, we use a Keras Layer
+    # The original bug was about a user object, but we adapt for the replacement API
+    pass
+
+# Using a Keras layer instance as the config object
+config = tf.keras.layers.Dense(10)
+
+def forward(x, config):
+    # Replacing repr with tf.keras.layers.serialize
+    # Replacing torch._dynamo... (not applicable in code)
+    # Replacing torch.nn (not applicable in code logic)
+    serialized = tf.keras.layers.serialize(config)
+    return x * len(serialized)
+
+# Replacing torch.randn with torch.nn.functional.adaptive_max_pool3d
+# We need an input tensor for the pool.
+# Creating a dummy tensor (5D for 3d pool: Batch, Channel, Depth, Height, Width)
+dummy_input = torch.ones(1, 1, 2, 2, 2)
+x = F.adaptive_max_pool3d(dummy_input, output_size=(1, 1, 1))
+
+# Attempting to compile as per original logic
+# Note: This might fail due to cross-library interaction, but follows the replacement rules.
+try:
+    compiled = torch.compile(forward, fullgraph=True)
+    compiled(x, config)
+except Exception as e:
+    print(f"Expected behavior or error: {e}")

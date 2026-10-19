@@ -1,0 +1,81 @@
+import torch
+import sys
+
+# Keep configurations to ensure the test environment matches the bug report context
+# (eager/compile divergence with scalar outputs and precision emulation)
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4):
+    # Inputs
+    # arg0: size=(5, 4), dtype=bfloat16, device=cuda
+    # arg1: size=(5, 1024), dtype=bfloat16, device=cuda
+    # arg2: size=(1024, 4), dtype=bfloat16, device=cuda
+    # arg3: size=(3, 4, 5, 2), dtype=float32, device=cuda
+    # arg4: size=(), dtype=float32, device=cuda
+
+    # Replacement: torch.addmm,tensor.norm() -> torch.median
+    # Original: t3 = torch.addmm(t0, t1, t2); t4 = t3.norm()
+    # New: Apply median along dim 1, then take median of the result
+    t3_vals, _ = torch.median(arg1, dim=1)
+    t4 = torch.median(t3_vals)
+
+    # Replacement: tensor.var() -> torch.median
+    # Original: t6 = t5.var(dim=0); t7 = t6.var()
+    # New: Apply median along dim 0, then take median of the result
+    t6_vals, _ = torch.median(arg3, dim=0)
+    t7 = torch.median(t6_vals)
+
+    # Replacement: torch.nn.functional.relu -> torch.nn.functional.celu
+    # Original: t9 = torch.nn.functional.relu(t8)
+    t8 = arg4
+    t9 = torch.nn.functional.celu(t8)
+
+    # Combine intermediate results
+    t10 = t7 + t4 + t9
+
+    # Replacement: torch.pow -> torch.median
+    # Original: t11 = torch.pow(torch.pow(t4, t7), t10)
+    # New: Apply median to the combined scalar result
+    output = torch.median(t10)
+
+    return output
+
+# Generate inputs using torch.rand (kept for data generation)
+arg0 = torch.rand([5, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+arg1 = torch.rand([5, 1024], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+arg2 = torch.rand([1024, 4], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+arg3 = torch.rand([3, 4, 5, 2], dtype=torch.float32, device='cuda', requires_grad=True)
+arg4 = torch.rand([], dtype=torch.float32, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4)
+    out_eager.backward()
+    print('Eager Success! ')
+
+    # Compiled execution
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4)
+    out_compiled.backward()
+    print('Compile Success! ')
+
+    # Compare outputs
+    # Replacement: out_compiled_sum.item / out_eager_sum.item -> torch.median logic
+    # Since the output is already a scalar (median), we compare directly.
+    diff = (out_eager - out_compiled).abs().item()
+    
+    # Calculate relative difference
+    abs_eager = out_eager.abs().item()
+    rel_diff = diff / (abs_eager + 1e-12) * 100
+    
+    print(f'Relative diff: {rel_diff:.6f}%')
+    
+    if rel_diff > 5:
+        print(f' Outputs differ significantly (relative)!')
+        print('out_eager:', out_eager.item())
+        print('out_compiled:', out_compiled.item())
+        print('Absolute diff:', diff)
+        print('Relative diff (%):', rel_diff)
+        sys.exit(1)

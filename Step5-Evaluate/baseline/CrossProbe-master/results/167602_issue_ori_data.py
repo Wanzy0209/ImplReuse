@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 # Conversion: Switched to TensorFlow-specific pipeline and scheduler classes
 from diffusers import TFSstableDiffusionPipeline, TFDPMSolverMultistepScheduler
@@ -21,4 +20,3 @@ for i in range(10):
 print("Time taken: ", time.time() - start)
 
 image.save("astronaut_rides_horse.png")
-```

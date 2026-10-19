@@ -1,0 +1,35 @@
+import tensorflow as tf
+import sys
+import platform
+import torch
+
+def test_mps_and_cuda_apis():
+    # Print system information
+    print("Python:", sys.version)
+    print("Executable:", sys.executable)
+    print("PyTorch:", torch.__version__)
+    print("macOS:", platform.mac_ver()[0])
+    print("platform:", platform.platform())
+    print("arch:", platform.machine())
+
+    # Check macOS version helper
+    print("is_macos_or_newer(14,0):",
+          getattr(torch.backends.mps, "is_macos_or_newer", lambda *a: "no-func")(14, 0))
+
+    # Original API: Check MPS availability
+    # Bug report expects this to be True on Apple Silicon under macOS 26 (Tahoe)
+    mps_available = torch.backends.mps.is_available()
+    print("MPS available?:", mps_available)
+
+    # Replacement API: Check CUDA built status
+    # Replacing torch.backends.mps.is_built with torch.backends.cuda.is_built
+    cuda_built = torch.backends.cuda.is_built()
+    print("CUDA built?:", cuda_built)
+
+    # Assertion based on the bug report expectation
+    # The bug report states that MPS should be available on Apple Silicon under Tahoe
+    if platform.machine() == "arm64":
+        assert mps_available, "Expected MPS available?: True on Apple Silicon under Tahoe"
+
+if __name__ == "__main__":
+    test_mps_and_cuda_apis()

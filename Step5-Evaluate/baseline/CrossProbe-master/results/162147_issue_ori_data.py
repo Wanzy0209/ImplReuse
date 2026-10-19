@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import math
 
@@ -152,4 +151,3 @@ class FastLearnedCellX3(tf.keras.layers.Layer):
             return tf.reshape(y, [B, T, self.D_out])
         else:
             return y
-```

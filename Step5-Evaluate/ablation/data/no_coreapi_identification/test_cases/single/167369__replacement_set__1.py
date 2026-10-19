@@ -1,0 +1,34 @@
+import torch
+import tensorflow as tf
+
+# Original: import torch.nn as nn
+# Replacement: torch.nn -> tf.keras.activations.serialize
+# (The import of torch.nn is removed as it is replaced by the usage of tf.keras.activations.serialize)
+
+class Config:
+    # The original class defined __repr__, but the test logic replaces the call to repr.
+    pass
+
+def forward(x, config):
+    # Original: return x * len(repr(config))
+    # Replacement: repr -> tf.keras.activations.serialize
+    return x * len(tf.keras.activations.serialize(config))
+
+# Original: x = torch.randn(2, 2)
+# Replacement: torch.randn -> torch.var_mean
+# We generate a dummy tensor to pass to var_mean and use the result as x
+dummy_input = torch.ones(2, 2)
+x = torch.var_mean(dummy_input)[0]
+
+config = Config()
+
+# Original: compiled = torch.compile(forward, fullgraph=True)
+# torch.compile is not in the replacement list, so it remains to test the tracing behavior.
+compiled = torch.compile(forward, fullgraph=True)
+
+# Run the compiled function
+try:
+    result = compiled(x, config)
+    print("Test case executed.")
+except Exception as e:
+    print(f"Test case failed with error: {e}")

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.keras.layers import Conv2D, WeightNormalization
 from tensorflow.keras.optimizers import SGD
@@ -35,4 +34,3 @@ if __name__ == "__main__":
         opt.apply_gradients(zip(grads, model.trainable_variables))
 
         # Conversion: opt.zero_grad() -> Not required in TensorFlow
-```

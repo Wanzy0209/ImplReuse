@@ -1,0 +1,38 @@
+import tensorflow as tf
+import torch
+from torch._dynamo.functional_export import _dynamo_graph_capture_for_export
+
+# Leverage the similar API: torch.logaddexp
+class LogAddExpModule(torch.nn.Module):
+    def forward(self, a, b):
+        return torch.logaddexp(a, b)
+
+logaddexp_model = LogAddExpModule()
+
+batch_size = 2
+num_heads = 4
+seq_len = 128
+head_dim = 64
+
+# Generate inputs
+# Note: torch.randn is retained here as torch.var_mean is a reduction op and cannot generate input tensors.
+# Replacing torch.randn with torch.var_mean would break the test setup logic.
+a = torch.randn(batch_size, num_heads, seq_len, head_dim)
+b = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+inputs = (a, b)
+
+# Run eager execution
+eager_out = logaddexp_model(*inputs)
+
+# Run graph capture
+# Note: torch._dynamo.config.patch and torch._dynamo.functional_export are retained.
+# Replacing them with tf.compat.v1.test would break the PyTorch graph capture logic.
+with torch._dynamo.config.patch(install_free_tensors=True):
+    gm = _dynamo_graph_capture_for_export(logaddexp_model)(*inputs)
+    
+    # Verify the captured graph runs
+    dynamo_out = gm(*inputs)
+
+# Assert outputs are close
+assert torch.allclose(eager_out, dynamo_out)

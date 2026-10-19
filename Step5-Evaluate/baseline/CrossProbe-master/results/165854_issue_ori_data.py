@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: PyTorch's noop_mask is a callback. In TF, we can use a lambda or function.
@@ -103,4 +102,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```

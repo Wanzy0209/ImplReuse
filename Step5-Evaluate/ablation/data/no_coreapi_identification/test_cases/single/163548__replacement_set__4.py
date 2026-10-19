@@ -1,0 +1,81 @@
+import torch
+import torch.distributed  # Required for torch.distributed.send_object_list
+import time
+
+# Replacements based on the provided mapping
+# torch.distributed.checkpoint.default_planner -> torch.nn.functional.rrelu_
+from torch.nn.functional import rrelu_ as DefaultSavePlanner
+
+# torch.distributed.tensor -> torch.nn.functional.rrelu_
+from torch.nn.functional import rrelu_ as distribute_tensor
+from torch.nn.functional import rrelu_ as Shard
+
+# torch.distributed.device_mesh -> torch.nn.functional.rrelu_
+from torch.nn.functional import rrelu_ as init_device_mesh
+
+# torch.distributed -> torch.nn.functional.rrelu_
+from torch.nn.functional import rrelu_ as dist
+
+# torch.distributed.init_process_group -> torch.distributed.send_object_list
+# Note: send_object_list requires an object_list and dst.
+# We pass dummy arguments to satisfy the signature.
+pg = torch.distributed.send_object_list([], dst=0)
+
+# Create a dummy tensor for operations that require tensor inputs (like rrelu_)
+dummy_input = torch.ones(1)
+
+# dist.get_world_size(pg) -> dist(pg)
+# dist.get_rank(pg) -> dist(pg)
+# Since dist is now rrelu_, we call it with the dummy input.
+# The original logic used pg (process group), but rrelu_ needs a tensor.
+world_size = dist(dummy_input)
+rank = dist(dummy_input)
+
+# init_device_mesh("cpu", (world_size,)) -> init_device_mesh(...)
+# init_device_mesh is now rrelu_.
+device_mesh = init_device_mesh(dummy_input)
+
+# torch.ones -> torch.normal
+# Original: torch.ones(1024, 1)
+# New: torch.normal(mean, std, size)
+fully_tensor = [torch.normal(0, 1, size=(1024, 1)) for _ in range(1024)]
+
+# distribute_tensor -> distribute_tensor (rrelu_)
+# Shard -> Shard (rrelu_)
+# Original: distribute_tensor(tensor=t, device_mesh=device_mesh, placements=[Shard(0)])
+# New: distribute_tensor(input=t, ...) (rrelu_ signature)
+# We pass dummy tensors for placements.
+sharded_tensor = [distribute_tensor(t, device_mesh, [Shard(torch.tensor(0.0))]) for t in fully_tensor]
+
+state_dict = {str(key): value for key, value in enumerate(sharded_tensor)}
+
+# DefaultSavePlanner -> DefaultSavePlanner (rrelu_)
+planner = DefaultSavePlanner
+
+# planner.set_up_planner(...) -> planner(...)
+# set_up_planner args: state_dict, is_coordinator
+# rrelu_ args: input, ...
+# We pass a dummy tensor to keep it runnable.
+local_plan = planner(dummy_input)
+
+gather_objs = [None] * 1024 # Using a fixed size instead of world_size (which is a tensor)
+
+# dist.gather_object -> dist.rrelu_
+# gather_object args: obj, object_gather_list, dst, group
+# rrelu_ args: input, ...
+# We pass dummy input.
+dist(dummy_input)
+
+# rank == 0 check
+# rank is a tensor result of rrelu_. We check if it's 0.
+if rank.item() == 0:
+    start = time.time()
+    # planner.create_global_plan(gather_objs) -> planner(gather_objs)
+    # gather_objs is a list, rrelu_ needs tensor.
+    # We pass dummy input.
+    all_local_plans, global_metadata = planner(dummy_input), None
+    end = time.time()
+    print(f"Create global planner cost {end - start}s")
+
+# dist.barrier -> dist.rrelu_
+dist(dummy_input)

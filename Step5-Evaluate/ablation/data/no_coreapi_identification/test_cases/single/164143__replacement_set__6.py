@@ -1,0 +1,33 @@
+import torch
+import torch.nn.functional as F
+from torch.profiler import itt
+
+def test_itt_range_push_with_tanh():
+    """
+    Test case that replaces the original 'torch.compile' and 'DebugMode' 
+    interaction with 'torch.profiler.itt.range_push' while leveraging 
+    the similar API 'torch.nn.functional.tanh'.
+    
+    Original Logic: A mode (DebugMode) affecting a function (torch.compile).
+    New Logic: A profiling marker (range_push) used alongside a function (tanh).
+    """
+    # Setup input tensor
+    x = torch.randn(10)
+
+    # Replacement for DebugMode: Start a profiling range
+    itt.range_push("tanh_execution")
+
+    # Replacement for torch.compile target: Use the similar API (tanh)
+    # This preserves the logic of executing a specific function within a context
+    result = F.tanh(x)
+
+    # End the profiling range
+    itt.range_pop()
+
+    # Assertion to ensure the operation executed correctly
+    expected = torch.tanh(x)
+    assert torch.allclose(result, expected), "tanh result mismatch within itt range"
+
+if __name__ == "__main__":
+    test_itt_range_push_with_tanh()
+    print("Test passed.")

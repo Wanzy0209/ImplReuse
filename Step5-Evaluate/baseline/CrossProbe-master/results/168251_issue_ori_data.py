@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.keras import layers, Model
 
@@ -89,4 +88,3 @@ def main():
     print(f'Compile  shape: {output_compile[0].shape}')
 if __name__ == '__main__':
     main()
-```

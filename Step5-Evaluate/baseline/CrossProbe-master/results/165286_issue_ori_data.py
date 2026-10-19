@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: Set global mixed precision policy to match torch.float16 behavior
@@ -9,4 +8,3 @@ tf.keras.mixed_precision.set_global_policy('mixed_float16')
 # The 'enabled' flag is implicitly True by entering the context
 with tf.keras.mixed_precision.autocast():
     output_seq = model(input_seq)
-```

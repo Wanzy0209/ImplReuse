@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.arange(10, device="cuda") -> tf.range(10)
@@ -19,4 +18,3 @@ out_not_compiled = test_fn(x)
 out_compiled = compiled_fn(x)
 print(out_not_compiled)
 print(out_compiled)
-```

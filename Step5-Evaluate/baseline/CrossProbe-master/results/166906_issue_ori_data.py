@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.python.framework.func_graph import func_graph_from_py_func
 from tensorflow.python.debug.lib.debug_data import node_traceback
@@ -61,4 +60,3 @@ def test_dynamic_annotate(self):
         except (LookupError, KeyError):
             meta_info = None
         print(node, meta_info)
-```

@@ -1,0 +1,67 @@
+```python
+import torch
+import tensorflow as tf
+from typing import NamedTuple
+import tempfile
+import os
+
+# Define the NamedTuple with the replacement API: tf.data.experimental.TFRecordWriter
+class MyNamedTuple(NamedTuple):
+    first: tf.data.experimental.TFRecordWriter
+    second: tf.data.experimental.TFRecordWriter
+
+class MyNamedTupleSubclass(MyNamedTuple):
+    pass
+
+# Define the function using the replacement API: torch.empty_strided
+def fn(tup: MyNamedTuple) -> MyNamedTuple:
+    # Replacing torch.tensor(4.0) with torch.empty_strided
+    extra_info = torch.empty_strided((1,), (1,))
+    tup.extra_info = extra_info  # Add dynamic attribute
+    return tup
+
+# Setup for leveraging the similar API: tf.compat.v1.feature_column.make_parse_example_spec
+# We create dummy feature columns to generate a spec, which we use to conceptually drive the test setup.
+print("\nSetting up feature columns using similar API pattern...")
+col_a = tf.compat.v1.feature_column.categorical_column_with_identity('feature_a', num_buckets=10)
+col_b = tf.compat.v1.feature_column.numeric_column('feature_b')
+feature_columns = [col_a, col_b]
+
+# Use the similar API to create a parsing spec
+parse_spec = tf.compat.v1.feature_column.make_parse_example_spec(feature_columns)
+print(f"Generated parse spec keys: {list(parse_spec.keys())}")
+
+# Create temporary files for TFRecordWriter instances
+temp_dir = tempfile.mkdtemp()
+path_a = os.path.join(temp_dir, "data_a.tfrecord")
+path_b = os.path.join(temp_dir, "data_b.tfrecord")
+
+# Instantiate the replacement API objects
+writer_a = tf.data.experimental.TFRecordWriter(path_a)
+writer_b = tf.data.experimental.TFRecordWriter(path_b)
+
+print("\nTesting NamedTuple with __setattr__ (Eager):")
+extended_tup = MyNamedTupleSubclass(first=writer_a, second=writer_b)
+setattr_result = fn(extended_tup)
+# Check if the dynamic attribute persists in eager mode
+try:
+    print(f"NamedTuple __setattr__ result: {setattr_result.extra_info}")
+    print("Eager mode: Attribute access successful.")
+except AttributeError as e:
+    print(f"Eager mode: AttributeError - {e}")
+
+print("\nTesting NamedTuple with __setattr__ (Compiled):")
+extended_tup = MyNamedTupleSubclass(first=writer_a, second=writer_b)
+# Note: torch.compile might treat TFRecordWriter as opaque objects.
+# The bug specifically targets the container's (NamedTuple) ability to hold dynamic attributes.
+try:
+    setattr_result = torch.compile(fn, backend="eager")(extended_tup)
+    print(f"NamedTuple __setattr__ result: {setattr_result.extra_info}")
+    print("Compiled mode: Attribute access successful.")
+except AttributeError as e:
+    print(f"Compiled mode: AttributeError - {e}")
+
+# Cleanup
+import shutil
+shutil.rmtree(temp_dir)
+```

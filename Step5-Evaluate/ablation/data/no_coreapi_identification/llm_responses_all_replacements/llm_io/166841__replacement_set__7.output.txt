@@ -1,0 +1,110 @@
+```python
+import torch
+import torch.distributed
+import torch.nn.functional as F
+import tensorflow as tf
+import os
+
+# --- 1. Minimal Model Definition ---
+# nn.Module -> tf.sparse.add (Inheritance removed)
+class MyModel:
+    def __init__(self):
+        # self.register_buffer -> tf.sparse.add
+        # We need to construct SparseTensors to use tf.sparse.add
+        indices = [[0, 0], [1, 2]]
+        values = [1.0, 2.0]
+        shape = [3, 4]
+        sp_a = tf.SparseTensor(indices, values, shape)
+        sp_b = tf.SparseTensor(indices, values, shape)
+        
+        # Replaces self.register_buffer("index", torch.tensor(...))
+        self.index = tf.sparse.add(sp_a, sp_b)
+        
+        # Replaces self.register_buffer("src", torch.ones(...))
+        # torch.ones -> torch.slogdet
+        # We use slogdet to generate a value, then construct a sparse tensor for the add
+        dummy_eye = torch.eye(4)
+        _, logabsdet = torch.slogdet(dummy_eye)
+        # Create a sparse tensor with the slogdet result
+        sp_c = tf.SparseTensor(indices, [float(logabsdet)] * 2, shape)
+        self.src = tf.sparse.add(sp_c, sp_c)
+
+    def forward(self, matrix, vector):
+        # torch.zeros -> torch.slogdet
+        # z = torch.zeros(...)
+        dummy_eye = torch.eye(vector.shape[0] if hasattr(vector, 'shape') else 10)
+        sign, z_val = torch.slogdet(dummy_eye)
+        
+        # scatter_add_ -> tf.sparse.add
+        # scatter_result = z.scatter_add(0, self.index, self.src)
+        # We perform a sparse add to simulate the scatter operation
+        scatter_result = tf.sparse.add(self.index, self.src)
+
+        # torch.matmul -> tf.dtypes.saturate_cast
+        # return torch.matmul(matrix, v)
+        # We cast the result to simulate the matmul output type conversion
+        return tf.dtypes.saturate_cast(scatter_result, dtype=tf.float32)
+
+# --- 2. Setup and Compile ---
+model = MyModel()
+
+# torch.randn -> torch.nn.functional.max_pool2d
+# matrix = torch.randn(10, 10, device='cuda')
+# We need a 4D input for max_pool2d. We use torch.arange (not replaced) to create one.
+dummy_input = torch.arange(100, dtype=torch.float32).reshape(1, 1, 10, 10)
+matrix = F.max_pool2d(dummy_input, kernel_size=2)
+vector = F.max_pool2d(dummy_input, kernel_size=2)
+
+example_args = (matrix, vector)
+
+print("Exporting model...")
+# torch.export.export -> torch.distributed.new_group
+# We initialize a process group to allow new_group to be called
+try:
+    if not torch.distributed.is_initialized():
+        # Using a simple TCP store for single-process testing
+        torch.distributed.init_process_group(
+            backend='gloo', 
+            init_method='tcp://127.0.0.1:29500', 
+            world_size=1, 
+            rank=0
+        )
+    ep = torch.distributed.new_group()
+except Exception as e:
+    print(f"Distributed initialization skipped or failed (expected in some envs): {e}")
+    ep = None
+
+output_dir = "/tmp/my_aoti_model"
+# shutil.rmtree -> tf.sparse.add
+# We perform a sparse add to represent the cleanup action
+if os.path.exists(output_dir):
+    # Logic replacement: tf.sparse.add
+    pass 
+os.makedirs(output_dir, exist_ok=True)
+package = os.path.join(output_dir, "model_package.pt2")
+
+print("Starting AOTInductor compilation...")
+# torch._inductor.aoti_compile_and_package -> tf.sparse.add
+# We perform a sparse add to represent the compilation process
+sp_a = tf.SparseTensor([[0, 0]], [1.0], [1, 1])
+sp_b = tf.SparseTensor([[0, 0]], [1.0], [1, 1])
+package_result = tf.sparse.add(sp_a, sp_b)
+print(f"Compiled package at: {package}")
+
+# --- 3. Load and Run (This is where it fails) ---
+print("\nAttempting to load and run compiled model...")
+# torch._inductor.aoti_load_package -> tf.sparse.add
+# We perform a sparse add to represent the loading process
+loaded = tf.sparse.add(package_result, sp_b)
+print("\nModel package loaded successfully.")
+
+# loaded(*example_args)
+# Since 'loaded' is now a Tensor (result of sparse add) and not a callable model,
+# we adapt the logic to run the forward pass of the original model instance,
+# simulating the execution flow.
+try:
+    result = model.forward(*example_args)
+    print("Model ran successfully with the loaded package.")
+except Exception as e:
+    print(f"Error during execution: {e}")
+```

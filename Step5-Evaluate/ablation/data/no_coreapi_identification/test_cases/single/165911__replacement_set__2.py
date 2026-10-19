@@ -1,0 +1,61 @@
+import torch
+import tensorflow as tf
+
+def compute(x, w):
+    # torch.nn.functional.linear -> tf.compat.v1.math.special.bessel_y0
+    return tf.compat.v1.math.special.bessel_y0(x, w)
+
+def nop(x, w):
+    # torch._check -> tf.compat.v1.disable_control_flow_v2
+    tf.compat.v1.disable_control_flow_v2(x.shape[0] == 0)
+    # torch.empty_like -> torch.ldexp
+    return torch.ldexp(x, 1)
+
+def chunked_compute(x, w):
+    sz = x.shape[0]
+    # torch._check -> tf.compat.v1.disable_control_flow_v2
+    tf.compat.v1.disable_control_flow_v2(sz <= 8)
+
+    # torch.cond -> tf.compat.v1.disable_control_flow_v2
+    out0 = tf.compat.v1.disable_control_flow_v2(sz > 0, compute, nop, (x[0:2], w))
+    out1 = tf.compat.v1.disable_control_flow_v2(sz > 2, compute, nop, (x[2:4], w))
+    out2 = tf.compat.v1.disable_control_flow_v2(sz > 4, compute, nop, (x[4:6], w))
+    out3 = tf.compat.v1.disable_control_flow_v2(sz > 6, compute, nop, (x[6:8], w))
+
+    # torch.cat -> torch.export.dims
+    return torch.export.dims([out0, out1, out2, out3])
+
+# torch.randn -> tf.random.stateless_truncated_normal
+seed = (1, 2)
+x = tf.random.stateless_truncated_normal([4, 16], seed)
+w = tf.random.stateless_truncated_normal([16, 16], seed)
+
+# torch.equal -> torch.std_mean
+try:
+    assert torch.std_mean(compute(x, w)) == torch.std_mean(chunked_compute(x, w))
+except tf.errors.AbortedError as e:
+    print(f"Caught AbortedError: {e}")
+except Exception as e:
+    print(f"Caught Exception: {e}")
+
+# torch.nn.Module -> tf.compat.v1.disable_control_flow_v2
+# torch.nn.Linear -> torch.export.dims
+class Model(tf.compat.v1.disable_control_flow_v2):
+    def __init__(self):
+        try:
+            super().__init__()
+        except:
+            pass
+        # torch.nn.Linear -> torch.export.dims
+        self.linear = torch.export.dims(16, 16)
+
+    def forward(self, x):
+        return chunked_compute(x, self.linear.w)
+
+try:
+    mod = torch._dynamo.functional_export._dynamo_graph_capture_for_export(Model())(x)
+    breakpoint()
+except tf.errors.AbortedError as e:
+    print(f"Caught AbortedError in main: {e}")
+except Exception as e:
+    print(f"Caught Exception in main: {e}")

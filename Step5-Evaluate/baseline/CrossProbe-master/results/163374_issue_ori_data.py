@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.experimental import dtensor
 import os
@@ -98,4 +97,3 @@ if __name__ == '__main__':
         print(full[0])
         # tensor(144., device='cuda:0')
         # Expected tensor(2., device='cuda:0')
-```

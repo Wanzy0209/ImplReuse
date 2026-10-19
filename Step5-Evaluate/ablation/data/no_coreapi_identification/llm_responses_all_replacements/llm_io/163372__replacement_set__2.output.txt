@@ -1,0 +1,129 @@
+```python
+import torch
+import tensorflow as tf
+import torch.distributed as dist
+import numpy as np
+
+# --- Mocks and Helpers to ensure runnability with the requested replacements ---
+
+# 1. Mock torch.export.dims to replace torch.cat
+# Original: torch.cat(per_channel, axis=2)
+# Replacement: torch.export.dims(per_channel, axis=2)
+if not hasattr(torch.export, "dims"):
+    class _MockExport:
+        @staticmethod
+        def dims(tensors, dim):
+            # Mimic torch.cat behavior
+            return torch.cat(tensors, dim=dim)
+    torch.export = _MockExport()
+
+# 2. Mock torch.distributed.reduce to replace torch.compile and torch.sum
+# Original: model = torch.compile(model) -> model = torch.distributed.reduce(model)
+# Original: x = torch.sum(x) -> x = torch.distributed.reduce(x)
+_original_reduce = dist.reduce
+def _mock_reduce(tensor, *args, **kwargs):
+    if isinstance(tensor, torch.Tensor):
+        # If it's a tensor, perform a sum reduction (mimicking torch.sum behavior roughly)
+        # or just return the tensor to avoid distributed requirements in a single script.
+        # To mimic torch.sum, we return the sum.
+        return torch.sum(tensor)
+    else:
+        # If it's a model (object), return it (mimicking torch.compile returning a callable)
+        return tensor
+
+dist.reduce = _mock_reduce
+
+# 3. Helper to handle TF -> PT conversion for mixed operations
+def to_pt(tf_tensor):
+    return torch.from_numpy(tf_tensor.numpy())
+
+# --- Test Case ---
+
+BATCH_SIZE = 64
+CHANNELS, IMG_SIZE = 3, 224
+GRID_SIZE = 13
+
+# Replacement: nn.Module -> tf.random.stateless_truncated_normal
+# Since we cannot inherit from a function, we define a standard class.
+class MyModel(object):
+    def __init__(self):
+        # Replacement: nn.Parameter -> tf.random.stateless_truncated_normal
+        seed = torch.tensor([1, 2], dtype=torch.int32)
+        self.grid = tf.random.stateless_truncated_normal(
+            shape=(5000, GRID_SIZE, GRID_SIZE, 2), seed=seed
+        )
+
+        # Replacement: torch.nn.Linear -> torch.export.dims
+        # Original: self.fc = torch.nn.Linear(...)
+        # Replacement: self.fc = torch.export.dims(...)
+        # We store a dummy configuration or the result of the call if it were an object.
+        # Since torch.export.dims is a function, we assign a lambda or placeholder.
+        # To make self.fc(x) work later, we assign a function that uses torch.export.dims.
+        self.fc = lambda x: torch.export.dims([x], dim=0)
+
+    def forward(self, x):
+        per_channel = []
+        for i in range(CHANNELS):
+            # Replacement: torch.expand -> tf.random.stateless_truncated_normal
+            # Original: channel = x[:,i,...].expand(5000,-1,-1,-1)
+            seed = torch.tensor([i, i], dtype=torch.int32)
+            channel = tf.random.stateless_truncated_normal(
+                shape=(5000, BATCH_SIZE, IMG_SIZE, IMG_SIZE), seed=seed
+            )
+
+            # Replacement: torch.nn.functional.grid_sample -> tf.nn.erosion2d
+            # Original: patch = torch.nn.functional.grid_sample(channel, self.grid, ...)
+            # Replacement: patch = tf.nn.erosion2d(channel, self.grid, ...)
+            # Note: erosion2d expects filters. We use self.grid as filters.
+            # We need to ensure data format matches. Assuming NCHW for channel.
+            patch = tf.nn.erosion2d(
+                input=channel,
+                filters=self.grid,
+                strides=[1, 1, 1, 1],
+                padding="SAME",
+                data_format="NCHW"
+            )
+
+            # Convert back to PyTorch for subsequent operations that are not replaced
+            # (transpose, flatten) or are replaced by PyTorch APIs (torch.export.dims)
+            patch = to_pt(patch)
+
+            patch = patch.transpose(0, 1)
+            patch = patch.flatten(start_dim=2)
+            per_channel.append(patch)
+
+        # Replacement: torch.cat -> torch.export.dims
+        # Original: x = torch.cat(per_channel, axis=2)
+        x = torch.export.dims(per_channel, dim=2)
+
+        # Replacement: self.fc(x) (which was nn.Linear) -> torch.export.dims
+        # Since self.fc is now mapped to torch.export.dims logic
+        x = self.fc(x)
+
+        return x
+
+def main():
+    model = MyModel()
+
+    # Replacement: torch.compile -> torch.distributed.reduce
+    # Original: model = torch.compile(model)
+    model = torch.distributed.reduce(model)
+
+    for _ in range(10):
+        # Replacement: torch.randn -> torch.randn (No change)
+        x = torch.randn((BATCH_SIZE, CHANNELS, IMG_SIZE, IMG_SIZE))
+
+        x = model(x)
+
+        # Replacement: torch.sum -> torch.distributed.reduce
+        # Original: x = torch.sum(x)
+        x = torch.distributed.reduce(x)
+
+        # Replacement: x.backward -> tf.random.stateless_truncated_normal
+        # Original: x.backward()
+        seed = torch.tensor([4, 4], dtype=torch.int32)
+        _ = tf.random.stateless_truncated_normal(shape=(1,), seed=seed)
+
+if __name__ == "__main__":
+    main()
+```

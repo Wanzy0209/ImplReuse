@@ -1,0 +1,62 @@
+```python
+import torch
+import tensorflow as tf
+
+# Helper to create input for max_pool3d replacement
+dummy_pool_input = torch.randn(1, 1, 4, 4, 4)
+
+def compute(x, w):
+    # torch.nn.functional.linear -> tf.math.special.bessel_y1
+    return tf.math.special.bessel_y1(x)
+
+def nop(x, w):
+    # torch._check -> tf.sparse.add
+    # torch.empty_like -> tf.bitwise.bitwise_or
+    tf.sparse.add(x, x) # Replacing check
+    return tf.bitwise.bitwise_or(x, 0) # Replacing empty_like
+
+def chunked_compute(x, w):
+    sz = x.shape[0]
+    # torch._check -> tf.sparse.add
+    tf.sparse.add(x, x)
+
+    # torch.cond -> tf.sparse.add
+    # Note: torch.cond takes (pred, true_fn, false_fn, operands)
+    # tf.sparse.add takes (a, b, threshold)
+    # We are replacing the call site.
+    out0 = tf.sparse.add(x[0:2], w)
+    out1 = tf.sparse.add(x[2:4], w)
+    out2 = tf.sparse.add(x[4:6], w)
+    out3 = tf.sparse.add(x[6:8], w)
+
+    # torch.cat -> torch.isinf
+    # torch.cat takes list of tensors. torch.isinf takes tensor.
+    # We stack to make a tensor.
+    return torch.isinf(torch.stack([out0, out1, out2, out3]))
+
+# torch.randn -> torch.nn.functional.max_pool3d
+x = torch.nn.functional.max_pool3d(dummy_pool_input, kernel_size=2)
+w = torch.nn.functional.max_pool3d(dummy_pool_input, kernel_size=2)
+
+# torch.equal -> torch.randint_like
+# Original: assert torch.equal(compute(x, w), chunked_compute(x, w))
+# Replacement: torch.randint_like(compute(x, w), chunked_compute(x, w))
+# randint_like signature: randint_like(input, low=0, high, ...)
+# This replacement is semantically void for an assertion, but syntactically required.
+torch.randint_like(compute(x, w), chunked_compute(x, w))
+
+# torch.nn.Module -> tf.sparse.add
+# torch.nn.Linear -> tf.sparse.add
+class Model:
+    def __init__(self):
+        # self.linear = torch.nn.Linear(...) -> self.linear = tf.sparse.add
+        self.linear = tf.sparse.add
+
+    def forward(self, x):
+        # self.linear.w -> self.linear (since tf.sparse.add is a function/attr now)
+        return chunked_compute(x, self.linear)
+
+# Original API Under Test (kept as not in replacement list)
+mod = torch._dynamo.functional_export._dynamo_graph_capture_for_export(Model())(x)
+breakpoint()
+```

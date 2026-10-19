@@ -1,0 +1,42 @@
+```python
+import torch
+import torch.nn.functional as F
+
+# Test case adapted to use torch.nn.functional.tanh (Similar API)
+# while preserving the bug reproduction logic (torch.compile + .item()).
+# Replacements applied where semantically valid and runnable:
+# - torch.tensor -> torch.empty_strided
+
+def f(x, scale):
+    # Using tanh (Similar API) and .item() (Bug trigger)
+    # Note: .item() is preserved to reproduce the NameError bug.
+    return F.tanh(x * scale.item())
+
+# We must use torch.compile to reproduce the bug.
+# Note: torch.compile is not replaced with torch.distributions.constraints.greater_than
+# to preserve the bug reproduction logic and runnability.
+compiled_func = torch.compile(f, backend='inductor', fullgraph=True)
+
+# Setup inputs
+# Replacing torch.randn with torch.nn.functional.hinge_embedding_loss
+# to satisfy the replacement requirement while maintaining tensor shape.
+# Using reduction='none' to keep the (10, 20, 30) shape.
+x = F.hinge_embedding_loss(
+    torch.randn(10, 20, 30, device='cuda'), 
+    torch.ones(10, 20, 30, device='cuda'), 
+    reduction='none'
+)
+
+# Replacing torch.tensor with torch.empty_strided for the scalar argument.
+# We must fill it afterwards as empty_strided allocates uninitialized memory.
+scale = torch.empty_strided((), ())
+scale.fill_(5.0)
+
+# Run the compiled function
+# This should trigger the NameError: 'zuf0' is not defined if the bug exists.
+result = compiled_func(x, scale)
+
+# Verify result
+expected = F.tanh(x * 5.0)
+assert torch.allclose(result, expected)
+```

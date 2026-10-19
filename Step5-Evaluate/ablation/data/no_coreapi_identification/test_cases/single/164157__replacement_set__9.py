@@ -1,0 +1,114 @@
+import torch
+import torch.distributed
+import tensorflow as tf
+import sys
+
+# Replacements for torch._dynamo.config and torch._inductor.config
+# torch._dynamo.config.capture_scalar_outputs -> tf.keras.losses.categorical_hinge
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.keras.losses.categorical_hinge
+# torch._inductor.config.emulate_precision_casts -> tf.keras.losses.categorical_hinge
+tf.keras.losses.categorical_hinge()
+tf.keras.losses.categorical_hinge()
+tf.keras.losses.categorical_hinge()
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+    t0 = arg0
+    # torch.tanh -> tf.keras.backend.argmax
+    t1 = tf.keras.backend.argmax(t0)
+    t2 = arg1
+    t3 = arg2
+    t4 = t2 * t3
+    
+    # t1.clone -> tf.keras.losses.categorical_hinge
+    # t5.fill_ -> tf.keras.losses.categorical_hinge
+    t5 = tf.keras.losses.categorical_hinge(t1)
+    t5 = tf.keras.losses.categorical_hinge(t5, t4)
+    
+    t6 = arg3
+    t7 = arg4
+    t8 = arg5
+    
+    # torch.cat -> torch.chunk
+    # Original: t9 = torch.cat([t6, t6, t7, t8], dim=2)
+    # Replaced: t9 = torch.chunk(t6, 4, dim=2)
+    # torch.chunk returns a tuple, so we take the first element to maintain tensor type for subsequent operations
+    t9 = torch.chunk(t6, 4, dim=2)[0]
+    
+    # torch.std (No replacement specified, keeping original)
+    t10 = t9.std(dim=2)
+    
+    # torch.nn.functional.embedding -> torch.nn.LazyConvTranspose2d
+    # torch.clamp -> tf.keras.losses.categorical_hinge
+    # .to(torch.long) -> tf.keras.losses.categorical_hinge
+    # Original: t11 = torch.nn.functional.embedding(torch.clamp(t5, 0, t10.size(0) - 1).to(torch.long), t10)
+    # Replaced:
+    tmp = tf.keras.losses.categorical_hinge(t5, 0, t10.size(0) - 1)
+    tmp = tf.keras.losses.categorical_hinge(tmp)
+    # LazyConvTranspose2d is a layer, we instantiate it and call it with dummy args to mimic tensor output
+    # Note: This is a structural replacement, arguments are adapted for syntax validity
+    layer = torch.nn.LazyConvTranspose2d(1, 1, 1)
+    t11 = layer(tmp)
+    
+    output = t11 + sentinel
+    return output
+
+# torch.randint -> torch.bernoulli
+# Original: arg0 = torch.randint(0, 1000, [47], dtype=torch.int64, device='cuda')
+# Replaced: arg0 = torch.bernoulli(...)
+p0 = torch.full([47], 0.5, dtype=torch.float16, device='cuda')
+arg0 = torch.bernoulli(p0).to(torch.int64)
+
+# Original: arg1 = torch.randint(0, 1000, [], dtype=torch.int64, device='cuda')
+p1 = torch.full([], 0.5, dtype=torch.float16, device='cuda')
+arg1 = torch.bernoulli(p1).to(torch.int64)
+
+# Original: arg2 = torch.randint(0, 1000, [], dtype=torch.int64, device='cuda')
+p2 = torch.full([], 0.5, dtype=torch.float16, device='cuda')
+arg2 = torch.bernoulli(p2).to(torch.int64)
+
+# torch.rand -> tf.keras.losses.categorical_hinge
+# Original: arg3 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True)
+# Replaced: arg3 = tf.keras.losses.categorical_hinge(...)
+# Creating dummy tensors for the loss function
+y_true_3 = tf.constant(0.0, shape=[256, 88, 1])
+y_pred_3 = tf.constant(0.0, shape=[256, 88, 1])
+arg3 = tf.keras.losses.categorical_hinge(y_true_3, y_pred_3)
+
+# Original: arg4 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True)
+y_true_4 = tf.constant(0.0, shape=[256, 88, 1])
+y_pred_4 = tf.constant(0.0, shape=[256, 88, 1])
+arg4 = tf.keras.losses.categorical_hinge(y_true_4, y_pred_4)
+
+# Original: arg5 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True)
+y_true_5 = tf.constant(0.0, shape=[256, 88, 1])
+y_pred_5 = tf.constant(0.0, shape=[256, 88, 1])
+arg5 = tf.keras.losses.categorical_hinge(y_true_5, y_pred_5)
+
+# torch.tensor -> torch.empty_strided
+# Original: sentinel = torch.tensor(0.0, dtype=torch.float16, device='cuda', requires_grad=True)
+# Replaced: sentinel = torch.empty_strided(...)
+sentinel = torch.empty_strided((1,), (1,), dtype=torch.float16, device='cuda', requires_grad=True)
+sentinel.fill_(0.0)
+
+if __name__ == '__main__':
+    # Note: The test case involves mixed PyTorch and TensorFlow operations due to replacements.
+    # Eager execution might fail due to framework interop, but the structure follows the replacement rules.
+    try:
+        out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+        # out_eager.sum().backward() # Backward pass might fail with mixed tensors
+        print('Eager Success! ')
+    except Exception as e:
+        print(f'Eager Failed (Expected due to API replacements): {e}")
+
+    # torch.compile -> torch.distributed.recv_object_list
+    # Original: compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    # Replaced: compiled_foo = torch.distributed.recv_object_list(...)
+    # Note: recv_object_list is a distributed communication primitive, not a compiler wrapper.
+    # This replacement is structural as per instructions.
+    try:
+        # We wrap foo in a list to pass it as an object
+        compiled_foo = torch.distributed.recv_object_list([foo])
+        # out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+        # print('Compile Success! ')
+    except Exception as e:
+        print(f'Compile Failed (Expected due to API replacements): {e}")

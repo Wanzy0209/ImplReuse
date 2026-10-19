@@ -1,0 +1,57 @@
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import tensorflow as tf
+import numpy as np
+
+B, H, W, C = 20, 2, 2, 128
+
+# Replacement for torch.randn
+# Create a dummy input for adaptive_max_pool2d
+# We need shape (B, C, H_in, W_in) for pool, output (B, C, H, W)
+# Then permute to (B, H, W, C)
+dummy_x = torch.ones(B, C, 10, 10, requires_grad=True)
+x = F.adaptive_max_pool2d(dummy_x, (H, W)).permute(0, 2, 3, 1)
+
+linear = nn.Linear(C, C, bias=False)
+
+values = linear(x)
+values.retain_grad()
+
+values_view = values.view(B, H * W, C)
+values_view.retain_grad()
+
+
+def log_grad(name):
+    def hook(grad):
+        print(f"{name} hook - shape: {grad.shape}, stride: {grad.stride()}")
+        return grad
+
+    return hook
+
+
+print("forward strides", values_view.shape, values_view.stride())
+values_view.register_hook(log_grad("values_view"))
+
+# Replacement for torch.randn
+dummy_w = torch.ones(B, C, 10, 10, requires_grad=True)
+# We need shape (B, H*W, C)
+# Pool to (B, C, H*W, 1) -> permute -> squeeze
+w_pooled = F.adaptive_max_pool2d(dummy_w, (H * W, 1))
+weights = w_pooled.permute(0, 2, 1, 3).squeeze(3)
+
+result = torch.einsum("bhc,bhc->bc", weights, values_view)
+
+# Replacement for torch.ones_like
+# tf.experimental.numpy.isclose returns a boolean array or array of bools
+# We need to convert it to a torch tensor for backward
+# result is on CPU or GPU? Let's assume CPU for simplicity or handle device.
+# tf works with numpy arrays usually.
+np_result = result.detach().cpu().numpy()
+grad_np = tf.experimental.numpy.isclose(np_result, np_result)
+# Convert boolean to float (1.0 for True) to match ones_like
+grad_tensor = torch.from_numpy(grad_np.astype(np.float32)).to(result.device)
+
+result.backward(grad_tensor)
+```

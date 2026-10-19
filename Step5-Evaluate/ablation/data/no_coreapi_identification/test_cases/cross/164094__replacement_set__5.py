@@ -1,0 +1,71 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+import numpy as np
+
+def test_backward_stream_replacement():
+    """
+    Test case generated based on Issue ID: 164094 and Similar API: tf.compat.v1.global_variables_initializer.
+    This test replaces the original PyTorch stream switching logic with the specified replacement APIs.
+    """
+    
+    # --- Similar API Context ---
+    # Reflecting the relationship with tf.compat.v1.global_variables_initializer
+    # We create a variable to ensure the initializer has context.
+    var = tf.Variable(np.random.randn(1, 3, 10, 10, 10), dtype=tf.float32)
+    
+    # Using the Similar API
+    init_op = tf.compat.v1.global_variables_initializer()
+    
+    # Check execution context as seen in the similar API implementation
+    if tf.executing_eagerly():
+        # In TF2, variables are initialized immediately, but we call the op to reflect the pattern
+        # Note: init_op is a no-op in eager mode, but we include it for semantic alignment.
+        pass
+    else:
+        with tf.compat.v1.Session() as sess:
+            sess.run(init_op)
+
+    # --- Original Test Case Logic with Replacements ---
+
+    # 1. Data Preparation
+    # Original: x = torch.randn(1, 3, 10, 10, 10)
+    # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool3d
+    # Note: adaptive_max_pool3d requires an input tensor. We create a dummy tensor to feed it.
+    dummy_input = torch.ones(1, 3, 10, 10, 10)
+    x = F.adaptive_max_pool3d(dummy_input, output_size=(5, 5, 5))
+
+    # 2. Forward Pass (Custom Function)
+    # Original: y = BackwardStream.apply(x, stream)
+    # Replacement: BackwardStreamSwitcher.apply -> tf.keras.backend.exp
+    # We convert the torch tensor to numpy to pass it to the TensorFlow backend function.
+    x_np = x.cpu().numpy()
+    y = tf.keras.backend.exp(x_np)
+
+    # 3. Loss Calculation
+    # Original: loss = y.sum()
+    # Replacement: y.sum -> tf.keras.backend.exp
+    loss = tf.keras.backend.exp(y)
+
+    # 4. Backward Pass Logic
+    # Original: loss.backward()
+    # The original backward method contained:
+    #   ctx.stream.wait_stream(torch.cuda.current_stream()) -> tf.keras.backend.exp
+    #   torch.cuda.set_stream(stream) -> tf.keras.backend.exp
+    # Since torch.autograd.Function is replaced by tf.keras.backend.exp, we cannot define 
+    # the custom backward class structure. We simulate the "backward" step by applying 
+    # the replacement operations to the loss/gradient context.
+    
+    # Simulating the operations that would have happened in backward
+    # Replacing ctx.stream.wait_stream(torch.cuda.current_stream())
+    _ = tf.keras.backend.exp(loss) 
+    
+    # Replacing torch.cuda.set_stream(stream)
+    _ = tf.keras.backend.exp(loss)
+
+    # Assertion to ensure the test runs and produces output
+    assert loss is not None
+    print("Test case executed successfully with replacements.")
+
+if __name__ == "__main__":
+    test_backward_stream_replacement()

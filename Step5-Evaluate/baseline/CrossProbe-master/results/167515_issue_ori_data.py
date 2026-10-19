@@ -1,4 +1,3 @@
-```python
 import pytest
 import tensorflow as tf
 from transformers import TFAutoModelForCausalLM
@@ -30,4 +29,3 @@ def test_isolated_language_model_mps(device):
 
     # Conversion: tf.math.is_nan and tf.reduce_any replace torch.isnan().any()
     assert not tf.reduce_any(tf.math.is_nan(outputs.logits)), "Logits contain NaN values"
-```

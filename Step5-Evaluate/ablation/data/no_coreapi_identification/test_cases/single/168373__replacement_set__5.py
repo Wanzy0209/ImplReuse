@@ -1,0 +1,62 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+import numpy as np
+
+# Replacement: torch._dynamo.backends.common -> torch.backends.cuda.enable_math_sdp
+from torch.backends.cuda import enable_math_sdp, enable_cudnn_sdp
+
+# Replacement: torch.nn.Module -> torch.backends.cuda.enable_math_sdp
+# Used as a type hint for the module parameter
+def torch_compile_with_custom_backend(
+    module: torch.backends.cuda.enable_math_sdp,
+):
+    # Replacement: torch.compile -> torch.all
+    # We wrap the module execution in torch.all to mimic the compilation/verification step
+    def wrapper(x):
+        return torch.all(module(x))
+    return wrapper
+
+# Replacement: torch.sin -> tf.keras.random.dropout
+class SubMod(torch.nn.Module):
+    def forward(self, x):
+        # Convert PyTorch tensor to TensorFlow tensor for dropout
+        x_np = x.detach().cpu().numpy()
+        x_tf = tf.constant(x_np)
+        # Apply TF dropout
+        out_tf = tf.keras.random.dropout(x_tf, rate=0.5)
+        # Convert back to PyTorch tensor
+        out_np = out_tf.numpy()
+        return torch.tensor(out_np, device=x.device)
+
+class Mod(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Replacement: self.mod_a -> torch.backends.cuda.enable_math_sdp
+        # We wrap the API call to make it compatible with the module forward pass structure
+        # (setting the backend and passing through the tensor)
+        self.mod_a = lambda x: (enable_math_sdp(True), x)[1]
+        self.mod_b = lambda x: (enable_math_sdp(True), x)[1]
+
+        # Apply the custom backend wrapper (which uses torch.all)
+        self.mod_a = torch_compile_with_custom_backend(self.mod_a)
+        self.mod_b = torch_compile_with_custom_backend(self.mod_b)
+
+    def forward(self, x):
+        # Original logic: return self.mod_a(x) + self.mod_b(x)
+        # self.mod_a(x) now returns torch.all(x) (a boolean)
+        # Adding booleans is valid in Python
+        return self.mod_a(x) + self.mod_b(x)
+
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool3d
+# Generate input using adaptive_max_pool3d on a random tensor
+input_tensor = torch.randn(1, 1, 4, 4, 4)
+x = F.adaptive_max_pool3d(input_tensor, (1, 1, 1))
+
+mod = Mod()
+# Run the model
+result = mod(x)
+
+# Basic assertion to ensure the test runs and produces a result
+# The result should be an integer (sum of two booleans)
+assert isinstance(result, (int, bool, torch.Tensor))

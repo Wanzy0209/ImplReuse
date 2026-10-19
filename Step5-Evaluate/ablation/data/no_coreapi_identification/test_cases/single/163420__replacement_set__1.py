@@ -1,0 +1,27 @@
+import torch
+
+def foo(arg0, arg1):
+    # Replacing fill_diagonal_ with torch.quantile
+    # Original logic: t2 = t0.clone(); t2.fill_diagonal_(t1.item())
+    # New logic: Compute quantile of arg0 at level arg1
+    return torch.quantile(arg0, arg1)
+
+# Replacing torch.empty with torch.quantile is not possible for tensor creation.
+# We create inputs suitable for torch.quantile.
+# arg0: data tensor (replaces the empty tensor)
+# arg1: quantile value (replaces the scalar tensor)
+arg0 = torch.randn([10, 10], dtype=torch.float32, device='cuda')
+arg1 = torch.tensor(0.5, dtype=torch.float32, device='cuda')
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0, arg1)
+    print('Eager Success! ')
+
+    # Compiled execution
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    print('Compile Success! ')
+
+    # Verify results match
+    assert torch.allclose(out_eager, out_compiled)

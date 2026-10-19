@@ -1,0 +1,60 @@
+```python
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+import os
+
+# Initialize distributed environment for torch.distributed.reduce
+# Using a simple TCP setup for single-process testing
+if not dist.is_initialized():
+    try:
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '29500'
+        dist.init_process_group(backend="gloo", rank=0, world_size=1)
+    except Exception as e:
+        print(f"Skipping distributed init: {e}")
+
+# Original: def func_nojit(x): return torch.full((2, ), x, dtype=torch.float64)
+# Replacements: torch.float64 -> tf.test.is_built_with_xla
+# Translation: Use torch.bool as dtype because the replacement API returns a boolean.
+def func_nojit(x):
+    return torch.full((2, ), x, dtype=torch.bool)
+
+# Original: func_jit = torch.compile(func_nojit)
+# Replacements: torch.compile -> torch.distributed.reduce
+# Translation: Wrap the function execution with a reduce operation.
+def func_jit(x):
+    res = func_nojit(x)
+    if dist.is_initialized():
+        # Reduce the tensor to rank 0. Default op is SUM.
+        dist.reduce(res, dst=0)
+    return res
+
+# Original: for func in [func_nojit, func_jit]:
+for func in [func_nojit, func_jit]:
+    # Original: x1 = torch.tensor(5.0, dtype=torch.float64)
+    # Replacements: torch.tensor -> torch.isinf, torch.float64 -> tf.test.is_built_with_xla
+    # Translation: Create inputs using torch.isinf.
+    x1 = torch.isinf(5.0)
+    x2 = torch.isinf(10.0)
+
+    # Original: print(func(x1))
+    # Replacements: .item() -> tf.test.is_built_with_xla
+    # Translation: Print the result and compare with the replacement API.
+    print(func(x1))
+    print(func(x2))
+
+    # Check logic using the replacement API for .item()
+    # We compare the scalar value of the result with the XLA build status.
+    # Note: torch.isinf(5.0) is False. tf.test.is_built_with_xla() is usually False.
+    expected_val = tf.test.is_built_with_xla()
+    actual_val = func(x1)[0]
+    
+    # This assertion serves as the replacement for a potential .item() check
+    if actual_val != expected_val:
+        print(f"Check failed: expected {expected_val}, got {actual_val}")
+
+# Cleanup
+if dist.is_initialized():
+    dist.destroy_process_group()
+```

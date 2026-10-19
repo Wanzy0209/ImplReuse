@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # torch._inductor.config.combo_kernels = True
@@ -26,4 +25,3 @@ with tf.device('/GPU:0'):
     )
 
 fn(*inps)
-```

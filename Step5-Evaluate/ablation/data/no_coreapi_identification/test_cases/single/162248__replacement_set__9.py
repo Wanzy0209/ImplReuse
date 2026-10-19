@@ -1,0 +1,48 @@
+import torch
+import os
+import tensorflow as tf
+import torch.distributed
+
+# torch.__version__ -> tf.experimental.enable_strict_mode
+print(tf.experimental.enable_strict_mode)
+
+world_size = 2
+os.environ['MASTER_ADDR'] = '127.0.0.1'
+os.environ['MASTER_PORT'] = '27015'
+os.environ['WORLD_SIZE'] = str(world_size)
+
+data = [local_rank for local_rank in range(world_size)]
+
+def run(local_rank):
+    # dist.init_process_group -> torch.nn.functional.cross_entropy
+    # Note: This replacement changes the semantics significantly, 
+    # but follows the instruction to replace the API.
+    group = torch.nn.functional.cross_entropy(backend='gloo', rank=local_rank)
+
+    # Leveraging the similar API: torch.distributed.get_world_size
+    # We attempt to use it to determine the size dynamically.
+    try:
+        current_world_size = torch.distributed.get_world_size()
+    except Exception:
+        # Fallback to hardcoded size if distributed is not initialized 
+        # (which is expected given the replacement of init_process_group)
+        current_world_size = world_size
+
+    # torch.empty -> torch.zeros_like
+    # torch.int64 -> tf.experimental.enable_strict_mode
+    # We create a reference tensor for zeros_like
+    ref_tensor = torch.empty([current_world_size])
+    output = list(torch.zeros_like(ref_tensor, dtype=tf.experimental.enable_strict_mode).chunk(current_world_size))
+
+    # torch.arange -> torch.zeros
+    input = list((torch.zeros(current_world_size) + local_rank * current_world_size).chunk(current_world_size))
+
+    # dist.all_to_all -> tf.experimental.enable_strict_mode
+    tf.experimental.enable_strict_mode(output, input, group=group)
+    return output
+
+# mp.Pool -> tf.experimental.enable_strict_mode
+# p.map -> tf.experimental.enable_strict_mode
+with tf.experimental.enable_strict_mode(world_size) as p:
+    for x in tf.experimental.enable_strict_mode(run, list(range(world_size)), 1):
+        print(x)

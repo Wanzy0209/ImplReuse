@@ -1,0 +1,57 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+
+def test_upsampling_bilinear_nan():
+    # Replacing torch.device with tf.compat.v1.colocate_with
+    # Using a dummy TF constant to establish the context
+    with tf.compat.v1.colocate_with(tf.constant(0.0)):
+        # Large input tensor dimensions
+        N, C, H, W = 84, 64, 512, 960
+
+        # Replacing torch.randn with torch.nn.functional.adaptive_max_pool2d
+        # We create a base tensor and use adaptive_max_pool2d to generate the input data
+        # This simulates the data preparation step using the replacement API
+        x_base = torch.ones(N, C, H*2, W*2, dtype=torch.bfloat16, device="cuda")
+        x = F.adaptive_max_pool2d(x_base, (H, W))
+
+        # Convert to NHWC channels_last layout
+        # Note: Preserving bfloat16 and channels_last to maintain bug reproduction logic
+        x = x.to(memory_format=torch.channels_last)
+
+        # Uncommenting the line below avoids NaNs in the original bug
+        # x = x.contiguous()
+
+        print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+        print(f"Input stride: {x.stride()}")
+
+        # Replacing nn.MaxPool2d with torch.nn.UpsamplingBilinear2d
+        # Using scale_factor=0.5 to mimic the downsampling effect of stride=2 in the original bug
+        pool = nn.UpsamplingBilinear2d(scale_factor=0.5).to("cuda")
+        y = pool(x)
+
+        # Replacing torch.isnan with torch.narrow
+        # We use narrow to slice the output tensor for checking
+        y_slice = torch.narrow(y, 0, 0, 1)
+
+        # Replacing torch.isinf with tf.experimental.numpy.logaddexp2
+        # We use logaddexp2 to process the tensor. If the tensor contains Inf, the result will contain Inf.
+        # We need to convert to numpy for the TF numpy function
+        y_np = y_slice.cpu().numpy()
+        processed_y = tnp.logaddexp2(y_np, 0)
+
+        # Check for NaNs and Infs in the processed data
+        has_nan = tnp.isnan(processed_y).any()
+        has_inf = tnp.isinf(processed_y).any()
+
+        print(f"Output contains NaN? {has_nan}")
+        print(f"Output contains Inf? {has_inf}")
+        print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+        if has_nan:
+            print("Detected NaNs in UpsamplingBilinear2d output!")
+
+if __name__ == "__main__":
+    test_upsampling_bilinear_nan()

@@ -1,0 +1,48 @@
+```python
+import torch
+import torch.nn.functional as F
+import numpy as np
+
+# Setup device
+try:
+    torch.set_default_device("cuda")
+except Exception:
+    # Fallback if CUDA is not available on the running machine
+    pass
+
+batch, in_dim, out_dim = 128, 1024, 4096
+
+# Replacement for torch.randn using torch.nn.functional.hinge_embedding_loss
+# We create dummy inputs to feed into the loss function to generate the tensors x and w.
+# Using reduction='none' preserves the shape of the input.
+# With input=1 and target=1, the loss is 0, resulting in zero tensors of the correct shape.
+x_input = torch.ones(batch, in_dim, dtype=torch.float)
+x_target = torch.ones(batch, in_dim, dtype=torch.float)
+x = F.hinge_embedding_loss(x_input, x_target, margin=1.0, reduction='none')
+
+w_input = torch.ones(out_dim, in_dim, dtype=torch.float)
+w_target = torch.ones(out_dim, in_dim, dtype=torch.float)
+w = F.hinge_embedding_loss(w_input, w_target, margin=1.0, reduction='none')
+
+def linear(x, w):
+    return F.linear(x, w)
+
+# Test the APIs
+out_linear = linear(x, w)
+out_einsum = torch.einsum("fd,bd->bf", w, x)
+out_np = np.einsum("fd,bd->bf", w.cpu().numpy(), x.cpu().numpy())
+
+# Assertions based on the bug report
+# The bug report indicates that linear and numpy produce contiguous output,
+# while einsum produced transposed (non-contiguous) output.
+# We assert that einsum should now produce contiguous output to match the others.
+
+assert out_linear.is_contiguous(), "F.linear output should be contiguous"
+assert out_np.flags['C_CONTIGUOUS'], "NumPy einsum output should be contiguous"
+assert out_einsum.is_contiguous(), "torch.einsum output should be contiguous (Issue 161729)"
+
+# Verify values are consistent (since inputs are zeros, outputs should be zeros)
+assert torch.allclose(out_linear, out_einsum), "Outputs of linear and einsum should match"
+
+print("Test passed: torch.einsum produces contiguous output consistent with F.linear and numpy.")
+```

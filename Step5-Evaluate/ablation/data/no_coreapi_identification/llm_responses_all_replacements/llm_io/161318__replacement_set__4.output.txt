@@ -1,0 +1,50 @@
+```python
+import torch
+import torch.nn.functional as F
+
+# The function to compile - logic remains the same to trigger the bug
+@torch.compile(fullgraph=True)
+def fn(encoder_attention_mask, encoder_hidden_states):
+    # The bug is triggered by the data-dependent slice [:text_len]
+    # where text_len comes from .sum().item()
+    encoder_hidden_states = encoder_hidden_states.new_zeros([1, 512, 3072])
+    text_len = encoder_attention_mask.sum().item()
+    encoder_hidden_states = encoder_hidden_states[:, :text_len]
+    return encoder_hidden_states
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+# Replacement 1: torch.arange -> torch.quantile
+# Original: mask = (torch.arange(512) < 8).unsqueeze(0).cuda()
+# We create a mask using torch.quantile.
+# Input for quantile: a tensor of ones.
+# Quantile value: 0.5.
+# Dim: 2 (last dim).
+# Result shape: (1, 512).
+# Comparison: < 8 (since values are 1.0, this is all True).
+mask_input = torch.ones(1, 512, 512).cuda()
+mask = (torch.quantile(mask_input, torch.tensor(0.5).cuda(), dim=2) < 8)
+
+# Replacement 2: torch.randn -> torch.nn.functional.adaptive_max_pool2d
+# Original: hidden = torch.randn((1, 512, 4096)).cuda()
+# We create a tensor using adaptive_max_pool2d.
+# Input: 4D tensor (1, 512, 8, 512).
+# Output size: (1, 4096).
+# Result shape: (1, 512, 1, 4096).
+# Squeeze to match original shape (1, 512, 4096).
+hidden_input = torch.ones(1, 512, 8, 512).cuda()
+hidden = F.adaptive_max_pool2d(hidden_input, (1, 4096)).squeeze(2)
+
+# Run the function
+try:
+    output = fn(mask, hidden)
+    print("Test passed. Output shape:", output.shape)
+    # Basic assertion to check execution
+    assert output.shape[0] == 1
+    assert output.shape[1] == 512
+    # text_len will be 512 (all True), so slice is [:512]
+    assert output.shape[2] == 512
+except Exception as e:
+    print(f"Test failed with error: {e}")
+    raise
+```

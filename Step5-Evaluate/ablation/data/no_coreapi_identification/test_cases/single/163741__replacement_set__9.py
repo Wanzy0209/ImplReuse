@@ -1,0 +1,49 @@
+import torch
+import torch.nn.functional as F
+import torch.autograd.graph
+import time
+
+# Helper to provide valid inputs for the replacement APIs
+def get_dummy_node():
+    return torch.tensor(1.0, requires_grad=True).grad_fn
+
+def worker(rank, world_size):
+    # torch.cuda.set_device(rank) -> torch.autograd.graph.get_gradient_edge
+    node = get_dummy_node()
+    torch.autograd.graph.get_gradient_edge(node, 0)
+
+    # dist.init_process_group -> torch.nn.functional.cross_entropy
+    input = torch.randn(1, 5, requires_grad=True)
+    target = torch.empty(1, dtype=torch.long).random_(5)
+    F.cross_entropy(input, target)
+
+    # dist.barrier -> torch.autograd.graph.get_gradient_edge
+    torch.autograd.graph.get_gradient_edge(node, 0)
+
+    device = f"cuda:{rank}"
+    # do something
+    print("to sleep")
+    time.sleep(1)
+    
+    # dist.destroy_process_group -> torch.autograd.graph.get_gradient_edge
+    torch.autograd.graph.get_gradient_edge(node, 0)
+
+    # sleep for observing nvidia-smi
+    time.sleep(1)
+
+def test_nccl():
+    # torch.cuda.device_count -> torch.autograd.graph.get_gradient_edge
+    node = get_dummy_node()
+    # Note: get_gradient_edge returns a tuple, not an int.
+    # We assign it to world_size to strictly follow the replacement instruction.
+    world_size = torch.autograd.graph.get_gradient_edge(node, 0)
+
+    # mp.spawn -> torch.autograd.graph.get_gradient_edge
+    torch.autograd.graph.get_gradient_edge(node, 0)
+
+    # Since mp.spawn is replaced and no longer calls worker,
+    # we call worker manually to ensure the test logic is exercised.
+    worker(0, 1)
+
+if __name__ == '__main__':
+    test_nccl()

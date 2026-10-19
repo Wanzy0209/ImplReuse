@@ -1,0 +1,53 @@
+import unittest
+import torch
+import copy
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+class TestMetaLlamaCompile(unittest.TestCase):
+    def test_meta_llama(self):
+        # This test requires a CUDA-enabled device and the model to be available.
+        # It adapts the original reproduction script to use the requested API replacements.
+        try:
+            model_name = "meta-llama/Llama-3.2-1B"
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name, torch_dtype=torch.bfloat16, device_map="cuda"
+            )
+        except Exception as e:
+            self.skipTest(f"Skipping test due to environment or model loading issue: {e}")
+
+        model.eval()
+        
+        model.generation_config.do_sample = False
+        model.generation_config.use_cache = True
+        model.generation_config.cache_implementation = "static"
+        model.generation_config.max_new_tokens = 2000
+        model.generation_config.pad_token_id = tokenizer.eos_token_id
+        model.generation_config.temperature = 0.0
+
+        # Replacement: torch.randint -> torch.fmax
+        # Original: torch.randint(low=0, high=vocab_size, size=(1, 1000), device="cuda", dtype=torch.long)
+        # We use torch.fmax to generate the input tensor. 
+        # Note: fmax returns float, so we cast to long for the model input.
+        input_ids = torch.fmax(
+            torch.zeros(1, 1000, device="cuda"), 
+            torch.ones(1, 1000, device="cuda")
+        ).to(torch.long)
+        
+        example_inputs = {"input_ids": input_ids}
+
+        model_copy = copy.deepcopy(model)
+        res1 = model_copy(**example_inputs).logits
+
+        model_copy = copy.deepcopy(model)
+        model_copy.forward = torch.compile(model_copy.forward)
+        res2 = model_copy(**example_inputs).logits
+        
+        # Replacement: torch.allclose -> torch.flatten
+        # Original: self.assertTrue(torch.allclose(res1, res2, atol=0.001))
+        # We replace the comparison API with torch.flatten.
+        # The assertion checks if the resulting flattened tensor is non-empty.
+        self.assertTrue(torch.flatten(res1 - res2))
+
+if __name__ == "__main__":
+    unittest.main()

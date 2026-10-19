@@ -1,0 +1,62 @@
+import torch
+import triton
+import triton.language as tl
+import torch.nn.functional as F
+
+# Define a dummy add_kernel to make the test case runnable
+@triton.jit
+def add_kernel(
+    x_ptr, y_ptr, output_ptr,
+    n_elements, BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+def test_triton_kernel_to_cpu():
+    # Replacements:
+    # torch.randn -> torch.nn.functional.cosine_embedding_loss
+    # torch.zeros_like -> torch.norm
+
+    # Setup inputs for cosine_embedding_loss
+    # We need input1, input2, and target to generate the inputs x and y.
+    input1 = torch.randn(4, 4, device='cuda')
+    input2 = torch.randn(4, 4, device='cuda')
+    target = torch.ones(4, device='cuda')
+
+    # Replacement: torch.randn -> torch.nn.functional.cosine_embedding_loss
+    # Note: cosine_embedding_loss returns a scalar tensor.
+    x = F.cosine_embedding_loss(input1, input2, target)
+    y = F.cosine_embedding_loss(input1, input2, target)
+
+    def f(x, y):
+        # Replacement: torch.zeros_like -> torch.norm
+        # Note: torch.norm returns a scalar tensor.
+        out = torch.norm(x)
+
+        # Call the kernel.
+        # Original call: add_kernel[(1,)](x, y, out, 16, 16)
+        # Adapted call: Since x, y, and out are now scalars (size 1),
+        # we adjust n_elements and BLOCK_SIZE to 1 to ensure the code runs correctly.
+        add_kernel[(1,)](x, y, out, 1, 1)
+
+        out_cpu = out.cpu() + 1
+        return out_cpu
+
+    eager_out = f(x, y)
+    compiled_out = torch.compile(f)(x, y)
+    
+    # Assert correctness
+    assert torch.allclose(compiled_out, eager_out)
+
+if __name__ == "__main__":
+    if torch.cuda.is_available():
+        test_triton_kernel_to_cpu()
+        print("Test passed.")
+    else:
+        print("CUDA not available, skipping test.")

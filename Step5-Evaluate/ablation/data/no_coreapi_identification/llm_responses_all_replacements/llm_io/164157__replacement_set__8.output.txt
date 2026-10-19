@@ -1,0 +1,94 @@
+```python
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+import os
+
+# Initialize distributed environment for torch.distributed.send_object_list replacement
+os.environ['MASTER_ADDR'] = '127.0.0.1'
+os.environ['MASTER_PORT'] = '29500'
+dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+# Replacements for torch._dynamo.config and torch._inductor.config
+# torch._dynamo.config.capture_scalar_outputs -> torch.nn.functional.local_response_norm
+# torch._inductor.config.emulate_precision_casts -> torch.nn.functional.local_response_norm
+torch.nn.functional.local_response_norm(torch.tensor([1.0]))
+torch.nn.functional.local_response_norm(torch.tensor([1.0]))
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+    t0 = arg0
+    # torch.tanh -> tf.experimental.numpy.argmax
+    t1 = tf.experimental.numpy.argmax(t0.cpu().numpy(), keepdims=True)
+    t1 = torch.from_numpy(t1).to(t0.device) # Convert back to torch for compatibility
+    
+    t2 = arg1
+    t3 = arg2
+    t4 = t2 * t3
+    
+    # t1.clone -> torch.nn.functional.local_response_norm
+    # Reshaping to 4D (N, C, H, W) as required by local_response_norm
+    t5 = torch.nn.functional.local_response_norm(t1.unsqueeze(0).unsqueeze(0).float())
+    
+    t6 = arg3
+    t7 = arg4
+    t8 = arg5
+    
+    # torch.cat -> torch.isinf
+    t9 = torch.isinf(t6)
+    
+    # Original API Under Test: torch.std
+    # Similar API: tf.keras.backend.resize_volumes
+    # Leveraging similar API to replace std logic
+    # Reshaping to 5D (Batch, Channels, Depth, Height, Width) for resize_volumes
+    t9_np = t9.unsqueeze(0).unsqueeze(0).cpu().numpy()
+    t10 = tf.keras.backend.resize_volumes(t9_np, 1, 1, 1, data_format='channels_first')
+    t10 = torch.from_numpy(t10).to(t0.device)
+    
+    # torch.clamp -> torch.nn.functional.local_response_norm
+    # Reshaping to 4D
+    indices = torch.nn.functional.local_response_norm(t5.unsqueeze(0).unsqueeze(0).unsqueeze(0).float())
+    
+    # torch.nn.functional.embedding -> torch.nn.LazyConvTranspose3d
+    # Using LazyConvTranspose3d to replace embedding lookup logic
+    # indices shape is (1, 1, 1, 1, 47), ConvTranspose3d expects 5D input
+    conv = torch.nn.LazyConvTranspose3d(out_channels=88, kernel_size=1)
+    t11 = conv(indices)
+    
+    output = t11 + sentinel
+    return output
+
+# Argument generation with replacements
+# torch.randint -> torch.argmax
+arg0 = torch.argmax(torch.randn(47, 1000), dim=1)
+arg1 = torch.argmax(torch.randn(1, 1000), dim=1)
+arg2 = torch.argmax(torch.randn(1, 1000), dim=1)
+
+# torch.rand -> torch.nn.functional.local_response_norm
+# Generating inputs with shape (256, 88, 1) via LRN on random noise then squeezing
+arg3 = torch.nn.functional.local_response_norm(torch.randn(1, 1, 256, 88)).squeeze()
+arg4 = torch.nn.functional.local_response_norm(torch.randn(1, 1, 256, 88)).squeeze()
+arg5 = torch.nn.functional.local_response_norm(torch.randn(1, 1, 256, 88)).squeeze()
+
+# torch.tensor -> torch.cummin
+sentinel = torch.cummin(torch.tensor([0.0]), dim=0)[0]
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    print('Eager Success! ✅')
+
+    # Compile execution
+    # torch.compile -> torch.distributed.send_object_list
+    # We simulate the "compilation" step by sending the function object via distributed communication
+    dist.send_object_list([foo], dst=0)
+    
+    # Receive the "compiled" function
+    recv_list = [None]
+    dist.recv_object_list(recv_list, src=0)
+    compiled_foo = recv_list[0]
+    
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    print('Compile Success! ✅')
+    
+    dist.destroy_process_group()
+```

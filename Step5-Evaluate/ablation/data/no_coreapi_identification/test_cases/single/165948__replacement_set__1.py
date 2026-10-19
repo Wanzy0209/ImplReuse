@@ -1,0 +1,45 @@
+import torch
+
+# Replacement: nn.Module -> torch.logaddexp
+# Since torch.logaddexp is a function and not a class, we use it directly.
+flex_model = torch.logaddexp
+
+# Replacement: torch.randn -> torch.logaddexp
+# To generate inputs using torch.logaddexp, we need base tensors.
+# We use simple constants to seed the generation.
+seed_a = torch.tensor(1.0)
+seed_b = torch.tensor(2.0)
+
+# Original: query = torch.randn(batch_size, num_heads, seq_len, head_dim)
+# New: query = torch.logaddexp(...)
+# We generate the inputs by applying logaddexp to the seeds.
+# Note: We maintain the variable names for semantic mapping.
+query = torch.logaddexp(seed_a, seed_b)
+key = torch.logaddexp(seed_a, seed_b)
+value = torch.logaddexp(seed_a, seed_b)
+
+# Original: flex_kwargs = {"block_mask": block_mask}
+# Replacement: flex_attention -> torch.logaddexp
+# torch.logaddexp accepts an 'out' kwarg, which is semantically similar to a mask/buffer in this context.
+out_tensor = torch.empty_like(query)
+flex_kwargs = {"out": out_tensor}
+
+# Original: flex_inputs = (query, key, value)
+# torch.logaddexp takes 2 inputs (x, y), not 3 (q, k, v).
+# We adapt the inputs to fit the new API signature.
+flex_inputs = (query, key)
+
+# Original: eager_out = flex_model(*flex_inputs, **flex_kwargs)
+# This calls torch.logaddexp(query, key, out=out_tensor)
+eager_out = flex_model(*flex_inputs, **flex_kwargs)
+
+# Original: with torch._dynamo.config.patch(...): gm = _dynamo_graph_capture_for_export(flex_model)...
+# Replacement: torch._dynamo.config.patch -> torch.logaddexp
+# Replacement: torch._dynamo.functional_export._dynamo_graph_capture_for_export -> torch.logaddexp
+# Since torch.logaddexp is not a tracer, we simply call it again to mimic the structure.
+# This represents the "captured" execution path.
+gm = torch.logaddexp(*flex_inputs, **flex_kwargs)
+
+# Verify the output is as expected
+assert torch.allclose(eager_out, gm)
+assert eager_out is out_tensor # Check that the 'out' kwarg was respected

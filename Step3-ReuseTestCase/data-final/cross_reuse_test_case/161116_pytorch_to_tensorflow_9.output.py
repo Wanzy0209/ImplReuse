@@ -1,0 +1,55 @@
+import tensorflow as tf
+import os
+
+def main():
+    # Adapted from the original PyTorch test case structure.
+    # The original bug occurs when scaling up to > 10 trays (40 GPUs).
+    # We simulate this scale by using a batch size of 40.
+    
+    # Preserving the environment variable logic to maintain test structure similarity
+    try:
+        gpu_id = int(os.environ.get("LOCAL_RANK", "0"))
+    except (ValueError, TypeError):
+        gpu_id = 0
+
+    # Simulate the "device" context by ensuring we are operating on the expected hardware if available
+    # In TensorFlow, this is often handled implicitly or via tf.device, but we focus on the API call.
+    
+    # Define input parameters
+    # Using a batch size of 40 to mirror the "40 GPUs" threshold mentioned in the bug report
+    batch_size = 40 
+    height, width = 256, 256
+    channels = 3
+    
+    # Create a large input tensor to stress the system, analogous to the large process group
+    # We use the gpu_id as a seed to mimic per-rank initialization differences
+    images = tf.random.uniform((batch_size, height, width, channels), 
+                               minval=0.0, 
+                               maxval=1.0, 
+                               seed=gpu_id,
+                               dtype=tf.float32)
+
+    # Call the similar API: tf.image.random_hue
+    # max_delta must be in the interval [0, 0.5]
+    max_delta = 0.2
+    
+    # This is the core operation being tested. 
+    # We verify it handles the "large scale" input without crashing (segfault).
+    adjusted_images = tf.image.random_hue(images, max_delta=max_delta, seed=gpu_id)
+
+    # Verify behavior (analogous to dist.barrier() ensuring completion and consistency)
+    # 1. Check shape preservation
+    assert adjusted_images.shape == images.shape, \
+        f"Shape mismatch: expected {images.shape}, got {adjusted_images.shape}"
+    
+    # 2. Check data type preservation
+    assert adjusted_images.dtype == images.dtype, \
+        f"Dtype mismatch: expected {images.dtype}, got {adjusted_images.dtype}"
+
+    # 3. Ensure values are finite (no NaNs or Infs resulting from the operation)
+    assert tf.reduce_all(tf.math.is_finite(adjusted_images)), "Output contains NaN or Inf values"
+
+    print(f"Test passed for rank {gpu_id}: tf.image.random_hue processed batch of {batch_size} successfully.")
+
+if __name__ == "__main__":
+    main()

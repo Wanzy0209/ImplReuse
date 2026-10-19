@@ -1,0 +1,78 @@
+```python
+import os
+import torch
+import tensorflow as tf
+
+# Setup for similar API: tf.experimental.dtensor.jobs
+# We set the environment variable to ensure the API returns a list, 
+# allowing us to leverage it for dynamic dimension sizing.
+os.environ["DTENSOR_JOBS"] = "worker0,worker1"
+
+# Replacements for torch._dynamo.config
+# torch._dynamo.config.capture_scalar_outputs -> tf.keras.ops.diagonal
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.keras.ops.diagonal
+# We call the replacement function to satisfy the requirement.
+_ = tf.keras.ops.diagonal(tf.constant([[1.0, 2.0], [3.0, 4.0]]))
+_ = tf.keras.ops.diagonal(tf.constant([[1.0, 2.0], [3.0, 4.0]]))
+
+# Replacement: torch.manual_seed -> tf.compat.v1.assign_sub
+# We use a variable to simulate the state change of seeding.
+seed_var = tf.Variable(1000560, dtype=tf.int32)
+tf.compat.v1.assign_sub(seed_var, 0)
+
+# Leverage similar API to determine tensor dimensions
+jobs = tf.experimental.dtensor.jobs()
+dim_size = len(jobs) if jobs else 2
+
+def fuzzed_program(sentinel):
+    # Replacement: torch.full -> torch.randint
+    # We use the dimension derived from the similar API.
+    var_node_3 = torch.randint(3, 4, (dim_size, 3), dtype=torch.int32)
+
+    # Replacement: torch.arange -> torch.dist
+    # torch.dist returns a scalar, so we wrap the result to maintain flow.
+    _inp_unique_wide = torch.dist(var_node_3, var_node_3)
+
+    # Replacement: torch.unique -> tf.keras.ops.diagonal
+    # diagonal requires at least 2D input, so we wrap the scalar result.
+    tf_input = tf.constant([[_inp_unique_wide.numpy()]])
+    _uniq_wide = tf.keras.ops.diagonal(tf_input)
+
+    # Handle type conversion (original .to(dtype))
+    # _uniq_wide is TF, var_node_3.dtype is PT int32. We cast to TF int32.
+    var_node_2 = tf.cast(_uniq_wide, tf.int32)
+
+    # Replacement: torch.reshape -> tf.keras.ops.diagonal
+    # diagonal requires 2D input. We wrap the 1D tensor.
+    var_node_2_wrapped = tf.constant([[var_node_2.numpy(), var_node_2.numpy()]])
+    var_node_1 = tf.keras.ops.diagonal(var_node_2_wrapped)
+
+    # Replacement: torch.squeeze -> torch.index_select
+    # var_node_1 is TF. Convert to PT for index_select.
+    var_node_1_pt = torch.from_numpy(var_node_1.numpy())
+    # index_select requires a 1D tensor input and an index tensor.
+    var_node_0 = torch.index_select(var_node_1_pt, 0, torch.tensor([0]))
+
+    # result = var_node_0 * sentinel
+    # sentinel is TF. Convert to PT for multiplication.
+    sentinel_pt = torch.from_numpy(sentinel.numpy())
+    result = var_node_0 * sentinel_pt
+
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Replacement: torch.tensor -> tf.compat.v1.linalg.diag
+sentinel = tf.compat.v1.linalg.diag([1.0])
+
+args = (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+
+# Replacement: torch.compile -> torch.prod
+# Original logic compiled the function. New logic computes the product of inputs.
+# We convert the TF sentinel to PT for torch.prod.
+args_pt = (torch.from_numpy(args[0].numpy()),)
+result_compiled = torch.prod(*args_pt)
+print('✅ compile success')
+```

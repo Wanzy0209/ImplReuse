@@ -1,0 +1,49 @@
+import torch
+import tensorflow as tf
+
+# Test case generated based on Issue ID: 164297
+# Original bug: Segfault accessing torch._C._onnx.OperatorExportTypes
+# Replacement API: tf.RaggedTensorSpec
+# Similar API: tf.experimental.unregister_dispatch_for
+
+def test_ragged_tensor_spec_and_dispatch():
+    # 1. Access the replacement API (tf.RaggedTensorSpec) to ensure it doesn't crash.
+    # This mimics the original bug reproduction logic where accessing the type caused a segfault.
+    spec = tf.RaggedTensorSpec([None, None], tf.int32)
+    assert spec is not None
+
+    # 2. Leverage the similar API (tf.experimental.unregister_dispatch_for).
+    # We define a custom ExtensionType that uses the replacement API (tf.RaggedTensorSpec)
+    # to test the dispatch mechanism, which is similar to the code pattern in the original issue.
+    
+    class RaggedWrapper(tf.experimental.ExtensionType):
+        spec: tf.RaggedTensorSpec
+
+    # Register a dispatch for a standard API (tf.abs) for our custom type
+    @tf.experimental.dispatch_for_api(tf.abs)
+    def ragged_wrapper_abs(x: RaggedWrapper):
+        # Dummy implementation returning a new wrapper with a modified spec
+        return RaggedWrapper(spec=tf.RaggedTensorSpec([1], tf.int32))
+
+    # Verify the dispatch works
+    wrapper = RaggedWrapper(spec=spec)
+    result = tf.abs(wrapper)
+    assert isinstance(result, RaggedWrapper)
+
+    # 3. Use the similar API to unregister the dispatch.
+    # This tests the C++ binding stability of unregister_dispatch_for,
+    # mirroring the concern from the original pybind11 crash.
+    tf.experimental.unregister_dispatch_for(ragged_wrapper_abs)
+
+    # Verify unregistration (should raise ValueError or fall back, depending on TF version/context)
+    # In the context of the original bug, simply ensuring this call doesn't segfault is key.
+    try:
+        tf.abs(wrapper)
+        # If it doesn't raise, it might have fallen back, but the unregistration itself is the test.
+    except ValueError:
+        # Expected if the dispatch was successfully removed and no fallback exists for ExtensionType
+        pass
+
+if __name__ == "__main__":
+    test_ragged_tensor_spec_and_dispatch()
+    print("Test passed.")

@@ -146,7 +146,7 @@ def main():
                         help='Input directory containing JSON files with parse errors')
     parser.add_argument('--prompt-dir', default='./data/pytorch_prompts',
                         help='Directory containing pre-generated prompt files')
-    parser.add_argument('--api-key', default='044f2bc486d14e13aa68259fbd1970c4.hjLhKCmeXaDRt2xf',
+    parser.add_argument('--api-key', default=os.getenv("ZHIPUAI_API_KEY"),
                         help='Zhipu API key (or use ZHIPUAI_API_KEY env var)')
     args = parser.parse_args()
 

@@ -1,0 +1,75 @@
+import tensorflow as tf
+import torch
+
+# Replacements applied based on the provided mapping:
+# dist.init_process_group -> tf.debugging.Assert
+# torch.ones -> torch.qr
+# torch.distributed._tensor -> tf.profiler.experimental.server.start
+# torch.utils.debug_mode -> tf.profiler.experimental.server.start
+# DTensor.clamp_ -> tf.profiler.experimental.server.start
+# debug_mode.debug_string -> tf.profiler.experimental.server.start
+# out.full_tensor -> tf.profiler.experimental.server.start
+# partial_dt.clamp_ -> tf.profiler.experimental.server.start
+
+def test_inplace_ops_replacement():
+    # dist.init_process_group(backend="nccl", world_size=2)
+    # Replacement: tf.debugging.Assert
+    # We pass the arguments as data to the assertion to maintain the "logic" of passing them.
+    tf.debugging.Assert(True, ["nccl", 2])
+
+    # mesh = init_device_mesh('cuda', (2,))
+    # init_device_mesh is from torch.distributed._tensor
+    # Replacement: tf.profiler.experimental.server.start
+    mesh = tf.profiler.experimental.server.start('cuda', (2,))
+
+    # tensor = torch.ones(12, 12, device="cuda")
+    # Replacement: torch.qr
+    # torch.qr requires a tensor input. We create a dummy tensor to feed it, 
+    # as we cannot use torch.ones (the replaced API).
+    # Using torch.empty as a minimal helper to make torch.qr runnable.
+    dummy_input = torch.empty(12, 12, device="cuda")
+    # torch.qr returns a tuple (Q, R), we take Q to mimic a tensor creation.
+    tensor = torch.qr(dummy_input)[0]
+
+    # in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)])
+    # distribute_tensor and Shard are from torch.distributed._tensor
+    # Replacement: tf.profiler.experimental.server.start
+    in_dtensor = tf.profiler.experimental.server.start(tensor, mesh, [tf.profiler.experimental.server.start(0)])
+
+    # partial_dt = in_dtensor.sum()
+    # sum() is not in the replacement list, so we keep it.
+    # Note: in_dtensor is now the result of server.start, which might not support sum().
+    # We proceed with the replacement logic regardless of runtime validity.
+    partial_dt = in_dtensor.sum()
+
+    # with DebugMode(record_torchfunction=False) as debug_mode:
+    # DebugMode is from torch.utils.debug_mode
+    # Replacement: tf.profiler.experimental.server.start
+    # server.start is not a context manager, so we call it directly.
+    debug_mode = tf.profiler.experimental.server.start(record_torchfunction=False)
+
+    # out = partial_dt.clamp_(max=2)
+    # clamp_ -> tf.profiler.experimental.server.start
+    out = tf.profiler.experimental.server.start(partial_dt, max=2)
+
+    # full = out.full_tensor()
+    # full_tensor -> tf.profiler.experimental.server.start
+    full = tf.profiler.experimental.server.start(out)
+
+    # print(debug_mode.debug_string())
+    # debug_string -> tf.profiler.experimental.server.start
+    print(tf.profiler.experimental.server.start())
+
+    # print(out.placements)
+    # placements is an attribute access, not a function call in the list, so we keep it.
+    # However, out is the result of server.start.
+    try:
+        print(out.placements)
+    except AttributeError:
+        print("Attribute 'placements' not found on replacement API result.")
+
+    # print(full)
+    print(full)
+
+if __name__ == '__main__':
+    test_inplace_ops_replacement()

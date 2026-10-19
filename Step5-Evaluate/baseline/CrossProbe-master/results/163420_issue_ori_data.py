@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # torch._dynamo.config.capture_scalar_outputs = True
@@ -48,4 +47,3 @@ if __name__ == '__main__':
     grads = tape.gradient(loss, [arg0, arg1])
     
     print('Compile Success! ✅')
-```

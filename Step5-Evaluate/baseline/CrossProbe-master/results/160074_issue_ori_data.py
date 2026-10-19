@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: Define flex_attention equivalent as it is not a standard TF import
@@ -50,4 +49,3 @@ dy = tf.random.normal(tf.shape(y), dtype=y.dtype)
 
 # Calculate gradients with the upstream gradient (dy)
 grads = tape.gradient(y, [q, k, v], output_gradients=dy)
-```

@@ -1,0 +1,61 @@
+```python
+import torch
+import torch.nn as nn
+from torch.export import export
+
+class DynamicSliceModel(nn.Module):
+    def forward(self, item_embedding, ref_tensor):
+        """
+        A model that performs a slice operation where the slice length
+        is data-dependent, calculated using torch.dist.
+        """
+        # Requirement: Replace torch.arange with torch.dist
+        # We use torch.dist to generate the dynamic scalar value 'max_item_num'
+        # based on the input data.
+        
+        # Calculate distance between the first elements of the inputs
+        # This results in a 0-dim tensor (scalar)
+        dist_val = torch.dist(item_embedding[0, 0, 0], ref_tensor[0, 0, 0])
+        
+        # Convert the distance to an integer to be used as a slice index
+        max_item_num = dist_val.to(torch.int)
+        
+        # The problematic operation from the bug report:
+        # Slicing a tensor using a data-dependent scalar tensor.
+        # This causes "Data dependent error" in torch.export.export
+        selected_item_embedding = item_embedding[:, :max_item_num, :]
+        
+        return selected_item_embedding
+
+def test_export_dynamic_slice_with_dist():
+    """
+    Test case for Issue 163146: Data dependent error on slices in autograd::applySlicing.
+    
+    This test verifies the behavior of torch.export.export when encountering
+    data-dependent slicing operations where the index is derived via torch.dist.
+    """
+    model = DynamicSliceModel()
+    
+    # Setup inputs matching the dimensions found in the bug report
+    # item_embedding: Tensor(shape: torch.Size([s10, s64, 64]))
+    item_embedding = torch.randn(10, 64, 64)
+    ref_tensor = torch.randn(10, 64, 64)
+    
+    # Attempt to export the model
+    # The bug report indicates that export fails with strict=True and strict=False
+    # due to inability to evaluate the data-dependent value.
+    try:
+        ep = export(model, (item_embedding, ref_tensor), strict=True)
+        # If the bug is fixed, this line might be reached.
+        # However, based on the issue, we expect a failure.
+        print("Export succeeded (Bug may be fixed or handled).")
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Export failed as expected: {error_msg}")
+        # Assert that the error is related to data dependency
+        assert "Data dependent error" in error_msg or "Unable to evaluate" in error_msg, \
+            f"Expected a data dependency error, but got: {error_msg}"
+
+if __name__ == "__main__":
+    test_export_dynamic_slice_with_dist()
+```

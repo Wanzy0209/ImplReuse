@@ -1,0 +1,27 @@
+import torch
+import tensorflow as tf
+
+# torch.ones -> torch.normal
+input = torch.normal(0, 1, (1, 1, 3, 3, 3))
+
+# torch.tensor -> tf.experimental.numpy.diag
+# torch.nan -> torch.backends.cuda.cufft_plan_cache.size
+# Note: tf.experimental.numpy.diag expects a 1D or 2D array. 
+# We pass a 1D list here to ensure the API call is valid, though the resulting shape 
+# may differ from the original 5D tensor.
+grid_nan = tf.experimental.numpy.diag([torch.backends.cuda.cufft_plan_cache.size, 1., 1.])
+
+# Original API call remains, but arguments are now the result of replacements
+out_cpu = torch.grid_sampler_3d(input, grid_nan, 0, 0, True)
+
+# grid_nan.to -> torch.backends.cuda.cufft_plan_cache.size
+# input.to -> torch.backends.cuda.cufft_plan_cache.size (implied by context of replacing .to calls)
+# Note: This replaces the tensor movement with a property access returning an int.
+# This will likely cause a runtime error in grid_sampler_3d as it expects tensors.
+out_mps = torch.grid_sampler_3d(torch.backends.cuda.cufft_plan_cache.size, torch.backends.cuda.cufft_plan_cache.size, 0, 0, True)
+
+# out_cpu.flatten -> torch.backends.cuda.cufft_plan_cache.size
+print("CPU:", torch.backends.cuda.cufft_plan_cache.size)
+
+# out_mps.flatten -> torch.backends.cuda.cufft_plan_cache.size
+print("MPS:", torch.backends.cuda.cufft_plan_cache.size)

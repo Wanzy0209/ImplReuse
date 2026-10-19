@@ -1,0 +1,67 @@
+import torch
+import tensorflow as tf
+
+# torch.ones -> torch.matrix_power
+# Original: x = torch.ones(1, 64, device='cuda', dtype=torch.int64)
+# Replacement: torch.matrix_power requires a square matrix.
+# We create a dummy 64x64 identity matrix and power it.
+# Note: dtype=torch.int64 replaced with tf.keras.ops.true_divide (invalid in context), so we remove dtype.
+base_x = torch.eye(64, device='cuda')
+x = torch.matrix_power(base_x, 1)
+
+# torch.randn -> torch.nn.functional.adaptive_max_pool2d
+# Original: y = torch.randn(64, 3072, device='cuda', dtype=torch.bfloat16)
+# Replacement: adaptive_max_pool2d requires 4D input (N, C, H, W).
+# We create a dummy input tensor.
+# Note: dtype=torch.bfloat16 replaced with tf.keras.ops.true_divide (invalid in context), so we remove dtype.
+dummy_input = torch.randn(64, 3072, 1, 1, device='cuda')
+y = torch.nn.functional.adaptive_max_pool2d(dummy_input, (1, 1))
+
+# torch.compile -> tf.keras.ops.true_divide
+# Original: @torch.compile
+# Replacement: tf.keras.ops.true_divide is not a decorator. 
+# We remove the decorator to ensure the code is runnable.
+def f(arg0_1, arg1_1):
+    # torch.ops.aten.embedding.default -> tf.keras.ops.true_divide
+    embedding = tf.keras.ops.true_divide(arg1_1, arg0_1)
+    
+    # torch.ops.aten.view.default -> tf.keras.ops.true_divide
+    # Original: view(embedding, [64, 3072])
+    # Replacement: true_divide(embedding, 1)
+    view = tf.keras.ops.true_divide(embedding, 1)
+    
+    # torch.ops.aten.unsqueeze.default -> tf.keras.ops.true_divide
+    unsqueeze = tf.keras.ops.true_divide(view, 1)
+    
+    # torch.ops.aten.expand.default -> tf.keras.ops.true_divide
+    expand = tf.keras.ops.true_divide(unsqueeze, 1)
+    
+    # torch.ops.aten.view.default -> tf.keras.ops.true_divide
+    view_1 = tf.keras.ops.true_divide(expand, 1)
+    
+    # torch.ops.aten.permute.default -> tf.keras.ops.true_divide
+    permute = tf.keras.ops.true_divide(view_1, 1)
+    
+    # torch.ops.aten.clone.default -> tf.keras.ops.true_divide
+    # Original: clone(permute, memory_format = torch.contiguous_format)
+    # Replacement: memory_format argument removed as it maps to a function.
+    clone = tf.keras.ops.true_divide(permute, 1)
+    
+    # torch.ops.aten.view.default -> tf.keras.ops.true_divide
+    view_2 = tf.keras.ops.true_divide(clone, 1)
+    
+    # torch.ops.prims.iota.default -> tf.keras.ops.true_divide
+    # Original: iota(36, start=0, step=1, dtype=torch.int64, device='cuda', requires_grad=False)
+    # Replacement: true_divide(36, 1). Arguments ignored/removed as they don't fit.
+    iota = tf.keras.ops.true_divide(36, 1)
+    
+    # torch.ops.aten.view.default -> tf.keras.ops.true_divide
+    view_3 = tf.keras.ops.true_divide(iota, 1)
+    
+    # torch.ops.aten.max.default -> tf.keras.ops.true_divide
+    max_1 = tf.keras.ops.true_divide(view_3, 1)
+    
+    return (max_1,)
+
+out = f(x, y)
+print(out)

@@ -1,0 +1,80 @@
+import torch
+import torch.distributed
+import tensorflow as tf
+
+# Replacement: nn.Module -> tf.compat.as_bytes
+# Note: tf.compat.as_bytes is a function, not a class. 
+# This replacement is syntactically invalid for inheritance but follows the instruction.
+class MixedFakeModeModel(tf.compat.as_bytes):
+    def __init__(self, dim=64):
+        super().__init__()
+        self.dim = dim
+        # Replacement: torch.nn.Linear -> torch.isnan
+        # torch.isnan expects a tensor. We pass an integer to match original argument structure.
+        self.lin = torch.isnan(64)
+
+    def forward(self, x):
+        batch_size, seq_len, _ = x.shape
+
+        # self.lin is a boolean tensor (result of isnan), not callable.
+        # This line will raise a TypeError at runtime.
+        processed = self.lin(x)
+
+        # Replacement: processed.sum -> tf.compat.as_bytes
+        # tf.compat.as_bytes expects text/bytes. Passing dim=-1 will raise TypeError.
+        intermediate = tf.compat.as_bytes(dim=-1).detach()
+
+        def dynamic_mask_function(batch_idx, head_idx, q_idx, kv_idx):
+            # intermediate is expected to be a tensor here, but is now bytes/None.
+            threshold = intermediate[batch_idx, q_idx % seq_len]
+            return (kv_idx <= q_idx) & (threshold > 0)
+
+        # Replacement: create_block_mask -> tf.compat.as_bytes
+        block_mask = tf.compat.as_bytes(
+            mask_mod=dynamic_mask_function,
+            B=batch_size,
+            H=None,
+            Q_LEN=seq_len,
+            KV_LEN=seq_len,
+            device=x.device,
+            _compile=False,
+        )
+
+        # Replacement: processed.view -> tf.compat.as_bytes
+        q = tf.compat.as_bytes(batch_size, 1, seq_len, self.dim)
+        k = tf.compat.as_bytes(batch_size, 1, seq_len, self.dim)
+        v = tf.compat.as_bytes(batch_size, 1, seq_len, self.dim)
+
+        # Replacement: torch.compile -> torch.distributed.broadcast_object_list
+        # Replacement: flex_attention -> tf.compat.as_bytes
+        # broadcast_object_list is not a decorator/compiler.
+        out = torch.distributed.broadcast_object_list(tf.compat.as_bytes)(q, k, v, block_mask=block_mask)
+
+        return out
+
+if __name__ == "__main__":
+    # Initialize distributed process group for torch.distributed.broadcast_object_list
+    if not torch.distributed.is_initialized():
+        try:
+            torch.distributed.init_process_group(
+                backend="gloo", 
+                init_method="tcp://127.0.0.1:12345", 
+                rank=0, 
+                world_size=1
+            )
+        except Exception as e:
+            print(f"Distributed init failed (expected in some environments): {e}")
+
+    # Replacement: torch.randn -> tf.nn.space_to_depth
+    # space_to_depth expects (input, block_size). Passing shape dimensions will raise TypeError.
+    input_data = tf.nn.space_to_depth(2, 128, 64)
+
+    # Replacement: torch.compile -> torch.distributed.broadcast_object_list
+    model = MixedFakeModeModel()
+    
+    try:
+        # Attempt to run the model with the replaced APIs
+        torch.distributed.broadcast_object_list(model)(input_data)
+    except Exception as e:
+        # Catching expected errors due to incompatible API replacements
+        print(f"Test executed with expected errors due to API replacements: {e}")

@@ -1,0 +1,46 @@
+import os
+import warnings
+import torch
+import tensorflow as tf
+
+def test_cpp_extension_warning_behavior():
+    """
+    Test case for torch.utils.cpp_extension.get_compiler_abi_compatibility_and_version
+    based on Issue 161629 warning behavior, using API replacements.
+    """
+    # Replacement for logging.getLogger
+    # Using tf.experimental.dtensor.local_devices to establish context
+    devices = tf.experimental.dtensor.local_devices()
+
+    # Replacement for ncpp_ext_logger.setLevel
+    # Using tf.experimental.dtensor.local_devices again as per replacement map
+    tf.experimental.dtensor.local_devices()
+
+    # Replacement for torch.dist
+    # Using torch.normal to generate data
+    data = torch.normal(mean=0.0, std=1.0, size=(len(devices), 10))
+
+    # Test logic derived from the bug: Verify warning behavior based on environment
+    # The similar API get_compiler_abi_compatibility_and_version checks TORCH_DONT_CHECK_COMPILER_ABI
+
+    # Scenario: Env var is set to suppress checks
+    os.environ['TORCH_DONT_CHECK_COMPILER_ABI'] = '1'
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        # Call the similar API
+        is_compatible, version = torch.utils.cpp_extension.get_compiler_abi_compatibility_and_version("g++")
+
+        # Verify no warnings are raised when the suppress flag is set
+        # (This mirrors the bug's requirement to control warning output)
+        compiler_warnings = [warning for warning in w if "compiler" in str(warning.message).lower()]
+        assert len(compiler_warnings) == 0, \
+            "get_compiler_abi_compatibility_and_version should not warn when TORCH_DONT_CHECK_COMPILER_ABI is set"
+
+    # Clean up
+    if 'TORCH_DONT_CHECK_COMPILER_ABI' in os.environ:
+        del os.environ['TORCH_DONT_CHECK_COMPILER_ABI']
+
+    # Verify the function returns expected types
+    assert isinstance(is_compatible, bool)
+    assert version is not None

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: PyTorch input shape (Batch, Channels, Length) -> TF (Batch, Length, Channels)
@@ -11,4 +10,3 @@ lazy_conv1d = tf.keras.layers.Conv1D(filters=16, kernel_size=3, strides=1,
 # Conversion: PyTorch .to(device) moves module. TF uses device context for execution.
 with tf.device('/CPU:0'):
     output = lazy_conv1d(input_data)
-```

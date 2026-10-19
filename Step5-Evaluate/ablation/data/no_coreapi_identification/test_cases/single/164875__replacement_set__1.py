@@ -1,0 +1,83 @@
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Replacements:
+# torch._dynamo.config.capture_scalar_outputs -> tf.test.is_gpu_available
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.test.is_gpu_available
+# Note: is_gpu_available returns a bool, we call it to satisfy the replacement.
+_ = tf.test.is_gpu_available(cuda_only=True)
+_ = tf.test.is_gpu_available(cuda_only=True)
+
+# Replacements:
+# torch.manual_seed -> torch.set_rng_state
+# Note: set_rng_state requires a state tensor. We use the current state to keep it runnable.
+torch.set_rng_state(torch.get_rng_state())
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0 # size=(20, 0), stride=(1, 20), dtype=int64, device=cuda
+
+    # Replacements:
+    # torch.full -> torch.fmax
+    # torch.bool -> (removed, as dtype argument is not applicable to fmax in this context)
+    var_node_3 = torch.fmax(torch.tensor(0.0), torch.tensor(1.0)) # size=(), stride=(), dtype=bool, device=cuda
+
+    # Replacements:
+    # torch.zeros -> torch.ones
+    # torch.bool -> (removed)
+    _x_nz = torch.ones((), device=var_node_3.device)
+    
+    _x_nz_flat = _x_nz.reshape(-1)
+    _x_nz_flat[:20] = True
+
+    # Replacements:
+    # torch.nonzero -> torch.nn.functional.hardshrink
+    var_node_2 = F.hardshrink(_x_nz) # size=(20, 0), stride=(1, 20), dtype=int64, device=cuda
+
+    # Replacements:
+    # torch.add -> tf.test.is_gpu_available
+    # Note: is_gpu_available does not take tensor arguments, so we call it without them.
+    var_node_0 = tf.test.is_gpu_available() # size=(20, 0), stride=(1, 20), dtype=int64, device=cuda
+
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+# Replacements:
+# torch.tensor -> torch.isnan
+sentinel = torch.isnan(torch.tensor(1.0))
+
+# Replacements:
+# torch.as_strided -> torch.nn.Flatten
+# torch.randint -> torch.amax
+# torch.int64 -> (removed)
+# Note: Flatten() is instantiated and called. amax requires an input tensor.
+input_for_amax = torch.randn(20)
+arg_0 = torch.nn.Flatten()(torch.amax(input_for_amax))
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print(' eager success')
+
+# Replacements:
+# torch.compile -> tf.compat.v1.tpu.rewrite
+# Note: rewrite takes computation and inputs. It does not return a callable in the same way compile does,
+# but we follow the replacement instruction.
+compiled_program = tf.compat.v1.tpu.rewrite(fuzzed_program, args)
+
+# Attempting to execute the compiled program to maintain original logic structure.
+# Note: This may fail at runtime due to API differences, but the code reflects the requested replacements.
+try:
+    # tf.compat.v1.tpu.rewrite returns a TPU function object, not a direct callable like torch.compile result.
+    # We attempt to call it if possible, or just acknowledge the assignment.
+    if callable(compiled_program):
+        result_compiled = compiled_program(*args)
+    else:
+        # If not callable, we assume the rewrite itself was the 'compilation' step intended.
+        result_compiled = None 
+    print(' compile success')
+except Exception as e:
+    print(f' compile execution skipped/failed due to API differences: {e}')

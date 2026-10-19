@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # torch.tensor creates a tensor; tf.constant is the equivalent for fixed values
@@ -9,4 +8,3 @@ foo = tf.constant([[1]])
 # Note: TensorFlow typically maps MPS support to '/GPU:0'.
 with tf.device('/GPU:0'):
     foo = tf.identity(foo)
-```

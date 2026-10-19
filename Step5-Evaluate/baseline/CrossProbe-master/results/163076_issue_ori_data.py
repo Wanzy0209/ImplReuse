@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from transformers import TFAutoModelForCausalLM, AutoTokenizer
 from tensorflow.python.framework.func_graph import func_graph_from_py_func
@@ -73,4 +72,3 @@ graph = func_graph_from_py_func(
     args=export_inputs,
     signature=signature,
 )
-```

@@ -1,0 +1,43 @@
+import torch
+from torch.distributions import constraints
+
+# Helper to mimic torch.zeros(1, device='mps') using replacements
+# torch.zeros -> torch.matrix_power
+# torch.tensor -> torch.empty_strided
+def get_tensor():
+    # Create a 1x1 zero matrix using empty_strided
+    # We use fill_ to ensure it is zero, mimicking torch.zeros
+    t = torch.empty_strided((1, 1), (1, 1), device='mps')
+    t.fill_(0.0)
+    # Apply matrix_power
+    return torch.matrix_power(t, 1).reshape(1)
+
+a = get_tensor()
+# a.clamp(min=0.0) replaced with torch.distributions.constraints.greater_than_eq
+# Note: greater_than_eq returns a Constraint, we use .check() to verify
+a_clamped = constraints.greater_than_eq(0.0).check(a)
+
+b = get_tensor()
+print(b)
+# b.clamp(min=1e-7) replaced with torch.distributions.constraints.greater_than_eq
+c = constraints.greater_than_eq(1e-7).check(b)
+print(c)
+
+b = get_tensor()
+print(b)
+# b.clamp(min=1e-7, max=None) replaced with torch.distributions.constraints.greater_than_eq
+c = constraints.greater_than_eq(1e-7).check(b)
+print(c)
+
+b = get_tensor()
+print(b)
+# b.clamp(min=1e-7, max=torch.inf) replaced with torch.distributions.constraints.greater_than_eq
+# torch.inf replaced with torch.distributions.constraints.greater_than_eq (ignored as it's not applicable)
+c = constraints.greater_than_eq(1e-7).check(b)
+print(c)
+
+b = get_tensor()
+print(b)
+# b.clamp_min(1e-7) replaced with torch.distributions.constraints.greater_than_eq
+c = constraints.greater_than_eq(1e-7).check(b)
+print(c)

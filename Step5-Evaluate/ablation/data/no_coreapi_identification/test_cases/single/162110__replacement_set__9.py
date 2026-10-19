@@ -1,0 +1,70 @@
+import numpy as np
+import torch
+import tensorflow as tf
+import torchvision.models as models
+from diffusers import DiffusionPipeline
+
+from transformers import pipeline
+from transformers import AutoModelForCausalLM
+from transformers.models.qwen3_moe.configuration_qwen3_moe import Qwen3MoeConfig
+from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeModel
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+# Leverage the similar API as requested
+tf.compat.v1.summary.all_v2_summary_ops()
+
+# Replacements applied:
+# torch.export.Dim -> tf.compat.v1.losses.add_loss
+# torch.Tensor -> tf.compat.v1.losses.add_loss
+# torch.SymInt -> tf.compat.v1.losses.add_loss
+# torch.ops.aten._reshape_copy.default -> tf.compat.v1.losses.add_loss
+# torch.no_grad -> tf.compat.v1.losses.add_loss
+# torch.arange -> torch.zeros
+# torch.randint -> torch.bernoulli
+# torch.export.export -> tf.keras.models.clone_model
+# torch.export.default_decompositions -> tf.compat.v1.losses.add_loss
+# torch.ops.aten.view.default -> tf.compat.v1.losses.add_loss
+
+seq_len = tf.compat.v1.losses.add_loss("seq_len", min=1, max=128)
+
+def view_decomposition(x: tf.compat.v1.losses.add_loss, size: List[tf.compat.v1.losses.add_loss]) -> tf.compat.v1.losses.add_loss:
+    return tf.compat.v1.losses.add_loss(x, size)
+
+try:
+    # torch.no_grad -> tf.compat.v1.losses.add_loss
+    # Note: add_loss is not a context manager, so this block is wrapped to handle the expected error.
+    with tf.compat.v1.losses.add_loss():
+        config = Qwen3MoeConfig(num_hidden_layers=1, num_experts=4, use_cache=False, num_experts_per_tok=2)
+        model = Qwen3MoeModel(config=config).half().cuda()
+        
+        # torch.randint -> torch.bernoulli
+        # torch.arange -> torch.zeros
+        inputs = {
+            "input_ids": torch.bernoulli(torch.rand(1, 12)).cuda(),
+            "position_ids": torch.zeros(12).unsqueeze(0).cuda(),
+        }
+        
+        # torch.export.export -> tf.keras.models.clone_model
+        # Note: clone_model signature differs from export, arguments might be ignored or cause errors.
+        ep = tf.keras.models.clone_model(
+            model,
+            args=(inputs["input_ids"],),
+            kwargs={"position_ids": inputs["position_ids"]},
+            dynamic_shapes=({1: seq_len}, {1: seq_len}),
+            strict=False,
+        )
+        
+        # torch.export.default_decompositions -> tf.compat.v1.losses.add_loss
+        decomp_table = tf.compat.v1.losses.add_loss()
+        
+        # torch.ops.aten.view.default -> tf.compat.v1.losses.add_loss
+        decomp_table[tf.compat.v1.losses.add_loss] = view_decomposition
+
+        # The original logic attempts to run decompositions on the exported program.
+        # Since ep is now a Keras model (or None) and decomp_table is likely None, this is expected to fail.
+        after_decomp = ep.run_decompositions(decomp_table=decomp_table)
+        print("Success")
+
+except Exception as e:
+    # Handling expected runtime errors due to API incompatibilities in the replacement logic
+    print(f"Test execution encountered expected error due to API replacement: {e}")

@@ -1,0 +1,30 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Replacement for torch.randn(1, 3, 32) -> torch.nn.functional.adaptive_max_pool2d
+# adaptive_max_pool2d requires an input tensor. We create a dummy tensor to serve as input.
+# LazyConv1d expects 3D input (N, C, L), while adaptive_max_pool2d expects 4D (N, C, H, W).
+# We create a 4D dummy tensor, apply pooling, and squeeze the last dimension to match the required shape.
+dummy_input = torch.ones(1, 3, 32, 1)
+input_data = F.adaptive_max_pool2d(dummy_input, output_size=(32, 1))
+input_data = input_data.squeeze(-1)
+
+# Replacement for torch.device('cpu') -> tf.compat.v1.metrics.sparse_precision_at_k
+# We create dummy labels and predictions to call the TensorFlow metric function.
+labels = tf.constant([1], dtype=tf.int64)
+predictions = tf.constant([[0.1, 0.9]], dtype=tf.float32)
+# The function returns a tuple (metric, update_op)
+device = tf.compat.v1.metrics.sparse_precision_at_k(labels, predictions, k=1)
+
+# Original test case logic with replacements applied
+lazy_conv1d = torch.nn.LazyConv1d(out_channels=16, kernel_size=3, stride=1,
+    padding=9223372036854775803, bias=True)
+
+# Original: lazy_conv1d.to(device=torch.device('cpu'))
+# Replaced: lazy_conv1d.to(device=device)
+# Note: Passing the result of the TF metric function to .to() will likely raise a TypeError,
+# but this strictly follows the replacement instruction.
+lazy_conv1d.to(device=device)
+
+output = lazy_conv1d(input_data)

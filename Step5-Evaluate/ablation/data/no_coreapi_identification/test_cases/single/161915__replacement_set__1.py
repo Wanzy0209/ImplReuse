@@ -1,0 +1,24 @@
+import torch
+import torch.nn as nn
+
+# Replacing torch.randn with torch.var_mean
+# We use torch.ones as the input tensor for var_mean to ensure the test is deterministic.
+# var_mean returns a tuple (variance, mean), we select the variance (index 0) to keep a tensor.
+a = torch.var_mean(torch.ones(3))[0]
+b = torch.var_mean(torch.ones(5))[0]
+
+# Replacing torch.nested.nested_tensor with torch.nn.Sigmoid
+# Replacing layout=torch.jagged with torch.nn.Sigmoid
+# Since torch.nn.Sigmoid is the replacement for the NestedTensor class and the layout argument,
+# we instantiate the Sigmoid module directly.
+nt = torch.nn.Sigmoid()
+
+# Replacing type(nt) check
+# Original: <class 'torch.nested._internal.nested_tensor.NestedTensor'>
+# Replacement: torch.nn.Sigmoid
+assert type(nt) == torch.nn.Sigmoid
+
+# Replacing nt.share_memory_() with torch.nn.Sigmoid
+# The original code called a method on the object. The replacement is the class itself.
+# We call the class (instantiate it) to mimic the action.
+torch.nn.Sigmoid()

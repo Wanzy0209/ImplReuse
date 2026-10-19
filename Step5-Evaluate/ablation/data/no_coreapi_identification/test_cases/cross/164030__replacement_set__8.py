@@ -1,0 +1,34 @@
+import torch
+import tensorflow as tf
+
+def test_issue_164030_replacement():
+    """
+    Test case generated based on Issue 164030.
+    Original logic involves scatter and sum operations within a no_grad context.
+    All source APIs have been replaced with tf.nn.relu as per instructions.
+    """
+    # Initialize tensors mimicking the original context
+    # expert_counts: i64[256, 64] -> float32[2, 2] for simplicity
+    expert_counts = tf.constant([[1.0, -1.0], [2.0, -2.0]])
+    topk_ids = tf.constant([[0, 1], [1, 0]], dtype=tf.int64)
+
+    # Original: with torch.no_grad():
+    # Replacement: tf.nn.relu
+    # Note: tf.nn.relu is an operation, not a context manager.
+    # We apply it to the input to satisfy the replacement requirement.
+    expert_counts = tf.nn.relu(expert_counts)
+
+    # Original: expert_counts.scatter_(1, topk_ids, 1)
+    # Replacement: tf.nn.relu
+    expert_counts = tf.nn.relu(expert_counts)
+
+    # Original: tokens_per_expert = expert_counts.sum(dim=0)
+    # Replacement: tf.nn.relu
+    tokens_per_expert = tf.nn.relu(expert_counts)
+
+    # Verify execution
+    assert expert_counts.shape == (2, 2)
+    assert tokens_per_expert.shape == (2, 2)
+
+if __name__ == "__main__":
+    test_issue_164030_replacement()

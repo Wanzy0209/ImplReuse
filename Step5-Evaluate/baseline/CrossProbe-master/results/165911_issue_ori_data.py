@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import pdb
 
@@ -59,4 +58,3 @@ result = traced_mod(x)
 
 # Conversion: breakpoint() -> pdb.set_trace()
 pdb.set_trace()
-```

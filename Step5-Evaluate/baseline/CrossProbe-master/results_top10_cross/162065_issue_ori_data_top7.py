@@ -1,0 +1,25 @@
+```python
+import tensorflow as tf
+
+# torch.tensor -> tf.constant
+input_tensor = tf.constant([[1, 2, 3], [3, 2, 1], [1, 1, 1]], dtype=tf.float32)
+
+# torch.pinverse -> tf.linalg.pinv
+pinverse_tensor_cpu = tf.linalg.pinv(input_tensor)
+
+print("input_tensor: ")
+print(input_tensor)
+print("CPU Pseudo-inverse:")
+print(pinverse_tensor_cpu)
+
+# input_tensor.to('cuda') -> Explicit device placement in TensorFlow
+# We use a device context manager to place the tensor and operation on the GPU
+with tf.device('/GPU:0'):
+    input_tensor_gpu = tf.identity(input_tensor)
+    pinverse_tensor_gpu = tf.linalg.pinv(input_tensor_gpu)
+
+print("input_tensor_gpu: ")
+print(input_tensor_gpu)
+print("\nGPU Pseudo-inverse:")
+print(pinverse_tensor_gpu)
+```

@@ -1,0 +1,148 @@
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+import os
+
+# Setup device
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+# Setup for distributed (mocked for single process to keep runnable)
+# Using file-based init for simplicity in single script
+if not dist.is_initialized():
+    try:
+        # Try to initialize a default process group for the sake of the API call
+        # Note: This is a minimal setup to allow the API to exist in the code.
+        dist.init_process_group(
+            backend='gloo',
+            init_method='tcp://127.0.0.1:29500',
+            rank=0,
+            world_size=1
+        )
+    except Exception:
+        pass # Ignore if already initialized or fails
+
+# Setup for TensorFlow
+# Replacing torch.manual_seed with tf.compat.v1.assert_variables_initialized
+try:
+    # This function is primarily for graph mode. 
+    # We disable eager execution to allow the call to be syntactically valid in a session.
+    tf.compat.v1.disable_eager_execution()
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
+        tf.compat.v1.assert_variables_initialized()
+except Exception:
+    # Fallback if TF environment is not fully configured for graph mode
+    pass
+
+# Create inputs
+arg_0 = torch.randint(0, 10, (15, 108, 4), dtype=torch.int16, device=device)
+arg_1 = torch.randint(0, 10, (11,), dtype=torch.int64, device=device)
+arg_2 = torch.randint(0, 10, (3, 27), dtype=torch.int16, device=device)
+arg_3 = torch.randint(0, 10, (1, 27), dtype=torch.int16, device=device)
+arg_4 = torch.randint(0, 10, (1, 27), dtype=torch.int16, device=device)
+arg_5 = torch.randint(0, 10, (1, 27), dtype=torch.int16, device=device)
+arg_6 = torch.randint(0, 10, (1,), dtype=torch.int64, device=device)
+
+var_node_4 = arg_0
+
+# Original: torch.chunk -> torch.as_strided
+var_node_3 = torch.as_strided(var_node_4, (15, 27, 4), (432, 1, 4))
+
+# Original: torch.chunk -> torch.as_strided
+var_node_2 = torch.as_strided(var_node_3, (15, 27, 1), (432, 1, 4))
+
+# Original: torch.squeeze -> torch.empty_strided
+var_node_1 = torch.empty_strided((15, 27), (1, 1), device=device, dtype=torch.int16)
+
+# Original: torch.full -> torch.rand_like
+ref = torch.empty((13, 27), dtype=torch.float16, device=device)
+var_node_8 = torch.rand_like(ref).to(torch.int16)
+
+var_node_9 = arg_1
+_input_size_var_node_7 = var_node_8.size(0)
+
+# Original: torch.randint -> torch.imag
+cplx = torch.complex(torch.randn(11, device=device), torch.randn(11, device=device))
+_index_var_node_7 = torch.imag(cplx).to(torch.int64)
+
+# Original: torch.index_select -> torch.empty_strided
+var_node_7 = torch.empty_strided((11, 27), (1, 1), device=device, dtype=torch.int16)
+
+# Original: torch.clamp -> torch.diag
+var_node_6 = torch.diag(var_node_7)
+
+var_node_12 = arg_2
+
+# Original: torch.clamp -> torch.diag
+var_node_11 = torch.diag(var_node_12)
+
+# Original: torch.full -> torch.rand_like
+ref2 = torch.empty(1, dtype=torch.float32, device=device)
+var_node_13 = torch.rand_like(ref2).to(torch.int64)
+
+_input_size_var_node_10 = var_node_11.size(0)
+
+# Original: torch.randint -> torch.imag
+cplx2 = torch.complex(torch.randn(1, device=device), torch.randn(1, device=device))
+_index_var_node_10 = torch.imag(cplx2).to(torch.int64)
+
+# Original: torch.index_select -> torch.empty_strided
+# Note: var_node_11 is now 1D (3), index is 1D (1). Result is 1D (1).
+var_node_10 = torch.empty_strided((1,), (1,), device=device, dtype=torch.int16)
+
+var_node_16 = arg_3
+var_node_17 = arg_4
+var_node_18 = arg_5
+
+# Original: torch.cat -> torch.distributed.gather
+# We mock the gather operation since we are in a single-process environment.
+# In a real distributed setting, this would gather tensors from other ranks.
+gather_list = [torch.empty_like(var_node_16) for _ in range(dist.get_world_size())]
+dist.gather(var_node_16, gather_list=gather_list, dst=0)
+# Concatenate the gathered list to form the result tensor
+if len(gather_list) > 0:
+    var_node_15 = torch.cat(gather_list, dim=0)
+else:
+    var_node_15 = var_node_16
+
+var_node_20 = arg_6
+
+# Original: torch.clamp -> torch.diag
+var_node_19 = torch.diag(var_node_20)
+
+_input_size_var_node_14 = var_node_15.size(0)
+
+# Original: torch.randint -> torch.imag
+cplx3 = torch.complex(torch.randn(1, device=device), torch.randn(1, device=device))
+_index_var_node_14 = torch.imag(cplx3).to(torch.int64)
+
+# Original: torch.index_select -> torch.empty_strided
+var_node_14 = torch.empty_strided((1, 27), (1, 1), device=device, dtype=torch.int16)
+
+# Original: torch.full -> torch.rand_like
+ref3 = torch.empty((4, 27), dtype=torch.float16, device=device)
+var_node_22 = torch.rand_like(ref3).to(torch.int16)
+
+# Original: torch.full -> torch.rand_like
+ref4 = torch.empty(4, dtype=torch.float32, device=device)
+var_node_24 = torch.rand_like(ref4).to(torch.int64)
+
+# Original: torch.full -> torch.rand_like
+ref5 = torch.empty(2, dtype=torch.float32, device=device)
+var_node_25 = torch.rand_like(ref5).to(torch.int64)
+
+_input_size_var_node_23 = var_node_24.size(0)
+
+# Verification of torch.gather (The "Similar API")
+# We use var_node_22 as input and var_node_24 as index (expanded)
+# var_node_22 is (4, 27). var_node_24 is (4,).
+# For gather, index must match input shape.
+index_expanded = var_node_24.unsqueeze(1).expand(-1, 27)
+try:
+    result = torch.gather(var_node_22, 0, index_expanded)
+    print("torch.gather succeeded")
+except Exception as e:
+    print(f"torch.gather failed: {e}")
+
+if dist.is_initialized():
+    dist.destroy_process_group()

@@ -1,0 +1,80 @@
+```python
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+def test_batch_isend_irecv_with_views_replaced():
+    """
+    Test case generated based on Issue ID: 161324.
+    This test replaces the original distributed communication APIs with 
+    TensorFlow initialization and PyTorch pooling/linspace APIs as requested,
+    while attempting to preserve the structural logic of the original bug report.
+    """
+    
+    # Setup parameters
+    batch_size = 4
+    total_columns = 10
+    split_offsets = [0, 2, 5, 10]
+    tag1 = 0
+    tag2 = 1
+    
+    # Simulating ranks for the purpose of the test structure
+    for rank in [0, 1]:
+        if rank == 0:
+            # Sender rank logic
+            
+            # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool1d
+            # Original: local_tensor = torch.randn(batch_size, total_columns)
+            # We create a dummy input to apply pooling, simulating data generation.
+            dummy_input = torch.ones(1, batch_size, total_columns)
+            local_tensor = F.adaptive_max_pool1d(dummy_input, output_size=(1,)).view(batch_size, total_columns)
+            
+            dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+            dst_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+            
+            # Replacement: dist.P2POp -> tf.compat.v1.local_variables_initializer
+            # Original: send_op1 = dist.P2POp(dist.isend, dst_t1, 1, process_group, tag1)
+            # Note: local_variables_initializer does not take P2POp arguments. 
+            # We call it to represent the operation setup phase.
+            send_op1 = tf.compat.v1.local_variables_initializer()
+            send_op2 = tf.compat.v1.local_variables_initializer()
+            
+            # Replacement: dist.batch_isend_irecv -> tf.compat.v1.local_variables_initializer
+            # Original: dist.batch_isend_irecv([send_op1, send_op2])
+            # We pass the list of ops to mimic the batching structure, 
+            # though semantically this initializes local variables in TF.
+            tf.compat.v1.local_variables_initializer([send_op1, send_op2])
+            
+            print(f"Rank {rank} processed tensors with shapes {dst_t1.shape} and {dst_t2.shape}")
+            
+        elif rank == 1:
+            # Receiver rank logic
+            
+            # Replacement: torch.zeros -> torch.linspace
+            # Original: local_tensor_dst = torch.zeros(batch_size, total_columns)
+            # We use linspace to generate a sequence and reshape it to the target 2D shape.
+            steps = batch_size * total_columns
+            local_tensor_dst = torch.linspace(0, steps, steps).view(batch_size, total_columns)
+            
+            tensor_col_offset1 = split_offsets[0]
+            end_col_offset1 = split_offsets[1]
+            tensor_col_offset2 = split_offsets[2]
+            end_col_offset2 = split_offsets[3]
+            
+            receiving_tensor_view1 = local_tensor_dst[:, tensor_col_offset1:end_col_offset1]
+            receiving_tensor_view2 = local_tensor_dst[:, tensor_col_offset2:end_col_offset2]
+            
+            # Replacement: dist.P2POp -> tf.compat.v1.local_variables_initializer
+            receive_op1 = tf.compat.v1.local_variables_initializer()
+            receive_op2 = tf.compat.v1.local_variables_initializer()
+            
+            # Replacement: dist.batch_isend_irecv -> tf.compat.v1.local_variables_initializer
+            tf.compat.v1.local_variables_initializer([receive_op1, receive_op2])
+            
+            # Basic assertion to ensure tensor views were created correctly
+            assert receiving_tensor_view1.shape == (batch_size, split_offsets[1] - split_offsets[0])
+            assert receiving_tensor_view2.shape == (batch_size, split_offsets[3] - split_offsets[2])
+
+if __name__ == "__main__":
+    test_batch_isend_irecv_with_views_replaced()
+```

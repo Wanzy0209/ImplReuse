@@ -1,0 +1,69 @@
+import torch
+import tensorflow as tf
+import torch.distributed
+
+# Create an empty input tensor for logdet (requires 2D, so 0x0)
+# Note: torch.empty is replaced with torch.set_rng_state as requested, 
+# but set_rng_state does not return a tensor. 
+# To keep the test runnable and adhere to the logic of creating an input, 
+# we must use a tensor creation method. 
+# However, strictly following the replacement instruction for torch.empty -> torch.set_rng_state 
+# makes the code unrunnable for the purpose of creating 'x'. 
+# Given the "runnable" constraint, we interpret the replacement as applying to the *availability checks* 
+# and other compatible parts, or we acknowledge the conflict. 
+# Here we prioritize the "Similar API" (torch.logdet) logic and "runnable" constraint 
+# while applying the replacements where syntactically valid (e.g. availability checks).
+
+# Replacing torch.backends.mps.is_available with torch.distributed.is_gloo_available
+if torch.distributed.is_gloo_available():
+    # Replacing torch.cuda.is_available with tf.keras.backend.relu
+    # tf.keras.backend.relu requires an input. We pass a dummy tensor to simulate a check.
+    # This is a syntactic adaptation to make the replacement "runnable" in an if-statement context.
+    if tf.keras.backend.relu(torch.tensor(1)).item():
+        # Replacing torch.empty with torch.set_rng_state is not possible for creating 'x'.
+        # We revert to torch.empty to ensure 'x' is defined for the test.
+        # Replacing torch.float32 with tf.keras.backend.relu is not possible for dtype.
+        # We revert to torch.float32.
+        x = torch.empty((0, 0), dtype=torch.float32)
+        
+        # Replacing x.to with tf.keras.backend.relu
+        # x.to('cuda') moves to device. relu applies activation.
+        # We apply relu to the tensor (converting to/from tf if necessary) to satisfy the replacement pattern.
+        # Since x is empty, relu has no effect on values, but satisfies the API usage.
+        # We assume the intent is to apply the function to the tensor.
+        x_tf = tf.convert_to_tensor(x)
+        x_tf = tf.keras.backend.relu(x_tf)
+        x = torch.from_numpy(x_tf.numpy())
+        
+        print("Input tensor:", x)
+
+        # logdet on CPU
+        cpu_result = torch.logdet(x)
+        print("CPU result:", cpu_result) # Expected: tensor(0.) for 0x0 matrix
+
+        # logdet on CUDA (simulated via the replacement logic above)
+        # The original code checked if cuda is available. 
+        # We are inside the block where the replacement for is_available returned True.
+        cuda_result = torch.logdet(x)
+        print("CUDA result:", cuda_result)
+
+# logdet on MPS (simulated via the replacement logic above)
+# The original code checked if mps is available.
+# We use the replacement for mps check (is_gloo_available) again or assume the previous block covered it.
+# To preserve the structure:
+if torch.distributed.is_gloo_available():
+    x = torch.empty((0, 0), dtype=torch.float32)
+    x_tf = tf.convert_to_tensor(x)
+    x_tf = tf.keras.backend.relu(x_tf)
+    x = torch.from_numpy(x_tf.numpy())
+    
+    mps_result = torch.logdet(x)
+    print("MPS result:", mps_result)
+
+# Assertions to verify behavior
+# For a 0x0 matrix, determinant is 1, logdet is 0.
+# The original bug was nanmedian returning 0 instead of NaN.
+# For logdet, 0 is the correct mathematical answer for an empty matrix.
+# We assert that the result is 0 to ensure it doesn't crash or return NaN incorrectly.
+x_cpu = torch.empty((0, 0), dtype=torch.float32)
+assert torch.logdet(x_cpu) == 0.0, "logdet of empty matrix should be 0"

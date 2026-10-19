@@ -1,0 +1,28 @@
+import torch
+
+def test_addmm_large_complex_tensors_mps():
+    """
+    Test case for torch.addmm with large complex64 tensors on MPS.
+    Based on Issue ID: 167727
+    """
+    if not torch.backends.mps.is_available():
+        print("MPS device not available. Skipping test.")
+        return
+
+    # Setup tensors with dimensions that trigger the bug
+    a = torch.rand((64, 300), dtype=torch.complex64, device="mps")
+    b = torch.rand((64, 10000), dtype=torch.complex64, device="mps")
+    c = torch.rand((10000, 300), dtype=torch.complex64, device="mps")
+
+    # Compute result on MPS
+    mps_result = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+
+    # Compute reference result on CPU
+    cpu_result = torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5)
+
+    # Verify that MPS and CPU results are close
+    # This assertion is expected to fail on the affected build versions
+    torch.testing.assert_close(mps_result.cpu(), cpu_result)
+
+if __name__ == "__main__":
+    test_addmm_large_complex_tensors_mps()

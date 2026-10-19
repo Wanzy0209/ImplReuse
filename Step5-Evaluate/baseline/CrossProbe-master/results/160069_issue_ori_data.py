@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 GB = 1024*1024*1024
@@ -56,4 +55,3 @@ dump_mem()
 # torch.cuda.empty_cache()
 print("cache emptied (TF manages cache automatically)")
 dump_mem()
-```

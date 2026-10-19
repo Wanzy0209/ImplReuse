@@ -1,0 +1,82 @@
+import torch
+import torch.nn.functional as F
+
+def test_torch_compile_dynamic_shape_regression():
+    """
+    Test case for torch.compile regression with dynamic shapes.
+    Issue: torch.compile hits recompile_limit due to size mismatch (expected 77, actual 78).
+    Similar API: torch.masked_select (which produces dynamic output shapes).
+    
+    Replacements applied based on instructions:
+    - torch.rand -> torch.nn.functional.conv_transpose2d
+    - torch.where -> torch.clone
+    - config.recompile_limit -> torch.nn.functional.conv_transpose2d (simulated setup)
+    - torch._dynamo -> torch.nn.functional.conv_transpose2d (simulated setup)
+    """
+    
+    # Setup: Replacing torch.rand with torch.nn.functional.conv_transpose2d
+    # to generate input data.
+    # We use a fixed weight for reproducibility.
+    weight = torch.ones(1, 1, 3, 3)
+    
+    # Generate initial input using the replacement API
+    base_input = torch.ones(1, 1, 10, 10)
+    x = F.conv_transpose2d(base_input, weight)
+
+    # Replacing config.recompile_limit and torch._dynamo setup 
+    # with calls to torch.nn.functional.conv_transpose2d to satisfy 
+    # replacement instructions while maintaining valid syntax.
+    # This acts as a "setup" phase before compilation.
+    F.conv_transpose2d(torch.ones(1, 1, 1, 1), torch.ones(1, 1, 1, 1))
+
+    def forward(t):
+        # Create a mask based on the input tensor
+        mask = t > 0.5
+        
+        # Use the similar API: torch.masked_select
+        # This operation results in a dynamic output shape based on the mask,
+        # which is the core of the reported regression.
+        selected = torch.masked_select(t, mask)
+        
+        # Replacing torch.where with torch.clone
+        # The original bug report involved torch.where in the stack trace.
+        # We use clone here to perform a copy operation on the dynamic result.
+        result = torch.clone(selected)
+        return result
+
+    # Compile the function using the original API under test
+    compiled_forward = torch.compile(forward)
+
+    # Run with inputs that trigger dynamic shape behavior.
+    # We use conv_transpose2d to generate inputs with potentially different 
+    # characteristics (e.g., different number of non-zero elements affecting the mask).
+    
+    # Input 1: Dense data
+    input_1 = F.conv_transpose2d(torch.ones(1, 1, 10, 10), weight)
+    
+    # Input 2: Sparse data (different mask density)
+    # This changes the output size of masked_select, triggering the dynamic shape logic
+    input_2 = F.conv_transpose2d(torch.zeros(1, 1, 10, 10), weight)
+
+    try:
+        # First run
+        out1 = compiled_forward(input_1)
+        
+        # Second run with different mask density (triggers potential recompilation)
+        out2 = compiled_forward(input_2)
+        
+        # If we reach here, the compilation handled the dynamic shapes correctly
+        # (or the specific regression condition was not met/triggered in this minimal example).
+        print("Test execution completed.")
+        
+        # Basic assertion to ensure outputs are tensors
+        assert isinstance(out1, torch.Tensor)
+        assert isinstance(out2, torch.Tensor)
+        
+    except Exception as e:
+        # Catching the error to report the regression if it occurs
+        print(f"Regression detected: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_torch_compile_dynamic_shape_regression()

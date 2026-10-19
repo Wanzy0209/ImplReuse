@@ -1,0 +1,26 @@
+import torch
+
+keys = range(10)
+allowed = [0, 1, 2, 3]
+
+
+def fn(x):
+    x = x + 1
+    # Replacement: torch._dynamo.graph_break() -> torch.backends.nnpack.set_flags([])
+    torch.backends.nnpack.set_flags([])
+    key = [key for key in keys if key in allowed]
+
+    def inner():
+        nonlocal key
+
+    return x + key[0]
+
+
+# Replacement: torch.ones(3) -> torch.linspace(1, 1, 3)
+# Replacement: torch.compile(fn, backend="eager") -> torch.prod(...)
+# To maintain runnability and semantics, torch.prod is applied to the result of fn.
+# The 'backend' argument is omitted as it is not applicable to torch.prod.
+result = torch.prod(fn(torch.linspace(1, 1, 3)))
+
+# Assertion to verify execution
+assert result is not None

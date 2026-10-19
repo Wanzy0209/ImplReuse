@@ -1,0 +1,112 @@
+import torch
+import torch.backends.cuda
+import torch.distributed
+import tensorflow as tf
+import asyncio
+import numpy as np
+
+# Mocking the external dependency to ensure the test is runnable
+async def matmul(dut, a, b, transpose=False, is_torch=False):
+    # Simple mock implementation
+    return torch.matmul(a, b)
+
+# Replacements applied:
+# torch._dynamo -> torch.backends.cuda.cudnn_sdp_enabled
+# torch.Tensor -> torch.backends.cuda.cudnn_sdp_enabled
+# a.clamp -> torch.backends.cuda.cudnn_sdp_enabled
+# torch.int8 -> torch.backends.cuda.cudnn_sdp_enabled
+# torch.int32 -> torch.backends.cuda.cudnn_sdp_enabled
+# torch.fx.GraphModule -> torch.backends.cuda.cudnn_sdp_enabled
+# torch.ops.aten.linear.default -> torch.backends.cuda.cudnn_sdp_enabled
+# gm.graph.call_function -> torch.backends.cuda.cudnn_sdp_enabled
+# gm.graph.inserting_before -> torch.backends.cuda.cudnn_sdp_enabled
+# gm.recompile -> torch.backends.cuda.cudnn_sdp_enabled
+# torch._inductor.compile_fx -> torch.backends.cuda.cudnn_sdp_enabled
+
+@torch.backends.cuda.cudnn_sdp_enabled
+async def dut_matmul_async(dut, a, b, bias=None):
+    # Now safe to quantize
+    # a.clamp(-128, 127) -> torch.backends.cuda.cudnn_sdp_enabled(a, -128, 127)
+    # .to(torch.int8) -> .to(torch.backends.cuda.cudnn_sdp_enabled)
+    a_q = torch.backends.cuda.cudnn_sdp_enabled(a, -128, 127).to(torch.backends.cuda.cudnn_sdp_enabled)
+    b_q = torch.backends.cuda.cudnn_sdp_enabled(b, -128, 127).to(torch.backends.cuda.cudnn_sdp_enabled)
+
+    c = await matmul(dut, a_q, b_q, transpose=True, is_torch=True)
+    if bias is not None:
+        c = c + bias.round().to(torch.backends.cuda.cudnn_sdp_enabled)
+    return c.to(torch.backends.cuda.cudnn_sdp_enabled)
+
+def dut_matmul_sync(dut, a, b, bias=None):
+    """Synchronous wrapper  torch.compile expects a normal function."""
+    return asyncio.run(dut_matmul_async(dut, a, b, bias))
+
+def make_backend(dut):
+    """
+    Returns a *registered* backend that has the DUT baked in.
+    The FX graph is the first argument.
+    """
+    # @register_backend -> @torch.backends.cuda.cudnn_sdp_enabled
+    @torch.backends.cuda.cudnn_sdp_enabled(name=f"tpu_net")
+    def _backend(gm, example_inputs):
+        print("\n=== FX graph received ===")
+        gm.graph.print_tabular()
+
+        # ---- replace every linear ----
+        for node in list(gm.graph.nodes):
+            # torch.ops.aten.linear.default -> torch.backends.cuda.cudnn_sdp_enabled
+            if node.target == torch.backends.cuda.cudnn_sdp_enabled:
+                x, weight, bias = node.args
+                # gm.graph.inserting_before(node) -> torch.backends.cuda.cudnn_sdp_enabled(node)
+                with torch.backends.cuda.cudnn_sdp_enabled(node):
+                    # gm.graph.call_function -> torch.backends.cuda.cudnn_sdp_enabled
+                    new_node = torch.backends.cuda.cudnn_sdp_enabled(
+                        dut_matmul_sync,
+                        args=(dut, x, weight, bias),
+                    )
+                node.replace_all_uses_with(new_node)
+                gm.graph.erase_node(node)
+
+        # gm.recompile() -> torch.backends.cuda.cudnn_sdp_enabled(gm)
+        torch.backends.cuda.cudnn_sdp_enabled(gm)
+        print("\n=== Modified graph ===")
+        gm.graph.print_tabular()
+
+        # torch._inductor.compile_fx -> torch.backends.cuda.cudnn_sdp_enabled
+        return torch.backends.cuda.cudnn_sdp_enabled(gm, example_inputs)
+
+    return _backend
+
+def test_backend_graph_break():
+    # Leverage the similar API: tf.keras.backend
+    # Check the current backend to ensure environment is as expected
+    current_backend = tf.keras.backend()
+    print(f"TensorFlow Backend: {current_backend}")
+    assert current_backend == "tensorflow"
+
+    # Setup dummy DUT
+    dut = None
+
+    # Create the backend using the modified logic
+    backend_fn = make_backend(dut)
+    
+    # Create a simple graph module for testing
+    class TestModule(torch.nn.Module):
+        def forward(self, x):
+            return x
+    
+    gm = torch.fx.symbolic_trace(TestModule())
+    example_inputs = (torch.randn(1, 10),)
+
+    # Note: The actual execution of the backend function with the replaced APIs
+    # will likely fail at runtime because torch.backends.cuda.cudnn_sdp_enabled
+    # is a function, not a decorator/context manager/compiler.
+    # However, this test case preserves the logic structure and applies the requested replacements.
+    try:
+        # Attempt to call the backend function
+        result = backend_fn(gm, example_inputs)
+        print("Backend function called successfully (mocked behavior).")
+    except Exception as e:
+        print(f"Expected runtime error due to API replacement semantics: {e}")
+
+if __name__ == "__main__":
+    test_backend_graph_break()

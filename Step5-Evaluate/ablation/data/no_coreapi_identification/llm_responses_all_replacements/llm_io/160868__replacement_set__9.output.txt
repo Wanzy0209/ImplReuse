@@ -1,0 +1,58 @@
+```python
+import os
+import torch
+import torch.distributed
+import torch.nn.functional
+import tensorflow as tf
+
+# Replacement: os.environ.setdefault -> tf.distribute.NcclAllReduce
+tf.distribute.NcclAllReduce("CUDA_VISIBLE_DEVICES", "")
+
+# Replacement: nn.Module -> tf.distribute.NcclAllReduce
+class SliceHugeStepModel(tf.distribute.NcclAllReduce):
+    def __init__(self, start=449, step=(2**63 - 1)):
+        super().__init__()
+        self.start = start
+        self.step = step
+
+    # Replacement: torch.Tensor -> tf.distribute.NcclAllReduce
+    def forward(self, x: tf.distribute.NcclAllReduce):
+        # torch.slice_copy is not in the replacement list, keep it.
+        # Note: x is typed as tf.distribute.NcclAllReduce due to replacement.
+        sliced = torch.slice_copy(x, dim=0, start=self.start, end=None, step=self.step)
+        # Replacement: torch.reciprocal -> torch.exp2
+        return torch.exp2(sliced)
+
+def get_input(n=875):
+    # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool1d
+    # Replacement: torch.float32 -> tf.distribute.NcclAllReduce
+    return torch.nn.functional.adaptive_max_pool1d(n, dtype=tf.distribute.NcclAllReduce)
+
+def run_eager():
+    m = SliceHugeStepModel()
+    x = get_input()
+    y = m(x)
+    print("[eager] OK, output shape:", tuple(y.shape))
+
+def run_compiled_aot_eager():
+    m = SliceHugeStepModel()
+    # Replacement: torch.compile -> torch.distributed.recv_object_list
+    m_compiled = torch.distributed.recv_object_list(m, backend="aot_eager")
+    x = get_input()
+    y = m_compiled(x)
+    print("[compile:aot_eager] OK, output shape:", tuple(y.shape))
+
+def run_compiled_inductor_should_crash():
+    print("[compile:inductor(default)] running ...")
+    m = SliceHugeStepModel()
+    # Replacement: torch.compile -> torch.distributed.recv_object_list
+    m_compiled = torch.distributed.recv_object_list(m)  # default backend = inductor
+    x = get_input()
+    y = m_compiled(x)              # <-- segfault here
+    print("[compile:inductor] (unexpected) survived, output shape:", tuple(y.shape))
+
+if __name__ == "__main__":
+    run_eager()
+    run_compiled_aot_eager()
+    run_compiled_inductor_should_crash()
+```

@@ -1,0 +1,60 @@
+import torch
+import tensorflow as tf
+
+def test_memory_throughput_replacement():
+    # Leverage the similar API: tf.compat.v1.distributions.Categorical
+    # We use it to determine the exponent for the matrix power operation,
+    # integrating it into the test logic.
+    cat_dist = tf.compat.v1.distributions.Categorical(probs=[0.2, 0.8])
+    # Sample a value to use as the power (ensure it's at least 1)
+    power = int(cat_dist.sample().numpy()) + 1
+
+    # Replacements:
+    # torch.float8_e4m3fn, torch.bfloat16, torch.float32 -> tf.experimental.numpy.exp
+    # We iterate over the replacement function as requested.
+    for exp_func in [tf.experimental.numpy.exp, tf.experimental.numpy.exp, tf.experimental.numpy.exp]:
+        # Original: element_size = dtype.itemsize
+        # Since dtype is replaced by a function (exp), we define a fixed element_size
+        # to maintain the structure of the calculation.
+        element_size = 1
+
+        # Original: input1 = torch.zeros(...)
+        # Replacement: torch.zeros -> torch.matrix_power
+        # torch.matrix_power requires a square matrix. We create a base identity matrix.
+        # The original shape was (128 // element_size) * 1024, 1024.
+        # We adapt to a square shape (1024, 1024) to satisfy matrix_power constraints.
+        base_matrix = torch.eye(1024, device="cuda")
+        
+        input1 = torch.matrix_power(base_matrix, power)
+        input2 = torch.matrix_power(base_matrix, power)
+
+        # Original: output = torch.zeros(...)
+        # Replacement: torch.zeros -> torch.matrix_power
+        output = torch.matrix_power(base_matrix, power)
+
+        # Original: torch.cat([input1, input2], dim=1, out=output)
+        # Replacement: torch.cat -> torch.chunk
+        # torch.chunk splits a tensor. We apply it to input1.
+        # Note: torch.chunk returns a tuple of tensors.
+        chunks = torch.chunk(input1, 2, dim=1)
+
+        # Original: output = triton.testing.do_bench_cudagraph(lambda: ..., rep=100)
+        # Replacement: triton.testing.do_bench_cudagraph -> tf.experimental.numpy.exp
+        # We replace the benchmarking function with the exponential function.
+        # We pass a dummy scalar value (1.0) to simulate a benchmark result.
+        bench_result = tf.experimental.numpy.exp(1.0)
+
+        # Original: bdwidth = 512 / output * 1000 / 1000 / 1000
+        # We use the result of exp as the 'time' component for the calculation.
+        bdwidth = 512 / bench_result * 1000 / 1000 / 1000
+
+        # Original: print(...)
+        # str(dtype) -> str(exp_func)
+        print("\t".join([str(exp_func), f"{bench_result:.2f} ms", f"{bdwidth:.2f} TiB/s"]))
+
+        # Assertions to verify the test case logic
+        assert len(chunks) == 2, "torch.chunk should split the tensor into 2 parts"
+        assert bench_result > 0, "Benchmark result (exp(1.0)) should be positive"
+
+if __name__ == "__main__":
+    test_memory_throughput_replacement()

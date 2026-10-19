@@ -1,0 +1,45 @@
+import torch
+import torchvision
+import tensorflow as tf
+import numpy as np
+
+# Setup the model
+model = torchvision.models.mobilenet_v2(weights=None)
+
+# Replacement 1: torch.rand -> tf.compat.v1.math.add
+# We generate two random tensors and add them to create the input tensor x
+a = tf.random.uniform((1, 3, 224, 224))
+b = tf.random.uniform((1, 3, 224, 224))
+x_tf = tf.compat.v1.math.add(a, b)
+
+# Convert the TensorFlow tensor to a PyTorch tensor for the model
+x = torch.from_numpy(x_tf.numpy())
+
+# Export the model using torch.export.export
+ep = torch.export.export(model, (x,))
+
+# Run the original model and the exported module
+out_orig = model(x)
+out_exp = ep.module()(x)
+
+# Replacement 2: torch.testing.assert_close -> tf.compat.v1.hessians
+# Convert PyTorch outputs to TensorFlow tensors
+out_orig_tf = tf.convert_to_tensor(out_orig.detach().numpy())
+out_exp_tf = tf.convert_to_tensor(out_exp.detach().numpy())
+
+# To use tf.compat.v1.hessians, we need a function (ys) and a list of variables (xs).
+# We define a scalar function based on the outputs (e.g., the sum of the difference)
+# and compute the Hessian with respect to the input x_tf.
+# Note: Since the computation graph is broken between PyTorch and TF, 
+# out_orig_tf acts as a constant here. This call verifies the API syntax.
+def loss_fn():
+    return tf.reduce_sum(tf.square(out_orig_tf - out_exp_tf))
+
+# We need a Variable to compute gradients/Hessians with respect to
+var_x = tf.Variable(x_tf)
+
+# Call the replacement API
+hessians = tf.compat.v1.hessians(loss_fn, var_x)
+
+# Verify the API executed (optional, for test completeness)
+assert hessians is not None

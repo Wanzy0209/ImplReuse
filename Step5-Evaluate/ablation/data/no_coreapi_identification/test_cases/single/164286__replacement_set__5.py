@@ -1,0 +1,37 @@
+import torch
+import tensorflow as tf
+
+def f(a, x):
+    # Replacing torch.sparse.mm with torch.mm as requested
+    return torch.mm(a, x)
+
+# Replacing torch.tensor with tf.keras.ops.diag for data generation
+# We create a diagonal matrix and convert it to a PyTorch tensor.
+# For 'a', we create an identity matrix (3x3).
+tf_a = tf.keras.ops.diag([1.0, 1.0, 1.0])
+a = torch.from_numpy(tf_a.numpy())
+
+# For 'x', we create a diagonal matrix and slice it to get a column vector (3x1),
+# mimicking the shape of the original 'x' in the bug report.
+tf_x = tf.keras.ops.diag([1.0, 3.0, 2.0])
+x = torch.from_numpy(tf_x.numpy())[:, :1]
+
+# Test standard execution
+result = f(a, x)
+print("Result:", result)
+
+# Test vjp execution (the context of the original bug)
+# The original bug occurred because GradTrackingTensor did not copy the layout,
+# causing torch.sparse.mm to fail. We verify torch.mm works correctly with vjp.
+try:
+    # vjp returns (func_output, vjp_function)
+    _, vjp_fn = torch.func.vjp(f, a, x)
+    
+    # Compute vjp with a cotangent of ones
+    cotangent = torch.ones_like(result)
+    vjp_result = vjp_fn(cotangent)
+    
+    print("VJP Result:", vjp_result)
+    print("Test passed: torch.mm works with torch.func.vjp.")
+except Exception as e:
+    print(f"Test failed: {e}")

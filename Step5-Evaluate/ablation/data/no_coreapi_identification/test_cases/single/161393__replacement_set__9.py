@@ -1,0 +1,26 @@
+import torch
+
+# Replacements for torch._dynamo.config.capture_scalar_outputs
+# and torch._dynamo.config.capture_dynamic_output_shape_ops
+# We replace the config assignments with calls to torch.isinf
+torch.isinf(torch.tensor(1.0))
+torch.isinf(torch.tensor(1.0))
+
+def f(x):
+    # Replacement for torch.nonzero,tensorslicing([:-1
+    # Original logic: nz = x.nonzero(); return nz[:-1]
+    # New logic: return torch.isinf(x)
+    return torch.isinf(x)
+
+# Replacement for torch.randn
+# Original logic: torch.randn(3, 4)
+# New logic: torch.isinf(torch.randn(3, 4))
+# This generates a boolean tensor based on whether random values are inf (unlikely, but follows replacement)
+input_tensor = torch.isinf(torch.randn(3, 4))
+
+# torch.compile is not in the replacement list, so we keep it to test the scenario
+# graph.run is replaced by torch.isinf, but torch.compile is the high-level API.
+# We assume the replacement applies to the explicit calls in the original code.
+out = torch.compile(f, fullgraph=True)(input_tensor)
+print(out)
+    assert out

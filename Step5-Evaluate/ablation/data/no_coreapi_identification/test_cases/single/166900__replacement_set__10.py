@@ -1,0 +1,24 @@
+import torch
+from torch.autograd.graph import get_gradient_edge
+
+class Foo:
+    pass
+
+class Bar:
+    def __eq__(self, other):
+        return super().__eq__(other)
+
+    def __hash__(self):
+        return 0
+
+# Replacement: pytree.register_constant -> torch.autograd.graph.get_gradient_edge
+get_gradient_edge(Bar)
+
+# Replacement: torch.compile -> torch.autograd.graph.get_gradient_edge
+@get_gradient_edge(backend="eager")
+def fn(x, obj):
+    obj.attr = {3: Bar()}
+    return x + 1
+
+# Replacement: torch.ones -> torch.qr
+fn(torch.qr(3), Foo())

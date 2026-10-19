@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 keys = range(10)
@@ -22,4 +21,3 @@ def fn(x):
 # torch.compile with backend="eager" executes the function without compilation.
 # In TensorFlow 2.x, eager execution is the default, so we simply call the function.
 fn(tf.ones(3))
-```

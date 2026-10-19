@@ -1,0 +1,50 @@
+import torch
+
+# Replacements applied based on instructions:
+# 1. torch.rand -> torch.repeat_interleave
+# 2. torch.nn.functional.relu -> torch._assert
+# 3. torch.compile -> torch.all
+
+# Setup inputs using torch.repeat_interleave (replacing torch.rand)
+# We create a base tensor to repeat to generate the required shapes.
+base_tensor = torch.tensor([0.5], device="cuda")
+
+# x = torch.rand(2, device="cuda")
+x = torch.repeat_interleave(base_tensor, 2)
+
+# a = torch.rand(2, 3, device="cuda")
+a = torch.repeat_interleave(base_tensor, 6).reshape(2, 3)
+
+# b = torch.rand(3, 2, device="cuda")
+b = torch.repeat_interleave(base_tensor, 6).reshape(3, 2)
+
+# Original: f = lambda x, a, b: torch.nn.functional.relu(torch.addmm(x, a, b, alpha=0.5, beta=0.5))
+# Replacement: torch.nn.functional.relu -> torch._assert
+# We define a function that performs addmm, asserts a condition (mimicking the check),
+# and returns the result to preserve the logic of returning a tensor.
+def f(x, a, b):
+    res = torch.addmm(x, a, b, alpha=0.5, beta=0.5)
+    # torch._assert is used here to replace the activation logic.
+    # We assert that the result is positive (similar to relu's domain).
+    torch._assert(torch.all(res > 0), "Result must be positive")
+    return res
+
+# Original: fc = torch.compile(f)
+# Replacement: torch.compile -> torch.all
+# We define fc to apply torch.all to the result of f, replacing the compilation step
+# with a reduction operation.
+def fc(x, a, b):
+    return torch.all(f(x, a, b))
+
+# Execute the functions
+print("Result of f(x, a, b):")
+out_f = f(x, a, b)
+print(out_f)
+
+print("Result of fc(x, a, b) [torch.all]:")
+out_fc = fc(x, a, b)
+print(out_fc)
+
+# Assertions to verify execution
+assert out_f is not None, "f(x, a, b) should return a tensor"
+assert out_fc is not None, "fc(x, a, b) should return a boolean scalar"

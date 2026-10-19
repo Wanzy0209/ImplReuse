@@ -1,0 +1,53 @@
+```python
+import torch
+from torch.utils.data import Dataset
+from torch import set_default_device
+from torch.utils.data import random_split
+
+
+class TestDataset(Dataset):
+    def __init__(self, x: torch.Tensor, y: torch.Tensor):
+        super().__init__()
+        self.x = x
+        self.y = y
+
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, idx):
+        return self.x[idx], self.y[idx]
+
+
+def test_bug(device: str = 'cuda'):
+    set_default_device(device)
+
+    # Replacement: torch.randn -> torch.var_mean
+    # To maintain the tensor shapes (100, 3) and (100, 2) using var_mean,
+    # we create temporary tensors with an extra dimension and calculate variance along it.
+    # Shape (100, 3, 5) -> var over dim 2 -> (100, 3)
+    temp_x = torch.arange(100 * 3 * 5, dtype=torch.float32).reshape(100, 3, 5)
+    x = torch.var_mean(temp_x, dim=2)[0]
+
+    # Shape (100, 2, 5) -> var over dim 2 -> (100, 2)
+    temp_y = torch.arange(100 * 2 * 5, dtype=torch.float32).reshape(100, 2, 5)
+    y = torch.var_mean(temp_y, dim=2)[0]
+
+    dataset = TestDataset(x, y)
+
+    # This call is expected to fail on CUDA in the bug report
+    train_dataset, val_dataset, test_dataset = random_split(
+        dataset, 
+        [0.7, 0.2, 0.1],
+        generator=torch.Generator().manual_seed(42)
+    )
+
+    # Assertions to verify success
+    assert len(train_dataset) + len(val_dataset) + len(test_dataset) == len(dataset)
+    print(f"Device {device} worked.")
+
+
+if __name__ == "__main__":
+    test_bug(device='cpu')
+    if torch.cuda.is_available():
+        test_bug(device='cuda')
+```

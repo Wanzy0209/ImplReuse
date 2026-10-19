@@ -1,0 +1,58 @@
+```python
+import torch
+import tensorflow as tf
+
+# Replacing torch._dynamo.config.capture_scalar_outputs with tf.keras.activations.serialize
+tf.keras.activations.serialize(None)
+
+# Replacing torch._dynamo.config.capture_dynamic_output_shape_ops with tf.keras.activations.serialize
+tf.keras.activations.serialize(None)
+
+# Replacing torch.manual_seed with torch.set_rng_state
+# torch.set_rng_state requires a state tensor. We generate one to ensure runnability.
+gen = torch.Generator()
+gen.manual_seed(19990)
+torch.set_rng_state(gen.get_state())
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = arg_0
+    
+    # Replacing torch.squeeze with torch.nn.ModuleDict
+    # torch.nn.ModuleDict is a container. We wrap the tensor to maintain data flow.
+    var_node_1 = torch.nn.ModuleDict({'data': torch.nn.Parameter(var_node_2)})
+    
+    # Accessing the tensor inside ModuleDict to allow .item() to work (runnability)
+    var_node_0 = var_node_1['data'].item()
+    
+    # Original logic
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Replacing torch.tensor with torch.isnan
+# torch.isnan checks for NaN values. We pass a dummy tensor to generate the sentinel.
+dummy_input = torch.tensor(1.0)
+sentinel = torch.isnan(dummy_input)
+
+# Replacing torch.randint with torch.amax
+# torch.amax computes the maximum value. We pass a dummy tensor to generate arg_0.
+dummy_rand_input = torch.tensor([[0, 1]], dtype=torch.bool)
+arg_0 = torch.amax(dummy_rand_input, dim=0)
+
+args = (arg_0,) + (sentinel,)
+
+# Run eager mode
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+
+# Replacing torch.compile with tf.compat.v1.tpu.rewrite
+# Note: tf.compat.v1.tpu.rewrite expects a TensorFlow function, but we are passing a PyTorch function.
+# This replacement is performed as requested, but runtime failure is expected due to framework mismatch.
+try:
+    compiled_program = tf.compat.v1.tpu.rewrite(fuzzed_program)
+    result_compiled = compiled_program(*args)
+    print('✅ compile success')
+except Exception as e:
+    print(f'❌ compile failed (expected due to cross-framework replacement): {e}')
+```

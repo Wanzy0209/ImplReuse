@@ -1,0 +1,61 @@
+import torch
+import tensorflow as tf
+from typing import NamedTuple
+import torch.nn.functional as F
+import tempfile
+import os
+
+# Replacement: torch.Tensor -> tf.io.TFRecordWriter
+class MyNamedTuple(NamedTuple):
+    first: tf.io.TFRecordWriter
+    second: tf.io.TFRecordWriter
+
+class MyNamedTupleSubclass(MyNamedTuple):
+    pass
+
+def fn(tup: MyNamedTuple) -> tf.io.TFRecordWriter:
+    # Replacement: torch.tensor -> torch.nn.functional.pdist
+    # Original: extra_info = torch.tensor(4.0)
+    # We use pdist to generate a tensor value to assign as the dynamic attribute.
+    # pdist requires a 2D tensor input.
+    dummy_input = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    extra_info = F.pdist(dummy_input)
+    
+    tup.extra_info = extra_info  # Add dynamic attribute
+    return tup
+
+# Setup temporary files for TFRecordWriter
+temp_dir = tempfile.mkdtemp()
+path1 = os.path.join(temp_dir, "file1.tfrecord")
+path2 = os.path.join(temp_dir, "file2.tfrecord")
+
+print("\nTesting NamedTuple with __setattr__ (Eager):")
+writer1 = tf.io.TFRecordWriter(path1)
+writer2 = tf.io.TFRecordWriter(path2)
+extended_tup = MyNamedTupleSubclass(first=writer1, second=writer2)
+setattr_result = fn(extended_tup)
+print(f"NamedTuple __setattr__ result: {setattr_result.extra_info}")
+assert hasattr(setattr_result, 'extra_info'), "Eager execution failed to persist attribute"
+writer1.close()
+writer2.close()
+
+print("\nTesting NamedTuple with __setattr__ (Compiled):")
+# Re-initialize writers for the compiled run
+writer1 = tf.io.TFRecordWriter(path1)
+writer2 = tf.io.TFRecordWriter(path2)
+extended_tup = MyNamedTupleSubclass(first=writer1, second=writer2)
+
+try:
+    # The bug is that torch.compile (eager backend) drops the dynamic attribute
+    compiled_fn = torch.compile(fn, backend="eager")
+    setattr_result = compiled_fn(extended_tup)
+    print(f"NamedTuple __setattr__ result: {setattr_result.extra_info}")
+    assert hasattr(setattr_result, 'extra_info'), "Compiled execution failed to persist attribute"
+except AttributeError as e:
+    print(f"Bug reproduced: {e}")
+finally:
+    writer1.close()
+    writer2.close()
+    # Cleanup temp directory
+    import shutil
+    shutil.rmtree(temp_dir)

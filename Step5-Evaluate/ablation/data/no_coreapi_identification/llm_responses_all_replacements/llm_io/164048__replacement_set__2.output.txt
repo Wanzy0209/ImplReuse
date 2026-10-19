@@ -1,0 +1,58 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Check for CUDA availability
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if device == "cpu":
+    print("Warning: CUDA not available, falling back to CPU.")
+
+# 1. Replace torch.randint with torch.amin
+# Original logic: Create a large tensor.
+# New logic: Create a large tensor and apply torch.amin to it.
+# We use a large random tensor as input to amin.
+large_input = torch.randn(4, 87, 1056, 736, device=device)
+mask = torch.amin(large_input, dim=1) # Shape: (4, 1056, 736)
+
+# 2. Replace torch.tensor with torch.isinf
+# Original logic: Create a boolean mask.
+# New logic: Create a tensor with inf and use torch.isinf to generate the mask.
+mask_source = torch.tensor([float('inf'), 0.0, 0.0, float('inf')], device=device)
+to_apply = torch.isinf(mask_source) # Shape: (4), Values: [True, False, False, True]
+
+# 3. Replace Tensor indexing with tf.custom_gradient
+# Original logic: Index the large tensor with the boolean mask.
+# New logic: Define a custom gradient operation that performs the indexing.
+# We convert PyTorch tensors to TensorFlow tensors to use tf.custom_gradient.
+
+# Note: Converting CUDA tensors directly to numpy requires moving to CPU first.
+mask_np = mask.cpu().numpy()
+to_apply_np = to_apply.cpu().numpy()
+
+mask_tf = tf.constant(mask_np)
+to_apply_tf = tf.constant(to_apply_np)
+
+@tf.custom_gradient
+def custom_indexing_op(x, mask):
+    # Perform the indexing operation
+    y = tf.boolean_mask(x, mask)
+    
+    # Define the gradient
+    def grad(dy):
+        # For a boolean mask, the gradient is typically zero for masked elements
+        # and passed through for unmasked elements.
+        # We need to reconstruct the shape of x.
+        # This is a simplified gradient implementation for the test case.
+        # We return zeros for x and mask (mask is usually integer/boolean, no gradient).
+        return tf.zeros_like(x), tf.zeros_like(mask, dtype=tf.float32)
+    
+    return y, grad
+
+# Execute the operation
+result = custom_indexing_op(mask_tf, to_apply_tf)
+
+# Assertion to verify the test case runs
+assert result is not None
+print("Test case executed successfully.")
+```

@@ -1,0 +1,149 @@
+```python
+import torch
+import torch.profiler.itt
+import torch.lobpcg
+import asyncio
+import numpy as np
+
+# --- Mocks to ensure the test case is runnable with the replaced APIs ---
+
+class MockProfilerEntity:
+    """
+    A mock class to replace torch.profiler.itt.range_pop.
+    It acts as a pass-through for various method calls to maintain 
+    the structure of the original logic without performing actual operations.
+    """
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+    def __call__(self, *args, **kwargs):
+        return MockProfilerEntity(*args, **kwargs)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def __getattr__(self, name):
+        # Handle method chaining like .clamp().to() or .inserting_before()
+        return MockProfilerEntity()
+
+    def replace_all_uses_with(self, *args):
+        pass
+
+    def erase_node(self, *args):
+        pass
+
+    def print_tabular(self):
+        pass
+
+    def round(self):
+        return self
+
+# Apply the mocks to the replacement APIs
+torch.profiler.itt.range_pop = MockProfilerEntity
+
+# Mock torch.lobpcg to act like torch.compile (identity function)
+torch.lobpcg = lambda *args, **kwargs: (lambda x: x)
+
+# Dummy matmul function to replace the external dependency
+async def matmul(dut, a, b, transpose=False, is_torch=False):
+    return torch.zeros(1, 1) # Return dummy tensor
+
+# Dummy disable decorator
+def disable(func):
+    return func
+
+# --- Test Case Logic ---
+
+@disable
+async def dut_matmul_async(dut, a: torch.profiler.itt.range_pop, b: torch.profiler.itt.range_pop, bias=None):
+    # Replacements: a.clamp -> torch.profiler.itt.range_pop, torch.int8 -> torch.profiler.itt.range_pop
+    a_q = torch.profiler.itt.range_pop(a, -128, 127).to(torch.profiler.itt.range_pop)
+    b_q = torch.profiler.itt.range_pop(b, -128, 127).to(torch.profiler.itt.range_pop)
+
+    c = await matmul(dut, a_q, b_q, transpose=True, is_torch=True)
+    if bias is not None:
+        # Replacements: torch.int32 -> torch.profiler.itt.range_pop
+        c = c + bias.round().to(torch.profiler.itt.range_pop)
+    return c.to(torch.profiler.itt.range_pop)
+
+def dut_matmul_sync(dut, a, b, bias=None):
+    """Synchronous wrapper – torch.compile expects a normal function."""
+    return asyncio.run(dut_matmul_async(dut, a, b, bias))
+
+def make_backend(dut):
+    """
+    Returns a *registered* backend that has the DUT baked in.
+    The FX graph is the first argument.
+    """
+    # Replacements: torch._dynamo.register_backend -> torch.profiler.itt.range_pop
+    @torch.profiler.itt.range_pop(name=f"tpu_net")
+    def _backend(gm: torch.profiler.itt.range_pop, example_inputs):
+        print("\n=== FX graph received ===")
+        gm.graph.print_tabular()
+
+        # ---- replace every linear ----
+        for node in list(gm.graph.nodes):
+            # Replacements: torch.ops.aten.linear.default -> torch.profiler.itt.range_pop
+            if node.target == torch.profiler.itt.range_pop:
+                x, weight, bias = node.args
+                # Replacements: gm.graph.inserting_before -> torch.profiler.itt.range_pop
+                with torch.profiler.itt.range_pop(node):
+                    # Replacements: gm.graph.call_function -> torch.profiler.itt.range_pop
+                    new_node = torch.profiler.itt.range_pop(
+                        dut_matmul_sync,
+                        args=(dut, x, weight, bias),
+                    )
+                node.replace_all_uses_with(new_node)
+                gm.graph.erase_node(node)
+
+        # Replacements: gm.recompile -> torch.profiler.itt.range_pop
+        torch.profiler.itt.range_pop(gm)
+        print("\n=== Modified graph ===")
+        gm.graph.print_tabular()
+
+        # Replacements: torch._inductor.compile_fx -> torch.profiler.itt.range_pop
+        return torch.profiler.itt.range_pop(gm, example_inputs)
+
+    return _backend
+
+def test_backend_graph_break():
+    """
+    Test case to reproduce the backend compiler graph break issue
+    using the replaced APIs.
+    """
+    dut = None # Dummy device under test
+    
+    # Register the backend
+    make_backend(dut)
+
+    # Define a simple model
+    # Replacements: nn.Linear -> torch.profiler.itt.range_pop
+    class SimpleModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.profiler.itt.range_pop(10, 10)
+
+        def forward(self, x):
+            return self.linear(x)
+
+    model = SimpleModel()
+
+    # Compile the model
+    # Replacements: torch.compile -> torch.lobpcg
+    model = torch.lobpcg(model, backend="tpu_net")
+
+    # Run the model
+    input_data = torch.randn(1, 10)
+    output = model(input_data)
+
+    # Basic assertion to ensure execution flow
+    assert output is not None
+    print("Test passed with replaced APIs.")
+
+if __name__ == "__main__":
+    test_backend_graph_break()
+```

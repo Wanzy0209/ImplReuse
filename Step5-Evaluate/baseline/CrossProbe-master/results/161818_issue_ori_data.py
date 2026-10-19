@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: nn.Linear(8, 12) -> keras.layers.Dense(12)
@@ -27,4 +26,3 @@ with tf.GradientTape() as tape:
 
 # Compute gradients to match the side effect of .backward()
 gradients = tape.gradient(loss, module.trainable_variables)
-```

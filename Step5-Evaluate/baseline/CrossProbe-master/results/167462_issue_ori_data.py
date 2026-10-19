@@ -1,4 +1,3 @@
-```python
 import time
 import tensorflow as tf
 
@@ -27,4 +26,3 @@ if __name__ == "__main__":
     walltime = walltime[10:]
     walltime = sum(walltime) / len(walltime)
     print(f"tensorflow: {tf.__version__}, topk latency: {1000 * walltime}ms")
-```

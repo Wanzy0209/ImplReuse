@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.keras import layers, Model
 
@@ -56,4 +55,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```

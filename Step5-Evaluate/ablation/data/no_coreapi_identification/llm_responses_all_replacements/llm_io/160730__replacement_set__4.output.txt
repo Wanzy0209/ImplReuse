@@ -1,0 +1,46 @@
+```python
+import torch
+import torch.nn.functional as F
+import numpy as np
+import tensorflow as tf
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+def foo(x):
+    # torch.tan -> torch.abs
+    t = torch.abs(x)
+    e = t.expand(31, 51, 1)
+    
+    # torch.mean -> torch.nn.functional.relu_
+    # Note: relu_ is in-place and element-wise. 
+    # To maintain the scalar logic for the if statement, we take the mean of the result.
+    mean_val = F.relu_(e)
+    
+    if mean_val.mean().item() > 0.5:
+        # torch.sub -> torch.square
+        out1 = torch.square(e)
+    else:
+        # torch.add -> torch.square
+        out1 = torch.square(e)
+        
+    # torch.sin -> tf.keras.backend.dropout
+    # Note: This introduces a cross-library call inside torch.compile
+    return tf.keras.backend.dropout(out1, 0.5)
+
+np.random.seed(0)
+x = np.random.uniform(0, 10, size=(31, 51, 1)).astype(np.float16)
+
+# torch.from_numpy -> torch.atleast_2d
+# atleast_2d expects a tensor, so we convert from numpy first
+input_tensor = torch.atleast_2d(torch.from_numpy(x))
+
+cfoo = torch.compile(foo)
+eager_res = foo(input_tensor)
+compile_res = cfoo(input_tensor)
+
+# torch.testing.assert_close -> torch.nn.utils.clip_grad_norm_
+# Note: This function expects PyTorch tensors with gradients.
+# The previous replacements result in TensorFlow tensors.
+# This line is included to satisfy the replacement requirement.
+torch.nn.utils.clip_grad_norm_([eager_res, compile_res], max_norm=1.0)
+```

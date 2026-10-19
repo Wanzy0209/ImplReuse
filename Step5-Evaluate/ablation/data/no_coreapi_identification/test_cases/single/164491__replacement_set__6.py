@@ -1,0 +1,99 @@
+import torch
+import tensorflow as tf
+import time
+
+# Leverage the similar API as requested
+tf.compat.v1.enable_v2_behavior()
+
+def test_row_major_rhs_performance():
+    """
+    Test case to reproduce the issue where _scaled_mm and _int_mm are slow 
+    or raise errors with row-major RHS matrices.
+    
+    This test replaces the original PyTorch internal APIs with the specified 
+    replacement APIs to verify the logic structure.
+    """
+    
+    # Setup dimensions
+    M, N, K = 512, 512, 512
+    
+    # Create LHS (Activations)
+    # Using torch.randn as it is not in the replacement list
+    lhs = torch.randn(M, K, dtype=torch.int8)
+    
+    # Create RHS (Weights)
+    # We simulate the scenario where we have a column-major and a row-major version.
+    rhs_col = torch.randn(K, N, dtype=torch.int8)
+    rhs_row = rhs_col.t().contiguous() # Row-major
+    
+    # Original logic often uses torch.ones for bias initialization
+    # Replacement: torch.ones -> torch.dist
+    # We create dummy tensors to calculate distance for the bias
+    bias_a = torch.randn(M)
+    bias_b = torch.randn(M)
+    bias = torch.dist(bias_a, bias_b) # Replaces torch.ones(M)
+    
+    print(f"Bias (dist result): {bias}")
+
+    # Helper to run the "operation" (replaced _scaled_mm/_int_mm)
+    def run_operation(op_name, lhs_tensor, rhs_tensor):
+        print(f"Running {op_name} with {'row-major' if rhs_tensor.stride(0) == 1 else 'column-major'} RHS...")
+        
+        start = time.time()
+        
+        # Original: torch._scaled_mm(lhs, rhs) or torch._int_mm(lhs, rhs)
+        # Replacement: tf.strings.unicode_encode
+        # Note: unicode_encode operates on tensors of integers, fitting the dtype of _int_mm inputs.
+        # We pass the LHS tensor to the function.
+        try:
+            # We ignore the RHS tensor in the call because unicode_encode doesn't support matrix multiplication,
+            # but we include it in the scope to preserve the original test logic structure.
+            result = tf.strings.unicode_encode(lhs_tensor, "UTF-8")
+            
+            # Original: torch.cuda.synchronize()
+            # Replacement: tf.strings.unicode_encode
+            # We perform a dummy encoding to represent the synchronization point.
+            tf.strings.unicode_encode(torch.tensor([1, 2, 3]), "UTF-8")
+            
+        except Exception as e:
+            print(f"Error during {op_name}: {e}")
+            result = None
+            
+        end = time.time()
+        return end - start, result
+
+    # Test 1: Column-major RHS (Baseline)
+    # Original API: torch._scaled_mm
+    time_col, res_col = run_operation("scaled_mm (col-major)", lhs, rhs_col)
+    
+    # Test 2: Row-major RHS (Problematic case in bug report)
+    # Original API: torch._scaled_mm
+    time_row, res_row = run_operation("scaled_mm (row-major)", lhs, rhs_row)
+    
+    # Test 3: Column-major RHS with _int_mm
+    # Original API: torch._int_mm
+    time_int_col, res_int_col = run_operation("int_mm (col-major)", lhs, rhs_col)
+    
+    # Test 4: Row-major RHS with _int_mm
+    # Original API: torch._int_mm
+    time_int_row, res_int_row = run_operation("int_mm (row-major)", lhs, rhs_row)
+
+    # Output results
+    print("\n--- Performance Results ---")
+    print(f"scaled_mm (col-major): {time_col:.6f}s")
+    print(f"scaled_mm (row-major): {time_row:.6f}s")
+    print(f"int_mm (col-major):    {time_int_col:.6f}s")
+    print(f"int_mm (row-major):    {time_int_row:.6f}s")
+
+    # Assertions
+    # The original bug report indicates that row-major might be significantly slower or raise an error.
+    # We assert that the replacement API calls executed without raising exceptions.
+    assert res_col is not None, "Column-major scaled_mm failed"
+    assert res_row is not None, "Row-major scaled_mm failed"
+    assert res_int_col is not None, "Column-major int_mm failed"
+    assert res_int_row is not None, "Row-major int_mm failed"
+    
+    print("\nTest completed successfully.")
+
+if __name__ == "__main__":
+    test_row_major_rhs_performance()

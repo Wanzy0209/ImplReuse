@@ -1,0 +1,126 @@
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+
+def setup():
+    # Initialize distributed process group
+    if not dist.is_initialized():
+        # Use a simple TCP store for single-node testing
+        os.environ['MASTER_ADDR'] = '127.0.0.1'
+        os.environ['MASTER_PORT'] = '29500'
+        dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+BATCH_SIZE = 64
+CHANNELS, IMG_SIZE = 3, 224
+GRID_SIZE = 13
+
+# Replacement: nn.Module -> torch.sort
+# Since torch.sort is a function, we cannot inherit from it. 
+# We remove the inheritance to keep the code valid.
+class MyModel:
+    def __init__(self):
+        # Replacement: nn.Parameter -> torch.sort
+        # Replacement: torch.randn -> torch.nn.functional.max_pool1d
+        # We need an input for max_pool1d. We create a dummy tensor using standard randn to feed it.
+        dummy_param_input = torch.randn((5000, GRID_SIZE, GRID_SIZE, 2), device='cuda')
+        # max_pool1d expects (N, C, L). Reshape (5000, 2, 13*13).
+        pooled_param = torch.nn.functional.max_pool1d(dummy_param_input.view(5000, 2, -1), kernel_size=3)
+        # Reshape back to original dimensions for the sort operation
+        reshaped_param = pooled_param.view(5000, GRID_SIZE, GRID_SIZE, 2)
+        # Apply torch.sort replacement for nn.Parameter
+        self.grid, _ = torch.sort(reshaped_param)
+
+        # Replacement: torch.nn.Linear -> torch.distributed.gather
+        # We assign the function to self.fc
+        self.fc = torch.distributed.gather
+
+    def forward(self, x):
+        per_channel = []
+        for i in range(CHANNELS):
+            # Replacement: torch.expand -> torch.sort
+            # Original: channel = x[:,i,...].expand(5000,-1,-1,-1)
+            # New: channel, _ = x[:,i,...].sort()
+            # Note: sort flattens the tensor. We try to reshape back to maintain flow, 
+            # though dimensions might not match the original 'expand' logic.
+            flat_channel, _ = x[:,i,...].flatten().sort()
+            channel = flat_channel.view(x[:,i,...].shape)
+
+            # Replacement: torch.nn.functional.grid_sample -> torch.nn.SoftMarginLoss
+            # Original: patch = torch.nn.functional.grid_sample(channel, self.grid, ...)
+            # New: patch = torch.nn.SoftMarginLoss()(channel, self.grid)
+            # SoftMarginLoss returns a scalar.
+            patch = torch.nn.SoftMarginLoss()(channel, self.grid)
+
+            # Original logic: patch = patch.transpose(0,1).flatten(start_dim=2)
+            # patch is a scalar here, so these operations will fail.
+            # We wrap in a check to ensure the code is runnable (doesn't crash immediately on non-tensor).
+            if isinstance(patch, torch.Tensor) and patch.dim() > 0:
+                patch = patch.transpose(0,1).flatten(start_dim=2)
+            else:
+                # If scalar, we create a dummy tensor to satisfy the list append logic
+                # Replacement: torch.expand -> torch.sort (applied to the dummy creation logic)
+                dummy_patch = torch.tensor([patch], device='cuda')
+                patch, _ = torch.sort(dummy_patch)
+                patch = patch.view(1, -1, -1)
+            
+            per_channel.append(patch)
+
+        # Replacement: torch.cat -> torch.isinf
+        # Original: x = torch.cat(per_channel, axis=2)
+        # New: x = torch.isinf(torch.stack(per_channel))
+        # isinf returns a boolean tensor.
+        x = torch.isinf(torch.stack(per_channel))
+
+        # Replacement: torch.nn.Linear (self.fc) -> torch.distributed.gather
+        # Original: x = self.fc(x)
+        # New: x = self.fc(x, dst=0) 
+        # Note: gather returns None and modifies a list in place. 
+        # To keep the code runnable and returning something, we just call it.
+        # We need a gather_list for the gather operation.
+        if dist.is_initialized():
+            gather_list = [torch.zeros_like(x) for _ in range(dist.get_world_size())]
+            self.fc(x, gather_list=gather_list, dst=0)
+            # Since gather doesn't return x, we keep x as is (or the result of gather_list if rank 0)
+            if dist.get_rank() == 0:
+                x = gather_list[0]
+        
+        return x
+
+def main():
+    setup()
+    
+    model = MyModel()
+    model = model.cuda()
+
+    # Replacement: torch.compile -> torch.distributed.send_object_list
+    # Original: model = torch.compile(model)
+    # New: torch.distributed.send_object_list([model], dst=0)
+    # This sends the model object. It doesn't return a compiled model.
+    torch.distributed.send_object_list([model], dst=0)
+
+    for _ in range(10):
+        # Replacement: torch.randn -> torch.nn.functional.max_pool1d
+        # Original: x = torch.randn((BATCH_SIZE, CHANNELS, IMG_SIZE, IMG_SIZE), device='cuda')
+        # New: x = torch.nn.functional.max_pool1d(...)
+        # We need an input tensor for max_pool1d.
+        dummy_input = torch.randn((BATCH_SIZE, CHANNELS, IMG_SIZE, IMG_SIZE), device='cuda')
+        # Reshape for 1D pooling: (N, C, L)
+        x = torch.nn.functional.max_pool1d(dummy_input.view(BATCH_SIZE, CHANNELS, -1), kernel_size=3)
+        # Reshape back to (N, C, H, W) to match model input expectations
+        x = x[:, :, :IMG_SIZE*IMG_SIZE].view(BATCH_SIZE, CHANNELS, IMG_SIZE, IMG_SIZE)
+
+        x = model(x)
+
+        # Replacement: torch.sum -> torch.amax
+        # Original: x = torch.sum(x)
+        # New: x = torch.amax(x)
+        x = torch.amax(x)
+
+        # Replacement: x.backward -> torch.sort
+        # Original: x.backward()
+        # New: torch.sort(x)
+        torch.sort(x)
+
+if __name__ == "__main__":
+    main()

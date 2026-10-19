@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.compile -> tf.function
@@ -16,4 +15,3 @@ def fn(x):
 
 # Conversion: torch.ones -> tf.ones
 fn(tf.ones(3))
-```

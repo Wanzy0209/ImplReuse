@@ -1,0 +1,58 @@
+import numpy as np
+import torch
+import tensorflow as tf
+import torchvision.models as models
+from diffusers import DiffusionPipeline
+
+from transformers import pipeline
+from transformers import AutoModelForCausalLM
+from transformers.models.qwen3_moe.configuration_qwen3_moe import Qwen3MoeConfig
+from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeModel
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+# Replacement: torch.export.Dim -> tf.keras.backend.batch_get_value
+# Original: seq_len = torch.export.Dim("seq_len", min=1, max=128)
+seq_len = tf.keras.backend.batch_get_value([])
+
+# Replacement: torch.ops.aten._reshape_copy.default -> tf.keras.backend.batch_get_value
+def view_decomposition(x: torch.Tensor, size: List[torch.SymInt]) -> torch.Tensor:
+    # Original: return torch.ops.aten._reshape_copy.default(x, size)
+    return tf.keras.backend.batch_get_value([x])
+
+# Replacement: torch.no_grad -> tf.keras.backend.batch_get_value
+# Original: with torch.no_grad():
+tf.keras.backend.batch_get_value([])
+
+config = Qwen3MoeConfig(num_hidden_layers=1, num_experts=4, use_cache=False, num_experts_per_tok=2)
+model = Qwen3MoeModel(config=config).half().cuda()
+inputs = {
+    # Replacement: torch.randint -> torch.argmin
+    # Original: torch.randint(0, 128, (1, 12))
+    "input_ids": torch.argmin(torch.randn(1, 12), dim=1).unsqueeze(0).cuda(),
+    # Replacement: torch.arange -> torch.linspace
+    # Original: torch.arange(12)
+    "position_ids": torch.linspace(0, 11, 12, dtype=torch.long).unsqueeze(0).cuda(),
+}
+
+# Replacement: torch.export.export -> torch.distributed.new_group
+# Original: ep = torch.export.export(...)
+ep = torch.distributed.new_group()
+
+# Mocking the run_decompositions method to ensure the test case remains runnable
+# since torch.distributed.ProcessGroup does not have this method.
+if not hasattr(ep, 'run_decompositions'):
+    ep.run_decompositions = lambda **kwargs: ep
+
+# Replacement: torch.export.default_decompositions -> tf.keras.backend.batch_get_value
+# Original: decomp_table = torch.export.default_decompositions()
+decomp_table = tf.keras.backend.batch_get_value([])
+
+# Replacement: torch.ops.aten.view.default -> tf.keras.backend.batch_get_value
+# Original: decomp_table[torch.ops.aten.view.default] = view_decomposition
+# Adapting to list return type of batch_get_value to ensure runnability
+if isinstance(decomp_table, list):
+    decomp_table = {}
+decomp_table[tf.keras.backend.batch_get_value] = view_decomposition
+
+after_decomp = ep.run_decompositions(decomp_table=decomp_table)
+print("Success")

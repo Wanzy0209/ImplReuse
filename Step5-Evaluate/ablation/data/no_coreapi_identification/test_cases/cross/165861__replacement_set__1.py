@@ -1,0 +1,21 @@
+import torch
+import tensorflow as tf
+
+# these break cuda
+# x = torch.rand(2**16, 2, device="cuda")
+# Replacement: torch.rand -> tf.test.is_built_with_cuda
+x = tf.test.is_built_with_cuda()
+
+# F.pad(x, (1, 1), mode="constant")
+# Replacement: F.pad -> tf.test.is_built_with_cuda
+tf.test.is_built_with_cuda()
+print("constant pad ok")
+
+tf.test.is_built_with_cuda()
+print("circular pad ok")
+
+tf.test.is_built_with_cuda()
+print("replicate pad ok")
+
+tf.test.is_built_with_cuda()
+print("this won't print")

@@ -1,0 +1,64 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+"""
+Test case adapted from Issue 164385 (FloorDiv generate sympy rational).
+Original logic: Symbolic definition -> FloorDiv operations -> Result inspection.
+Adapted logic:
+- Symbolic definition replaced by torch.nn.Softmax instantiation.
+- FloorDiv operations replaced by torch.nn.Softmax application.
+- Final operation leverages tf.keras.layers.Average (Similar API).
+- Inspection replaced by torch.nn.Softmax application.
+"""
+
+print("Testing Softmax and Average interaction...")
+
+# Replacement for sympy.Symbol -> torch.nn.Softmax
+# We define Softmax layers to act as our symbolic variables/transformers
+s14 = torch.nn.Softmax(dim=1)
+s37 = torch.nn.Softmax(dim=1)
+s46 = torch.nn.Softmax(dim=1)
+
+# Create input data. Using 2016 as a feature dimension to mirror the original constant.
+input_data_s14 = torch.randn(1, 2016)
+input_data_s37 = torch.randn(1, 2016)
+input_data_s46 = torch.randn(1, 2016)
+
+# Replacement for FloorDiv(s14, 2016) -> torch.nn.Softmax
+# Applying the layer to the data
+inner_expr = s14(input_data_s14)
+
+# Build the expression: (24 * s37 + 672) * inner_expr
+# We apply s37 to its data
+s37_val = s37(input_data_s37)
+middle_expr = (24 * s37_val + 672) * inner_expr
+
+# Numerator: middle_expr + 21
+numerator = middle_expr + 21
+
+# Leverage Similar API: tf.keras.layers.Average
+# The original did FloorDiv(numerator, 22). Average divides by the number of inputs.
+# We convert the PyTorch tensor to a TensorFlow tensor to use the Keras layer.
+tf_numerator = tf.constant(numerator.numpy())
+
+# To simulate a division operation similar to the original FloorDiv(numerator, 22),
+# we can average the numerator with itself 21 times (total 22 inputs) to get numerator/22.
+# For simplicity in this test, we will average with a zero tensor to get numerator/2.
+tf_denominator_part = tf.zeros_like(tf_numerator)
+
+avg_layer = tf.keras.layers.Average()
+result = avg_layer([tf_numerator, tf_denominator_part])
+
+print(f"Average result: {result}")
+
+# Replacement for sympy.srepr -> torch.nn.Softmax
+# srepr was used to inspect the internal structure.
+# We apply Softmax to the result to inspect its normalized distribution.
+torch_result = torch.from_numpy(result.numpy())
+inspection = torch.nn.Softmax(dim=1)(torch_result)
+
+print(f"Softmax inspection: {inspection}")
+
+# Basic assertion to ensure execution
+assert result.shape == tf_numerator.shape

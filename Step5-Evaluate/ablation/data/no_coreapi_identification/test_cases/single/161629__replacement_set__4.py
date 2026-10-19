@@ -1,0 +1,67 @@
+import os
+import tempfile
+import torch
+import warnings
+from torch.export import export, save
+from torch.utils.cpp_extension import get_compiler_abi_compatibility_and_version
+
+def test_compiler_abi_warning_with_replacements():
+    """
+    Test case for torch.utils.cpp_extension.get_compiler_abi_compatibility_and_version.
+    This test reflects the logic of the reported bug (warning behavior based on environment)
+    but replaces the original APIs (logging, torch.dist) with the requested replacements
+    (torch.export.load, torch.zeros).
+    """
+    
+    # Setup: Create a dummy exported program to use with torch.export.load
+    def dummy_model(x):
+        return x + 1
+    ep = export(dummy_model, (torch.randn(1),))
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        file_path = os.path.join(tmpdir, "model.pt2")
+        save(ep, file_path)
+
+        # Replacement for logging.getLogger and ncpp_ext_logger.setLevel
+        # Instead of configuring the logging level to control warning output,
+        # we load an exported program.
+        loaded_model = torch.export.load(file_path)
+
+        # Replacement for torch.dist
+        # Instead of checking the distributed rank to determine if warnings should print,
+        # we create a zero tensor.
+        _ = torch.zeros(1)
+
+        # Test the similar API: get_compiler_abi_compatibility_and_version
+        # The bug report highlights issues with warnings appearing when environment variables
+        # are not set. This API checks 'TORCH_DONT_CHECK_COMPILER_ABI'.
+        
+        # Scenario 1: Environment variable is set to skip checks (suppresses warnings)
+        os.environ['TORCH_DONT_CHECK_COMPILER_ABI'] = '1'
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            is_compat, version = get_compiler_abi_compatibility_and_version("g++")
+            # When the env var is set, it should return True and '0.0.0' without warnings
+            # (assuming _is_binary_build() returns True, otherwise it returns True anyway)
+            assert is_compat is True
+            assert str(version) == '0.0.0'
+            # We expect no warnings related to ABI incompatibility here
+            abi_warnings = [warning for warning in w if 'ABI' in str(warning.message)]
+            assert len(abi_warnings) == 0, "Expected no ABI warnings when TORCH_DONT_CHECK_COMPILER_ABI is set"
+
+        # Scenario 2: Environment variable is not set (default behavior)
+        if 'TORCH_DONT_CHECK_COMPILER_ABI' in os.environ:
+            del os.environ['TORCH_DONT_CHECK_COMPILER_ABI']
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            # This call might trigger a warning if the compiler is incompatible,
+            # mimicking the behavior in the bug report where warnings are conditional.
+            is_compat, version = get_compiler_abi_compatibility_and_version("g++")
+            # We simply assert the function executes successfully.
+            # The specific warning content depends on the system's compiler.
+            assert isinstance(is_compat, bool)
+            assert version is not None
+
+if __name__ == "__main__":
+    test_compiler_abi_warning_with_replacements()

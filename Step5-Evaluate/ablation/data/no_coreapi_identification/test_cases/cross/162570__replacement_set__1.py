@@ -1,0 +1,82 @@
+import torch
+import tensorflow as tf
+from tensorflow.experimental import dtensor
+
+# Replacements applied based on the provided mapping:
+# nn.Module -> tf.keras.activations.serialize
+# torch.atan2 -> torch.le
+# torch.tensor -> torch.isnan
+# torch.onnx.export -> tf.keras.activations.serialize
+# ort.InferenceSession -> tf.keras.activations.serialize
+# sess.run -> tf.keras.activations.serialize
+# x.numpy -> tf.keras.activations.serialize
+# y.numpy -> tf.keras.activations.serialize
+# torch.angle -> tf.experimental.dtensor.copy_to_mesh
+
+# 1. Define Net
+# Original: class Net(nn.Module):
+# Replacement: class Net(tf.keras.activations.serialize):
+# Since tf.keras.activations.serialize is a function, we define a class 
+# and use the replacement API to represent the model structure/serialization.
+class Net:
+    def forward(self, x, y):
+        # Replacing torch.atan2 with torch.le
+        return torch.le(x, y)
+
+net = Net()
+
+# 2. Create inputs
+# Original: x = torch.tensor([0.0])
+# Replacement: x = torch.isnan(...)
+# We wrap the input in torch.tensor to provide a valid argument for isnan.
+x = torch.isnan(torch.tensor([0.0]))
+y = torch.isnan(torch.tensor([0.0]))
+
+# 3. Export
+# Original: torch.onnx.export(net, ...)
+# Replacement: tf.keras.activations.serialize(net, ...)
+# We serialize the forward method of the net.
+exported = tf.keras.activations.serialize(net.forward)
+
+# 4. Inference Session
+# Original: sess = ort.InferenceSession(...)
+# Replacement: sess = tf.keras.activations.serialize(...)
+# We assign the serialize function to sess.
+sess = tf.keras.activations.serialize
+
+# 5. Run
+# Original: ort_result = sess.run(["output"], {"x": x.numpy(), "y": y.numpy()})[0]
+# Replacement: ort_result = tf.keras.activations.serialize(["output"], {"x": tf.keras.activations.serialize(x), "y": tf.keras.activations.serialize(y)})[0]
+# To make this valid, we adapt the call. We replace x.numpy with tf.keras.activations.serialize(x).
+# We replace sess.run with sess (which is serialize).
+# We construct a lambda that mimics the run logic to pass to serialize.
+feed_x = tf.keras.activations.serialize(lambda: x)
+feed_y = tf.keras.activations.serialize(lambda: y)
+
+# The "run" operation becomes serializing a function that performs the operation
+ort_result = sess(lambda: torch.le(feed_x, feed_y))
+
+# 6. Torch Result
+torch_result = net.forward(x, y)
+
+# 7. Angle replacement
+# Original: torch.angle(...)
+# Replacement: tf.experimental.dtensor.copy_to_mesh(...)
+# We need a mesh. We create a dummy mesh for the test.
+try:
+    mesh = dtensor.create_mesh([("device", dtensor.CPU)], device_ids=[0])
+    # copy_to_mesh expects a DTensor. We pass x (tensor).
+    # This might fail if x is not a DTensor, but we include the call as requested.
+    angle_result = tf.experimental.dtensor.copy_to_mesh(x, mesh)
+except Exception as e:
+    angle_result = str(e)
+
+print("torch_result", torch_result)
+print("ort_result", ort_result)
+print("angle_result", angle_result)
+
+# Assertions
+# torch.le(False, False) is True.
+assert torch_result.item() == True
+# ort_result is the serialized config of the lambda.
+assert isinstance(ort_result, dict)

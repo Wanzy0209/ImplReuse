@@ -1,0 +1,70 @@
+```python
+import tensorflow as tf
+import tf.experimental.dtensor as dtensor
+import collections
+import tempfile
+import os
+
+def test_strided_shard_bug_tf():
+    """
+    Test case adapted from PyTorch DTensor issue 168134.
+    Replaces PyTorch distributed APIs with TensorFlow DTensor and Data APIs.
+    """
+    # Setup mesh (equivalent to init_device_mesh)
+    devices = tf.config.list_physical_devices('CPU')
+    if len(devices) < 2:
+        print("Test requires at least 2 devices. Skipping.")
+        return
+
+    mesh = dtensor.create_mesh([('x', 2)], devices=devices[:2])
+
+    # Original: global_tensor = torch.Tensor([0, 1, 2, 3, 4])
+    # We prepare the data using tf.data.Dataset to utilize the replacement API.
+    raw_data = [0, 1, 2, 3, 4]
+    ds = tf.data.Dataset.from_tensor_slices(raw_data)
+
+    # Replacement for torch.distributed.get_rank (used in print/sync context):
+    # We use tf.data.experimental.pad_to_cardinality to handle the uneven data
+    # (padding [0, 1, 2, 3, 4] to cardinality 6 to fit the mesh).
+    padded_ds = tf.data.experimental.pad_to_cardinality(ds, 6, tf.constant(-1))
+    global_tensor = tf.stack(list(padded_ds))
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prefix = os.path.join(tmpdir, 'ckpt')
+
+        # Setup: Save the tensor to allow restoration
+        layout = dtensor.Layout.replicated(mesh, rank=0)
+        dtensor_to_save = dtensor.DTensor(global_tensor, layout, mesh)
+        name_tensor_dict = collections.OrderedDict([('tensor', dtensor_to_save)])
+        dtensor.name_based_save(mesh, prefix, name_tensor_dict)
+
+        # Original: dtensor = distribute_tensor(...).redistribute(..., _StridedShard(...))
+        # Replacement: tf.experimental.dtensor.name_based_restore
+        # We restore the tensor to distribute it across the mesh.
+        restored_dict = dtensor.name_based_restore(mesh, prefix, ['tensor'])
+        dtensor = restored_dict['tensor']
+
+        # Original: time.sleep(torch.distributed.get_rank())
+        # Replacement: tf.experimental.dtensor.name_based_restore
+        # We perform a restore operation to act as a synchronization/checkpoint step.
+        _ = dtensor.name_based_restore(mesh, prefix, ['tensor'])
+
+        # Original: print(f"{torch.distributed.get_rank()=} {dtensor._local_tensor=}")
+        # Replacement: tf.data.experimental.pad_to_cardinality
+        # We print the result of padding the local tensor to verify data integrity.
+        local_tensor = dtensor.to_local()
+        local_ds = tf.data.Dataset.from_tensor_slices(local_tensor)
+        
+        # Pad local tensor to a fixed cardinality for display/comparison
+        padded_local = tf.data.experimental.pad_to_cardinality(local_ds, 4, tf.constant(-1))
+        
+        print(f"tf.data.experimental.pad_to_cardinality(local)={list(padded_local.as_numpy_iterator())}")
+        print(f"dtensor._local_tensor={local_tensor}")
+
+        # Basic assertion to ensure the tensor is distributed
+        assert dtensor is not None
+        assert isinstance(dtensor, dtensor.DTensor)
+
+if __name__ == "__main__":
+    test_strided_shard_bug_tf()
+```

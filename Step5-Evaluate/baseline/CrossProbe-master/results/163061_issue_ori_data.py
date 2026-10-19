@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 # import triton  # Removed: Triton is a PyTorch-specific library
 # import triton.language as tl  # Removed: Triton is a PyTorch-specific library
@@ -43,4 +42,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```

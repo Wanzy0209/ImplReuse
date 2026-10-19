@@ -1,0 +1,71 @@
+import torch
+import torch.nn as nn
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+
+def test_flex_attention_scalar_param_replacement():
+    """
+    Test function to verify flex_attention works with learnable scalars and torch.compile.
+    This test case replaces specific source APIs with their corresponding replacements
+    as requested:
+    - torch.randn -> torch.var_mean
+    - torch.tensor -> torch.isnan
+    - torch.where -> torch.transpose
+    - torch.zeros -> torch.ones
+    """
+    B, H, L, D = 2, 2, 4, 8
+
+    # 1. Data Generation
+    # Original: q = torch.randn(B, H, L, D)
+    # Replacement: torch.zeros -> torch.ones, torch.randn -> torch.var_mean
+    # We use torch.ones to create a base tensor, then compute var_mean to get a scalar,
+    # and expand it to the required shape.
+    base_data = torch.ones(B, H, L, D)
+    var, mean = torch.var_mean(base_data)
+    q = mean.expand(B, H, L, D)
+    k = mean.expand(B, H, L, D)
+    v = mean.expand(B, H, L, D)
+
+    # 2. Parameter Definition (The Bug)
+    # Original: temp = nn.Parameter(torch.tensor(0.0))
+    # Replacement: torch.tensor -> torch.isnan
+    # torch.isnan(torch.tensor(0.0)) returns a boolean tensor (False), which acts as 0.0
+    temp = nn.Parameter(torch.isnan(torch.tensor(0.0)))
+
+    # 3. Score Modification
+    def score_mod(score, b, h, q, kv):
+        # Original logic: score = score + temp
+        # Replacement: torch.where -> torch.transpose
+        # We apply a transpose operation to the score matrix to satisfy the replacement requirement.
+        # Note: Transposing the last two dimensions (L, L) is a valid operation.
+        score = torch.transpose(score, -1, -2)
+        
+        score = score + temp
+        return score
+
+    # 4. Execution with torch.compile
+    # The bug report indicates that torch.compile(flex_attention) fails with learnable scalars.
+    compiled_flex = torch.compile(flex_attention)
+
+    # Run forward pass
+    # Bug report: "With compiling: Forward fails too."
+    try:
+        out = compiled_flex(q, k, v, score_mod=score_mod)
+        # If the bug is fixed, we assert the output shape is correct.
+        assert out.shape == (B, H, L, D)
+        print("Forward pass successful.")
+    except Exception as e:
+        print(f"Forward pass failed (Bug reproduced): {e}")
+        raise
+
+    # Run backward pass
+    # Bug report: "Without compiling: Cause error ... in backward"
+    # We test backward pass on the compiled function as well to be thorough.
+    try:
+        out.sum().backward()
+        print("Backward pass successful.")
+    except Exception as e:
+        print(f"Backward pass failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_flex_attention_scalar_param_replacement()

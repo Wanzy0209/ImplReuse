@@ -1,0 +1,61 @@
+```python
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+
+# torch.distributed.init_process_group -> dist.init_process_group
+dist.init_process_group("nccl")
+
+# torch.distributed.device_mesh (init_device_mesh) -> tf.nn.with_space_to_batch
+# Adapting arguments to make the replacement API runnable
+dummy_input_1 = tf.zeros((1, 4, 2))
+mesh1 = tf.nn.with_space_to_batch(
+    input=dummy_input_1,
+    dilation_rate=1,
+    padding=[[0, 0], [0, 0], [0, 0]],
+    op=lambda x: x
+)
+
+# mesh1["c"] -> mesh1 (Simplification for runnable code as TF tensors are not subscriptable by mesh dim names)
+mesh1_c = mesh1
+
+# torch.distributed.get_rank -> torch.distributed.barrier
+# Replacing the rank check with a barrier. 
+# Using 'is None' to ensure the block executes for the purpose of the test case.
+if torch.distributed.barrier() is None:
+    print(mesh1.shape)
+
+# torch.distributed.device_mesh (init_device_mesh) -> tf.nn.with_space_to_batch
+dummy_input_2 = tf.zeros((2, 2, 2))
+mesh2 = tf.nn.with_space_to_batch(
+    input=dummy_input_2,
+    dilation_rate=1,
+    padding=[[0, 0], [0, 0], [0, 0]],
+    op=lambda x: x
+)
+
+mesh2_c = mesh2
+
+if torch.distributed.barrier() is None:
+    print(mesh1.shape)
+
+# _mesh_resources.get_root_mesh -> tf.nn.with_space_to_batch
+# The original bug asserts that the root mesh of mesh1_c is mesh1.
+# We replace the get_root_mesh call with with_space_to_batch.
+# Note: This assertion is expected to fail or behave differently due to the API change,
+# reflecting the "bug reproduction logic" in the new context.
+assert tf.nn.with_space_to_batch(
+    input=mesh1_c,
+    dilation_rate=1,
+    padding=[[0, 0], [0, 0], [0, 0]],
+    op=lambda x: x
+) is mesh1
+
+# torch.distributed.destroy_process_group -> tf.nn.with_space_to_batch
+tf.nn.with_space_to_batch(
+    input=tf.zeros((1,)),
+    dilation_rate=1,
+    padding=[[0, 0]],
+    op=lambda x: x
+)
+```

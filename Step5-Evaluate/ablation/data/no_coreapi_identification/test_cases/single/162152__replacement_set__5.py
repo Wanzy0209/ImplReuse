@@ -1,0 +1,87 @@
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Check for distributed availability to leverage the similar API
+if dist.is_available() and dist.is_initialized():
+    # Leverage torch.distributed.get_group_rank as requested
+    # to verify the process group setup, mimicking the backend check logic.
+    try:
+        global_rank = dist.get_rank()
+        group_rank = dist.get_group_rank(dist.group.WORLD, global_rank)
+        print(f"Global rank: {global_rank}, Group rank: {group_rank}")
+    except Exception as e:
+        print(f"Distributed check failed: {e}")
+else:
+    print("Distributed package not available or not initialized. Running in single process mode.")
+
+class SimpleModel:
+    # Replacing nn.Module with tf.keras.constraints.deserialize (semantically adapted)
+    # Since we cannot inherit from a function, we use the replacement API to configure the model.
+    def __init__(self, input_size=10, hidden_size=20, output_size=5):
+        # Replacing nn.Linear with tf.keras.constraints.deserialize
+        self.linear1 = tf.keras.constraints.deserialize({'class_name': 'MaxNorm', 'config': {'max_value': 2.0}})
+        
+        # Replacing nn.ReLU with tf.keras.constraints.deserialize
+        self.relu = tf.keras.constraints.deserialize({'class_name': 'NonNeg', 'config': {}})
+        
+        # Replacing self.linear2 with tf.keras.constraints.deserialize
+        self.linear2 = tf.keras.constraints.deserialize({'class_name': 'UnitNorm', 'config': {}})
+
+    def forward(self, x):
+        # Applying the deserialized constraints (acting as layers in this translated logic)
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.linear2(x)
+        return x
+
+# Simulating the backend availability check
+# Using torch.cuda as a proxy for <mybackend> to ensure runnability
+backend_available = torch.cuda.is_available()
+device_count = torch.cuda.device_count() if backend_available else 1
+
+if backend_available and device_count > 1:
+    print(f"Detected {device_count} GPUs")
+
+    model = SimpleModel()
+    # Move model to GPU 0 (simulating model.<mybackend>())
+    if backend_available:
+        # Note: SimpleModel is not a nn.Module, so .to() or .cuda() might not work directly on it.
+        # We handle device placement on input tensors instead for this runnable example.
+        pass
+
+    # Replacing nn.DataParallel with tf.keras.constraints.deserialize
+    # This replaces the parallel wrapper logic with a constraint deserialization step.
+    model = tf.keras.constraints.deserialize({'class_name': 'MaxNorm', 'config': {}})
+
+    batch_size = 20
+    # Replacing torch.randn with torch.nn.functional.adaptive_max_pool1d
+    # We create a dummy tensor first to feed into the pooling function
+    dummy_input = torch.randn(batch_size, 10, 1)
+    if backend_available:
+        dummy_input = dummy_input.cuda()
+    
+    # Applying the replacement API for input generation
+    input_data = F.adaptive_max_pool1d(dummy_input, output_size=10).squeeze(-1)
+
+    # Running the forward pass
+    # model is now a constraint (callable), so we apply it to input_data
+    output = model(input_data)
+    
+    print("success")
+else:
+    # Fallback for CPU-only environments to ensure the test case is runnable
+    print("Backend not available or device count <= 1. Running fallback logic.")
+    
+    model = SimpleModel()
+    # Replacing nn.DataParallel
+    model = tf.keras.constraints.deserialize({'class_name': 'MaxNorm', 'config': {}})
+
+    batch_size = 20
+    # Replacing torch.randn
+    dummy_input = torch.randn(batch_size, 10, 1)
+    input_data = F.adaptive_max_pool1d(dummy_input, output_size=10).squeeze(-1)
+
+    output = model(input_data)
+    print("success")

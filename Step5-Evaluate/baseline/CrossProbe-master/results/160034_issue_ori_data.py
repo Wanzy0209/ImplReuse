@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # PyTorch uses "mps" for Apple Silicon. TensorFlow uses "/GPU:0" or "/CPU:0".
@@ -16,4 +15,3 @@ with tf.device(device):
     # TF requires indices to be rank-2 (N, 1) for 1D updates.
     # TF tensors are immutable, so we reassign the result.
     image = tf.tensor_scatter_nd_add(image, tf.expand_dims(indices, axis=1), data)
-```

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import numpy as np
 
@@ -52,4 +51,3 @@ compile_res = cfoo(tf.convert_to_tensor(x))
 # torch.testing.assert_close(eager_res, compile_res)
 # Conversion: np.testing.assert_allclose checks if two arrays are element-wise equal within a tolerance.
 np.testing.assert_allclose(eager_res.numpy(), compile_res.numpy())
-```

@@ -1,0 +1,68 @@
+import torch
+import torch.nn as nn
+import torch.nn.utils.prune as prune
+from torch.nn.utils.prune import CustomFromMask
+import torch.hub
+import time
+
+# Replacing torch.distributed.init_process_group with torch.hub.load_state_dict_from_url
+# We use a dummy URL to satisfy the API requirement without network dependency in a generated test.
+# In a real scenario, this would load a pre-trained model.
+# For this test, we will simulate the setup phase.
+try:
+    # Attempting to load a state dict to mimic the initialization step
+    # Using a small, standard model URL if available, or handling the failure gracefully
+    # to ensure the test remains runnable in offline environments.
+    state_dict_from_url = torch.hub.load_state_dict_from_url(
+        'https://download.pytorch.org/models/resnet18-f37072fd.pth', 
+        progress=False
+    )
+except Exception:
+    # Fallback if network is unavailable, to keep the test runnable
+    state_dict_from_url = {}
+    print("Warning: Could not load state dict from URL (network error). Proceeding with empty state.")
+
+# Replacing torch.distributed with torch.nn.utils.prune.CustomFromMask logic
+# We define a large model to mimic the "1024 tensors" and "fsdp_size" complexity.
+class LargeModel(nn.Module):
+    def __init__(self, num_layers=1024):
+        super().__init__()
+        self.layers = nn.ModuleList([nn.Linear(10, 10) for _ in range(num_layers)])
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+model = LargeModel(num_layers=1024)
+
+# Replacing torch.ones with torch.eye
+# Original: fully_tensor = [torch.ones(1024, 1) for _ in range(1024)]
+# New: We create masks using torch.eye to apply CustomFromMask
+# We create a mask for each layer. 
+# Note: torch.eye(10) creates a 10x10 identity matrix, suitable for masking 10x10 weights.
+masks = [torch.eye(10) for _ in range(1024)]
+
+# Replacing torch.distributed.tensor with torch.nn.utils.prune.CustomFromMask
+# Original: sharded_tensor = [distribute_tensor(...) for t in fully_tensor]
+# New: We apply CustomFromMask to the model parameters using the generated masks.
+# This mimics the "sharding" or "distribution" of logic across the model components.
+
+# Replacing DefaultSavePlanner with torch.nn.utils.prune.CustomFromMask
+# Original: planner = DefaultSavePlanner()
+# New: We iterate through the model and apply the pruning method.
+start = time.time()
+
+for i, layer in enumerate(model.layers):
+    # Apply CustomFromMask to the weight of each layer
+    # This replaces the 'planner.create_local_plan()' and 'create_global_plan()' logic
+    # by performing a heavy operation on each component.
+    CustomFromMask.apply(layer, name='weight', mask=masks[i])
+
+end = time.time()
+
+# Replacing ndist.barrier (synchronization) with a check
+# We verify that the pruning was applied successfully (mimicking validation)
+assert all(layer.weight_mask is not None for layer in model.layers), "Pruning failed to apply masks"
+
+print(f"CustomFromMask application cost {end - start}s")

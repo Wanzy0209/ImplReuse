@@ -1,0 +1,167 @@
+Issue ID: 164663
+Title: FSDPMemTracker fails with KeyError for RMSNorm during backward
+Bug Description:
+### 🐛 Describe the bug
+
+When sharding a model that uses nn.RMSNorm, FSDPMemTracker raises KeyError during pre-backward. The failure happens when RMSNorm is wrapped with another Linear module in a single fully_sharded().
+
+Repro
+```
+import os
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.tensor.experimental import implicit_replication
+from torch.distributed._tools.fsdp2_mem_tracker import FSDPMemTracker
+
+
+class TestModule(nn.Module):
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.norm = nn.RMSNorm(d_model)
+        self.output = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = self.output(x)
+        return x
+
+
+def main():
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+
+    dist.init_process_group(backend="nccl")
+
+    d_model = 128
+
+    model = TestModule(d_model)
+    model = model.to('cuda:0')
+    mesh = init_device_mesh("cuda", (dist.get_world_size(),))
+
+Original API Under Test: FSDPMemTracker
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.types.experimental.ConcreteFunction
+Similarity score: 0.9900421500205994
+
+Similar API information:
+# Extracted call chain for tf.types.experimental.ConcreteFunction
+
+# --- tensorflow.python.eager.polymorphic_function.concrete_function.ConcreteFunction ---
+class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
+  """A `tf.types.experimental.ConcreteFunction` created from `tf.function`."""
+
+  def __init__(
+      self, atomic_fn: atomic_function.AtomicFunction, shared_func_graph=True
+  ):
+    """Initialize a `ConcreteFunction`.
+
+    Args:
+     atomic_fn: Inference atomic function to form basis of forward pass.
+     shared_func_graph: If False, the ConcreteFunction takes ownership of
+       `func_graph` and will break reference cycles when it is deleted. This
+       makes the FuncGraph inoperable.
+
+    Raises:
+      ValueError: If number of input_placeholders is not equal to the number
+        of function inputs.
+    """
+    # _arg_keywords and _num_positional_args define the flat signature.  They
+    # are assigned after construction.
+    self._arg_keywords = None
+    self._num_positional_args = None
+
+    self._func_graph = atomic_fn.graph
+    self._captured_inputs = (
+        self._func_graph.external_captures
+        + self._func_graph.deferred_external_captures
+
+Original Test Case:
+import os
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.tensor.experimental import implicit_replication
+from torch.distributed._tools.fsdp2_mem_tracker import FSDPMemTracker
+
+
+class TestModule(nn.Module):
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.norm = nn.RMSNorm(d_model)
+        self.output = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = self.output(x)
+        return x
+
+
+def main():
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+
+    dist.init_process_group(backend="nccl")
+
+    d_model = 128
+
+    model = TestModule(d_model)
+    model = model.to('cuda:0')
+    mesh = init_device_mesh("cuda", (dist.get_world_size(),))
+
+    fully_shard([model.norm, model.output], mesh=mesh)   # shards the RMSNorm's parameters/state across ranks
+    fully_shard(model, mesh=mesh)  # shards the Linear's parameters/state across ranks
+    print(model)
+
+    tracker = FSDPMemTracker(model)
+
+    with tracker, implicit_replication():
+        x = torch.randn(16, d_model, device='cuda:0')
+        y = model(x)
+        loss = y.sum()
+        loss.backward()
+
+
+if __name__ == "__main__":
+    main()
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- loss.backward -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+- nn.Linear -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+- nn.Module -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+- nn.RMSNorm -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+- self.norm -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+- torch.Tensor -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+- torch.cuda.set_device -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+- torch.distributed -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+- torch.distributed._composable.fsdp -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+- torch.distributed._tools.fsdp2_mem_tracker -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+- torch.distributed.device_mesh -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+- torch.distributed.tensor.experimental -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+- torch.nn -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+- torch.randn -> torch.var_mean (score=0.9906626343727112, source_group=pytorch_to_pytorch)
+- y.sum -> tf.types.experimental.ConcreteFunction (score=0.9900421500205994, source_group=issue_to_api)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

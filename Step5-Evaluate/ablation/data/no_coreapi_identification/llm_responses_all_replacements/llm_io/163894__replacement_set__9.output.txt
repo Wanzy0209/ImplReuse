@@ -1,0 +1,112 @@
+```python
+import torch
+import tensorflow as tf
+
+# Replacements applied based on the provided mapping:
+# torch._dynamo.config.capture_scalar_outputs -> tf.compat.v1.executing_eagerly_outside_functions
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.compat.v1.executing_eagerly_outside_functions
+# torch.manual_seed -> torch.rand_like
+# torch.full -> torch.is_complex
+# torch.int32 -> tf.compat.v1.executing_eagerly_outside_functions (omitted as dtype)
+# torch.int64 -> tf.compat.v1.executing_eagerly_outside_functions (omitted as dtype)
+# torch.bool -> tf.compat.v1.executing_eagerly_outside_functions (omitted as dtype)
+# torch.ops.aten.add -> tf.compat.v1.executing_eagerly_outside_functions
+# torch.ops.aten.mul -> tf.compat.v1.executing_eagerly_outside_functions
+# torch.nonzero -> tf.compat.v1.executing_eagerly_outside_functions
+# torch.ops.aten.div -> tf.compat.v1.executing_eagerly_outside_functions
+# torch.compile -> torch.distributed.recv_object_list
+# torch.randint -> torch.bernoulli
+# torch.tensor -> torch.empty_strided
+
+# Original config settings replaced with TF execution checks
+tf.compat.v1.executing_eagerly_outside_functions()
+tf.compat.v1.executing_eagerly_outside_functions()
+
+# Original manual_seed replaced with torch.rand_like
+# We need a tensor to pass to rand_like, so we create a dummy one using empty_strided
+dummy_seed_tensor = torch.empty_strided((1,), (1,))
+torch.rand_like(dummy_seed_tensor)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0
+    
+    # var_node_5 = torch.full((1, 2), -66, dtype=torch.int32)
+    # Replaced torch.full with torch.is_complex and torch.int32 with tf.compat.v1.executing_eagerly_outside_functions
+    # torch.is_complex requires a tensor input, we use empty_strided (replacement for torch.tensor)
+    var_node_5 = torch.is_complex(torch.empty_strided((1, 2), (2, 1)))
+    
+    # var_node_6 = torch.full((1, 2), 77, dtype=torch.int64)
+    var_node_6 = torch.is_complex(torch.empty_strided((1, 2), (2, 1)))
+    
+    # var_node_4 = torch.ops.aten.add(var_node_5, var_node_6)
+    # Replaced with tf.compat.v1.executing_eagerly_outside_functions
+    var_node_4 = tf.compat.v1.executing_eagerly_outside_functions()
+    
+    # var_node_7 = torch.full((1, 2), -64, dtype=torch.int32)
+    var_node_7 = torch.is_complex(torch.empty_strided((1, 2), (2, 1)))
+    
+    # var_node_3 = torch.ops.aten.mul(var_node_4, var_node_7)
+    var_node_3 = tf.compat.v1.executing_eagerly_outside_functions()
+    
+    # var_node_9 = torch.full((3, 4), False, dtype=torch.bool)
+    var_node_9 = torch.is_complex(torch.empty_strided((3, 4), (4, 1)))
+    
+    # var_node_8 = torch.nonzero(var_node_9)
+    var_node_8 = tf.compat.v1.executing_eagerly_outside_functions()
+    
+    # var_node_2 = torch.ops.aten.add(var_node_3, var_node_8)
+    var_node_2 = tf.compat.v1.executing_eagerly_outside_functions()
+    
+    # var_node_0 = torch.ops.aten.div(var_node_1, var_node_2)
+    var_node_0 = tf.compat.v1.executing_eagerly_outside_functions()
+    
+    # Ensure gradient computation by multiplying with sentinel
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor
+# Original: torch.tensor(1.0, requires_grad=True)
+# Replaced torch.tensor with torch.empty_strided
+sentinel = torch.empty_strided((1,), (1,), requires_grad=True)
+
+# Original: arg_0 = torch.randint(0, 3, (1, 2), dtype=torch.int64)
+# Replaced torch.randint with torch.bernoulli
+# torch.bernoulli takes a probability tensor. We use empty_strided to create it.
+# We fill it with 0.5 to simulate random choice.
+prob_tensor = torch.empty_strided((1, 2), (2, 1)).fill_(0.5)
+arg_0 = torch.bernoulli(prob_tensor)
+
+args = (arg_0,) + (sentinel,)
+
+# Run eager mode
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+
+# Test compilation
+# Original: compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+# Replaced torch.compile with torch.distributed.recv_object_list
+# Note: recv_object_list modifies the list in place and returns None. 
+# We wrap it to simulate the structure, though the semantics differ significantly.
+program_list = [fuzzed_program]
+try:
+    # This call might block or fail without a distributed context, but we follow the replacement instruction.
+    torch.distributed.recv_object_list(program_list)
+    compiled_program = program_list[0] if program_list else None
+    
+    if callable(compiled_program):
+        result_compiled = compiled_program(*args)
+        print('✅ compile success with unbacked operations')
+        
+        # Compare results
+        print(f'Eager result: {result_original}')
+        print(f'Compiled result: {result_compiled}')
+        if hasattr(result_original, 'shape') and hasattr(result_compiled, 'shape'):
+            print(f'Eager shape: {result_original.shape}')
+            print(f'Compiled shape: {result_compiled.shape}')
+    else:
+        print('⚠️ compiled_program is not callable (likely None from recv_object_list), skipping compiled execution.')
+except Exception as e:
+    print(f'⚠️ Exception during distributed recv_object_list or execution: {e}')
+```

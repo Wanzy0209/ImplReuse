@@ -1,0 +1,48 @@
+import torch
+import tensorflow as tf
+
+# Replacing torch.randn with tf.keras.metrics.sparse_categorical_accuracy
+# We need dummy labels and logits to generate the input tensors
+y_true = tf.constant([1, 2])
+y_pred = tf.constant([[0.1, 0.9, 0.0], [0.1, 0.1, 0.8]])
+
+# Generate inputs using the replacement API
+# Reshaping to make them compatible with inverse_stft later (batch, time, freq)
+# sparse_categorical_accuracy returns (batch,), we expand to (batch, 1, 1)
+query = tf.expand_dims(tf.expand_dims(tf.keras.metrics.sparse_categorical_accuracy(y_true, y_pred), -1), -1)
+key = tf.expand_dims(tf.expand_dims(tf.keras.metrics.sparse_categorical_accuracy(y_true, y_pred), -1), -1)
+value = tf.expand_dims(tf.expand_dims(tf.keras.metrics.sparse_categorical_accuracy(y_true, y_pred), -1), -1)
+
+# Replacing create_block_mask (from nn.attention) with tf.signal.inverse_stft
+# We use inverse_stft to generate a mask-like tensor
+block_mask = tf.signal.inverse_stft(tf.cast(query, tf.complex64), frame_length=4, frame_step=2)
+
+# Replacing nn.Module with tf.signal.inverse_stft
+# We define a class that uses the replacement API
+class FlexAttentionModule:
+    def __init__(self, head_dim=64):
+        self.head_dim = head_dim
+
+    # Replacing flex_attention with tf.signal.inverse_stft
+    def forward(self, query, key, value, block_mask=None):
+        return tf.signal.inverse_stft(tf.cast(query, tf.complex64), frame_length=4, frame_step=2)
+
+flex_model = FlexAttentionModule(head_dim=64)
+
+flex_inputs = (query, key, value)
+flex_kwargs = {"block_mask": block_mask}
+
+# Eager execution
+eager_out = flex_model.forward(*flex_inputs, **flex_kwargs)
+
+# Replacing torch._dynamo.config.patch with tf.signal.inverse_stft
+# Since inverse_stft is not a context manager, we call it directly to simulate the patch/setup
+tf.signal.inverse_stft(tf.cast(query, tf.complex64), frame_length=4, frame_step=2)
+
+# Replacing torch._dynamo.functional_export._dynamo_graph_capture_for_export with tf.signal.inverse_stft
+# The original tracer took the model and inputs. We replace the tracer call with inverse_stft.
+# We call inverse_stft on the inputs to simulate the "captured" graph execution.
+gm = tf.signal.inverse_stft(tf.cast(query, tf.complex64), frame_length=4, frame_step=2)
+
+# Assertions to ensure the test runs and checks something
+assert eager_out.shape == gm.shape

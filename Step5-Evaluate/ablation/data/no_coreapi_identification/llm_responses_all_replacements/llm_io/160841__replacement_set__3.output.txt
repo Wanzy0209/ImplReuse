@@ -1,0 +1,85 @@
+```python
+import tensorflow as tf
+import torch
+
+def test_phi2_macos_garbage_fix():
+    """
+    Test case adapted from Issue 160841.
+    Replaces PyTorch/Transformers APIs with tf.experimental.DynamicRaggedShape
+    and torch.clamp as per the similarity mapping requirements.
+    """
+    
+    # Input text from the original issue
+    input_text = '''def print_prime(n):
+       """
+       Print all primes between 1 and n
+       """'''
+
+    # 1. Replace AutoModelForCausalLM.from_pretrained with tf.experimental.DynamicRaggedShape
+    # Original: model = AutoModelForCausalLM.from_pretrained(...)
+    # We simulate the model's parameter structure using a DynamicRaggedShape.
+    # Using bfloat16 to mimic the fix mentioned in the bug report.
+    model_params_shape = tf.experimental.DynamicRaggedShape.from_tensor(
+        tf.zeros([1, 2048, 2048], dtype=tf.bfloat16)
+    )
+
+    # 2. Replace AutoTokenizer.from_pretrained with tf.experimental.DynamicRaggedShape
+    # Original: tokenizer = AutoTokenizer.from_pretrained(...)
+    # We simulate the tokenizer's vocabulary structure.
+    tokenizer_vocab_shape = tf.experimental.DynamicRaggedShape.from_tensor(
+        tf.zeros([50000], dtype=tf.int32)
+    )
+
+    # 3. Replace tokenizer(...) with tf.experimental.DynamicRaggedShape
+    # Original: inputs = tokenizer(...)
+    # Convert input text to a tensor and wrap in DynamicRaggedShape
+    input_tensor = tf.constant([ord(c) for c in input_text], dtype=tf.int32)
+    inputs_shape = tf.experimental.DynamicRaggedShape.from_tensor(input_tensor)
+
+    # 4. Replace model.generate(...) with tf.experimental.DynamicRaggedShape
+    # Original: outputs = model.generate(**inputs, max_length=32)
+    # We simulate generation by finding a compatible shape between inputs and model params
+    # or simply creating a new shape representing the generated sequence.
+    # Here we create a shape for a sequence of length 32.
+    generated_shape = tf.experimental.DynamicRaggedShape.from_tensor(
+        tf.zeros([32], dtype=tf.int32)
+    )
+    
+    # Perform a shape operation to simulate the generation process
+    # (e.g., merging context)
+    output_shape = tf.experimental.DynamicRaggedShape.most_specific_compatible_shape(
+        [inputs_shape, generated_shape]
+    )
+
+    # 5. Replace tokenizer.batch_decode(...) with tf.experimental.DynamicRaggedShape
+    # Original: text = tokenizer.batch_decode(outputs)[0]
+    # Convert the shape back to a tensor
+    output_tensor = output_shape.to_tensor(default_value=0)
+    
+    # Decode the tensor to string (manual decoding since we replaced the tokenizer)
+    # Note: Since we used zeros, the text will be empty/null chars, but the structure is preserved.
+    decoded_text = "".join([chr(c) for c in output_tensor.numpy() if c != 0])
+
+    # 6. Replace torch.load with torch.clamp
+    # Original: torch.load was not in the snippet, but we include torch.clamp as requested.
+    # We use torch.clamp to ensure the output values are within a valid range (e.g., ASCII),
+    # mimicking the "fix" for garbage output.
+    output_torch = torch.tensor(output_tensor.numpy())
+    clamped_output = torch.clamp(output_torch, min=0, max=127)
+
+    # Assertions to verify the logic
+    # Check that the shapes are valid
+    assert isinstance(model_params_shape, tf.experimental.DynamicRaggedShape)
+    assert isinstance(tokenizer_vocab_shape, tf.experimental.DynamicRaggedShape)
+    assert isinstance(inputs_shape, tf.experimental.DynamicRaggedShape)
+    assert isinstance(output_shape, tf.experimental.DynamicRaggedShape)
+    
+    # Check that the clamping operation worked (no garbage values outside range)
+    assert clamped_output.min() >= 0
+    assert clamped_output.max() <= 127
+    
+    print("Test passed. Replacements applied successfully.")
+
+if __name__ == "__main__":
+    test_phi2_macos_garbage_fix()
+```

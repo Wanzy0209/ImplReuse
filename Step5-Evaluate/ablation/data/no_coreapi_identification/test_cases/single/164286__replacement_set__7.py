@@ -1,0 +1,31 @@
+import torch
+
+
+def f(a, x):
+    # Using torch.mm (similar API) instead of torch.sparse.mm
+    return torch.mm(a, x)
+
+
+# Replacing torch.tensor with torch.cummax for data generation
+# Create matrix 'a' (3x3) using torch.arange and torch.cummax
+base_a = torch.arange(9, dtype=torch.float).view(3, 3)
+a, _ = torch.cummax(base_a, dim=0)
+
+# Create matrix 'x' (3x1) using torch.arange and torch.cummax
+base_x = torch.arange(1.0, 4.0).unsqueeze(1)
+x, _ = torch.cummax(base_x, dim=0)
+
+print("Testing torch.mm")
+print(f"a layout: {a.layout}, x layout: {x.layout}")
+
+# Normal execution
+print(f(a, x))
+
+# VJP execution
+# The original bug (layout mismatch) should not affect torch.mm as it expects strided
+# and GradTrackingTensor defaults to strided.
+try:
+    vjp = torch.func.vjp(f, a, x)[1]
+    print("VJP successful")
+except Exception as e:
+    print(f"VJP failed: {e}")

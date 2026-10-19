@@ -1,0 +1,65 @@
+```python
+import tensorflow as tf
+
+def test_onnx_exporter_none_crash_tf_version():
+    """
+    Reproduces the logic of Issue 160150 (ONNX Exporter crash on None output)
+    using TensorFlow APIs.
+    
+    Original Bug: torch.onnx.export crashes when model returns (output, None).
+    Replacement API: tf.keras.backend.epsilon (replaces the internal exporter logic context).
+    Similar API: tf.compat.v1.Summary.Value (used to process the output).
+    """
+    
+    # 1. Define the model/function logic based on the issue's snippet.
+    # Original: return (output, image_tokens_masks) where image_tokens_masks could be None.
+    # We replace the internal processing logic with tf.keras.backend.epsilon usage.
+    def transformer_output(return_dict, input_tensor):
+        # Use Replacement API: tf.keras.backend.epsilon
+        # This replaces the implicit processing logic of the exporter with a specific TF operation.
+        epsilon = tf.keras.backend.epsilon()
+        output = input_tensor + epsilon
+        
+        image_tokens_masks = None
+        
+        if not return_dict:
+            return (output, image_tokens_masks)
+        return {"output": output, "mask": image_tokens_masks}
+
+    # 2. Setup input
+    input_val = tf.constant(1.0)
+
+    # 3. Execute the function in the "buggy" mode (return_dict=False)
+    # This produces the (Tensor, None) tuple that caused the crash in PyTorch.
+    result = transformer_output(return_dict=False, input_tensor=input_val)
+    
+    # Verify the structure matches the bug scenario
+    assert isinstance(result, tuple), "Result should be a tuple"
+    assert result[1] is None, "Second element should be None (Bug scenario)"
+
+    # 4. Use the Similar API: tf.compat.v1.Summary.Value
+    # In the original bug, the exporter tried to consume this tuple and crashed.
+    # Here, we use Summary.Value to consume the valid part of the tuple.
+    # We need to evaluate the tensor to get a scalar value for the summary.
+    
+    # Note: In eager mode, tensors have .numpy()
+    output_tensor, _ = result
+    output_value = output_tensor.numpy()
+
+    # Create the summary value
+    summary = tf.compat.v1.Summary.Value(
+        tag="transformer_output",
+        simple_value=float(output_value)
+    )
+
+    # 5. Assertions
+    assert summary is not None
+    assert summary.tag == "transformer_output"
+    # Check that epsilon was applied (1.0 + epsilon > 1.0)
+    assert summary.simple_value > 1.0
+    
+    print("Test Passed: Handled (Tensor, None) output using tf.keras.backend.epsilon and tf.compat.v1.Summary.Value")
+
+if __name__ == "__main__":
+    test_onnx_exporter_none_crash_tf_version()
+```

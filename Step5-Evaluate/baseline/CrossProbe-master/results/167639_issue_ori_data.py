@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: nn.Module -> tf.keras.Model
@@ -70,4 +69,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```

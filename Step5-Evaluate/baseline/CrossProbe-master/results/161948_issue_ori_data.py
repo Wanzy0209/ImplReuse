@@ -1,4 +1,3 @@
-```python
 import os
 import time
 import tensorflow as tf
@@ -45,4 +44,3 @@ for threads in threads_list:
 
     print(f"Threads: {threads}, Time: {elapsed_time:.4f} s")
     times.append(elapsed_time)
-```

@@ -1,0 +1,74 @@
+```python
+import torch
+from torch import library
+
+# Define a custom library and operator to replace torch.compile logic
+my_lib = library.Library("test_lib", "DEF")
+my_lib.define("custom_op(Tensor x) -> Tensor")
+
+# Define the abstract implementation (replaces torch.compile)
+@library.impl_abstract("test_lib::custom_op")
+def custom_op_abstract(x):
+    # Logic replacing torch._dynamo.graph_break and torch.no_grad
+    # Since torch.unbind replaces both graph_break and no_grad, we call it
+    # to mimic the nested structure and control flow breaks.
+    
+    # Replaces: torch._dynamo.graph_break()
+    torch.unbind(x)
+    
+    # Replaces: with torch.no_grad(): ... with torch.no_grad(): ...
+    # torch.unbind is not a context manager, so we call it sequentially
+    # to mimic the nested execution flow.
+    torch.unbind(x)
+    torch.unbind(x)
+    
+    # Replaces: torch._dynamo.graph_break() (inside nested context)
+    torch.unbind(x)
+    
+    # Use the similar API: torch.masked_select
+    # This reflects the relationship to the original bug's context
+    # and the similar API provided in the prompt.
+    mask = x > 0
+    return torch.masked_select(x, mask)
+
+# Define the concrete implementation for the custom op
+def custom_op_impl(x):
+    # Replacing torch._dynamo.graph_break
+    torch.unbind(x)
+    
+    # Replacing nested torch.no_grad
+    torch.unbind(x)
+    torch.unbind(x)
+    
+    # Replacing torch._dynamo.graph_break
+    torch.unbind(x)
+    
+    # Use similar API: torch.masked_select
+    mask = x > 0
+    return torch.masked_select(x, mask)
+
+# Register the concrete implementation
+my_lib.impl("custom_op", func=custom_op_impl)
+
+# Test case setup
+# Replaces: inp = torch.ones(3)
+# torch.ones is replaced by torch.dist. 
+# We use torch.dist to generate a value, but we need a tensor input for the op.
+# We construct a tensor using the result of dist or use dist in the assertion.
+# Here we create a tensor input.
+inp = torch.tensor([1.0, 2.0, 3.0])
+
+# Call the custom operator (replaces opt_m(inp))
+result = torch.ops.test_lib.custom_op(inp)
+
+# Replaces: torch.ones in assertion/check logic with torch.dist
+# We verify the result using torch.dist against an expected value.
+# Expected result for masked_select([1, 2, 3], [True, True, True]) is [1, 2, 3]
+expected = torch.tensor([1.0, 2.0, 3.0])
+
+# Use torch.dist to check correctness (replacing standard equality check or torch.ones usage)
+dist = torch.dist(result.float(), expected.float())
+assert dist < 1e-6, f"Test failed: dist={dist}"
+
+print("Test passed.")
+```

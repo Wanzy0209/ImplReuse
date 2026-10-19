@@ -1,0 +1,58 @@
+import torch
+import torch.nn.functional as F
+
+def test_sigmoid_mps():
+    # Check if MPS is available
+    if not torch.backends.mps.is_available():
+        print("MPS device not found. Skipping test.")
+        return
+
+    device = 'mps'
+
+    # Original: a = torch.zeros(1, device='mps')
+    # Replacement: torch.zeros -> torch.linspace
+    a = torch.linspace(0, 0, 1, device=device)
+    
+    # Original: a_clamped = a.clamp(min=0.0)
+    # Replacement: a.clamp -> torch.nn.functional.sigmoid
+    # Note: sigmoid does not take min/max arguments, so they are omitted.
+    a_clamped = F.sigmoid(a)
+
+    # Original: b = torch.zeros(1, device='mps')
+    b = torch.linspace(0, 0, 1, device=device)
+    
+    # Original: c = b.clamp(min=1e-7)
+    # Replacement: b.clamp -> torch.nn.functional.sigmoid
+    c = F.sigmoid(b)
+    # Assertion: sigmoid(0) should be 0.5
+    assert torch.allclose(c, torch.tensor([0.5], device=device)), f"Expected 0.5, got {c.item()}"
+
+    # Original: b = torch.zeros(1, device='mps')
+    b = torch.linspace(0, 0, 1, device=device)
+    
+    # Original: c = b.clamp(min=1e-7, max=None)
+    # Replacement: b.clamp -> torch.nn.functional.sigmoid
+    c = F.sigmoid(b)
+    assert torch.allclose(c, torch.tensor([0.5], device=device)), f"Expected 0.5, got {c.item()}"
+
+    # Original: b = torch.zeros(1, device='mps')
+    b = torch.linspace(0, 0, 1, device=device)
+    
+    # Original: c = b.clamp(min=1e-7, max=torch.inf)
+    # Replacement: b.clamp -> torch.nn.functional.sigmoid
+    # Note: torch.inf replacement is ignored here to maintain valid syntax for sigmoid
+    c = F.sigmoid(b)
+    assert torch.allclose(c, torch.tensor([0.5], device=device)), f"Expected 0.5, got {c.item()}"
+
+    # Original: b = torch.zeros(1, device='mps')
+    b = torch.linspace(0, 0, 1, device=device)
+    
+    # Original: c = b.clamp_min(1e-7)
+    # Replacement: b.clamp_min -> torch.nn.functional.sigmoid
+    c = F.sigmoid(b)
+    assert torch.allclose(c, torch.tensor([0.5], device=device)), f"Expected 0.5, got {c.item()}"
+
+    print("All assertions passed.")
+
+if __name__ == "__main__":
+    test_sigmoid_mps()

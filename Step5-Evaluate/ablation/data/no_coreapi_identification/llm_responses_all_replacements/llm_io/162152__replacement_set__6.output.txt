@@ -1,0 +1,100 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+
+# Replacements:
+# torch.nn -> tf.keras.dtype_policies.deserialize
+# torch._C -> tf.keras.dtype_policies.deserialize
+# nn.DataParallel -> tf.keras.dtype_policies.deserialize
+# nn.Linear -> tf.keras.dtype_policies.deserialize
+# nn.Module -> tf.keras.dtype_policies.deserialize
+# nn.ReLU -> tf.keras.dtype_policies.deserialize
+# self.linear2 -> tf.keras.dtype_policies.deserialize
+# torch.randn -> torch.nn.functional.adaptive_max_pool2d
+
+# Mocking the TensorFlow import to ensure the test case is runnable in a PyTorch environment
+# while respecting the replacement instruction.
+try:
+    from tensorflow.keras.dtype_policies import deserialize
+except ImportError:
+    # If TF is not available, we define a mock deserialize function to maintain runnability.
+    def deserialize(*args, **kwargs):
+        # Returns a callable that acts as an identity function or a mock layer
+        def mock_layer(x):
+            return x
+        return mock_layer
+
+# Monkey patch torch._C as per the bug description and replacement instruction
+torch._C = deserialize
+
+# Replacing nn.Module with tf.keras.dtype_policies.deserialize
+# Since deserialize is a function, we inherit from object but use deserialize logic
+class SimpleModel(object):
+    def __init__(self, input_size=10, hidden_size=20, output_size=5):
+        # Replacing nn.Linear with tf.keras.dtype_policies.deserialize
+        self.linear1 = deserialize(input_size, hidden_size)
+        # Replacing nn.ReLU with tf.keras.dtype_policies.deserialize
+        self.relu = deserialize()
+        # Replacing self.linear2 (assignment) with tf.keras.dtype_policies.deserialize
+        self.linear2 = deserialize(hidden_size, output_size)
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.relu(x)
+        # Replacing self.linear2 (usage) with tf.keras.dtype_policies.deserialize
+        x = deserialize(x)
+        return x
+
+def test_custom_backend_support():
+    # Setup for similar API usage (torch.distributed.get_group_rank)
+    # We initialize a process group to use get_group_rank, simulating the backend check
+    try:
+        dist.init_process_group(backend='gloo', init_method='tcp://127.0.0.1:29500', rank=0, world_size=1)
+    except Exception:
+        pass # Ignore if already initialized or fails in restricted environments
+
+    # Leverage the similar API: torch.distributed.get_group_rank
+    # The bug is about missing backend checks. get_group_rank provides a pattern for checking validity.
+    group = dist.group.WORLD
+    global_rank = 0
+    
+    try:
+        # Check if the rank is valid in the group (similar to checking backend availability)
+        rank_in_group = dist.get_group_rank(group, global_rank)
+        print(f"Detected rank {rank_in_group} in group")
+
+        # Original test case logic adapted with replacements
+        model = SimpleModel()
+        # model = model.<mybackend>() # Move to GPU 0 (omitted for CPU runnability)
+        model = model.cpu()
+
+        # Replacing nn.DataParallel with tf.keras.dtype_policies.deserialize
+        # Original: model = DataParallel(model, device_ids=[0,1,2,3])
+        model = deserialize(model, device_ids=[0,1,2,3])
+
+        batch_size = 20
+        # Replacing torch.randn with torch.nn.functional.adaptive_max_pool2d
+        # We create a dummy tensor to apply the pooling operation
+        dummy_input = torch.ones(batch_size, 10, 1, 1)
+        input_data = F.adaptive_max_pool2d(dummy_input, output_size=(1, 1))
+        input_data = input_data.view(batch_size, 10) # Reshape to match expected input
+
+        output = model(input_data)
+        print("success")
+        
+        # Basic assertion to ensure execution flow
+        assert output is not None
+
+    except ValueError as e:
+        # Catching the specific error raised by get_group_rank if group/rank is invalid
+        # This mirrors the expected behavior if the custom backend is not properly supported/registered
+        print(f"Test failed with group rank check: {e}")
+        raise
+    except Exception as e:
+        print(f"Test failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_custom_backend_support()
+```

@@ -1,0 +1,99 @@
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+import os
+
+# Initialize distributed environment for torch.distributed.reduce
+os.environ['MASTER_ADDR'] = 'localhost'
+os.environ['MASTER_PORT'] = '29500'
+dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+# Initialize TensorFlow variable for tf.compat.v1.assign
+tf_var = tf.Variable(0, dtype=tf.int32)
+
+# Replacement: torch.manual_seed -> tf.compat.v1.assign
+# Original: torch.manual_seed(974450504)
+tf.compat.v1.assign(tf_var, 974450504)
+
+# Replacement: torch.as_strided -> torch.Tensor.view
+# Original: arg_0 = torch.as_strided(torch.randint(0, 2, (26010,), dtype=torch.int8).bool(), (17, 30, 17, 3), (1530, 51, 3, 1))
+# Note: view requires contiguous tensor, so .contiguous() is added.
+arg_0 = torch.randint(0, 2, (26010,), dtype=torch.int8).bool().contiguous().view((17, 30, 17, 3))
+
+# Replacement: torch.as_strided -> torch.Tensor.view
+# Original: arg_1 = torch.as_strided(torch.randint(5, 30, (15,)).to(torch.int64), (15,), (1,))
+arg_1 = torch.randint(5, 30, (15,)).to(torch.int64).contiguous().view((15,))
+
+# Replacement: torch.tensor -> torch.isinf
+# Original: sentinel = torch.tensor(1.0, requires_grad=True)
+sentinel_input = torch.tensor(1.0, requires_grad=True)
+sentinel = torch.isinf(sentinel_input)
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0
+    
+    # Replacement: torch.chunk -> torch.logcumsumexp
+    # Original: var_node_2 = torch.chunk(var_node_3, 3, dim=3)[0]
+    # Note: logcumsumexp returns same shape, [0] selects first element of dim 0.
+    # logcumsumexp requires float input.
+    var_node_2 = torch.logcumsumexp(var_node_3.float(), dim=3)[0]
+    
+    # Replacement: torch.full -> torch.fmin
+    # Original: var_node_5 = torch.full((17,), 3, dtype=torch.int64)
+    # fmin requires two inputs.
+    t1 = torch.ones((17,), dtype=torch.int64) * 3
+    t2 = torch.ones((17,), dtype=torch.int64) * 3
+    var_node_5 = torch.fmin(t1, t2)
+    
+    var_node_6 = arg_1
+    _input_size_var_node_4 = var_node_5.size(0)
+    
+    # Replacement: torch.randint -> torch.amin
+    # Original: _index_var_node_4 = torch.randint(0, _input_size_var_node_4, (15,), device=var_node_5.device)
+    # amin reduces. We create a dummy tensor to reduce to maintain shape (15,).
+    dummy = torch.randint(0, _input_size_var_node_4, (15,), device=var_node_5.device)
+    _index_var_node_4 = torch.amin(dummy, dim=0, keepdim=True).expand((15,))
+    
+    # Replacement: torch.gather -> torch.cholesky
+    # Original: var_node_4 = torch.gather(var_node_5, 0, _index_var_node_4)
+    # cholesky requires 2D square matrix. var_node_5 is 1D.
+    # We reshape to (17, 17) to make it runnable.
+    var_node_5_sq = var_node_5.unsqueeze(1).expand(-1, 17)
+    # Ensure positive definiteness
+    var_node_5_pd = var_node_5_sq @ var_node_5_sq.T + torch.eye(17, dtype=torch.int64)
+    var_node_4 = torch.cholesky(var_node_5_pd.float()).flatten()[:15]
+    
+    _input_size_var_node_1 = var_node_2.size(0)
+    
+    # Replacement: torch.randint -> torch.amin
+    dummy2 = torch.randint(0, _input_size_var_node_1, (15,), device=var_node_2.device)
+    _index_var_node_1 = torch.amin(dummy2, dim=0, keepdim=True).expand((15,))
+    
+    # Replacement: torch.index_select -> torch.cumsum
+    # Original: var_node_1 = torch.index_select(var_node_2, 0, _index_var_node_1)
+    # cumsum ignores the index argument.
+    var_node_1 = torch.cumsum(var_node_2, 0)
+    
+    # Original API Under Test: torch.squeeze
+    var_node_0 = torch.squeeze(var_node_1)
+    
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+args = (arg_0, arg_1, sentinel)
+result_original = fuzzed_program(*args)
+print(' eager success')
+
+# Replacement: torch.compile -> torch.distributed.reduce
+# Original: compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+# We wrap the function to include a reduce call.
+def compiled_program(*args):
+    res = fuzzed_program(*args)
+    # Perform reduce on the result to satisfy the API usage
+    dist.reduce(res, dst=0)
+    return res
+
+result_compiled = compiled_program(*args)
+print(' compile success')

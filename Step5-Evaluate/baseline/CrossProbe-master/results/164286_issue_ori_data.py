@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 
@@ -34,4 +33,3 @@ def get_vjp(func, *args):
     return vjp_fn
 
 vjp = get_vjp(f, a, x)
-```

@@ -1,0 +1,102 @@
+import torch
+import sys
+
+# Keeping configurations to ensure the test environment matches the bug report context
+# (Replacing config settings with torch.median would cause syntax errors)
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0 # size=(3, 395, 202, 357), stride=(239370, 79790, 202, 1), dtype=bfloat16, device=cuda
+    t1 = arg1 # size=(1,), stride=(1,), dtype=int64, device=cuda
+    t2 = arg2 # size=(395,), stride=(1,), dtype=bfloat16, device=cuda
+    
+    # Replacement: nn.functional.group_norm -> torch.median
+    # Original: t3 = torch.nn.functional.group_norm(t0, 1, weight=t2, bias=t2)
+    # Using torch.median to process the tensor. Note: median does not use weight/bias in the same way.
+    # We perform a reduction along dim=1 to mimic the transformation.
+    t3 = torch.median(t0, dim=1).values # size=(3, 202, 357)
+    
+    # t4 = t3.max(dim=0).values # size=(202, 357)
+    # No replacement specified for max, keeping original logic
+    t4 = t3.max(dim=0).values 
+    
+    # Replacement: torch.sigmoid -> torch.median
+    # Original: t5 = torch.sigmoid(t4)
+    # Applying torch.median on the result of max
+    t5 = torch.median(t4) # Scalar output
+    
+    output = t5  # output tensor
+    return output
+
+# Replacement: torch.rand -> torch.median
+# Note: torch.median cannot generate random data. We keep torch.rand for data generation 
+# to ensure the test is runnable, but the logic inside foo uses torch.median.
+arg0 = torch.rand([3, 395, 202, 357], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+
+# Replacement: torch.randint -> torch.amin
+# Original: arg1 = torch.randint(0, 1000, [1], dtype=torch.int64, device='cuda')
+# We generate a random tensor and apply torch.amin to satisfy the replacement.
+arg1 = torch.amin(torch.randint(0, 1000, [1], dtype=torch.int64, device='cuda'), dim=0)
+
+arg2 = torch.rand([395], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2)
+    
+    # Replacement: out_eager.sum -> torch.median
+    # Original: out_eager.sum().backward()
+    # We use torch.median to get a scalar for backward pass.
+    # Since out_eager is a scalar in this modified foo, we can call backward directly, 
+    # but to strictly follow the replacement pattern of reducing the output:
+    if out_eager.dim() > 0:
+        out_eager_reduced = torch.median(out_eager)
+        out_eager_reduced.backward()
+    else:
+        out_eager.backward()
+        
+    print('Eager Success! ')
+    
+    # Replacement: torch.compile -> torch.median
+    # Note: Replacing torch.compile with torch.median would break the compilation test.
+    # We keep torch.compile to test the Eager/Compile divergence as per the issue title.
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    
+    if out_compiled.dim() > 0:
+        out_compiled_reduced = torch.median(out_compiled)
+        out_compiled_reduced.backward()
+    else:
+        out_compiled.backward()
+        
+    print('Compile Success! ')
+    
+    # Compare outputs (forward)
+    # Replacement: out_eager.sum -> torch.median
+    # Original: out_eager_sum = out_eager.sum()
+    out_eager_median = out_eager if out_eager.dim() == 0 else torch.median(out_eager)
+    out_compiled_median = out_compiled if out_compiled.dim() == 0 else torch.median(out_compiled)
+    
+    # Replacement: out_eager_sum.item -> torch.median
+    # Original: diff = (out_eager_sum - out_compiled_sum).abs().item()
+    # We calculate the difference between the medians.
+    diff = (out_eager_median - out_compiled_median).abs()
+    
+    # Handle scalar vs tensor difference
+    diff_val = diff.item() if diff.dim() == 0 else diff.max().item()
+    
+    # Replacement: out_eager_sum.item -> torch.median
+    # Original: rel_diff = diff / (out_eager_sum.abs().item() + 1e-12) * 100
+    # We use the median value for relative difference calculation.
+    denom = out_eager_median.abs().item() if out_eager_median.dim() == 0 else out_eager_median.abs().max().item()
+    rel_diff = diff_val / (denom + 1e-12) * 100
+    
+    print(f'Relative diff (median): {rel_diff:.6f}%')
+    if rel_diff > 5:
+        print(f' Forward outputs differ significantly (relative)!')
+        print('out_eager_median:', out_eager_median)
+        print('out_compiled_median:', out_compiled_median)
+        print('Absolute diff:', diff_val)
+        print('Relative diff (%):', rel_diff)
+        sys.exit(1)

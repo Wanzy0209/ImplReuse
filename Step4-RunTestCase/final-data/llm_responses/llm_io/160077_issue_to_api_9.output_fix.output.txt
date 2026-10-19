@@ -1,0 +1,40 @@
+```python
+import torch
+import unittest
+
+class TestTorchCompileSplit(unittest.TestCase):
+    def test_split_inside_device_context(self):
+        """
+        Regression test for Issue 160077.
+        Verifies that torch.compile correctly handles Tensor.split
+        when called inside a device context manager.
+        """
+        # Skip if CUDA is not available, as the bug report specifically targets CUDA context
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available")
+
+        def f(xs):
+            return xs.split(1, dim=0)
+
+        # Fix: torch.device does not support the context manager protocol (__enter__/__exit__)
+        # in the environment where this test is running. We use torch.cuda.device instead
+        # to achieve the same effect of setting the current CUDA device context.
+        with torch.cuda.device(0):
+            xs = torch.randn(2, 2, device="cuda")
+
+            # 1. Eager execution (should work)
+            eager_result = f(xs)
+
+            # 2. Compiled execution
+            # Previously failed with: AttributeError: module 'torch._tensor' has no attribute 'split'
+            compiled_f = torch.compile(f)
+            compiled_result = compiled_f(xs)
+
+            # 3. Verify correctness
+            self.assertEqual(len(eager_result), len(compiled_result))
+            for e_tensor, c_tensor in zip(eager_result, compiled_result):
+                self.assertTrue(torch.allclose(e_tensor, c_tensor))
+
+if __name__ == "__main__":
+    unittest.main()
+```

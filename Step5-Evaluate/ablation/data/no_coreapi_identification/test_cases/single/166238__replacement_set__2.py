@@ -1,0 +1,38 @@
+import torch
+import torch.nn.functional as F
+
+# Test case generated based on Issue 166238
+# Original Bug: Regression about collections.defaultdict creation in torch.compile
+# Replacements applied:
+# - collections.defaultdict -> torch.nn.functional.elu_
+# - torch._dynamo.exc.Unsupported -> torch.nn.functional.elu_ (Logic adapted to verify elu_ execution)
+# - tx.output.graph.nodes.call_function -> torch.nn.functional.elu_ (Logic adapted to verify elu_ in graph)
+
+def test_elu_in_compile():
+    # Define a function that uses the replacement API
+    def fn(x):
+        # Replacing collections.defaultdict usage with torch.nn.functional.elu_
+        return F.elu_(x)
+
+    # Compile the function using the Original API Under Test: torch.compile
+    compiled_fn = torch.compile(fn)
+
+    # Prepare input
+    x = torch.randn(3, 3)
+
+    # Execute
+    # The original test expected torch._dynamo.exc.Unsupported.
+    # We replace this expectation with a successful execution of torch.nn.functional.elu_.
+    output = compiled_fn(x)
+
+    # Verify the result
+    expected = F.elu_(x.clone())
+    assert torch.allclose(output, expected), "Output of compiled function does not match expected"
+
+    # Note on "tx.output.graph.nodes.call_function" replacement:
+    # In a full test suite, one might inspect the graph nodes to ensure 'elu_' is present.
+    # Here, we verify the functional behavior which implies the graph contains the operation.
+
+if __name__ == "__main__":
+    test_elu_in_compile()
+    print("Test passed successfully.")

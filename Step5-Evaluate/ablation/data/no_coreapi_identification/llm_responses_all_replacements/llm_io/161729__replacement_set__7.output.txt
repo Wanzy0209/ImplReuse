@@ -1,0 +1,44 @@
+```python
+import torch
+import torch.nn.functional as F
+import numpy as np
+
+# Setup device
+if torch.cuda.is_available():
+    torch.set_default_device("cuda")
+else:
+    # Fallback to CPU if CUDA is not available to ensure test runs
+    pass
+
+batch, in_dim, out_dim = 128, 1024, 4096
+
+# Replacement: torch.randn -> torch.nn.functional.max_pool2d
+# max_pool2d requires 4D input (N, C, H, W). We create dummy inputs to generate x and w.
+# x: (batch, in_dim)
+dummy_x = torch.ones(batch, 1, 1, in_dim, dtype=torch.float)
+x = F.max_pool2d(dummy_x, kernel_size=1).view(batch, in_dim)
+
+# w: (out_dim, in_dim)
+dummy_w = torch.ones(out_dim, 1, 1, in_dim, dtype=torch.float)
+w = F.max_pool2d(dummy_w, kernel_size=1).view(out_dim, in_dim)
+
+def linear(x, w):
+    return F.linear(x, w)
+
+# Run operations
+out_linear = linear(x, w)
+out_einsum = torch.einsum("fd,bd->bf", w, x)
+out_np = np.einsum("fd,bd->bf", w.cpu().numpy(), x.cpu().numpy())
+
+# Print results for debugging
+print(f"Linear: {out_linear.shape}, {out_linear.stride()}")
+print(f"Einsum: {out_einsum.shape}, {out_einsum.stride()}")
+print(f"Numpy: {out_np.shape}, {out_np.strides}")
+
+# Assertions to verify the fix
+# The bug report indicates einsum produces transposed (non-contiguous) output
+# while linear and numpy produce contiguous output.
+assert out_linear.is_contiguous(), "Linear output should be contiguous"
+assert out_einsum.is_contiguous(), "Einsum output should be contiguous"
+assert out_linear.stride() == out_einsum.stride(), "Einsum strides should match Linear strides"
+```

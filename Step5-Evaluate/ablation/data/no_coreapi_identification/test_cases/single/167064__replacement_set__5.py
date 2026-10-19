@@ -1,0 +1,26 @@
+import torch
+import tensorflow as tf
+
+def test_issue_167064_replacement():
+    """
+    Test case generated based on Issue ID: 167064.
+    Original logic involved torch.compile triggering a global state change
+    via torch.distributions.Distribution.set_default_validate_args(False).
+    
+    Replacements applied:
+    - torch.distributions.Distribution.set_default_validate_args -> tf.keras.activations.relu
+    - torch.compile -> tf.keras.activations.relu
+    
+    The test verifies the behavior of the replacement API with the argument
+    from the original test case (False).
+    """
+    # Original: torch.distributions.Distribution.set_default_validate_args(False)
+    # Replacement: tf.keras.activations.relu(False)
+    # Semantics: Passing False (0.0) to ReLU should result in 0.0.
+    result = tf.keras.activations.relu(False)
+    
+    # Assert the expected behavior based on the replacement API's semantics
+    assert result == 0.0
+
+if __name__ == "__main__":
+    test_issue_167064_replacement()

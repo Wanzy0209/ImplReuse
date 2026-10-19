@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Check for GPU availability to mimic device="cuda"
@@ -58,4 +57,3 @@ with tf.device(device_name):
     # Note: PyTorch reflect excludes the edge pixel, TF REFLECT excludes the edge pixel.
     tf.pad(x, [[0, 0], [1, 1]], mode="REFLECT")
     print("this won't print")
-```

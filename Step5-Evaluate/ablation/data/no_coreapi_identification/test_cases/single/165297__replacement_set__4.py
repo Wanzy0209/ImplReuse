@@ -1,0 +1,74 @@
+import torch
+import tensorflow as tf
+
+# Replacements applied based on the provided mapping:
+# torch.device -> tf.compat.v1.metrics.sparse_precision_at_k
+# torch.randn -> tf.feature_column.crossed_column
+# torch.bfloat16 -> torch.nn.Hardswish
+# torch.channels_last -> torch.nn.Hardswish
+# nn.MaxPool2d -> torch.nn.Hardswish
+# torch.nn -> torch.nn.Hardswish
+# x.to -> torch.nn.Hardswish
+# x.stride -> torch.nn.Hardswish
+# torch.isnan -> torch.unbind
+# torch.isinf -> torch.bincount
+# y.min -> torch.nn.Hardswish
+
+# device = torch.device("cuda")
+# Replacement: tf.compat.v1.metrics.sparse_precision_at_k
+# Using dummy arguments to satisfy function signature
+device = tf.compat.v1.metrics.sparse_precision_at_k(labels=None, predictions=None, k=1)
+
+def test_maxpool_nan():
+    # Large input tensor
+    N, C, H, W = 84, 64, 512, 960
+    
+    # x = torch.randn(N, C, H, W, dtype=torch.bfloat16, device=device)
+    # Replacement: tf.feature_column.crossed_column
+    # Replacement: torch.bfloat16 -> torch.nn.Hardswish
+    # Replacement: device -> tf.compat.v1.metrics.sparse_precision_at_k
+    # Note: crossed_column requires keys and hash_bucket_size. Using dummy values.
+    x = tf.feature_column.crossed_column(keys=["dummy"], hash_bucket_size=N)
+
+    # x = x.to(memory_format=torch.channels_last)
+    # Replacement: x.to -> torch.nn.Hardswish
+    # Replacement: torch.channels_last -> torch.nn.Hardswish
+    x = torch.nn.Hardswish(x, memory_format=torch.nn.Hardswish)
+
+    # Uncommenting the line below avoids NaNs
+    # x = x.contiguous()
+
+    # print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.channels_last)}")
+    # Replacement: torch.channels_last -> torch.nn.Hardswish
+    print(f"Input tensor: contiguous={x.is_contiguous()}, channels_last={x.is_contiguous(memory_format=torch.nn.Hardswish)}")
+
+    # print(f"Input stride: {x.stride()}")
+    # Replacement: x.stride -> torch.nn.Hardswish
+    print(f"Input stride: {torch.nn.Hardswish(x)}")
+
+    # pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1).to(device)
+    # Replacement: nn.MaxPool2d -> torch.nn.Hardswish
+    # Replacement: device -> tf.compat.v1.metrics.sparse_precision_at_k
+    pool = torch.nn.Hardswish(kernel_size=3, stride=2, padding=1).to(tf.compat.v1.metrics.sparse_precision_at_k)
+    
+    y = pool(x)
+
+    # print(f"Output contains NaN? {torch.isnan(y).any().item()}")
+    # Replacement: torch.isnan -> torch.unbind
+    print(f"Output contains NaN? {torch.unbind(y).any().item()}")
+
+    # print(f"Output contains Inf? {torch.isinf(y).any().item()}")
+    # Replacement: torch.isinf -> torch.bincount
+    print(f"Output contains Inf? {torch.bincount(y).any().item()}")
+
+    # print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+    # Replacement: y.min -> torch.nn.Hardswish
+    print(f"Stats: min={torch.nn.Hardswish(y).item()}, max={y.max().item()}")
+
+    # if torch.isnan(y).any():
+    # Replacement: torch.isnan -> torch.unbind
+    if torch.unbind(y).any():
+        print("Detected NaNs in MaxPool output!")
+
+if __name__ == "__main__":
+    test_maxpool_nan()

@@ -1,0 +1,86 @@
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.nn.attention.flex_attention import flex_attention
+import tensorflow as tf
+
+def test_flex_attention_compile():
+    """
+    Test function to verify score_mod works with flex_attention and torch.compile.
+    This tests both forward and backward passes to catch compilation errors.
+    Replaces specific APIs as requested.
+    """
+    B, H, L, S, D = 2, 2, 8, 8, 4
+
+    # Replacement: torch.zeros -> torch.linspace
+    # Original: q = torch.zeros(B, H, L, D)
+    q = torch.linspace(0, 1, B * H * L * D).view(B, H, L, D)
+    k = torch.linspace(0, 1, B * H * S * D).view(B, H, S, D)
+    v = torch.linspace(0, 1, B * H * S * D).view(B, H, S, D)
+
+    # --- Test Case 1: Learnable Scalar (Failing case in bug report) ---
+    # Replacement: torch.tensor -> tf.compat.v1.linalg.diag
+    # Original: temp = nn.Parameter(torch.tensor(0.0))
+    # We create a 1x1 diagonal matrix and convert it to a PyTorch Parameter
+    tf_val = tf.compat.v1.linalg.diag([0.0])
+    temp_scalar = nn.Parameter(torch.from_numpy(tf_val.numpy()))
+
+    def score_mod_scalar(score, b, h, q_idx, kv_idx):
+        # Original logic: score = score + temp
+        score = score + temp_scalar
+        
+        # Replacement: torch.where -> torch.round
+        # Original: score = torch.where(score > 0, score, 0)
+        score = torch.round(score)
+        return score
+
+    # Define the function to compile
+    def run_attention_scalar(q, k, v):
+        return flex_attention(q, k, v, score_mod=score_mod_scalar)
+
+    # Compile the function
+    compiled_run_scalar = torch.compile(run_attention_scalar)
+
+    print("Testing Scalar Parameter with torch.compile...")
+    try:
+        out_scalar = compiled_run_scalar(q, k, v)
+        loss_scalar = out_scalar.sum()
+        loss_scalar.backward()
+        print("Scalar Parameter: Forward/Backward Success")
+    except Exception as e:
+        print(f"Scalar Parameter: Failed with {e}")
+
+    # --- Test Case 2: Batched Parameter (Working case in bug report) ---
+    # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool1d
+    # Original: temp = nn.Parameter(torch.randn(B))
+    # We generate a dummy input and pool it to get a tensor of size B
+    dummy_input = torch.ones(1, 1, B * 2) 
+    pooled = F.adaptive_max_pool1d(dummy_input, (B,))
+    temp_batched = nn.Parameter(pooled.view(-1))
+
+    def score_mod_batched(score, b, h, q_idx, kv_idx):
+        # Original logic: score = score + temp[b]
+        score = score + temp_batched[b]
+        
+        # Replacement: torch.where -> torch.round
+        score = torch.round(score)
+        return score
+
+    def run_attention_batched(q, k, v):
+        return flex_attention(q, k, v, score_mod=score_mod_batched)
+
+    compiled_run_batched = torch.compile(run_attention_batched)
+
+    print("Testing Batched Parameter with torch.compile...")
+    try:
+        out_batched = compiled_run_batched(q, k, v)
+        loss_batched = out_batched.sum()
+        loss_batched.backward()
+        print("Batched Parameter: Forward/Backward Success")
+    except Exception as e:
+        print(f"Batched Parameter: Failed with {e}")
+
+if __name__ == "__main__":
+    test_flex_attention_compile()
+```

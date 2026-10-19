@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import time
 
@@ -46,4 +45,3 @@ for dtype in [tf.float8_e4m3fn, tf.bfloat16, tf.float32]:
         bdwidth = 512 / elapsed_ms * 1000 / 1000 / 1000 # TiB/s
 
         print("\t".join([str(dtype), f"{elapsed_ms:.2f} ms", f"{bdwidth:.2f} TiB/s"]))
-```

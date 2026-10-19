@@ -1,0 +1,35 @@
+import torch
+import tensorflow as tf
+
+# Replacing torch.symm_mem._nvshmem_triton with tf.linalg.LinearOperatorToeplitz
+# The original code imported a module, here we use the class directly.
+
+# Replacing nvshmem.get with tf.linalg.LinearOperatorToeplitz
+def foo(col, row):
+    """
+    Simulates the user-defined kernel that uses the 'get' operation.
+    Here, we instantiate the LinearOperatorToeplitz to represent that usage.
+    """
+    return tf.linalg.LinearOperatorToeplitz(col, row)
+
+def run():
+    # Define inputs for the operator
+    col = tf.constant([1.0, 2.0, 3.0])
+    row = tf.constant([1.0, 4.0, 5.0])
+
+    # Replacing nvshmem.enable_triton with tf.linalg.LinearOperatorToeplitz
+    # Simulates the 'enable' step required before the kernel runs.
+    # In the original bug, missing this (or naming conventions) caused IMA.
+    # Here we ensure the operator can be instantiated as a setup step.
+    _ = tf.linalg.LinearOperatorToeplitz(col, row)
+
+    # Execute the function (kernel launch equivalent)
+    op = foo(col, row)
+
+    # Assertion to verify the operation completed successfully
+    # The original bug resulted in a silent crash (IMA), so we check for valid output.
+    assert op is not None
+    assert op.shape == (3, 3)
+
+if __name__ == "__main__":
+    run()

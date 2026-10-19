@@ -1,0 +1,29 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+from tensorflow.python.compat import compat
+
+# Create a dummy tensor to serve as input for the replacement of torch.tensor
+# Original: foo = torch.tensor([[1]])
+# Replacement: foo = torch.nn.functional.pdist(...)
+dummy_input = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+foo = F.pdist(dummy_input)
+
+# Original: foo = foo.to('mps')
+# Replacement: foo = tf.keras.layers.ZeroPadding3D(...)
+# Note: ZeroPadding3D expects a 5D tensor (Batch, Depth, Height, Width, Channel).
+# We convert the PyTorch tensor to a TensorFlow tensor and reshape it to fit the layer requirements.
+foo_tf = tf.convert_to_tensor(foo.numpy())
+# Reshape 1D output of pdist to 5D (1, 1, 1, 1, N) for ZeroPadding3D
+foo_tf = tf.reshape(foo_tf, (1, 1, 1, 1, foo_tf.shape[0]))
+
+# Leverage the similar API (forward_compatibility_horizon) to wrap the operation.
+# This relates to the version checking nature of the original bug (macOS 13.0+ requirement).
+with compat.forward_compatibility_horizon(2023, 1, 1):
+    # Apply the replacement for .to('mps')
+    layer = tf.keras.layers.ZeroPadding3D(padding=(1, 1, 1))
+    result = layer(foo_tf)
+
+# Assertion to ensure the operations ran successfully
+assert result is not None
+assert result.shape == (1, 3, 3, 3, 1) # (1+2, 1+2, 1+2, 1+2, 1) due to padding 1 on each side of 3 dims

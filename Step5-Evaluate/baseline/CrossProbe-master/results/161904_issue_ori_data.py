@@ -1,4 +1,3 @@
-```python
 """
 Run:
 
@@ -246,4 +245,3 @@ def loss_fn(inputs, targets):
 
 if __name__ == "__main__":
     main()
-```

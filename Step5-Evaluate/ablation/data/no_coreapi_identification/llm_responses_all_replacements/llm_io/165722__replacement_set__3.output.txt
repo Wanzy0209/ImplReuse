@@ -1,0 +1,53 @@
+```python
+import tensorflow as tf
+import gc
+
+def test_dangling_pointer_scenario():
+    """
+    Test case adapted from PyTorch Issue #165722.
+    
+    Original Bug: OBJECT_ALIASING class stored a raw PyObject* without 
+    Py_INCREF. Calling torch._dynamo.reset() would delete the object, 
+    leaving a dangling pointer in the guard, causing a crash on subsequent access.
+    
+    Adaptation: 
+    - Replace OBJECT_ALIASING (state holder) with tf.keras.backend.epsilon.
+    - Replace torch._dynamo.reset (state invalidator) with tf.keras.backend.epsilon.
+    
+    This test checks if tf.keras.backend.epsilon handles state correctly 
+    when called in a way that might simulate a reset or state invalidation,
+    ensuring no dangling pointer or crash occurs.
+    """
+    
+    # 1. Initial call to get the value (simulating OBJECT_ALIASING check)
+    # This might cache a pointer internally in the C++ backend.
+    initial_epsilon = tf.keras.backend.epsilon()
+    print(f"Initial epsilon: {initial_epsilon}")
+    
+    # 2. Simulate the reset operation.
+    # In the original bug, torch._dynamo.reset() clears the cache.
+    # Here we call tf.keras.backend.epsilon() again. 
+    # If the implementation had a bug similar to OBJECT_ALIASING (storing a raw pointer
+    # to a temporary object created during the first call), this call might crash
+    # or return garbage if the first object was garbage collected.
+    # We force a garbage collection to increase the chance of invalidating 
+    # any dangling references if they exist.
+    gc.collect()
+    
+    # 3. Access the value again (simulating the second OBJECT_ALIASING check)
+    # If there was a dangling pointer bug, this line might crash.
+    try:
+        second_epsilon = tf.keras.backend.epsilon()
+        print(f"Second epsilon: {second_epsilon}")
+    except Exception as e:
+        print(f"Error accessing epsilon after reset: {e}")
+        raise
+
+    # 4. Verify consistency
+    # The value should remain consistent or be valid.
+    assert isinstance(second_epsilon, float), "Epsilon should be a float"
+    assert second_epsilon == initial_epsilon, "Epsilon should not change unexpectedly"
+
+if __name__ == "__main__":
+    test_dangling_pointer_scenario()
+```

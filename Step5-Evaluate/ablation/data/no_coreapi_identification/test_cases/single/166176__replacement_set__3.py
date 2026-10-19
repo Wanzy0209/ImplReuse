@@ -1,0 +1,44 @@
+import torch
+import tensorflow as tf
+
+def fn(x):
+    # torch._dynamo.graph_break() -> tf.raw_ops.ZerosLike
+    # graph_break takes no args. ZerosLike takes a tensor.
+    # We pass x. To make it runnable, we convert x to a TF tensor.
+    tf.raw_ops.ZerosLike(x=tf.convert_to_tensor(x.numpy()))
+
+    # with torch.no_grad(): -> tf.raw_ops.ZerosLike
+    # Context manager replaced by function call.
+    tf.raw_ops.ZerosLike(x=tf.convert_to_tensor(x.numpy()))
+
+    # with torch.no_grad(): -> tf.raw_ops.ZerosLike
+    tf.raw_ops.ZerosLike(x=tf.convert_to_tensor(x.numpy()))
+
+    # torch._dynamo.graph_break() -> tf.raw_ops.ZerosLike
+    tf.raw_ops.ZerosLike(x=tf.convert_to_tensor(x.numpy()))
+
+    # Leverage torch.masked_select
+    # Original: return x + 1
+    # New: return torch.masked_select(x, x > 0)
+    return torch.masked_select(x, x > 0)
+
+# torch.ones(3) -> torch.linspace
+# ones(3) is [1, 1, 1]. linspace(1, 1, 3) is [1, 1, 1].
+inp = torch.linspace(1, 1, 3)
+
+# torch.compile(fn, backend="eager") -> torch.unsqueeze
+# opt_m = torch.compile(fn, backend="eager")
+# opt_m(inp)
+#
+# Replaced with:
+# opt_m = torch.unsqueeze(inp, 0)
+# fn(opt_m)
+#
+# This adapts the logic to be runnable with the new API.
+opt_m = torch.unsqueeze(inp, 0)
+result = fn(opt_m)
+
+# Check if the result is as expected (masked select of ones is ones)
+# fn(inp) returns [1, 1, 1]. unsqueeze(..., 0) returns [[1, 1, 1]].
+# Here opt_m is [[1, 1, 1]]. fn(opt_m) returns [1, 1, 1].
+assert torch.equal(result, torch.tensor([1., 1., 1.]))

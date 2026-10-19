@@ -1,0 +1,86 @@
+```python
+import tensorflow as tf
+import numpy as np
+
+def test_tf_cumsum_gradient_behavior():
+    """
+    Test case for tf.experimental.numpy.cumsum gradient behavior.
+    This test mirrors the logic of the original torch.min issue, checking
+    how gradients flow through the operation.
+    """
+    
+    # Setup input tensor (mimicking torch.ones([5]))
+    # Note: Replacing torch.ones with tf.ones for semantic equivalence in TF context.
+    a = tf.ones([5], dtype=tf.float32)
+    
+    # --- Test 1: Reduce over all dimensions (cumsum over flattened tensor) ---
+    # Original: min_val = torch.min(a)
+    # Similar API: tf.experimental.numpy.cumsum
+    # We use cumsum on the flattened tensor to mimic a global reduction-like operation
+    with tf.GradientTape() as tape:
+        tape.watch(a)
+        # cumsum on a 1D tensor
+        cumsum_val = tf.experimental.numpy.cumsum(a)
+        # To mimic the scalar reduction of torch.min(a), we take the last element of cumsum
+        # which is the sum of all elements.
+        reduced_val = cumsum_val[-1]
+    
+    grads = tape.gradient(reduced_val, a)
+    
+    # Original behavior for torch.min (all dims) was even distribution (0.2 for 5 elements).
+    # For cumsum, the gradient of the sum (last element) w.r.t input is 1.0 for all elements.
+    # dy/dx_i = 1 for all i.
+    expected_grads = tf.ones([5], dtype=tf.float32)
+    
+    print("Test 1: Gradient of sum (via cumsum[-1])")
+    print(f"Gradients: {grads.numpy()}")
+    print(f"Expected: {expected_grads.numpy()}")
+    assert np.allclose(grads.numpy(), expected_grads.numpy()), "Gradients for global reduction should be 1.0 for all inputs"
+
+    # --- Test 2: Operation along specific axis ---
+    # Original: min_val = torch.min(a, dim=0)
+    # Similar API: tf.experimental.numpy.cumsum(a, axis=0)
+    with tf.GradientTape() as tape:
+        tape.watch(a)
+        # cumsum along axis 0
+        cumsum_axis = tf.experimental.numpy.cumsum(a, axis=0)
+        # To mimic the indexing behavior of torch.min(a, dim=0).values.backward(),
+        # we check the gradient of the last element in the cumsum sequence.
+        # In torch.min(dim=0), gradient is 1.0 for the first occurrence of min.
+        # In cumsum, the gradient of the i-th output w.r.t j-th input is 1 if j <= i.
+        # Let's check the gradient of the last element (index 4).
+        target_val = cumsum_axis[4]
+        
+    grads_axis = tape.gradient(target_val, a)
+    
+    # For cumsum[4] = a[0] + a[1] + a[2] + a[3] + a[4]
+    # d(cumsum[4])/da = [1, 1, 1, 1, 1]
+    expected_grads_axis = tf.ones([5], dtype=tf.float32)
+    
+    print("\nTest 2: Gradient of cumsum[4]")
+    print(f"Gradients: {grads_axis.numpy()}")
+    print(f"Expected: {expected_grads_axis.numpy()}")
+    assert np.allclose(grads_axis.numpy(), expected_grads_axis.numpy()), "Gradients for cumsum[4] should be 1.0 for all inputs"
+
+    # --- Test 3: Gradient of an intermediate element ---
+    # To show the difference from torch.min's indexing behavior.
+    with tf.GradientTape() as tape:
+        tape.watch(a)
+        cumsum_axis = tf.experimental.numpy.cumsum(a, axis=0)
+        # Check gradient of the 2nd element (index 1)
+        # cumsum[1] = a[0] + a[1]
+        target_val = cumsum_axis[1]
+        
+    grads_intermediate = tape.gradient(target_val, a)
+    
+    # d(cumsum[1])/da = [1, 1, 0, 0, 0]
+    expected_grads_intermediate = tf.constant([1., 1., 0., 0., 0.], dtype=tf.float32)
+    
+    print("\nTest 3: Gradient of cumsum[1]")
+    print(f"Gradients: {grads_intermediate.numpy()}")
+    print(f"Expected: {expected_grads_intermediate.numpy()}")
+    assert np.allclose(grads_intermediate.numpy(), expected_grads_intermediate.numpy()), "Gradients for cumsum[1] should be 1.0 for a[0], a[1]"
+
+if __name__ == "__main__":
+    test_tf_cumsum_gradient_behavior()
+```

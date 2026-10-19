@@ -1,0 +1,96 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Replacements for torch._dynamo.config...
+# Original: torch._dynamo.config.capture_scalar_outputs = True
+# Replacement: torch.backends.cuda.cudnn_sdp_enabled
+torch.backends.cuda.cudnn_sdp_enabled()
+
+# Original: torch._dynamo.config.capture_dynamic_output_shape_ops = True
+# Replacement: torch.backends.cuda.cudnn_sdp_enabled
+torch.backends.cuda.cudnn_sdp_enabled()
+
+# Original: torch.manual_seed(1012969)
+# Replacement: torch.isinf
+torch.isinf(torch.tensor([0.0]))
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0
+    var_node_4 = arg_1
+
+    # Original: torch.matmul(var_node_3.to(torch.float64), var_node_4.to(torch.float64))
+    # Replacement: torch.matmul -> tf.keras.backend.resize_volumes
+    # Replacement: torch.float64 -> torch.backends.cuda.cudnn_sdp_enabled (interpreted as torch.bool)
+    # Replacement: var_node_3.to -> torch.backends.cuda.cudnn_sdp_enabled (interpreted as .to(torch.bool))
+    # Note: resize_volumes takes 1 tensor, original took 2. We use var_node_3.
+    # Note: resize_volumes needs 5D tensor.
+    v3 = var_node_3.to(torch.bool)
+    # Reshape to 5D (Batch, Depth, Height, Width, Channels) - assuming channels_first logic
+    # var_node_3 is (2, 10) or similar from bmm. Let's make it (1, 1, 2, 10, 1)
+    v3_5d = tf.convert_to_tensor(v3.unsqueeze(0).unsqueeze(0).unsqueeze(-1).numpy())
+    var_node_2 = tf.keras.backend.resize_volumes(v3_5d, 1, 1, 1, data_format='channels_first')
+
+    # Original: _inp_unique_wide = torch.arange(1, device=var_node_2.device, dtype=torch.int64)
+    # Replacement: torch.arange -> torch.svd
+    # Replacement: torch.int64 -> torch.backends.cuda.cudnn_sdp_enabled (interpreted as torch.bool)
+    # var_node_2 is TF tensor. svd needs torch tensor.
+    var_node_2_torch = torch.from_numpy(var_node_2.numpy())
+    _inp_unique_wide = torch.svd(var_node_2_torch)[0]
+
+    _uniq_wide = torch.unique(_inp_unique_wide)
+    var_node_1 = _uniq_wide.to(var_node_2_torch.dtype)
+
+    # Original: var_node_5 = torch.full((1, 18), 0.403..., dtype=torch.float64)
+    # Replacement: torch.full -> torch.amax
+    # Replacement: torch.float64 -> torch.backends.cuda.cudnn_sdp_enabled (interpreted as torch.bool)
+    dummy = torch.tensor([[0.40330381448978797]*18], dtype=torch.bool)
+    var_node_5 = torch.amax(dummy)
+
+    # Original: var_node_0 = torch.matmul(var_node_1.to(torch.float64), var_node_5.to(torch.float64))
+    # Replacement: torch.matmul -> tf.keras.backend.resize_volumes
+    # Replacement: torch.float64 -> torch.backends.cuda.cudnn_sdp_enabled (interpreted as torch.bool)
+    # var_node_1 is torch tensor. var_node_5 is scalar.
+    # resize_volumes needs 5D.
+    v1 = var_node_1.to(torch.bool)
+    v1_5d = tf.convert_to_tensor(v1.unsqueeze(0).unsqueeze(0).unsqueeze(-1).numpy())
+    var_node_0 = tf.keras.backend.resize_volumes(v1_5d, 1, 1, 1, data_format='channels_first')
+
+    result = var_node_0 * sentinel
+    # result is TF tensor
+    return result
+
+# Original: sentinel = torch.tensor(1.0, requires_grad=True)
+# Replacement: torch.tensor -> tf.keras.ops.diag
+sentinel = tf.keras.ops.diag([1.0])
+
+# Original: arg_0 = torch.as_strided(torch.randn(20).to(torch.float64), (2, 10), (10, 1))
+# Replacement: torch.as_strided -> torch.bmm
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool3d
+# Replacement: torch.float64 -> torch.backends.cuda.cudnn_sdp_enabled (interpreted as torch.bool)
+# We need inputs for bmm (3D).
+# adaptive_max_pool3d needs 5D.
+x_5d = torch.nn.functional.adaptive_max_pool3d(torch.randn(1, 1, 2, 10, 1).to(torch.bool), (1, 1, 1))
+y_5d = torch.nn.functional.adaptive_max_pool3d(torch.randn(1, 1, 10, 3, 1).to(torch.bool), (1, 1, 1))
+# Reshape to 3D for bmm
+x_3d = x_5d.view(1, 2, 10)
+y_3d = y_5d.view(1, 10, 3)
+arg_0 = torch.bmm(x_3d, y_3d)
+
+# Original: arg_1 = torch.as_strided(torch.randn(30).to(torch.float64), (10, 3), (3, 1))
+# Same replacements
+arg_1 = torch.bmm(x_3d, y_3d)
+
+args = (arg_0, arg_1, sentinel)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+
+# Original: compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+# Replacement: torch.compile -> torch.all
+# result_original is TF tensor. torch.all needs torch tensor.
+result_original_torch = torch.from_numpy(result_original.numpy())
+compiled_program = torch.all(result_original_torch)
+result_compiled = compiled_program
+print('✅ compile success')
+```

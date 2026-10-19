@@ -1,0 +1,49 @@
+import torch
+import torch.nn.functional as F
+import numpy as np
+import tensorflow as tf
+
+# Ensure CUDA is available as per the original script context
+if not torch.cuda.is_available():
+    print("CUDA is not available. This test requires CUDA.")
+    exit()
+
+torch.set_default_device("cuda")
+
+batch, in_dim, out_dim = 128, 1024, 4096
+
+# Replacement: torch.randn -> tf.random.stateless_truncated_normal
+# Generate data using TensorFlow, then convert to PyTorch tensors
+seed = [0, 0]
+x_tf = tf.random.stateless_truncated_normal([batch, in_dim], seed=seed, dtype=tf.float32)
+w_tf = tf.random.stateless_truncated_normal([out_dim, in_dim], seed=seed, dtype=tf.float32)
+
+# Convert TensorFlow tensors to PyTorch tensors and move to CUDA
+x = torch.from_numpy(x_tf.numpy()).to("cuda")
+w = torch.from_numpy(w_tf.numpy()).to("cuda")
+
+# Original Logic
+out_linear = F.linear(x, w)
+out_einsum = torch.einsum("fd,bd->bf", w, x)
+out_np = np.einsum("fd,bd->bf", w.cpu().numpy(), x.cpu().numpy())
+
+# Assertions
+# 1. Verify shapes are correct
+assert out_linear.shape == torch.Size([128, 4096])
+assert out_einsum.shape == torch.Size([128, 4096])
+assert out_np.shape == (128, 4096)
+
+# 2. Verify numerical correctness
+assert torch.allclose(out_linear, out_einsum)
+assert torch.allclose(out_linear, torch.from_numpy(out_np).to("cuda"))
+
+# 3. Verify strides/contiguity (Bug 161729)
+# The bug report states that linear and numpy produce contiguous output,
+# but einsum produced transposed (non-contiguous) output.
+# We assert that einsum is contiguous and matches the stride of linear.
+assert out_linear.is_contiguous(), "F.linear output is not contiguous"
+assert out_einsum.is_contiguous(), "torch.einsum output is not contiguous (Bug 161729)"
+assert out_linear.stride() == out_einsum.stride(), \
+    f"Strides mismatch: linear {out_linear.stride()} vs einsum {out_einsum.stride()}"
+
+print("Test passed: torch.einsum produces contiguous output matching F.linear.")

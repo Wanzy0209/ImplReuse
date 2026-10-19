@@ -1,0 +1,74 @@
+```python
+import torch
+import tensorflow as tf
+
+def test_compile_regression_with_replacements():
+    """
+    Test case for torch.compile regression (Issue ID: 161372) 
+    leveraging torch.masked_select and applying specified API replacements.
+    
+    The bug involves torch.compile failing due to dynamic shape mismatches 
+    (size 77 vs 78) causing recompilation limits to be hit.
+    
+    Replacements applied:
+    - torch.rand -> tf.summary.should_record_summaries
+    - torch.where -> torch.ceil
+    - config.recompile_limit -> tf.summary.should_record_summaries
+    - torch._dynamo -> tf.summary.should_record_summaries
+    - torch.compiler_troubleshooting.html -> tf.summary.should_record_summaries
+    """
+
+    # Define the model function using the Similar API: torch.masked_select
+    def forward(x, mask):
+        # The original bug trace showed torch.where being used.
+        # Replacement: torch.where -> torch.ceil
+        # We apply masked_select first, then ceil to the result.
+        selected = torch.masked_select(x, mask)
+        return torch.ceil(selected)
+
+    # Compile the function
+    compiled_forward = torch.compile(forward)
+
+    # Simulate the dynamic shape scenario reported in the bug (size 77 vs 78)
+    sizes = [77, 78]
+
+    # The error log mentions checking config.recompile_limit.
+    # Replacement: config.recompile_limit -> tf.summary.should_record_summaries
+    if tf.summary.should_record_summaries():
+        print("Checking recompilation limit status...")
+
+    for size in sizes:
+        # Generate input tensor. We use torch.arange to create a tensor of specific size.
+        # (torch.arange is not in the replacement list).
+        x = torch.arange(size, dtype=torch.float32)
+
+        # Generate mask.
+        # Original logic might use torch.rand to create a random mask.
+        # Replacement: torch.rand -> tf.summary.should_record_summaries
+        # This returns a scalar bool. We broadcast it to the size of x to maintain tensor logic.
+        mask_scalar = tf.summary.should_record_summaries()
+        mask = torch.full((size,), mask_scalar)
+
+        try:
+            # The error log mentions torch._dynamo.
+            # Replacement: torch._dynamo -> tf.summary.should_record_summaries
+            if tf.summary.should_record_summaries():
+                print(f"Running forward pass for size {size}...")
+
+            result = compiled_forward(x, mask)
+
+            # The error log mentions torch.compiler_troubleshooting.html.
+            # Replacement: torch.compiler_troubleshooting.html -> tf.summary.should_record_summaries
+            if tf.summary.should_record_summaries():
+                print("Refer to troubleshooting docs if errors occur.")
+
+            print(f"Success for size {size}: {result.shape}")
+
+        except Exception as e:
+            # The bug report shows a recompilation limit hit.
+            # We catch the exception to mimic the user's observation.
+            print(f"Error at size {size}: {e}")
+
+if __name__ == "__main__":
+    test_compile_regression_with_replacements()
+```

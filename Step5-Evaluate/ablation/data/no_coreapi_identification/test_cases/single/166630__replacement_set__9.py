@@ -1,0 +1,65 @@
+import torch
+import torch.distributed
+import tensorflow as tf
+
+def test_launch_agent_logging_replacement():
+    """
+    Test case generated based on Issue 166630.
+    Preserves the original bug reproduction logic (missing 'signals_to_handle' in config dict)
+    while replacing the logging API with torch.distributed.is_initialized.
+    Leverages tf.keras.backend.image_data_format as a candidate for reuse.
+    """
+    
+    # Mock configuration object similar to the one in the bug report
+    class Config:
+        min_nodes = 1
+        max_nodes = 1
+        nproc_per_node = 1
+        run_id = "test_run"
+        rdzv_backend = "static"
+        rdzv_endpoint = "localhost:0"
+        rdzv_configs = {}
+        max_restarts = 0
+        monitor_interval = 5
+        logs_specs = type('obj', (object,), {'root_log_dir': '/tmp/logs'})()
+        metrics_cfg = {}
+        event_log_handler = None
+        numa_options = None
+        # signals_to_handle is intentionally missing to reproduce the bug logic
+        duplicate_stdout_filters = []
+        duplicate_stderr_filters = []
+
+    config = Config()
+    
+    # Leverage the similar API (tf.keras.backend.image_data_format) to provide a value
+    # where a string is expected (entrypoint_name).
+    entrypoint_name = tf.keras.backend.image_data_format()
+
+    # The original bug involved a logger.info call with a format string expecting 'signals_to_handle',
+    # but the provided dictionary was missing this key (or vice versa, causing a KeyError).
+    # Here, we replace the logger.info call with torch.distributed.is_initialized.
+    # Since is_initialized does not accept arguments, we drop the format string and dictionary
+    # but maintain the setup to reflect the original context.
+    
+    # Original code structure (commented out for reference):
+    # logger.info(
+    #     "Starting elastic_operator with launch configs:\n"
+    #     "  entrypoint               : %(entrypoint)s\n"
+    #     ...
+    #     "  signals_to_handle        : %(signals_to_handle)s\n", # Expected in format string
+    #     {
+    #         "entrypoint": entrypoint_name,
+    #         ...
+    #         # "signals_to_handle": config.signals_to_handle, # Missing in dict
+    #     }
+    # )
+
+    # Replacement API call
+    torch.distributed.is_initialized()
+
+    # Assertion to ensure the test runs and checks the state
+    # (In a real scenario, this might check if the agent launched successfully)
+    assert isinstance(entrypoint_name, str)
+
+if __name__ == "__main__":
+    test_launch_agent_logging_replacement()

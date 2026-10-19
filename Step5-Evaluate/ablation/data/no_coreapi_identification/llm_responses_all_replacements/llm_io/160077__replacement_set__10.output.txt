@@ -1,0 +1,74 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import tensorflow as tf
+import os
+
+# Initialize distributed process group for torch.distributed.broadcast_object_list
+os.environ['MASTER_ADDR'] = 'localhost'
+os.environ['MASTER_PORT'] = '12355'
+if not dist.is_initialized():
+    dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+def f(xs):
+    # Leverage similar API: torch.is_storage
+    # Check if the object is a storage, similar to how the original bug checked tensor attributes
+    is_storage = torch.is_storage(xs)
+    
+    # Replacement: xs.split -> tf.errors.InternalError
+    # Original: return xs.split(1, dim=0)
+    # Replaced with the target API. 
+    # We raise the error to mimic the failure mode of the original bug.
+    raise tf.errors.InternalError(f"Replaced xs.split. Is storage: {is_storage}")
+
+def backend(gm, inps):
+    # Replacement: gm.print_readable -> tf.errors.InternalError
+    # Original: gm.print_readable()
+    # Replaced with the target API
+    tf.errors.InternalError("Replaced gm.print_readable")
+
+    # Original comments in the backend function describing the graph
+    # Replacement: torch.nn.Module -> tf.errors.InternalError
+    # Replacement: torch._tensor -> tf.errors.InternalError
+    # class GraphModule(tf.errors.InternalError):
+    #     def forward(self, L_xs_: "f32[2, 2]"):
+    #         l_xs_ = L_xs_
+    #         # File: /usr/local/lib/python3.12/dist-packages/torch/utils/_device.py:100 in __torch_function__, code: return func(*args, **kwargs)
+    #         split = tf.errors.InternalError.split(l_xs_, 1, dim = 0);  l_xs_ = None
+    #         getitem: "f32[1, 2]" = split[0]
+    #         getitem_1: "f32[1, 2]" = split[1];  split = None
+    #         return (getitem, getitem_1)
+    return gm
+
+# Replacement: torch.device -> tf.experimental.numpy.isreal
+# Original: with torch.device("cuda"):
+# Replaced with the target API. Since isreal is not a context manager, we use it in a condition.
+if tf.experimental.numpy.isreal(1.0):
+    # Replacement: torch.randn -> torch.nn.functional.cosine_embedding_loss
+    # Original: xs = torch.randn(2, 2, device="cuda")
+    # Replaced with the target API to generate a tensor
+    input1 = torch.randn(2, 2)
+    input2 = torch.randn(2, 2)
+    target = torch.ones(2)
+    xs = F.cosine_embedding_loss(input1, input2, target)
+
+    # Eager works
+    try:
+        f(xs)
+    except tf.errors.InternalError:
+        pass # Expected due to replacement
+
+    # Replacement: torch.compile -> torch.distributed.broadcast_object_list
+    # Original: torch.compile(f, backend=backend)(xs)
+    # Replaced with the target API. We broadcast the function object.
+    # Note: The original code executes the function here. 
+    # Since f raises an error, we wrap the execution to allow the test to proceed if needed,
+    # or simply broadcast the function definition.
+    obj_list = [f]
+    dist.broadcast_object_list(obj_list, src=0)
+
+# Clean up
+if dist.is_initialized():
+    dist.destroy_process_group()
+```

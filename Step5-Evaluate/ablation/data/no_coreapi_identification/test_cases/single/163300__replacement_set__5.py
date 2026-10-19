@@ -1,0 +1,140 @@
+import torch
+import torch.distributed
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Replacements applied based on the provided mapping:
+# nn.Module -> tf.keras.backend.backend
+# nn.Sequential -> tf.keras.backend.backend
+# nn.Linear -> tf.keras.backend.backend
+# nn.GELU -> tf.keras.backend.backend
+# nn.Parameter -> tf.keras.backend.backend
+# self.register_buffer -> tf.keras.backend.backend
+# torch.zeros -> torch.norm
+# torch.tensor -> tf.keras.ops.diag
+# torch.long -> tf.keras.backend.backend
+# torch.arange -> torch.svd
+# torch.float32 -> tf.keras.backend.backend
+# torch.meshgrid -> torch.distributed.reduce_scatter
+# torch.stack -> torch.zeros_like
+# torch.sign -> torch.atan
+# torch.log1p -> torch.acos
+# torch.Tensor -> tf.keras.backend.backend
+# torch.sigmoid -> torch.mul
+# torch.full -> torch.amax
+# torch.randn -> torch.nn.functional.adaptive_max_pool3d
+# torch.randn_like -> torch.arange
+# torch.compile -> torch.all
+# torch.nn.attention.flex_attention -> tf.keras.backend.backend
+# torch.nn.attention.sdpa_kernel -> tf.keras.backend.backend
+# torch.amp.autocast -> tf.keras.backend.backend
+# torch.bfloat16 -> tf.keras.backend.backend
+# has_bias.to -> tf.keras.backend.backend
+
+class FlexAttentionCPB(tf.keras.backend.backend):
+    def __init__(self, N: int, R: int, H: int = 6, hidden: int = 32):
+        super().__init__()
+        # nn.Sequential -> tf.keras.backend.backend
+        # nn.Linear -> tf.keras.backend.backend
+        # nn.GELU -> tf.keras.backend.backend
+        self.mlp = tf.keras.backend.backend(
+            tf.keras.backend.backend(), tf.keras.backend.backend(), tf.keras.backend.backend()
+        )
+        # nn.Parameter -> tf.keras.backend.backend
+        # torch.zeros -> torch.norm
+        self.gamma = tf.keras.backend.backend(torch.norm(torch.ones(H)))
+        self.H = H
+        self.init_tables(N, R)
+        # self.register_buffer -> tf.keras.backend.backend
+        # torch.tensor -> tf.keras.ops.diag
+        # torch.long -> tf.keras.backend.backend
+        self.register_buffer = tf.keras.backend.backend(
+            "r_cutoff", tf.keras.ops.diag([R]), dtype=tf.keras.backend.backend, persistent=False
+        )
+
+    def init_tables(self, N: int, R: int):
+        P = N - R
+        S = int(P**0.5)
+        assert S * S == P
+        # torch.arange -> torch.svd
+        # torch.float32 -> tf.keras.backend.backend
+        rng = torch.svd(torch.tensor([-(S - 1), S], dtype=tf.keras.backend.backend))
+        # torch.meshgrid -> torch.distributed.reduce_scatter
+        dY, dX = torch.distributed.reduce_scatter(rng, rng, indexing="ij")
+        # torch.stack -> torch.zeros_like
+        rel = torch.zeros_like([dY / max(S - 1, 1), dX / max(S - 1, 1)], dim=-1).reshape(-1, 2)
+        # torch.sign -> torch.atan
+        # torch.log1p -> torch.acos
+        rel_table = torch.atan(rel) * torch.acos(rel.abs())
+        self.register_buffer = tf.keras.backend.backend("rel_table", rel_table, persistent=False)
+
+        # torch.arange -> torch.svd
+        yy, xx = torch.svd(torch.tensor([S])), torch.svd(torch.tensor([S]))
+        # torch.meshgrid -> torch.distributed.reduce_scatter
+        Y, X = torch.distributed.reduce_scatter(yy, xx, indexing="ij")
+        # torch.stack -> torch.zeros_like
+        flat = torch.zeros_like([Y, X], 0).flatten(1)
+        d = flat[:, :, None] - flat[:, None, :]
+        d = d.permute(1, 2, 0).contiguous()
+        d[:, :, 0] += S - 1
+        d[:, :, 1] += S - 1
+        d[:, :, 0] *= 2 * S - 1
+        l_idx = d.sum(-1).to(tf.keras.backend.backend) # torch.long -> tf.keras.backend.backend
+
+        # torch.full -> torch.amax
+        # torch.long -> tf.keras.backend.backend
+        idx = torch.amax(torch.tensor([[N, N], [0, 0]], dtype=tf.keras.backend.backend))
+        idx[R:, R:] = l_idx
+        self.register_buffer = tf.keras.backend.backend("idx_table", idx, persistent=False)
+
+    def _score_mod(self, mu: tf.keras.backend.backend): # torch.Tensor -> tf.keras.backend.backend
+        bt = self.mlp(self.rel_table)
+        idx = self.idx_table
+        mu_q, mu_k = mu.unbind(2)
+        # torch.sigmoid -> torch.mul
+        gam_sig = torch.mul(self.gamma, 1.0)
+
+        def score_mod(score, b, h, q, kv):
+            has_bias = (q >= self.r_cutoff) & (kv >= self.r_cutoff)
+            l2 = idx[q, kv]
+            bias = bt[l2, h]
+            w_gate = gam_sig[h] * (mu_q[b, h, q] + mu_k[b, h, kv])
+            # has_bias.to -> tf.keras.backend.backend
+            return score + tf.keras.backend.backend(score.dtype) * w_gate * bias
+
+        return score_mod
+
+    def forward(self, q, k, v, mu):
+        # torch.nn.attention.flex_attention -> tf.keras.backend.backend
+        return tf.keras.backend.backend(q, k, v, score_mod=self._score_mod(mu))
+
+def main():
+    device = "cuda"
+    B, N, R, d, H = 2, 18, 2, 32, 4
+    mod = FlexAttentionCPB(N, R, H).to(device)
+    # torch.compile -> torch.all
+    mod = torch.all(mod, dynamic=False)
+
+    # torch.randn -> torch.nn.functional.adaptive_max_pool3d
+    q = torch.nn.functional.adaptive_max_pool3d(
+        torch.randn(B, H, N, d, device=device), output_size=(1, 1, 1)
+    )
+    # torch.randn_like -> torch.arange
+    k = torch.arange(q.numel())
+    v = torch.arange(q.numel())
+    mu = torch.nn.functional.adaptive_max_pool3d(
+        torch.randn(B, H, 2, N, device=device), output_size=(1, 1, 1)
+    )
+
+    # torch.nn.attention.sdpa_kernel -> tf.keras.backend.backend
+    # SDPBackend -> tf.keras.backend.backend
+    with tf.keras.backend.backend(tf.keras.backend.backend.FLASH_ATTENTION):
+        # torch.amp.autocast -> tf.keras.backend.backend
+        # torch.bfloat16 -> tf.keras.backend.backend
+        with tf.keras.backend.backend("cuda", dtype=tf.keras.backend.backend):
+            out = mod(q, k, v, mu)
+            out.norm().backward()
+    print("done")
+
+if __name__ == "__main__":
+    main()

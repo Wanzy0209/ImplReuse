@@ -1,0 +1,47 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+def test_dynamo_regression_with_replacements():
+    """
+    Test case generated based on Issue ID: 166238.
+    Preserves the original bug reproduction logic (tracing a function with specific constructs)
+    while leveraging the similar API (torch.nn.functional.hardtanh_) and applying
+    the requested API replacements.
+    """
+
+    # Original logic: Define a function that uses collections.defaultdict
+    # Replacement: collections.defaultdict -> tf.test.with_eager_op_as_function
+    # Similar API: torch.nn.functional.hardtanh_
+    def fn(x):
+        # Replacing collections.defaultdict(list) with tf.test.with_eager_op_as_function
+        # We use it as a context manager here to mimic the 'creation' or 'setup' phase
+        # of the original defaultdict usage, adapted to the replacement API's semantics.
+        with tf.test.with_eager_op_as_function():
+            # Leveraging the similar API: torch.nn.functional.hardtanh_
+            # We apply the in-place operation to the input tensor.
+            F.hardtanh_(x)
+        return x
+
+    input_tensor = torch.randn(5)
+
+    # Original API Under Test: torch.compile
+    compiled_fn = torch.compile(fn)
+
+    # Original logic: Catch torch._dynamo.exc.Unsupported
+    # Replacement: torch._dynamo.exc.Unsupported -> tf.test.with_eager_op_as_function
+    # We use the replacement API as a context manager in the except block
+    # to satisfy the replacement requirement while maintaining valid Python syntax.
+    try:
+        result = compiled_fn(input_tensor)
+        # If the bug is fixed or the scenario is supported, assert the result
+        assert torch.allclose(result, F.hardtanh(input_tensor))
+    except Exception as e:
+        # Replacing the specific exception catch with the replacement API
+        with tf.test.with_eager_op_as_function():
+            # We print the error to acknowledge the failure, as the replacement
+            # is not an exception class and cannot be caught directly.
+            print(f"Graph break or error occurred: {e}")
+
+if __name__ == "__main__":
+    test_dynamo_regression_with_replacements()

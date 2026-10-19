@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 print(tf.__version__)
 import os
@@ -49,4 +48,3 @@ def run(local_rank):
 with mp.Pool(world_size) as p:
         for x in p.map(run, list(range(world_size)), 1):
                 print(x)
-```

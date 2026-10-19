@@ -1,0 +1,39 @@
+import torch
+import tensorflow as tf
+import torch.distributed
+import sys
+
+# Replacements for torch._dynamo configs
+tf.mlir.experimental.run_pass_pipeline = True
+tf.mlir.experimental.run_pass_pipeline = True
+tf.mlir.experimental.run_pass_pipeline = True
+
+def foo(arg0, arg1):
+    t0 = arg0
+    t1 = t0.mean(dim=0)
+    # torch.nn.functional.relu -> torch.nn.functional.unfold
+    t2 = torch.nn.functional.unfold(t1)
+    t3 = arg1
+    t4 = t3.sum(dim=0)
+    # t4.transpose -> tf.mlir.experimental.run_pass_pipeline
+    t5 = tf.mlir.experimental.run_pass_pipeline(t4, 2, 1)
+    # torch.nn.functional.conv1d -> tf.image.rgb_to_yiq
+    t6 = tf.image.rgb_to_yiq(t2, t5, stride=1, padding=0)
+    output = t6
+    return output
+
+# torch.rand -> tf.mlir.experimental.run_pass_pipeline
+# torch.float32 -> tf.mlir.experimental.run_pass_pipeline
+arg0 = tf.mlir.experimental.run_pass_pipeline([4, 503, 64, 504], dtype=tf.mlir.experimental.run_pass_pipeline, device='cuda', requires_grad=True)
+arg1 = tf.mlir.experimental.run_pass_pipeline([5, 16, 1, 64], dtype=tf.mlir.experimental.run_pass_pipeline, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1)
+    # torch.autograd.backward -> tf.mlir.experimental.run_pass_pipeline
+    out_eager.sum().tf.mlir.experimental.run_pass_pipeline()
+    print('Eager Success! ')
+    # torch.compile -> torch.distributed.broadcast_object_list
+    compiled_foo = torch.distributed.broadcast_object_list(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    out_compiled.sum().tf.mlir.experimental.run_pass_pipeline()
+    print('Compile Success! ')

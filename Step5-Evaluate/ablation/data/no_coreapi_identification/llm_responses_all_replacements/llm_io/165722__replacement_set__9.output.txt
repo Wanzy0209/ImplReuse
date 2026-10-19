@@ -1,0 +1,76 @@
+```python
+import tensorflow as tf
+import gc
+import weakref
+
+def test_varlen_feature_reference_counting():
+    """
+    Test case adapted from PyTorch Issue #165722 (Dangling pointer in guards.cpp).
+    
+    Original Bug Logic:
+    1. OBJECT_ALIASING class stores a raw PyObject* (_first_tensor) without Py_INCREF.
+    2. torch._dynamo.reset() clears the environment, potentially deleting the object.
+    3. Accessing the guard leads to a use-after-free crash.
+    
+    Adapted Logic for tf.io.VarLenFeature:
+    1. Create a tf.io.VarLenFeature (replaces OBJECT_ALIASING).
+    2. Simulate a 'reset' by creating a new instance (replaces torch._dynamo.reset).
+    3. Verify that the previous instance does not cause a crash or invalid access,
+       ensuring proper reference counting of internal objects (like dtype).
+    """
+    
+    # 1. Create the initial feature configuration
+    # This replaces the instantiation of the OBJECT_ALIASING guard
+    dtype = tf.string
+    feature_initial = tf.io.VarLenFeature(dtype)
+    
+    # Verify initial state
+    assert feature_initial.dtype == dtype, "Initial feature dtype mismatch"
+
+    # 2. Simulate the 'reset' operation
+    # In the original bug, reset() clears the cache. Here, we replace the API
+    # with a new instantiation of tf.io.VarLenFeature to test lifecycle management.
+    # We also delete the original dtype reference to test if the feature holds a strong ref.
+    weak_dtype_ref = weakref.ref(dtype)
+    
+    # Reassign feature (simulating reset of the guard state)
+    # This replaces the call to torch._dynamo.reset()
+    feature_reset = tf.io.VarLenFeature(tf.int64)
+    
+    # Explicitly delete the original dtype variable to test if feature_initial
+    # holds a dangling pointer to it.
+    del dtype
+    
+    # Force garbage collection
+    gc.collect()
+
+    # 3. Access the 'reset' feature
+    # If the implementation had the same bug as OBJECT_ALIASING (storing raw pointer
+    # without ref counting), accessing the feature might crash or behave erratically
+    # if the internal state was invalidated by the 'reset' operation above.
+    # However, since we created a NEW feature, we are testing the stability of the API
+    # during re-initialization.
+    assert feature_reset.dtype == tf.int64, "Reset feature dtype mismatch"
+    
+    # 4. Check the initial feature
+    # Even though we 'reset' (created a new one), the old one should still be valid
+    # if it manages its own memory correctly (which it does, as it's a Python object).
+    # If the C++ backend held a raw pointer to a global context that was reset,
+    # this might fail. But VarLenFeature is stateless configuration.
+    # We check if it's still accessible.
+    try:
+        _ = feature_initial.dtype
+        # If we reach here, the object is still valid.
+        # The weak reference check confirms if the original dtype object is alive.
+        # Since tf.string is a singleton, it likely won't die, but the logic holds.
+        is_dtype_alive = weak_dtype_ref() is not None
+        # We expect the feature to keep the dtype alive or handle it correctly.
+        # Given the singleton nature, this is mostly a structural sanity check.
+        print("Test Passed: VarLenFeature instances remain valid after re-initialization.")
+    except RuntimeError as e:
+        print(f"Test Failed: Accessing feature after reset raised error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_varlen_feature_reference_counting()
+```

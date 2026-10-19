@@ -1,0 +1,23 @@
+import torch
+import tensorflow as tf
+
+# Generate indices for one_hot encoding to replace torch.rand
+# Original: A = torch.rand((1, 1024, 1024), device="cuda", dtype=torch.float16)
+# Replacement: torch.rand -> torch.nn.functional.one_hot
+# Replacement: torch.float16 -> torch.nn.functional.one_hot (handled by data generation change)
+indices_A = torch.randint(0, 10, (1, 1024, 1024))
+A = torch.nn.functional.one_hot(indices_A, num_classes=10)
+
+indices_B = torch.randint(0, 10, (1, 1024, 1024))
+B = torch.nn.functional.one_hot(indices_B, num_classes=10)
+
+# Original: @torch.compile
+# Replacement: torch.compile -> tf.compat.v1.tpu.rewrite
+@tf.compat.v1.tpu.rewrite
+def linear(weight, input):
+    # Original: return torch.bmm(input, weight, out_dtype=torch.float32)
+    # Replacement: torch.bmm -> torch.nn.functional.pdist
+    # Replacement: torch.float32 -> torch.nn.functional.one_hot (handled by dropping out_dtype)
+    return torch.nn.functional.pdist(input, p=2.0)
+
+linear(A, B)

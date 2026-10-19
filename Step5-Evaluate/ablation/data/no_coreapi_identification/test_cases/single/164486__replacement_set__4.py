@@ -1,0 +1,102 @@
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Note: The following replacements are applied based on the provided mapping.
+# Some replacements (e.g., PyTorch to TensorFlow) may result in runtime errors
+# due to cross-library incompatibility or semantic shifts, but the syntax is valid.
+
+# Replacement: torch.manual_seed -> tf.compat.v1.assign_add
+# Original: torch.manual_seed(238)
+# To make it runnable, we create a dummy variable and perform the operation.
+dummy_var = tf.Variable(0.0)
+tf.compat.v1.assign_add(dummy_var, 238)
+
+def fuzzed_program(arg_0, sentinel):
+    # Replacement: torch.full -> torch.amin
+    # Original: var_node_2 = torch.full((), 1, dtype=torch.int16)
+    # torch.amin requires an input tensor. We create a dummy tensor to reduce.
+    dummy_input_full = torch.tensor([1, 2], dtype=torch.int16)
+    var_node_2 = torch.amin(dummy_input_full) # size=(), dtype=int16
+    
+    var_node_3 = arg_0 
+    
+    # Replacement: torch.add -> torch.exp
+    # Original: var_node_1 = torch.add(var_node_2, var_node_3)
+    # torch.exp takes one argument. We drop var_node_3 to fit the signature.
+    var_node_1 = torch.exp(var_node_2) # size=(), dtype=int16
+    
+    # Replacement: torch.full -> torch.amin
+    # Original: var_node_5 = torch.full((1,), 3, dtype=torch.int16)
+    dummy_input_full_2 = torch.tensor([3, 4], dtype=torch.int16)
+    var_node_5 = torch.amin(dummy_input_full_2) # size=(), dtype=int16
+    # Note: Original var_node_5 was size (1,). Now it is size ().
+    # The subsequent squeeze on a size () tensor is a no-op, which matches the original intent.
+    
+    # Replacement: torch.squeeze -> torch.fx.wrap
+    # Original: var_node_4 = torch.squeeze(var_node_5)
+    # torch.fx.wrap returns the function itself, so we call it immediately.
+    var_node_4 = torch.fx.wrap(torch.squeeze)(var_node_5) # size=(), dtype=int16
+    
+    var_node_0 = torch.div(var_node_1, var_node_4) # size=(), dtype=int16
+    
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    # Note: sentinel is now a TensorFlow tensor (see below). 
+    # Multiplying PyTorch tensor (var_node_0) with TF tensor (sentinel) will raise a RuntimeError.
+    # This is kept as-is to satisfy the replacement requirement.
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Replacement: torch.tensor -> tf.experimental.numpy.diag
+# Original: sentinel = torch.tensor(1.0, requires_grad=True)
+# tf.experimental.numpy.diag creates a 2D array.
+sentinel = tf.experimental.numpy.diag([1.0])
+
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool2d
+# Original: arg_0 = torch.as_strided(torch.randn(1).to(torch.int16), (), ())
+# We replace torch.randn(1) with the pooling op. The pooling op requires a 4D input (N, C, H, W).
+# We generate a dummy input for the pool.
+dummy_randn_input = torch.randn(1, 1, 1, 1)
+pooled_result = F.adaptive_max_pool2d(dummy_randn_input, (1, 1))
+
+# Replacement: torch.as_strided -> torch.narrow
+# Original: arg_0 = torch.as_strided(..., (), ())
+# We apply narrow to the result of the pooling replacement.
+# Narrowing a 4D tensor of size (1,1,1,1) by length 0 results in size (0,1,1,1).
+# We then flatten or reshape to try and match the scalar nature if possible, 
+# but strictly replacing the call site:
+arg_0 = torch.narrow(pooled_result, 0, 0, 0).to(torch.int16)
+
+args = (arg_0,) + (sentinel,)
+
+# Eager execution
+try:
+    out_eager = fuzzed_program(*args)
+    # out_eager.sum().backward() # sentinel is TF tensor, no grad for PyTorch op
+    print('Eager Success! ')
+except Exception as e:
+    print(f'Eager Failed (expected due to cross-library ops): {e}')
+
+# Replacement: torch.compile -> torch.library.impl_abstract
+# Original: compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+# torch.library.impl_abstract is used to register abstract implementations.
+# It takes a schema and a function. It returns the function.
+# We use a dummy schema "test::fuzzed_op".
+compiled_program = torch.library.impl_abstract("test::fuzzed_op", fuzzed_program)
+
+try:
+    out_compiled = compiled_program(*args)
+    # out_compiled.sum().backward()
+    print('Compile Success! ')
+    
+    # Comparison logic (will likely fail or error due to type mismatches)
+    if 'out_eager' in locals() and 'out_compiled' in locals():
+        # Converting TF tensor to PyTorch for comparison if possible, or just skipping
+        # This part is kept to respect the original test structure.
+        pass 
+except Exception as e:
+    print(f'Compile/Run Failed: {e}')
+
+print("Test case generated with requested API replacements.")

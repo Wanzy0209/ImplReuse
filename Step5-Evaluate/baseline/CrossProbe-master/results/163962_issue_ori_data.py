@@ -1,4 +1,3 @@
-```python
 import tensorly as tl
 # Set backend to TensorFlow
 tl.set_backend("tensorflow")
@@ -15,4 +14,3 @@ print(x.shape)
 weights, factors = parafac(x, 12, init="random", tol=1e-6)
 
 a, m, b = factors
-```

@@ -1,0 +1,33 @@
+import torch
+import tensorflow as tf
+import warnings
+
+def cli_main():
+    """
+    Reproduces the logic of setting precision using the similar API.
+    The original issue involved 'torch.set_float32_matmul_precision("high")'
+    triggering internal deprecation warnings. This test uses the equivalent
+    TensorFlow/Keras API to set the float precision.
+    """
+    # Capture warnings to ensure the similar API does not produce unwanted spam
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        
+        # Original API: torch.set_float32_matmul_precision("high")
+        # Similar API: tf.keras.backend.set_floatx('float32')
+        # We use 'float32' as the standard precision setting equivalent.
+        tf.keras.backend.set_floatx('float32')
+        
+        # Verify the setting was applied correctly
+        assert tf.keras.backend.floatx() == 'float32', \
+            f"Failed to set floatx. Expected 'float32', got '{tf.keras.backend.floatx()}'"
+        
+        # Check for warnings (addressing the "spam" context of the original bug)
+        # We expect no warnings to be raised by this public API call.
+        # If warnings are present, we print them (or could assert len(w) == 0)
+        if len(w) > 0:
+            for warning in w:
+                print(f"Warning caught: {warning.message}")
+
+if __name__ == '__main__':
+    cli_main()

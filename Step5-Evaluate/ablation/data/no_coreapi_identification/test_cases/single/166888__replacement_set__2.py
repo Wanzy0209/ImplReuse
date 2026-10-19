@@ -1,0 +1,53 @@
+import torch
+import tensorflow as tf
+from torch.distributions import constraints
+
+def f(x, max_val):
+    # torch.clamp -> torch.nn.functional.tanh
+    # The original logic used max_val.item() as an argument.
+    # With tanh, we don't strictly need the scalar argument for the operation itself,
+    # but to preserve the structure of using the second argument, we can pass it 
+    # (though tanh ignores it) or use it in a way that fits the replacement constraints.
+    # Given the replacement .item() -> torch.distributions.constraints.greater_than_eq,
+    # we interpret this as checking a constraint or simply using the value.
+    # However, to keep the test runnable and minimal, we apply the primary API swap (tanh)
+    # and the input generation swaps.
+    
+    # Replacing torch.clamp with torch.nn.functional.tanh
+    y = torch.nn.functional.tanh(x)
+    return y
+
+# torch.compile -> torch.distributions.constraints.greater_than_eq
+# This replacement is syntactically incompatible if applied directly as a wrapper.
+# However, to satisfy the requirement of using the replacement API in the test logic,
+# we can use it to validate the behavior or setup.
+# Since the original bug was about compilation, and we are replacing the compiler,
+# we are effectively testing if the logic holds with the new API/constraint context.
+# We will keep the structure but apply the replacements where possible.
+
+# torch.randn -> tf.random.stateless_truncated_normal
+# We need to convert the TF tensor to a Torch tensor for the function to work
+# as the function body uses torch.nn.functional.tanh.
+shape = [10, 20, 30]
+seed = (0, 1)
+x_tf = tf.random.stateless_truncated_normal(shape, seed=seed)
+x = torch.from_numpy(x_tf.numpy())
+
+# torch.tensor -> torch.isinf
+# torch.isinf(5.0) returns a tensor(False).
+max_val = torch.isinf(5.0)
+
+# Original call: compiled_func(x, max_val)
+# We apply the logic of the function directly since we replaced the compiler wrapper
+# with a constraint object which is not callable in the same way.
+# We use the replacement API 'torch.distributions.constraints.greater_than_eq' 
+# to verify the output, satisfying the requirement to include it.
+
+result = f(x, max_val)
+
+# Use the replacement API to check the result (e.g., result should be > -1)
+# This integrates the 'torch.compile' replacement into the test flow.
+constraint = constraints.greater_than_eq(-1.0)
+assert constraint.check(result)
+
+print("Test passed with replaced APIs.")

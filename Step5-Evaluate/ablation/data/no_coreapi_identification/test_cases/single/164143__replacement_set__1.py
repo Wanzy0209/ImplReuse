@@ -1,0 +1,38 @@
+import torch
+import torch.nn.functional as F
+
+def test_tanh_functionality():
+    """
+    Test case generated based on Issue ID: 164143.
+    
+    Original Logic: The issue described a scenario where torch.compile silently 
+    disabled when used inside DebugMode. The original test case logic involved 
+    calling a 'forward' function within this context.
+    
+    Replacement Logic: Per the requirements, 'torch.compile' and 'DebugMode' 
+    are replaced with 'torch.nn.functional.tanh'. This translates the test into 
+    a direct verification of the tanh operation, which represents the core 
+    functional unit likely present in the original issue's code path (e.g., 
+    llama3.py).
+    """
+    # Setup input tensor
+    x = torch.randn(3, 3)
+    
+    # Execute the replacement API: torch.nn.functional.tanh
+    # This replaces the original 'torch.compile(forward)(x)' pattern
+    y = F.tanh(x)
+    
+    # Assertions to verify the logic is preserved (execution and correctness)
+    # 1. Check shape preservation
+    assert y.shape == x.shape, "Output shape must match input shape"
+    
+    # 2. Check value range (tanh outputs are between -1 and 1)
+    assert torch.all(y >= -1) and torch.all(y <= 1), "Tanh output must be in [-1, 1]"
+    
+    # 3. Check consistency with the method implementation
+    # This mirrors the code similarity between the API and the issue's usage
+    assert torch.allclose(y, x.tanh()), "Functional result must match method result"
+
+if __name__ == "__main__":
+    test_tanh_functionality()
+    print("Test passed.")

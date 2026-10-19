@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import functools
 
@@ -54,4 +53,3 @@ with tf.GradientTape() as tape:
     loss = tf.reduce_sum(output)
 
 gradients = tape.gradient(loss, [a, b])
-```

@@ -1,0 +1,59 @@
+import sys
+import tensorflow as tf
+
+# Handle environment compatibility: ExtensionType requires TensorFlow 2.6+
+try:
+    from tensorflow.experimental import ExtensionType, dispatch_for_binary_elementwise_apis
+except (ImportError, AttributeError) as e:
+    print(f"Skipping test: Required TensorFlow features (ExtensionType) not found. {e}")
+    print("This test requires TensorFlow 2.6+.")
+    sys.exit(0)
+
+# Define a custom type to represent tensors that require specific precision handling,
+# similar to how the phi-2 model requires specific dtype handling on MacOS.
+class PrecisionSensitiveTensor(ExtensionType):
+    values: tf.Tensor
+
+# Use the similar API (dispatch_for_binary_elementwise_apis) to override default behavior.
+# This mirrors the "fix" logic from the bug report: ensuring operations are performed
+# in bfloat16 to avoid garbage results that might occur with automatic/default types.
+@dispatch_for_binary_elementwise_apis(PrecisionSensitiveTensor, PrecisionSensitiveTensor)
+def stable_elementwise_handler(api_func, x, y):
+    # Cast inputs to bfloat16 to ensure numerical stability (the fix)
+    x_bf16 = tf.cast(x.values, tf.bfloat16)
+    y_bf16 = tf.cast(y.values, tf.bfloat16)
+    
+    # Perform the elementwise operation (e.g., add, mul) using the provided api_func
+    result = api_func(x_bf16, y_bf16)
+    
+    # Return the result wrapped in the custom type
+    return PrecisionSensitiveTensor(values=result)
+
+def test_dispatch_enforces_bfloat16_stability():
+    """
+    Test that the dispatch handler correctly enforces bfloat16 precision
+    for binary operations on PrecisionSensitiveTensor, preventing potential
+    garbage output similar to the original bug.
+    """
+    # Create instances of our custom type
+    input_a = PrecisionSensitiveTensor(values=tf.constant([1.0, 2.0, 3.0]))
+    input_b = PrecisionSensitiveTensor(values=tf.constant([10.0, 20.0, 30.0]))
+    
+    # Perform a binary operation (addition). 
+    # This triggers the stable_elementwise_handler.
+    result_tensor = input_a + input_b
+    
+    # Assertions
+    # 1. Verify the operation was performed in bfloat16 (the fix)
+    assert result_tensor.values.dtype == tf.bfloat16, \
+        f"Expected dtype bfloat16, but got {result_tensor.values.dtype}"
+    
+    # 2. Verify the result is numerically correct (not garbage)
+    expected_values = tf.constant([11.0, 22.0, 33.0], dtype=tf.bfloat16)
+    assert tf.reduce_all(tf.equal(result_tensor.values, expected_values)).numpy(), \
+        "Operation produced incorrect results (garbage)."
+    
+    print("Test passed: Dispatch handler successfully enforced bfloat16 stability.")
+
+if __name__ == "__main__":
+    test_dispatch_enforces_bfloat16_stability()

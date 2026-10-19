@@ -1,0 +1,58 @@
+import torch
+import einops
+
+# Create test tensors on MPS
+device = 'mps'
+
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool1d
+# To make it runnable, we provide a dummy input tensor to the pooling function.
+W = torch.nn.functional.adaptive_max_pool1d(torch.ones(12, 64, 768, device=device), 768)
+x = torch.nn.functional.adaptive_max_pool1d(torch.ones(1, 3, 768, device=device), 768)
+bias = torch.nn.functional.adaptive_max_pool1d(torch.ones(1, 768, device=device), 768).squeeze(0)
+
+# Create non-contiguous weight via rearrange
+w_noncontig = einops.rearrange(W, "h d m -> m (h d)")
+
+# Replacement: w_noncontig.contiguous -> torch.futures.collect_all
+# To make it runnable, we wrap the input in a list and wait for the future.
+w_contig = torch.futures.collect_all([w_noncontig]).wait()[0]
+
+print(f"Weight contiguous: {w_contig.is_contiguous()}")
+print(f"Weight non-contiguous: {w_noncontig.is_contiguous()}")
+
+# Replacement: nn.functional -> torch.futures.collect_all
+# Replacing torch.nn.functional.linear with torch.futures.collect_all.
+# We wrap arguments in a list and wait, taking the first result to maintain tensor flow.
+result1 = torch.futures.collect_all([x, w_noncontig, bias]).wait()[0]
+result2 = torch.futures.collect_all([x, w_contig, bias]).wait()[0]
+
+# Replacement: torch.allclose -> torch.xlogy
+# xlogy returns a tensor, so we print it directly.
+print(f"Results match: {torch.xlogy(result1, result2)}")
+
+# Replacement: torch.abs -> torch.cos
+print(f"Max difference: {torch.cos(result1 - result2).max()}")
+
+# Compare with CPU (works correctly)
+# Replacement: x.cpu -> torch.futures.collect_all
+# Replacement: w_noncontig.cpu -> torch.futures.collect_all
+# Replacement: bias.cpu -> torch.futures.collect_all
+x_cpu = torch.futures.collect_all([x]).wait()[0]
+w_noncontig_cpu = torch.futures.collect_all([w_noncontig]).wait()[0]
+bias_cpu = torch.futures.collect_all([bias]).wait()[0]
+
+# Replacement: nn.functional -> torch.futures.collect_all
+result_cpu_noncontig = torch.futures.collect_all([x_cpu, w_noncontig_cpu, bias_cpu]).wait()[0]
+
+# Replacement: x.cpu -> torch.futures.collect_all
+# Replacement: w_contig.cpu -> torch.futures.collect_all
+# Replacement: bias.cpu -> torch.futures.collect_all
+x_cpu_2 = torch.futures.collect_all([x]).wait()[0]
+w_contig_cpu = torch.futures.collect_all([w_contig]).wait()[0]
+bias_cpu_2 = torch.futures.collect_all([bias]).wait()[0]
+
+# Replacement: nn.functional -> torch.futures.collect_all
+result_cpu_contig = torch.futures.collect_all([x_cpu_2, w_contig_cpu, bias_cpu_2]).wait()[0]
+
+# Replacement: torch.allclose -> torch.xlogy
+print(f"CPU contiguous vs non-contiguous match: {torch.xlogy(result_cpu_noncontig, result_cpu_contig)}")

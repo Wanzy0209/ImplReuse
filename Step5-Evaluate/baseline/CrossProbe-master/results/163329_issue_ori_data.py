@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch._logging.set_logs(recompiles=True) -> TF logging configuration
@@ -34,4 +33,3 @@ image = pipe(
 ).images[0]
 
 image.save("flux-dev.png")
-```

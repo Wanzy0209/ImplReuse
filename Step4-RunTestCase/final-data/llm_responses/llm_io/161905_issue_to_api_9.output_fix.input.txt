@@ -1,0 +1,111 @@
+Please fix the following Python test case based on the error message.
+
+## Original Test Case:
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision.models import resnet18
+
+def test_torch_compile_resnet_backward():
+    """
+    Test case to reproduce Issue 161905: torch.compile fails on MPS during backward pass.
+    
+    This test leverages the pattern from tf.distribute.experimental_set_strategy,
+    where the execution context (strategy/device) is set before the function call,
+    rather than inside it.
+    """
+    BATCH_SIZE = 4
+    NUM_CLASSES = 10
+    LEARNING_RATE = 0.01
+
+    # Define the devices (strategies) to test. 
+    # The bug report highlights a discrepancy between CPU and MPS.
+    devices = ['cpu']
+    if torch.backends.mps.is_available():
+        devices.append('mps')
+
+    for device in devices:
+        print(f"Testing on device: {device}")
+
+        # Initialize model and move to device (Setting the "strategy")
+        model = resnet18(num_classes=NUM_CLASSES)
+        model = model.to(device)
+        model.train()
+
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+
+        # Define the compiled function
+        # Note: We keep the logic minimal. Data movement is handled outside 
+        # to mimic the 'set_strategy -> run' pattern of the similar API.
+        @torch.compile
+        def train_step(images, labels):
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward() # This is where the bug occurs on MPS
+            optimizer.step()
+            return loss
+
+        # Prepare data and move to device (Context setting)
+        images = torch.randn(BATCH_SIZE, 3, 224, 224).to(device)
+        labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,)).to(device)
+
+        try:
+            # Execute the training step
+            loss = train_step(images, labels)
+            
+            # Assertions to verify the backward pass completed successfully
+            assert loss is not None, "Loss should not be None"
+            assert torch.isfinite(loss), "Loss should be finite"
+            
+            # Verify gradients were computed (checking the first layer)
+            assert model.conv1.weight.grad is not None, "Gradients should be computed for conv1"
+            assert model.conv1.weight.grad.abs().sum() > 0, "Gradients should not be all zeros"
+            
+            print(f"Test passed for device: {device}")
+
+        except RuntimeError as e:
+            if device == 'mps':
+                # This block catches the specific bug described in Issue 161905
+                print(f"RuntimeError on MPS (Bug Reproduced): {e}")
+                # Re-raise to signal test failure
+                raise AssertionError(f"torch.compile failed on MPS backend during backward pass: {e}")
+            else:
+                # Unexpected failure on CPU
+                raise
+
+if __name__ == "__main__":
+    test_torch_compile_resnet_backward()
+```
+
+## Error Message:
+```
+Traceback (most recent call last):
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/161905_issue_to_api_9.output.py", line 4, in <module>
+    from torchvision.models import resnet18
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/torchvision/__init__.py", line 5, in <module>
+    from torchvision import datasets, io, models, ops, transforms, utils
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/torchvision/datasets/__init__.py", line 1, in <module>
+    from ._optical_flow import FlyingChairs, FlyingThings3D, HD1K, KittiFlow, Sintel
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/torchvision/datasets/_optical_flow.py", line 12, in <module>
+    from .utils import _read_pfm, verify_str_arg
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/torchvision/datasets/utils.py", line 22, in <module>
+    import requests
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/requests/__init__.py", line 43, in <module>
+    import urllib3
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/urllib3/__init__.py", line 42, in <module>
+    "urllib3 v2.0 only supports OpenSSL 1.1.1+, currently "
+ImportError: urllib3 v2.0 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'OpenSSL 1.0.2u  20 Dec 2019'. See: https://github.com/urllib3/urllib3/issues/2168
+
+```
+
+## Requirements:
+1. Analyze the error message carefully
+2. Fix the test case to resolve the error
+3. Keep the test logic intact - do not change the core test functionality
+4. If the error is due to missing dependencies or environment issues, try to add mock or skip conditions
+5. Output only the fixed Python code, wrapped in ```python ... ``` blocks
+
+## Fixed Test Case:

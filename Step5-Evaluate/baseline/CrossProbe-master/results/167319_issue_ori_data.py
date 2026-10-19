@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from omegaconf import OmegaConf
 
@@ -35,4 +34,3 @@ checkpoint.save('checkpoint')
 # Conversion Note: This specific issue is PyTorch-specific. 
 # TensorFlow Checkpoints save variable values and do not pickle the optimizer object graph,
 # so the OmegaConf reference issue does not occur here.
-```

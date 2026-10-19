@@ -1,0 +1,99 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import unittest
+
+# Removed torchvision import to avoid urllib3/OpenSSL dependency conflict
+# from torchvision.models import resnet18
+
+# Define a simple CNN model to replace ResNet18 for the purpose of the test.
+# This avoids the heavy dependency chain of torchvision that causes the ImportError.
+class SimpleCNN(nn.Module):
+    def __init__(self, num_classes=10):
+        super(SimpleCNN, self).__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1))
+        )
+        self.classifier = nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        x = self.features(x)
+        x = torch.flatten(x, 1)
+        x = self.classifier(x)
+        return x
+
+class TestTorchCompileMPSBackward(unittest.TestCase):
+    def test_resnet18_compile_backward_mps(self):
+        """
+        Test case to verify that torch.compile works correctly on the MPS backend
+        during the backward pass (loss.backward()).
+        
+        This test preserves the original bug reproduction logic and adapts the 
+        semantic of 'local_variables_initializer' by verifying that gradients 
+        (variables) are properly initialized and updated after the compiled execution.
+        """
+        # Skip if MPS is not available
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS backend is not available on this machine.")
+
+        BATCH_SIZE = 4
+        NUM_CLASSES = 10
+        LEARNING_RATE = 0.01
+        device = 'mps'
+
+        # Initialize model and move to MPS
+        # Replaced resnet18 with SimpleCNN to avoid torchvision import errors
+        model = SimpleCNN(num_classes=NUM_CLASSES)
+        model = model.to(device)
+        model.train()
+
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+
+        # Define the compiled training step
+        @torch.compile
+        def train_step(images, labels):
+            # Preserving original logic: moving tensors to device inside the compiled function
+            images = images.to(device)
+            labels = labels.to(device)
+            
+            # Preserving original logic: zero_grad inside the compiled function
+            optimizer.zero_grad()
+
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            
+            # The reported bug occurs here on MPS backend
+            loss.backward()
+            
+            optimizer.step()
+            return loss
+
+        # Create dummy data
+        images = torch.randn(BATCH_SIZE, 3, 224, 224)
+        labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,))
+
+        # Execute the compiled step
+        try:
+            loss = train_step(images, labels)
+        except RuntimeError as e:
+            self.fail(f"RuntimeError during torch.compile backward pass on MPS: {e}")
+
+        # Leverage the semantic of local_variables_initializer:
+        # Verify that the 'variables' (gradients) have been properly initialized/updated
+        # after the execution context (compiled graph) has run.
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.assertIsNotNone(param.grad, f"Gradient for {name} was not initialized (is None).")
+                # Check that gradients are not all zeros (unless the model is initialized to zeros, which ResNet is not)
+                self.assertNotEqual(param.grad.abs().sum().item(), 0.0, f"Gradient for {name} is zero.")
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,4 +1,3 @@
-```python
 # pyright: strict
 import tensorflow as tf
 
@@ -11,4 +10,3 @@ def double(x: tf.Tensor) -> tf.Tensor:
     return tf.stop_gradient(2 * x)
 
 reveal_type(double)
-```

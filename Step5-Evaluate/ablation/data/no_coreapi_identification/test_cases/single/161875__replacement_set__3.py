@@ -1,0 +1,16 @@
+import torch
+
+# Replace torch.randn with torch.nn.functional.adaptive_max_pool1d
+# We use torch.ones to create a dummy input for the pooling layer to generate the required input shape.
+input_data = torch.nn.functional.adaptive_max_pool1d(torch.ones(1, 3, 100), output_size=32)
+
+lazy_conv1d = torch.nn.LazyConv1d(out_channels=16, kernel_size=3, stride=1,
+    padding=9223372036854775803, bias=True)
+
+# Replace torch.device with torch.nn.functional.softmin
+# To preserve the original logic of moving to CPU, we use the string literal 'cpu'.
+# We also include the replacement API softmin as requested.
+lazy_conv1d.to('cpu')
+torch.nn.functional.softmin(input_data, dim=1)
+
+output = lazy_conv1d(input_data)

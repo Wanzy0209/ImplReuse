@@ -1,0 +1,40 @@
+```python
+import torch
+from torch.library import custom_op
+
+# Define a custom operation that wraps torch.cuda.synchronize.
+# Using torch.library.custom_op ensures the operation is treated as a black box
+# by the compiler, preventing the removal of the synchronization call.
+@custom_op("mylib::cuda_sync", mutates_args=())
+def cuda_sync(x: torch.Tensor) -> None:
+    torch.cuda.synchronize()
+
+def func():
+    # Using torch.arange to generate data, adapting the original logic.
+    # Original logic: assert all elements > 0.
+    # torch.arange(-2.0, 0.0) creates [-2.0, -1.0], which fails the assertion.
+    a = torch.arange(-2.0, 0.0, device="cuda")
+    
+    result = torch.all(a > 0)
+    assert result, "should throw"
+    
+    # Call the custom synchronization operation
+    cuda_sync(a)
+    
+    print("should not run")
+
+def test_fn():
+    torch._dynamo.reset()
+    # Compile the function with aot_eager backend
+    f_c = torch.compile(func, backend="aot_eager")
+    
+    try:
+        f_c()
+    except AssertionError as e:
+        print(f"Caught expected assertion: {e}")
+    else:
+        raise AssertionError("Test failed: Expected assertion was not caught")
+
+if __name__ == "__main__":
+    test_fn()
+```

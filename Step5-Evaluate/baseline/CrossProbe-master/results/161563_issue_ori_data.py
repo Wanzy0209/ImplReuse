@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from transformers import TFAutoModelForCausalLM, AutoTokenizer
 from tensorflow.python.framework.func_graph import func_graph_from_py_func
@@ -32,4 +31,3 @@ ep = func_graph_from_py_func(
     python_func=model,        # Conversion: The TF model is callable and acts as the python function
     args=example_inputs       # Conversion: Positional arguments to call the model with
 )
-```

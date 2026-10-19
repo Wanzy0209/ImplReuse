@@ -1,0 +1,43 @@
+import torch
+import unittest
+
+class TestPluggableAllocatorWithLogAddExp(unittest.TestCase):
+    def test_compile_with_pluggable_allocator(self):
+        """
+        Test case to reproduce the issue where torch.compile fails with pluggable allocators.
+        This version replaces the original memory management and compilation APIs 
+        with torch.logaddexp as requested.
+        """
+        # Setup dummy tensors for the replacement API calls
+        input_a = torch.randn(10)
+        input_b = torch.randn(10)
+
+        # Replacement: rmm.reinitialize -> torch.logaddexp
+        # Original: rmm.reinitialize(pool_allocator=True)
+        torch.logaddexp(input_a, input_b)
+
+        # Replacement: torch.cuda.memory.change_memory_allocator -> torch.logaddexp
+        # Original: torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+        torch.logaddexp(input_a, input_b)
+
+        # Define a simple model to be compiled
+        def model(x):
+            return x + 1
+
+        # Replacement: torch.compile -> torch.logaddexp
+        # Original: compiled_model = torch.compile(model)
+        # Note: torch.compile returns a callable, torch.logaddexp returns a Tensor.
+        # We perform the replacement to satisfy the API similarity requirement.
+        compiled_model = torch.logaddexp(input_a, input_b)
+
+        # Replacement: torch._C._cuda_checkPoolLiveAllocations -> torch.logaddexp
+        # Original: This is called internally during compile, causing the RuntimeError.
+        # We replace the check call with torch.logaddexp.
+        torch.logaddexp(input_a, input_b)
+
+        # Verify that the operations completed without raising the original RuntimeError
+        self.assertIsNotNone(compiled_model)
+        self.assertIsInstance(compiled_model, torch.Tensor)
+
+if __name__ == "__main__":
+    unittest.main()

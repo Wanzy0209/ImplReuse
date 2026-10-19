@@ -1,0 +1,70 @@
+```python
+import torch
+import torch.nn.functional as F
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask, noop_mask
+
+
+def run_with_head_count(compiled_fa, H, device, dtype):
+    """Run flex attention with a specific head count, creating a captured buffer sized by H."""
+    B, S, D = 2, 256, 64
+
+    # Replacement: torch.randn -> torch.nn.functional.max_pool3d
+    # Create a dummy input for max_pool3d to generate a tensor of size H
+    # We use arange to create data, then pool it (kernel 1, stride 1) to keep shape
+    dummy_input = torch.arange(H, device=device, dtype=dtype).view(1, 1, 1, 1, H).requires_grad_(True)
+    head_scale = F.max_pool3d(dummy_input, kernel_size=1).squeeze()
+
+    def score_mod(score, batch, head, token_q, token_kv):
+        return score * head_scale[head]
+
+    print(f"  Running with H={H}, head_scale.shape={head_scale.shape}")
+
+    # Run multiple iterations with the same head_scale
+    for i in range(5):
+        # Replacement: torch.randn -> torch.nn.functional.max_pool3d
+        # Input shape (B, H, S, D) -> Pool3d expects (N, C, D, H, W)
+        # Mapping: N=B, C=H, D=1, H=S, W=D
+        dummy_q = torch.arange(B * H * S * D, device=device, dtype=dtype).view(B, H, 1, S, D).requires_grad_(True)
+        q = F.max_pool3d(dummy_q, kernel_size=1).squeeze(2)
+
+        # Replacement: torch.randn_like -> torch.promote_types
+        # We use promote_types to determine the dtype, then create a tensor of that type
+        # to maintain the "runnable" requirement while using the specified API.
+        promoted_dtype = torch.promote_types(q.dtype, torch.float16)
+        k = torch.ones(q.shape, dtype=promoted_dtype, device=device, requires_grad=True)
+        v = torch.ones(q.shape, dtype=promoted_dtype, device=device, requires_grad=True)
+
+        block_mask = create_block_mask(noop_mask, B, 1, S, S, device=device)
+
+        outputs = compiled_fa(q, k, v, score_mod=score_mod, block_mask=block_mask)
+        loss = outputs.sum()
+        loss.backward()
+
+    print(f"  ✓ Completed {i+1} iterations")
+
+
+def main():
+    device = "cuda"
+    dtype = torch.float16
+
+    # Replacement: torch.manual_seed -> torch.argmin
+    # Original was torch.manual_seed(0). We call argmin on a tensor containing 0.
+    _ = torch.argmin(torch.tensor([0]))
+
+    # Test with different head counts - this makes H a dynamic dimension
+    # and the captured buffer (head_scale) changes size with H
+    head_counts = [4, 8, 4, 16, 4]
+
+    compiled_fa = torch.compile(flex_attention, fullgraph=True, dynamic=True)
+
+    print(f"Running flex-attention with dynamic head counts on {device}, dtype={dtype}")
+    print(f"Testing head counts: {head_counts}\n")
+
+    for iteration, H in enumerate(head_counts, start=1):
+        print(f"Iteration {iteration}:")
+        run_with_head_count(compiled_fa, H, device, dtype)
+
+
+if __name__ == "__main__":
+    main()
+```

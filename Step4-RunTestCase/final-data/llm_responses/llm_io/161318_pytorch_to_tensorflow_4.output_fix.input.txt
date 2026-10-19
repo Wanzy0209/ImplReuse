@@ -1,0 +1,132 @@
+Please fix the following Python test case based on the error message.
+
+## Original Test Case:
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_data_dependent_slice_with_string_producer():
+    """
+    Adapts the PyTorch Inductor crash scenario (Issue 161318) to TensorFlow.
+    
+    Original Bug: torch.compile(fullgraph=True) crashes when slicing a tensor 
+    based on a scalar value derived from tensor operations (data-dependent slice).
+    
+    TensorFlow Adaptation: Uses tf.compat.v1.train.string_input_producer to feed
+    dynamic length parameters into the graph, then performs a data-dependent slice
+    to verify that TensorFlow handles this dynamic shape logic gracefully.
+    """
+    
+    # Disable eager execution to use v1 graph features (like string_input_producer)
+    tf.compat.v1.disable_eager_execution()
+
+    # 1. Setup Input Data
+    # We simulate the dynamic 'text_len' from the original bug using strings.
+    # The original bug had text_len = 8 (from mask sum).
+    # We test with "8" and "16" to ensure dynamic behavior.
+    input_strings = tf.constant(["8", "16"])
+
+    # 2. Use the requested API: string_input_producer
+    # This creates a queue to output the strings for the input pipeline.
+    queue = tf.compat.v1.train.string_input_producer(
+        input_strings, 
+        num_epochs=1, 
+        shuffle=False
+    )
+
+    # 3. Read from the queue
+    # We use a reader to consume the strings from the queue.
+    reader = tf.compat.v1.IdentityReader()
+    key, value = reader.read(queue)
+
+    # 4. Process the input to get the dynamic slice index
+    # Convert the string "8" or "16" to a tensor scalar int32.
+    text_len = tf.strings.to_number(value, out_type=tf.int32)
+    text_len = tf.reshape(text_len, []) # Ensure scalar shape
+
+    # 5. Reproduce the core logic from the bug report
+    # Original: encoder_hidden_states = encoder_hidden_states.new_zeros([1, 512, 3072])
+    # Original: encoder_hidden_states = encoder_hidden_states[:, :text_len]
+    
+    # Create a large tensor (simulating encoder_hidden_states)
+    encoder_hidden_states = tf.zeros([1, 512, 3072], dtype=tf.float32)
+
+    # Perform the data-dependent slice.
+    # In the original PyTorch bug, this caused an Inductor crash because the shape
+    # depended on a runtime value. TensorFlow graphs support dynamic shapes natively.
+    sliced_tensor = encoder_hidden_states[:, :text_len]
+
+    # 6. Verification
+    # We expect the second dimension to match the input text_len.
+    # We use tf.print to observe values during execution if needed, or assertions.
+    # Here we just capture the shape to verify in the session run.
+    result_shape = tf.shape(sliced_tensor)
+
+    with tf.compat.v1.Session() as sess:
+        # Initialize variables (required for epochs counter in string_input_producer)
+        sess.run([tf.compat.v1.local_variables_initializer(), tf.compat.v1.global_variables_initializer()])
+
+        # Start queue runners to feed data into the graph
+        coord = tf.compat.v1.train.Coordinator()
+        threads = tf.compat.v1.train.start_queue_runners(coord=coord)
+
+        try:
+            # --- Iteration 1: Expecting text_len = 8 ---
+            shape_1 = sess.run(result_shape)
+            print(f"Iteration 1 Result Shape: {shape_1}")
+            assert shape_1[1] == 8, f"Expected slice length 8, got {shape_1[1]}"
+            assert shape_1[0] == 1 and shape_1[2] == 3072, "Other dimensions should remain constant"
+
+            # --- Iteration 2: Expecting text_len = 16 ---
+            shape_2 = sess.run(result_shape)
+            print(f"Iteration 2 Result Shape: {shape_2}")
+            assert shape_2[1] == 16, f"Expected slice length 16, got {shape_2[1]}"
+            assert shape_2[0] == 1 and shape_2[2] == 3072, "Other dimensions should remain constant"
+
+            print("Test Passed: TensorFlow successfully handled data-dependent slicing via string_input_producer.")
+
+        except tf.errors.OutOfRangeError:
+            print("Reached end of input queue.")
+        finally:
+            # Stop the threads
+            coord.request_stop()
+            coord.join(threads)
+
+if __name__ == "__main__":
+    test_data_dependent_slice_with_string_producer()
+```
+
+## Error Message:
+```
+Traceback (most recent call last):
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/161318_pytorch_to_tensorflow_4.output.py", line 2, in <module>
+    import tensorflow as tf
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow/__init__.py", line 99, in <module>
+    from tensorflow_core import *
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow_core/__init__.py", line 28, in <module>
+    from tensorflow.python import pywrap_tensorflow  # pylint: disable=unused-import
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow/__init__.py", line 50, in __getattr__
+    module = self._load()
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow/__init__.py", line 44, in _load
+    module = _importlib.import_module(self.__name__)
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/importlib/__init__.py", line 127, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow_core/python/__init__.py", line 52, in <module>
+    from tensorflow.core.framework.graph_pb2 import *
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/tensorflow_core/core/framework/graph_pb2.py", line 7, in <module>
+    from google.protobuf import descriptor as _descriptor
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/google/protobuf/descriptor.py", line 47, in <module>
+    from google.protobuf.pyext import _message
+ImportError: /usr/lib/x86_64-linux-gnu/libstdc++.so.6: version `GLIBCXX_3.4.29' not found (required by /home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/google/protobuf/pyext/_message.cpython-37m-x86_64-linux-gnu.so)
+
+```
+
+## Requirements:
+1. Analyze the error message carefully
+2. Fix the test case to resolve the error
+3. Keep the test logic intact - do not change the core test functionality
+4. If the error is due to missing dependencies or environment issues, try to add mock or skip conditions
+5. Output only the fixed Python code, wrapped in ```python ... ``` blocks
+
+## Fixed Test Case:

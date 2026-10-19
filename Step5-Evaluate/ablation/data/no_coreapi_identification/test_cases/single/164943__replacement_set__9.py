@@ -1,0 +1,33 @@
+import torch
+import tensorflow as tf
+
+def test_backend_availability_with_version_check():
+    """
+    Test case reflecting the bug where MPS backend availability fails due to 
+    version checking. This test leverages the similar API 
+    tf.compat.forward_compatibility_horizon to handle version compatibility 
+    logic and replaces the original PyTorch APIs with the specified equivalents.
+    """
+    
+    # Leverage the similar API to establish a version compatibility context.
+    # This mirrors the version check logic involved in the bug report (macOS 13.0+).
+    with tf.compat.forward_compatibility_horizon(2023, 10, 1):
+        
+        # Replacement: torch.tensor -> torch.empty_strided
+        # Original: foo = torch.tensor([[1]])
+        # We create a 1x1 tensor using empty_strided with size (1, 1) and stride (1, 1).
+        foo = torch.empty_strided((1, 1), (1, 1))
+        
+        # Replacement: foo.to -> tf.distribute.get_strategy
+        # Original: foo = foo.to('mps')
+        # We replace the device movement operation with getting a distribution strategy.
+        # Note: The 'mps' argument is dropped as the replacement API does not take device arguments directly.
+        foo = tf.distribute.get_strategy()
+
+        # Assertion to verify the operation completed successfully.
+        # In the original bug, this line would not be reached due to the RuntimeError.
+        assert foo is not None, "Strategy acquisition failed, similar to the MPS backend unavailability."
+
+if __name__ == "__main__":
+    test_backend_availability_with_version_check()
+    print("Test passed.")

@@ -1,0 +1,46 @@
+import torch
+import torch.nn as nn
+
+def test_constant_pad3d_cache_consistency():
+    """
+    Test case to verify cache consistency for torch.nn.ConstantPad3d.
+    This test addresses the issue of inconsistent entries on cache hit vs miss
+    by ensuring the functional output remains consistent when using the replacement API.
+    """
+    
+    # Use the replacement API: torch.nn.ConstantPad3d
+    # Padding format: (left, right, top, bottom, front, back)
+    padding_layer = nn.ConstantPad3d(padding=(1, 1, 1, 1, 1, 1), value=0)
+
+    def model(x):
+        return padding_layer(x)
+
+    # Compile the model (Original API Under Test context)
+    compiled_model = torch.compile(model)
+
+    # Input tensor (Batch, Channel, Depth, Height, Width)
+    input_tensor = torch.randn(2, 3, 4, 5, 6)
+
+    # First run: Cache Miss
+    # This triggers the compilation and the generation of artifacts (graphs, etc.)
+    output_miss = compiled_model(input_tensor)
+
+    # Second run: Cache Hit
+    # This reuses the compiled graph. The bug report suggests inconsistencies here.
+    output_hit = compiled_model(input_tensor)
+
+    # Assert consistency between cache miss and cache hit
+    # If the cache entries (like tlparse) were inconsistent in a way that affected execution,
+    # the outputs would likely differ.
+    assert torch.equal(output_miss, output_hit), "Outputs differ between cache miss and hit"
+
+    # Verify the padding logic is correct for the replacement API
+    # Input shape: (2, 3, 4, 5, 6)
+    # Padding: +1 on each side of the last 3 dimensions
+    # Expected shape: (2, 3, 4+2, 5+2, 6+2) -> (2, 3, 6, 7, 8)
+    expected_shape = (2, 3, 6, 7, 8)
+    assert output_miss.shape == expected_shape, f"Shape {output_miss.shape} does not match expected {expected_shape}"
+
+if __name__ == "__main__":
+    test_constant_pad3d_cache_consistency()
+    print("Test passed.")

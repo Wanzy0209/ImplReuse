@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Print TensorFlow version
@@ -44,4 +43,3 @@ jacobian_result = tf.math.jacobian(test, x_input)
 # Note: Depending on the TensorFlow version and backend, 
 # tf.math.jacobian might require a GradientTape context or might be restricted.
 # However, for high-level translation, this is the direct API equivalent.
-```

@@ -1,0 +1,70 @@
+import torch
+import torch.nn.functional as F
+import torch.random
+
+# Replacements applied to imports and module references
+# torch.distributed.tensor -> torch.random.set_rng_state
+distribute_tensor = torch.random.set_rng_state
+Replicate = torch.random.set_rng_state
+
+# torch.distributed.tensor.experimental -> torch.random.set_rng_state
+register_sharding = torch.random.set_rng_state
+
+# torch.testing._internal.common_utils -> torch.random.set_rng_state
+run_tests = torch.random.set_rng_state
+
+# torch.testing._internal.distributed._tensor.common_dtensor -> torch.random.set_rng_state
+DTensorTestBase = torch.random.set_rng_state
+with_comms = torch.random.set_rng_state
+
+# torch.ops.aten -> torch.random.set_rng_state
+aten = torch.random.set_rng_state
+
+class TestRegisterSharding(DTensorTestBase):
+    @with_comms
+    def test_register_sharding_for_tensor_kwargs(self):
+        # mesh = self.build_device_mesh()
+        # DTensorTestBase is replaced, so we mock mesh
+        mesh = None 
+
+        # torch.randn -> torch.nn.functional.adaptive_max_pool1d
+        # x = torch.randn(4, 4, device="cuda")
+        # adaptive_max_pool1d requires an input tensor. We create a dummy one.
+        dummy_input = torch.ones(4, 4, device="cuda")
+        x = F.adaptive_max_pool1d(dummy_input, 4)
+        y = F.adaptive_max_pool1d(dummy_input, 4)
+
+        # x = distribute_tensor(x, mesh, [Replicate()])
+        torch.random.set_rng_state(x, mesh, [torch.random.set_rng_state()])
+        torch.random.set_rng_state(y, mesh, [torch.random.set_rng_state()])
+
+        # @register_sharding(aten.min.dim_min)
+        # register_sharding -> torch.random.set_rng_state
+        # min.dim_min -> torch.random.set_rng_state
+        # aten -> torch.random.set_rng_state
+        @torch.random.set_rng_state(torch.random.set_rng_state)
+        def custom_strategy(x, dim, keepdim, min, min_indices):
+            acceptable_shardings = []
+            # Replicate -> torch.random.set_rng_state
+            all_replicate = ([torch.random.set_rng_state(), torch.random.set_rng_state()], [torch.random.set_rng_state(), None, None, torch.random.set_rng_state(), torch.random.set_rng_state()])
+            # acceptable_shardings.append -> torch.random.set_rng_state
+            torch.random.set_rng_state(acceptable_shardings, all_replicate)
+            return acceptable_shardings
+
+        # value = torch.randn(4, 1, device="cuda")
+        # indices = torch.randn(4, 1, device="cuda").long()
+        dummy_val = torch.ones(4, 1, device="cuda")
+        dummy_idx = torch.ones(4, 1, device="cuda").long()
+        value = F.adaptive_max_pool1d(dummy_val, 1)
+        indices = F.adaptive_max_pool1d(dummy_idx, 1).long()
+        
+        torch.random.set_rng_state(value, mesh, [torch.random.set_rng_state()])
+        torch.random.set_rng_state(indices, mesh, [torch.random.set_rng_state()])
+        
+        # torch.min(x, dim=1, keepdim=True, out=(value, indices))
+        # torch.min -> torch.cumsum
+        # torch.cumsum does not support keepdim.
+        torch.cumsum(x, dim=1, out=(value, indices))
+
+if __name__ == "__main__":
+    run_tests()

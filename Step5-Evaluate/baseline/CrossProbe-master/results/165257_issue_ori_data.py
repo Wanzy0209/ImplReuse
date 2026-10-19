@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: PyTorch in-place random operations are replaced by TensorFlow functional operations.
@@ -41,4 +40,3 @@ for name, op_func in ops:
 
     status = "✓ OK" if gpu_max != 0.0 else "✗ BUG"
     print(f"{name:<20} {cpu_max:<12.4f} {gpu_max:<12.4f} {status}")
-```

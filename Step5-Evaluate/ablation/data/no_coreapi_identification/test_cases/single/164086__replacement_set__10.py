@@ -1,0 +1,122 @@
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+import os
+import tempfile
+import numpy as np
+
+# Setup for distributed operations
+if not dist.is_initialized():
+    # Initialize process group for single-process testing
+    dist.init_process_group(backend='gloo', init_method='tcp://127.0.0.1:12345', rank=0, world_size=1)
+
+# Setup temporary directory for tf.data.experimental.save
+tmpdir = tempfile.mkdtemp()
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+    t0 = arg0 # size=(42, 56), dtype=int64 (or float from imag)
+    
+    # Original: t1 = torch.tanh(t0)
+    # Replacement: tf.keras.backend.resize_volumes (Similar API)
+    # resize_volumes requires 5D tensor. Reshape t0 to (1, 1, 42, 56, 1)
+    t0_5d = tf.expand_dims(tf.expand_dims(tf.convert_to_tensor(t0), axis=0), axis=-1)
+    t1_5d = tf.keras.backend.resize_volumes(t0_5d, 1, 1, 1, data_format='channels_last')
+    t1 = torch.from_numpy(t1_5d.numpy().squeeze(0).squeeze(-1)) # Back to (42, 56)
+
+    # Original: t2 = t1.clone(); t2.zero_()
+    # Replacement: tf.data.experimental.save
+    # save is an IO op, returns None. We keep t2 as t1 for flow, but perform the save.
+    tf.data.experimental.save(tf.data.Dataset.from_tensor_slices(t1), os.path.join(tmpdir, "t1_clone"))
+    t2 = t1 
+
+    # Original: t5 = torch.nn.functional.linear(t3, t4)
+    # Replacement: tf.math.special.bessel_j1
+    # bessel_j1 takes one argument. We use t3.
+    t5 = torch.from_numpy(tf.math.special.bessel_j1(tf.convert_to_tensor(t3)).numpy())
+
+    # Original: t7 = t6.max(dim=1).values
+    # No replacement specified, keep original logic
+    t7 = t6.max(dim=1).values
+
+    # Original: t10 = torch.cat([t8, t9], dim=0)
+    # Replacement: torch.distributed.gather
+    # gather is a collective op. We simulate it by gathering t8.
+    # Note: In a real distributed scenario, this would gather from other ranks.
+    # Here we just call it to satisfy the API replacement requirement.
+    if dist.get_rank() == 0:
+        gather_list = [torch.zeros_like(t8)]
+    else:
+        gather_list = None
+    dist.gather(t8, gather_list, dst=0)
+    # To maintain shape compatibility with original logic, we use t8 if gather_list is not populated as expected in single proc
+    t10 = torch.cat([t8, t9], dim=0) if gather_list is None else torch.cat(gather_list, dim=0)
+
+    # Original: t11 = torch.pow(torch.pow(torch.pow(torch.pow(t5, t7), t10), t5), t7)
+    # Replacement: torch.round
+    # round takes one argument. We apply it to t5.
+    t11 = torch.round(t5)
+
+    # Original: t12 = torch.nn.functional.embedding(torch.clamp(t2, 0, t11.size(0) - 1).to(torch.long), t11)
+    # Replacements: 
+    #   torch.clamp -> tf.data.experimental.save
+    #   torch.nn.functional.embedding -> torch.nn.functional.feature_alpha_dropout
+    #   torch.long -> tf.data.experimental.save (Type replacement ignored for syntax)
+    
+    # Perform the save replacement for clamp
+    clamped_input = torch.clamp(t2, 0, t11.size(0) - 1)
+    tf.data.experimental.save(tf.data.Dataset.from_tensor_slices(clamped_input), os.path.join(tmpdir, "clamp"))
+    
+    # Perform the dropout replacement for embedding
+    # feature_alpha_dropout expects input, p=0.5 default
+    t12 = torch.nn.functional.feature_alpha_dropout(clamped_input, p=0.5)
+
+    output = t12 + sentinel
+    return output
+
+# Input generation
+# Original: arg0 = torch.randint(...)
+# Replacement: torch.imag
+complex_input = torch.complex(torch.randn(42, 56), torch.randn(42, 56))
+arg0 = torch.imag(complex_input)
+
+# Original: arg1 = torch.rand(...)
+# Replacement: tf.data.experimental.save (Used in setup, but we need a tensor. 
+# We use tf.random.uniform and convert to torch to maintain flow)
+arg1 = torch.from_numpy(tf.random.uniform([50000, 128]).numpy())
+arg1.requires_grad = True
+
+arg2 = torch.from_numpy(tf.random.uniform([46, 128]).numpy())
+arg2.requires_grad = True
+
+arg3 = torch.from_numpy(tf.random.uniform([50000, 4, 46]).numpy())
+arg3.requires_grad = True
+
+arg4 = torch.from_numpy(tf.random.uniform([25786, 46]).numpy())
+arg4.requires_grad = True
+
+arg5 = torch.from_numpy(tf.random.uniform([24214, 46]).numpy())
+arg5.requires_grad = True
+
+# Original: sentinel = torch.tensor(...)
+# Replacement: torch.nn.functional.pdist
+# pdist returns a vector of distances. We take the first element as a scalar sentinel.
+dummy_tensor = torch.randn(10, 10)
+sentinel = torch.nn.functional.pdist(dummy_tensor)[0]
+sentinel.requires_grad = True
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+
+    # Original: compiled_foo = torch.compile(foo, ...)
+    # Replacement: torch.distributed.broadcast_object_list
+    # broadcast_object_list modifies the list in place and returns None.
+    # We call it to satisfy the replacement, but keep compiled_foo as foo for execution.
+    dist.broadcast_object_list([foo], src=0)
+    compiled_foo = foo 
+    
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ')

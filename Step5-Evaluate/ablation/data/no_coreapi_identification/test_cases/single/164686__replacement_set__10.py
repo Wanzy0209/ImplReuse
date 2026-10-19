@@ -1,0 +1,80 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Replacement: torch.manual_seed -> tf.compat.v1.assert_variables_initialized
+# We wrap this in a try-except block to ensure the script remains runnable
+# even if TensorFlow is not fully configured or in a different graph mode.
+try:
+    # Passing an empty list to avoid errors if no variables exist
+    tf.compat.v1.assert_variables_initialized([])
+except Exception:
+    # Ignore TF errors to keep the script runnable in a PyTorch context
+    pass
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    # Replacement: torch.full -> torch.rand_like
+    # Original: var_node_3 = torch.full((), 1.0, dtype=torch.float32)
+    # We create a reference tensor to use rand_like
+    ref = torch.empty((), dtype=torch.float32)
+    var_node_3 = torch.rand_like(ref)
+    
+    var_node_2 = var_node_3.item()
+    var_node_5 = -3
+    var_node_6 = arg_0
+    var_node_4 = var_node_5 + var_node_6
+    var_node_1 = var_node_2 + var_node_4
+    var_node_9 = 1
+    var_node_10 = -10
+    var_node_8 = var_node_9 / var_node_10
+    var_node_12 = arg_1
+    var_node_13 = -5
+    var_node_11 = var_node_12 / var_node_13
+    var_node_7 = var_node_8 + var_node_11
+    var_node_0 = var_node_1 * var_node_7
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Helper to generate arguments using the replaced APIs
+def generate_args():
+    # Original: arg_0 = torch.tensor(torch.randn(()), dtype=torch.int64).item()
+    # Replacements: torch.randn -> torch.nn.functional.cosine_embedding_loss
+    #               torch.tensor -> torch.nn.functional.pdist
+    
+    # Inner replacement: torch.randn(()) -> F.cosine_embedding_loss
+    # We need dummy inputs for the loss function
+    input1 = torch.randn(2, 3)
+    input2 = torch.randn(2, 3)
+    target = torch.tensor([1.0, 1.0])
+    loss_val = F.cosine_embedding_loss(input1, input2, target)
+    
+    # Outer replacement: torch.tensor(...) -> F.pdist
+    # pdist requires a 2D tensor. loss_val is a scalar.
+    # We reshape to 2D to make it runnable.
+    pdist_input = torch.cat([loss_val.view(1, 1), torch.zeros(1, 1)], dim=0)
+    arg_0 = F.pdist(pdist_input).item()
+    
+    # Same logic for arg_1
+    loss_val_1 = F.cosine_embedding_loss(input1, input2, target)
+    pdist_input_1 = torch.cat([loss_val_1.view(1, 1), torch.zeros(1, 1)], dim=0)
+    arg_1 = F.pdist(pdist_input_1).item()
+    
+    return arg_0, arg_1
+
+# Replacement: torch.tensor -> torch.nn.functional.pdist
+# Original: sentinel = torch.tensor(1.0, requires_grad=True)
+# pdist requires a 2D tensor. We create one with requires_grad=True.
+s_input = torch.randn(2, 1, requires_grad=True)
+sentinel = F.pdist(s_input)
+
+arg_0, arg_1 = generate_args()
+args = (arg_0, arg_1) + (sentinel,)
+
+result_original = fuzzed_program(*args)
+print(' eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print(' compile success')

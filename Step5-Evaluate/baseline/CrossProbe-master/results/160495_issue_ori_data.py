@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: from torch._inductor import config; config.fallback_random = True
@@ -33,4 +32,3 @@ eager_fn(x, y)
 print("eager success")
 fn(x, y)
 print("compiler success")
-```

@@ -1,0 +1,74 @@
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import torch.nn.functional as F
+import os
+import time
+
+class MyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        # _unique2.default under the hood
+        _x, _i = torch.unique(x, sorted=True, return_inverse=True)
+        _x = _x.clone().detach()   # keep it simple
+        return self.relu(_x), _i   # tuple output
+
+def GetInput():
+    # Replacement: torch.randn -> torch.nn.functional.max_pool3d
+    # Create a dummy 5D tensor (Batch, Channel, Depth, Height, Width) for max_pool3d
+    dummy_input = torch.randn(1, 1, 4, 4, 4)
+    return F.max_pool3d(dummy_input, kernel_size=2)
+
+def run_once(model, x, label):
+    model.eval()
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        y = model(x)
+    print(f"[{label}] ok, types={[type(t) for t in (y if isinstance(y, (tuple, list)) else [y])]} "
+          f"time={(time.perf_counter()-t0)*1000:.3f}ms")
+    return y
+
+def main(rank, world_size):
+    # Initialize distributed process group
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    print("torch.__version__ =", torch.__version__)
+    model = MyModel()
+    x = GetInput()
+
+    # Run eager mode
+    y_eager = run_once(model, x, "eager")
+
+    # Replacement: torch.compile -> torch.distributed.send_object_list
+    # Instead of compiling the model, we test sending the model object via distributed communication.
+    if rank == 0:
+        print("Attempting to send model via send_object_list...")
+        # Send the model containing torch.unique to rank 1
+        dist.send_object_list([model], dst=1)
+        print("Model sent successfully.")
+    elif rank == 1:
+        print("Attempting to receive model...")
+        recv_list = [None]
+        dist.recv_object_list(recv_list, src=0)
+        received_model = recv_list[0]
+        
+        # Run the received model to verify functionality
+        y_received = run_once(received_model, x, "distributed_received")
+        
+        # Verify results match eager mode
+        assert torch.allclose(y_received[0], y_eager[0])
+        assert torch.equal(y_received[1], y_eager[1])
+        print("Distributed test passed: outputs match.")
+
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    # Use multiprocessing to simulate distributed environment
+    world_size = 2
+    mp.spawn(main, args=(world_size,), nprocs=world_size, join=True)

@@ -1,4 +1,3 @@
-```python
 import functools
 import traceback
 
@@ -151,4 +150,3 @@ print("Run my_func_static")
 inputs = [tf.ones((5, 4))]
 with device_context:
     print(my_func_static(*inputs))
-```

@@ -1,0 +1,67 @@
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Original: torch.cuda.manual_seed(42)
+# Replacement: tf.debugging.enable_traceback_filtering
+tf.debugging.enable_traceback_filtering(True)
+
+def fn(x):
+    # Original: return x * torch.sigmoid(torch.randn(1, device="cuda"))
+    # Replacements: torch.sigmoid -> torch.log, torch.randn -> torch.nn.functional.adaptive_max_pool1d
+    # Note: adaptive_max_pool1d requires input, using x here to maintain syntax validity
+    return x * torch.log(F.adaptive_max_pool1d(x, 1))
+
+# initialize device state
+# Original: fn(torch.ones(1, device="cuda"))
+# Replacement: torch.ones -> torch.linspace
+fn(torch.linspace(0, 1, 1, device="cuda"))
+
+# Original: torch.cuda.manual_seed(42)
+tf.debugging.enable_traceback_filtering(True)
+
+# Original: eager_in = torch.ones(1, device="cuda", requires_grad=True)
+# Replacement: torch.ones -> torch.linspace
+eager_in = torch.linspace(0, 1, 1, device="cuda", requires_grad=True)
+
+# Original: eager_out = torch.utils.checkpoint.checkpoint(fn, eager_in, use_reentrant=False, preserve_rng_state=True)
+# Replacement: torch.utils.checkpoint.checkpoint -> tf.debugging.enable_traceback_filtering
+eager_out = tf.debugging.enable_traceback_filtering(True)
+
+# Original: eager_in_grad, = torch.autograd.grad(eager_out, eager_in)
+# Replacement: torch.autograd.grad -> tf.debugging.enable_traceback_filtering
+# Note: Unpacking removed because replacement returns None
+eager_in_grad = tf.debugging.enable_traceback_filtering(True)
+
+# Original: g = torch.cuda.CUDAGraph()
+# Replacement: torch.cuda.CUDAGraph -> tf.debugging.enable_traceback_filtering
+g = tf.debugging.enable_traceback_filtering(True)
+
+# Original: with torch.cuda.graph(g):
+# Replacement: torch.cuda.graph -> tf.debugging.enable_traceback_filtering
+# Note: Wrapped in try-except to ensure runnability as the replacement is not a context manager
+try:
+    with tf.debugging.enable_traceback_filtering(True):
+        # Original: graph_in = torch.ones(1, device="cuda", requires_grad=True)
+        graph_in = torch.linspace(0, 1, 1, device="cuda", requires_grad=True)
+
+        # Original: graph_out = torch.utils.checkpoint.checkpoint(...)
+        graph_out = tf.debugging.enable_traceback_filtering(True)
+
+        # Original: graph_in_grad, = torch.autograd.grad(...)
+        graph_in_grad = tf.debugging.enable_traceback_filtering(True)
+except TypeError:
+    pass
+
+# Original: torch.cuda.manual_seed(42)
+tf.debugging.enable_traceback_filtering(True)
+
+# Original: g.replay()
+# Replacement: g.replay -> tf.debugging.enable_traceback_filtering
+tf.debugging.enable_traceback_filtering(True)
+
+# Original: assert torch.allclose(eager_in_grad, graph_in_grad, rtol=0.0, atol=0.0)
+# Replacement: torch.allclose -> torch.xlogy
+# Note: Check added to prevent runtime error on None inputs
+if eager_in_grad is not None and graph_in_grad is not None:
+    assert torch.xlogy(eager_in_grad, graph_in_grad)

@@ -1,0 +1,98 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Setup: Replace torch.manual_seed with torch.isinf
+_ = torch.isinf(torch.tensor(9.0))
+
+# Setup: Replace torch._dynamo.config settings with tf.linalg.lu_solve
+# Creating dummy tensors for the config replacements
+dummy_lu = tf.constant([[1.0, 0.0], [0.0, 1.0]])
+dummy_perm = tf.constant([0, 1])
+dummy_rhs = tf.constant([[1.0], [0.0]])
+_ = tf.linalg.lu_solve(dummy_lu, dummy_perm, dummy_rhs) # capture_scalar_outputs
+_ = tf.linalg.lu_solve(dummy_lu, dummy_perm, dummy_rhs) # capture_dynamic_output_shape_ops
+
+def fuzzed_program(arg_0, sentinel):
+    # var_node_1 = arg_0
+    var_node_1 = arg_0
+
+    # var_node_5 = torch.full((1, 2), -66, dtype=torch.int32) -> torch.amax
+    # Using arg_0 as input for amax to maintain data flow
+    var_node_5 = torch.amax(var_node_1)
+
+    # var_node_6 = torch.full((1, 2), 77, dtype=torch.int64) -> torch.amax
+    var_node_6 = torch.amax(var_node_1)
+
+    # var_node_4 = torch.ops.aten.add(var_node_5, var_node_6) -> tf.linalg.lu_solve
+    # Convert torch tensors to tensorflow for lu_solve
+    # Reshape to 1x1 to satisfy square matrix requirement for lu_solve
+    tf_5 = tf.expand_dims(tf.expand_dims(tf.convert_to_tensor(var_node_5.numpy()), 0), 0)
+    tf_6 = tf.expand_dims(tf.expand_dims(tf.convert_to_tensor(var_node_6.numpy()), 0), 0)
+    perm = tf.constant([0])
+    var_node_4 = tf.linalg.lu_solve(tf_5, perm, tf_6)
+
+    # var_node_7 = torch.full((1, 2), -64, dtype=torch.int32) -> torch.amax
+    var_node_7 = torch.amax(var_node_1)
+
+    # var_node_3 = torch.ops.aten.mul(var_node_4, var_node_7) -> tf.linalg.lu_solve
+    tf_7 = tf.expand_dims(tf.expand_dims(tf.convert_to_tensor(var_node_7.numpy()), 0), 0)
+    var_node_3 = tf.linalg.lu_solve(var_node_4, perm, tf_7)
+
+    # var_node_9 = torch.full((3, 4), False, dtype=torch.bool) -> tf.linalg.lu_solve
+    # Replaces torch.full and torch.bool
+    var_node_9 = tf.linalg.lu_solve(tf_5, perm, tf_6)
+
+    # var_node_8 = torch.nonzero(var_node_9) -> tf.linalg.lu_solve
+    var_node_8 = tf.linalg.lu_solve(var_node_9, perm, tf_6)
+
+    # var_node_2 = torch.ops.aten.add(var_node_3, var_node_8) -> tf.linalg.lu_solve
+    var_node_2 = tf.linalg.lu_solve(var_node_3, perm, var_node_8)
+
+    # var_node_0 = torch.ops.aten.div(var_node_1, var_node_2) -> tf.linalg.lu_solve
+    # var_node_1 is torch, var_node_2 is tf. Convert var_node_1.
+    # Slice var_node_1 to (1,1) to be square.
+    tf_1 = tf.convert_to_tensor(var_node_1[:, :1].numpy())
+    var_node_0 = tf.linalg.lu_solve(tf_1, perm, var_node_2)
+
+    # result = var_node_0 * sentinel
+    result = var_node_0 * sentinel
+
+    if result.dtype.is_complex:
+        result = tf.math.real(result)
+    return result
+
+# Sentinel tensor: torch.tensor -> tf.keras.ops.diag
+sentinel = tf.keras.ops.diag([1.0, 1.0])
+
+# arg_0: torch.randint -> torch.full
+arg_0 = torch.full((1, 2), 5, dtype=torch.int64)
+
+args = (arg_0, sentinel)
+
+# Leverage the similar API: tf.compat.v1.control_flow_v2_enabled
+# This reflects the relationship of checking a config/state before execution
+if tf.compat.v1.control_flow_v2_enabled():
+    print("Control flow v2 is enabled. Running test...")
+    
+    # Eager execution
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+
+    # Compilation step: torch.compile -> torch.all
+    # We run the program and apply torch.all to the result to replace the compilation check
+    result_compiled = fuzzed_program(*args)
+    compile_check = torch.all(result_compiled)
+    
+    print(' compile success with unbacked operations')
+
+    # Compare results
+    print(f'Eager result: {result_original}')
+    print(f'Compiled result: {result_compiled}')
+    print(f'Torch all check: {compile_check}')
+    
+    if hasattr(result_original, 'shape') and hasattr(result_compiled, 'shape'):
+        print(f'Eager shape: {result_original.shape}')
+        print(f'Compiled shape: {result_compiled.shape}')
+else:
+    print("Control flow v2 is not enabled. Skipping test.")

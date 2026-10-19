@@ -1,0 +1,39 @@
+```python
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+# torch.set_default_device('cuda') -> tf.test.is_built_with_xla
+# We use the replacement API to guard the test execution, similar to the ROCm check pattern.
+if tf.test.is_built_with_xla():
+    # inp = torch.randn(8192) -> torch.nn.functional.adaptive_max_pool1d
+    # To make the replacement runnable, we provide a dummy input tensor to the pooling function.
+    dummy_input = torch.ones(1, 8192)
+    inp = F.adaptive_max_pool1d(dummy_input, 1)
+
+    # func = torch.exp
+    # torch.exp is not in the replacement list alone, so we keep it as is.
+    func = torch.exp
+
+    # out1 = func(inp)
+    out1 = func(inp)
+
+    # out2 = torch.compile(func)(inp) -> torch.prod(func)(inp)
+    # Replacing torch.compile with torch.prod. To maintain runnable syntax, we apply prod to the result of func(inp).
+    out2 = torch.prod(func(inp))
+
+    # out3_high = func(inp.to(torch.float64))
+    # inp.to(torch.float64) -> tf.test.is_built_with_xla
+    # torch.float64 -> tf.test.is_built_with_xla
+    # We replace the conversion chain with a call to the XLA check.
+    # Note: tf.test.is_built_with_xla() returns a bool, which torch.exp can handle (casting to float).
+    out3_high = func(tf.test.is_built_with_xla())
+
+    # Print statements
+    # out3_high is a scalar, out1 is a tensor. Broadcasting works.
+    print((out3_high - out1).abs().max())
+
+    # out3_high is a scalar, out2 is a scalar (result of prod).
+    # We wrap the result in a tensor to allow the .max() call, preserving the original logic structure.
+    print(torch.tensor((out3_high - out2).abs()).max())
+```

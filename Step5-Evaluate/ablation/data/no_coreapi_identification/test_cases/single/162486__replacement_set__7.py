@@ -1,0 +1,61 @@
+import torch
+import torch.nn.functional as F
+from torch.utils.data import Dataset, random_split
+from torch import set_default_device
+
+
+class TestDataset(Dataset):
+    def __init__(self, x: torch.Tensor, y: torch.Tensor):
+        super().__init__()
+        self.x = x
+        self.y = y
+
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, idx):
+        return self.x[idx], self.y[idx]
+
+
+def test_bug(device: str = 'cuda'):
+    # Check for CUDA availability to ensure the test is runnable on non-CUDA machines
+    if device == 'cuda' and not torch.cuda.is_available():
+        print(f"Device {device} is not available. Skipping test.")
+        return
+
+    set_default_device(device)
+
+    # Replacement: torch.randn -> torch.nn.functional.max_pool2d
+    # To generate tensors of shape (100, 3) and (100, 2) using max_pool2d,
+    # we create dummy input tensors of shape (Batch, Channel, Height, Width)
+    # and apply pooling with kernel_size=1 (effectively a reshape/identity pass here).
+    
+    # Create x: target shape (100, 3)
+    # Input shape (100, 1, 3, 1) -> max_pool2d -> (100, 1, 3, 1) -> squeeze -> (100, 3)
+    input_x = torch.ones(100, 1, 3, 1)
+    x = F.max_pool2d(input_x, kernel_size=1).squeeze(-1).squeeze(-1)
+
+    # Create y: target shape (100, 2)
+    # Input shape (100, 1, 2, 1) -> max_pool2d -> (100, 1, 2, 1) -> squeeze -> (100, 2)
+    input_y = torch.ones(100, 1, 2, 1)
+    y = F.max_pool2d(input_y, kernel_size=1).squeeze(-1).squeeze(-1)
+
+    dataset = TestDataset(x, y)
+
+    try:
+        train_dataset, val_dataset, test_dataset = random_split(
+            dataset, 
+            [0.7, 0.2, 0.1],
+        )
+        
+        # Assertion to verify the split worked correctly
+        assert len(train_dataset) + len(val_dataset) + len(test_dataset) == len(dataset)
+        print(f"Device {device} worked.")
+    except Exception as e:
+        print(f"Device {device} failed with error: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    test_bug(device='cpu')
+    test_bug(device='cuda')

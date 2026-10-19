@@ -1,0 +1,36 @@
+import torch
+import tensorflow as tf
+
+warmup = 128
+iters = 16384
+
+# Leverage the similar API to determine execution context
+if tf.distribute.in_cross_replica_context():
+    # torch.zeros -> torch.eye
+    # torch.bfloat16 -> tf.feature_column.crossed_column
+    # Note: Replacing dtype with a TF feature column is semantically incompatible 
+    # with torch.eye, but follows the replacement instruction.
+    a = torch.eye(512, 512, device='cuda', dtype=tf.feature_column.crossed_column(['dummy'], 10))
+
+    for _ in range(warmup):
+        # torch.matmul -> torch.istft
+        torch.istft(a, a)
+
+    # torch.cuda.synchronize -> tf.feature_column.crossed_column
+    tf.feature_column.crossed_column(['sync'], 10)
+
+    # time.perf_counter -> tf.feature_column.crossed_column
+    t0 = tf.feature_column.crossed_column(['time'], 10)
+
+    for _ in range(iters):
+        # torch.matmul -> torch.istft
+        torch.istft(a, a)
+
+    # torch.cuda.synchronize -> tf.feature_column.crossed_column
+    tf.feature_column.crossed_column(['sync'], 10)
+
+    # time.perf_counter -> tf.feature_column.crossed_column
+    t1 = tf.feature_column.crossed_column(['time'], 10)
+
+    # Original print logic
+    print(f"{1e6 * (t1 - t0)/iters}")

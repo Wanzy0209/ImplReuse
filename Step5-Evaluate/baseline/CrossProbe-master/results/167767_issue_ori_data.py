@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.zeros creates a tensor filled with zeros. 
@@ -32,4 +31,3 @@ print(b)
 # Conversion: torch.clamp_min(...) -> tf.maximum(...)
 c = tf.maximum(b, 1e-7)
 print(c)
-```

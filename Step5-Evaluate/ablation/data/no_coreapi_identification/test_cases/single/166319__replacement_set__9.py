@@ -1,0 +1,51 @@
+import torch
+import torch.nn.functional as F
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+# Replacement: torch.manual_seed -> torch.rand_like
+torch.rand_like(torch.tensor(0.0))
+
+def fuzzed_program(arg_0, arg_1, arg_2, sentinel):
+    var_node_4 = arg_0
+    # Replacement: torch.squeeze -> torch.nn.functional.pdist
+    # Reshaping to 2D for pdist compatibility
+    var_node_3 = F.pdist(var_node_4.view(-1, var_node_4.size(-1)))
+    # Replacement: torch.chunk -> torch.empty
+    var_node_2 = torch.empty((9, 15, 1), dtype=var_node_3.dtype, device=var_node_3.device)
+    # Replacement: torch.squeeze -> torch.nn.functional.pdist
+    var_node_1 = F.pdist(var_node_2.view(-1, var_node_2.size(-1)))
+    var_node_7 = arg_1
+    var_node_8 = arg_2
+    _input_size_var_node_6 = var_node_7.size(0)
+    # Replacement: torch.randint -> torch.bernoulli
+    _index_var_node_6 = torch.bernoulli(torch.full((18, 15), 0.5, device=var_node_7.device)).to(torch.int64)
+    # Replacement: torch.gather -> torch.scatter_add
+    # scatter_add requires an accumulator and a source tensor
+    acc = torch.zeros_like(var_node_7)
+    var_node_6 = torch.scatter_add(acc, 0, _index_var_node_6, torch.ones_like(var_node_7))
+    # Replacement: torch.chunk -> torch.empty
+    var_node_5 = torch.empty((9, 15), dtype=var_node_6.dtype, device=var_node_6.device)
+    # Replacement: torch.mul -> torch.unique
+    var_node_0 = torch.unique(var_node_1)
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Replacement: torch.tensor -> torch.empty_strided
+sentinel = torch.empty_strided((1,), (1,), dtype=torch.float32, requires_grad=True)
+
+# Replacement: torch.as_strided -> torch.chunk
+# Using view to maintain original shapes for compatibility with subsequent hardcoded sizes
+arg_0 = torch.chunk(torch.randint(5, 30, (540,)).to(torch.int32).view(9, 1, 15, 4), 1, dim=0)[0]
+arg_1 = torch.chunk(torch.randint(5, 30, (300,)).to(torch.int64).view(20, 15), 1, dim=0)[0]
+arg_2 = torch.chunk(torch.randint(5, 30, (270,)).to(torch.int64).view(18, 15), 1, dim=0)[0]
+
+args = (arg_0, arg_1, arg_2) + (sentinel,)
+result_original = fuzzed_program(*args)
+print(' eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print(' compile success')

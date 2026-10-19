@@ -1,0 +1,34 @@
+import torch
+import tensorflow as tf
+import torch.distributed
+
+# Original: @torch.compile(dynamic=True)
+# Replacement: torch.distributed.broadcast_object_list
+# Since broadcast_object_list is a function and not a decorator, 
+# we remove the decorator and use the function to wrap the execution.
+
+def f(x):
+    # Original: x.fill_diagonal_(True)
+    # Replacement: tf.test.is_built_with_cuda
+    tf.test.is_built_with_cuda()
+
+# Original: x = torch.zeros(4, 4)
+# Replacement: x = torch.qr(torch.zeros(4, 4))
+# torch.qr requires a tensor input, so we pass a tensor.
+x = torch.qr(torch.zeros(4, 4))
+
+try:
+    # Original: f(x)
+    # Replacement: torch.distributed.broadcast_object_list([f(x)], src=0)
+    # We wrap the call to f(x) inside the broadcast_object_list call.
+    # We check for distributed initialization to ensure the test is runnable in various environments.
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.broadcast_object_list([f(x)], src=0)
+    else:
+        # If distributed is not initialized, we simply call f(x) to preserve the core logic.
+        f(x)
+except Exception:
+    # Original: torch._dynamo.exc.TorchRuntimeError
+    # Replacement: tf.test.is_built_with_cuda
+    # We replace the specific exception handling with a call to the similar API.
+    tf.test.is_built_with_cuda()

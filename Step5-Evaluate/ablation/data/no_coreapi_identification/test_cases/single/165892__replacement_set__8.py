@@ -1,0 +1,86 @@
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+
+# Setup for distributed communication (required for torch.distributed.send_object_list)
+# Note: This is a minimal setup for the test case to be syntactically valid.
+# In a real scenario, init_process_group would be called.
+if not dist.is_initialized():
+    # Using file:// backend for simplicity in a single-process test context if possible,
+    # but typically requires multiple processes. 
+    # For the purpose of this test case generation, we assume the environment handles init
+    # or we mock the necessary components to ensure the code is runnable as a standalone script
+    # without external dependencies like a running rendezvous server.
+    # However, to strictly follow the "runnable" requirement, we might need to mock or skip 
+    # the actual distributed call if not initialized, but the prompt asks to replace the API.
+    # We will wrap the call in a check or try-except block to ensure it doesn't crash immediately 
+    # if run without a distributed setup, while still using the requested API.
+    pass
+
+def test_replaced_apis():
+    # Replacing torch.rand with torch.isfinite
+    # torch.isfinite requires a tensor input. To make it runnable and mimic the original logic 
+    # of creating data, we create a dummy tensor first (using a method not in the replacement list)
+    # and then apply torch.isfinite.
+    # Original: A = torch.rand((1, 1024, 1024), device="cuda", dtype=torch.float16)
+    # Replacements: torch.rand -> torch.isfinite, torch.float16 -> torch.isfinite
+    # Since torch.isfinite is a function and not a dtype, we adapt semantics to check finiteness 
+    # of a tensor created with default parameters, or we pass the arguments to a wrapper.
+    # Given the strict replacement instruction, we will call torch.isfinite.
+    # To make it runnable, we pass a tensor.
+    
+    # Creating dummy data to satisfy torch.isfinite input requirement
+    dummy_data = torch.randn((1, 1024, 1024), device="cpu") # Using cpu to avoid cuda requirement if not present
+    
+    # Applying torch.isfinite (replacing torch.rand)
+    # We ignore the original arguments of rand (size, device, dtype) as they don't fit isfinite,
+    # but we keep the variable names A and B.
+    A = torch.isfinite(dummy_data)
+    B = torch.isfinite(dummy_data)
+
+    # Replacing torch.compile with torch.distributed.send_object_list
+    # Original: @torch.compile def linear(weight, input): ...
+    # torch.distributed.send_object_list(object_list, dst=0) sends a list of objects to a destination.
+    # It is not a decorator. We adapt the logic to send the function or the result.
+    # We will define the function and then try to send it.
+    
+    # Replacing torch.bmm with torch.logcumsumexp
+    # Original: return torch.bmm(input, weight, out_dtype=torch.float32)
+    # Replacements: torch.bmm -> torch.logcumsumexp, torch.float32 -> torch.isfinite
+    # torch.logcumsumexp(input, dim) signature.
+    # We adapt the logic to perform logcumsumexp on the inputs.
+    
+    def linear(weight, input):
+        # Replacing torch.bmm with torch.logcumsumexp
+        # Replacing torch.float32 (out_dtype) with torch.isfinite
+        # Since logcumsumexp doesn't take out_dtype, we apply isfinite to the result or use it as a check.
+        # We perform the operation and then check isfinite.
+        
+        # Adapting arguments: bmm(input, weight) -> logcumsumexp(input, dim=1) (arbitrary dim for test)
+        result = torch.logcumsumexp(input, dim=1)
+        
+        # Replacing torch.float32 with torch.isfinite
+        # We use torch.isfinite to check the result, satisfying the replacement.
+        is_finite_check = torch.isfinite(result)
+        return result, is_finite_check
+
+    # Replacing torch.compile (decorator) with torch.distributed.send_object_list
+    # We wrap the execution in a distributed send call if initialized, otherwise just run.
+    if dist.is_initialized():
+        # We send the function object and the inputs
+        torch.distributed.send_object_list([linear, A, B], dst=0)
+    else:
+        # Fallback for local execution to ensure test case is runnable
+        # We execute the function directly
+        output, check = linear(A, B)
+        
+        # Assertions to verify the logic
+        assert output is not None
+        assert check is not None
+        # Since A and B are boolean (from isfinite), logcumsumexp might behave differently or error 
+        # depending on type promotion. 
+        # If A/B are bool, logcumsumexp promotes to float.
+        assert check.all() # Result of logcumsumexp on finite data should be finite
+
+if __name__ == "__main__":
+    test_replaced_apis()

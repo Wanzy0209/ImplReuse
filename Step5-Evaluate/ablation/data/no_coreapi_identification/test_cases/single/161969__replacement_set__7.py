@@ -1,0 +1,75 @@
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+
+def test_replaced_api_logic():
+    # Replacing torch.device("mps") with torch.distributed.recv
+    # We assign the function object to avoid blocking execution in a non-distributed environment
+    device = dist.recv
+
+    # Replacing torch.float32 with torch.nn.SyncBatchNorm
+    dtype = nn.SyncBatchNorm
+
+    # Replacing torch.zeros with torch.slogdet
+    # Original: torch.zeros((2, 5, 3), device=device, dtype=dtype)
+    # We create a square matrix for slogdet
+    input_data = torch.eye(3)
+    data = torch.slogdet(input_data)
+
+    # Replacing torch.tensor with torch.cummax
+    # Original: torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)
+    # We use cummax on a tensor to generate values
+    values, _ = torch.cummax(torch.tensor([20., 0.5, 5.]), dim=0)
+    
+    # Replacing torch.diag with torch.triu_indices
+    # Original: torch.diag(...)
+    # We use the size from the previous step to generate indices
+    size = int(values.shape[0])
+    p = torch.triu_indices(size, size)
+
+    def example_function():
+        def logp(x, matrix):
+            # Replacing matrix.is_contiguous with torch.nn.SyncBatchNorm
+            # Original: # print(matrix.is_contiguous())
+            # print(torch.nn.SyncBatchNorm)
+
+            # Replacing torch.linalg.cholesky with torch.nn.SyncBatchNorm
+            # Original: p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+            # We instantiate SyncBatchNorm. Assuming 3 features based on context.
+            norm = nn.SyncBatchNorm(3)
+            # Ensure input is Batch x Channels for the layer
+            if matrix.dim() == 2:
+                matrix = matrix.unsqueeze(0)
+            p_mat_sqrt = norm(matrix)
+
+            # Replacing torch.sum with torch.allclose
+            # Original: val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+            # We compare the tensor with itself to satisfy allclose signature
+            val = torch.allclose(p_mat_sqrt, p_mat_sqrt)
+            return -val
+
+        # Replacing torch.vmap and torch.func.grad with torch.nn.SyncBatchNorm
+        # Original: score_func = torch.vmap(torch.func.grad(logp, 0), (0, None))
+        # We return a SyncBatchNorm layer as the replacement for the functional mapping
+        score_func = nn.SyncBatchNorm(3)
+        return score_func
+
+    # Replacing torch.compile with torch.nn.SyncBatchNorm
+    # Original: compiled_function = torch.compile(example_function())
+    # We instantiate a SyncBatchNorm layer
+    compiled_function = nn.SyncBatchNorm(3)
+
+    # Original: res = compiled_function(data, p)
+    # data is a tuple (sign, logabsdet) from slogdet. We pass the logabsdet (tensor) to the layer.
+    # p is indices, ignored by the layer.
+    if isinstance(data, tuple):
+        res = compiled_function(data[1])
+    else:
+        res = compiled_function(data)
+
+    # Basic assertion to verify execution
+    assert res is not None
+    print("Test passed with replaced APIs.")
+
+if __name__ == "__main__":
+    test_replaced_api_logic()

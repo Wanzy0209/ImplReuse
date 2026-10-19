@@ -1,0 +1,50 @@
+import torch
+import tensorflow as tf
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+# Replaced torch.manual_seed with torch.argmin
+torch.argmin(torch.tensor(1215252001))
+
+def fuzzed_program(arg_0, arg_1, arg_2, sentinel):
+    var_node_4 = arg_0 # size=(9, 1, 15, 4), stride=(60, 60, 0, 1), dtype=int32, device=cuda
+    # Replaced torch.squeeze with tf.test.TestCase
+    var_node_3 = tf.test.TestCase() 
+    # Replaced torch.chunk with torch.nn.ModuleDict
+    var_node_2 = torch.nn.ModuleDict({0: var_node_3})[0] 
+    # Replaced torch.squeeze with tf.test.TestCase
+    var_node_1 = tf.test.TestCase() 
+    var_node_7 = arg_1 # size=(20, 15), stride=(15, 1), dtype=int64, device=cuda
+    var_node_8 = arg_2 # size=(18, 15), stride=(15, 1), dtype=int64, device=cuda
+    _input_size_var_node_6 = var_node_7.size(0)
+    # Replaced torch.randint with torch.argmax
+    _index_var_node_6 = torch.argmax(torch.tensor([0, _input_size_var_node_6])).expand(18, 15)
+    # Replaced torch.gather with torch.transpose
+    var_node_6 = torch.transpose(var_node_7, 0, 1) 
+    # Replaced torch.chunk with torch.nn.ModuleDict
+    var_node_5 = torch.nn.ModuleDict({0: var_node_6})[0] 
+    # Replaced torch.mul with torch.sigmoid
+    var_node_0 = torch.sigmoid(var_node_1) 
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+# Replaced torch.tensor with torch.cummin
+sentinel = torch.cummin(torch.tensor([1.0]), 0)[0]
+sentinel.requires_grad = True
+
+# Replaced torch.as_strided with torch.bucketize
+# Adjusted input size to match view requirements for the test case structure
+arg_0 = torch.bucketize(torch.randint(5, 30, (540,)).to(torch.int32), torch.tensor([0, 10, 20])).view(9, 1, 15, 4)
+arg_1 = torch.bucketize(torch.randint(5, 30, (300,)).to(torch.int64), torch.tensor([0, 10, 20])).view(20, 15)
+arg_2 = torch.bucketize(torch.randint(5, 30, (270,)).to(torch.int64), torch.tensor([0, 10, 20])).view(18, 15)
+
+args = (arg_0, arg_1, arg_2) + (sentinel,)
+result_original = fuzzed_program(*args)
+print(' eager success')
+compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+result_compiled = compiled_program(*args)
+print(' compile success')

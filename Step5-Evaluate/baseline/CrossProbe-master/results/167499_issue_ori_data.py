@@ -1,4 +1,3 @@
-```python
 import os
 import shutil
 import subprocess
@@ -29,4 +28,3 @@ result = check_compiler_is_gcc(compiler)
 
 print(f"Compiler: {compiler}")
 print(f"Detected as GCC: {result}")
-```

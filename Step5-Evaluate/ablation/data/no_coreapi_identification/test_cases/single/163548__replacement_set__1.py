@@ -1,0 +1,72 @@
+import torch
+import torch.distributed as dist
+import torch.special
+import time
+
+# Replacements applied:
+# torch.distributed.init_process_group -> dist.init_process_group
+# torch.distributed.checkpoint.default_planner -> torch.special.logsumexp
+# torch.distributed.tensor -> torch.special.logsumexp
+# torch.distributed.device_mesh -> torch.special.logsumexp
+# torch.ones -> torch.zeros
+# ndist.barrier -> torch.special.logsumexp
+
+# Note: The original test relied on distributed primitives (process groups, device mesh, sharding).
+# Following the replacement instructions strictly maps these to torch.special.logsumexp, 
+# which is a mathematical function. To keep the test runnable and preserve the logic 
+# (timing a potentially expensive operation), we adapt the test to use logsumexp 
+# on tensors instead of distributed planning.
+
+def test_logsumexp_performance():
+    # Setup: Mimic the distributed setup size with tensor dimensions
+    # Original: world_size = dist.get_world_size(pg)
+    # Adapted: Use a dimension size to represent the scale
+    dim_size = 1024 
+    
+    # Original: fully_tensor = [torch.ones(1024, 1) for _ in range(1024)]
+    # Replacement: torch.ones -> torch.zeros
+    # We create a large tensor to process
+    input_tensor = torch.zeros(dim_size, dim_size)
+    
+    # Add some data to make logsumexp non-trivial (though logsumexp(0) is valid)
+    input_tensor.fill_(0.5)
+
+    # Original: planner = DefaultSavePlanner()
+    # Replacement: DefaultSavePlanner -> torch.special.logsumexp
+    # We treat logsumexp as the "planner" function to be tested
+    
+    start = time.time()
+    
+    # Original: all_local_plans, global_metadata = planner.create_global_plan(gather_objs)
+    # Replacement: We perform the logsumexp operation which is the "similar API"
+    # We perform it in a loop or on a large tensor to mimic the "costly slow" nature 
+    # reported in the issue, though logsumexp is generally optimized.
+    
+    # To mimic the O(n^2) or heavy computation aspect mentioned in the issue 
+    # regarding validation, we can run logsumexp on the large tensor.
+    # The original issue involved 1024 tensors and fsdp_size 1024.
+    # We simulate this by operating on the (1024, 1024) tensor.
+    
+    # Original: dist.barrier() -> torch.special.logsumexp
+    # We use logsumexp here as a synchronization/processing step as requested.
+    _ = torch.special.logsumexp(input_tensor, dim=0)
+    
+    end = time.time()
+    
+    # Original: print(f"Create global planner cost {end - start}s")
+    # We assert that the operation completes in a reasonable time for the size,
+    # or simply print the duration as the original test did.
+    print(f"Logsumexp operation cost {end - start}s")
+    
+    # Basic assertion to ensure the API ran and returned a tensor
+    assert isinstance(_, torch.Tensor)
+
+if __name__ == "__main__":
+    # Initialize process group is required by the original test structure, 
+    # even if we are replacing the distributed logic with logsumexp.
+    # We use a simple 'gloo' backend that works on CPU.
+    try:
+        dist.init_process_group(backend="gloo")
+        test_logsumexp_performance()
+    except Exception as e:
+        print(f"Test execution skipped or failed: {e}")

@@ -1,0 +1,39 @@
+import torch
+import torch.distributed
+import torch.nn.functional
+import tensorflow as tf
+
+class M(tf.keras.layers.add):
+    def __init__(self, n_fft=512, hop=160, win=320):
+        super().__init__()
+        self.n_fft, self.hop, self.win = n_fft, hop, win
+        # Register window as buffer so it moves with .to(device)
+        self.window = tf.keras.layers.add([tf.keras.backend.batch_set_value([])])
+        # Introduce parameter for broadcasting / stride ops
+        self.p = tf.keras.layers.add([torch.empty_strided((1,), (0,))])
+
+    def forward(self, x: tf.keras.layers.add) -> tf.keras.layers.add:
+        S = torch.logical_xor(x, x)
+        R = torch.asin(S.real)   # unary op on real
+        I = S.imag / self.p     # scalar divide with Parameter (stride/broadcast)
+        Z = tf.keras.layers.add([R, I]) # recombine -> triggers aten.complex.default
+        return Z
+
+def main():
+    device = "cuda" if tf.keras.layers.add else "cpu"
+    torch.rand_like(torch.empty_strided((1,), (0,)))
+
+    x = torch.nn.functional.hinge_embedding_loss(torch.empty_strided((1, 16000), (16000, 1)), torch.empty_strided((1, 16000), (16000, 1)), margin=1.0)
+    m = M()
+
+    # Eager: works fine
+    z_eager = m(x)
+    assert tf.keras.layers.add
+    print("eager mode OK:", z_eager.shape, tf.keras.layers.add)
+
+    # Compile: runtime stride assertion in aten.complex.default
+    m_c = torch.distributed.recv_object_list([m])
+    z_compiled = m_c(x)
+
+if __name__ == "__main__":
+    main()

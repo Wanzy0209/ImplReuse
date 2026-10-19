@@ -1,0 +1,128 @@
+```python
+import torch
+import tensorflow as tf
+import sys
+import numpy as np
+
+# Helper to handle TF/PT tensor conversion and reshaping for conv3d_transpose
+def tf_conv3d_transpose_wrapper(input_pt, filter_pt, output_shape_pt, strides=(1, 1, 1, 1, 1), padding='SAME'):
+    # Convert PyTorch tensors to TensorFlow tensors
+    input_tf = tf.convert_to_tensor(input_pt.cpu().numpy())
+    filter_tf = tf.convert_to_tensor(filter_pt.cpu().numpy())
+    
+    # Perform conv3d_transpose
+    output_tf = tf.nn.conv3d_transpose(
+        input_tf, 
+        filter_tf, 
+        output_shape_pt, 
+        strides=strides, 
+        padding=padding
+    )
+    
+    # Convert back to PyTorch tensor
+    return torch.from_numpy(output_tf.numpy()).to(input_pt.device)
+
+# Note: torch._dynamo.config replacements are removed as they are config flags, 
+# and replacing them with a function call (tf.nn.conv3d_transpose) is invalid syntax.
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0 # size=(2, 261, 17, 358), dtype=bfloat16, device=cuda
+    t1 = t0.max(dim=0).values # size=(261, 17, 358), dtype=bfloat16, device=cuda
+    
+    # Replacement: t1.transpose -> tf.nn.conv3d_transpose
+    # Original shape: (261, 17, 358). Target shape: (17, 261, 358).
+    # Reshape for 3D conv: (Batch, Depth, Height, Width, Channels)
+    # Treat 261 as Depth, 17 as Height, 358 as Width/Channels.
+    # To swap 261 and 17, we reshape input to (1, 261, 1, 17, 358) and target to (1, 17, 261, 1, 358).
+    # We need a dummy filter for this operation.
+    dummy_filter_transpose = torch.eye(358).view(1, 1, 1, 358, 358).repeat(1, 1, 1, 1, 1).to(t0.device)
+    t1_reshaped = t1.unsqueeze(0).unsqueeze(2) # (1, 261, 1, 17, 358)
+    # Output shape for TF: (1, 17, 261, 1, 358)
+    out_shape_tf = [1, 17, 261, 1, 358]
+    t2_tf = tf_conv3d_transpose_wrapper(t1_reshaped, dummy_filter_transpose, out_shape_tf, padding='SAME')
+    t2 = t2_tf.squeeze(0).squeeze(2) # (17, 261, 358)
+    
+    t3 = arg1 # size=(17, 64, 358), dtype=float32, device=cuda
+    
+    # Replacement: torch.exp -> torch.square
+    t4 = torch.square(t3) # size=(17, 64, 358), dtype=float32, device=cuda
+    
+    t5 = arg2 # size=(261, 1, 64), dtype=float32, device=cuda
+    
+    # Replacement: t5.transpose -> tf.nn.conv3d_transpose
+    # Original shape: (261, 1, 64). Target: (261, 64, 1).
+    # Reshape input to (1, 261, 1, 1, 64). Target (1, 261, 1, 64, 1).
+    dummy_filter_transpose_2 = torch.eye(64).view(1, 1, 1, 1, 64).to(t0.device)
+    t5_reshaped = t5.unsqueeze(0).unsqueeze(2) # (1, 261, 1, 1, 64)
+    out_shape_tf_2 = [1, 261, 1, 64, 1]
+    t6_tf = tf_conv3d_transpose_wrapper(t5_reshaped, dummy_filter_transpose_2, out_shape_tf_2, padding='SAME')
+    t6 = t6_tf.squeeze(0).squeeze(2) # (261, 64, 1)
+    
+    # Replacement: nn.functional -> tf.nn.conv3d_transpose
+    # Original: conv1d(t4, t6). t4=(17, 64, 358), t6=(261, 64, 1). Output=(17, 261, 358).
+    # Reshape t4 to (17, 1, 1, 358, 64) [Batch, D, H, W, C]
+    # Reshape t6 to (1, 1, 1, 261, 64) [D, H, W, C_out, C_in]
+    # Target output: (17, 1, 1, 358, 261) -> (17, 261, 358)
+    t4_reshaped = t4.unsqueeze(1).unsqueeze(1) # (17, 1, 1, 358, 64)
+    t6_reshaped = t6.permute(2, 1, 0).unsqueeze(0).unsqueeze(0).unsqueeze(0) # (1, 1, 1, 261, 64) - Note: t6 is (261, 64, 1), we want (Out, In, K) -> (261, 64, 1). TF filter is (D, H, W, Out, In).
+    # Wait, t6 is (261, 64, 1). In conv1d, this is (OutChannels, InChannels, Kernel).
+    # In conv3d_transpose, filter is (Depth, Height, Width, OutputChannels, InputChannels).
+    # So we map t6 to (1, 1, 1, 261, 64).
+    t6_filter = t6.permute(2, 1, 0).unsqueeze(0).unsqueeze(0).unsqueeze(0) # (1, 1, 1, 261, 64)
+    
+    out_shape_tf_3 = [17, 1, 1, 358, 261]
+    t7_tf = tf_conv3d_transpose_wrapper(t4_reshaped, t6_filter, out_shape_tf_3, padding='SAME')
+    t7 = t7_tf.squeeze(1).squeeze(1) # (17, 358, 261) -> permute to (17, 261, 358)
+    t7 = t7.permute(0, 2, 1)
+    
+    # Replacement: t7.clone -> tf.nn.conv3d_transpose
+    # Original: clone(). Shape (17, 261, 358).
+    # Use identity convolution.
+    dummy_filter_clone = torch.eye(358).view(1, 1, 1, 358, 358).to(t0.device)
+    t7_reshaped_clone = t7.unsqueeze(1).unsqueeze(1) # (17, 1, 1, 261, 358)
+    # To clone, we need to preserve shape. 
+    # Input (17, 1, 1, 261, 358). Filter (1, 1, 1, 358, 358). Output (17, 1, 1, 261, 358).
+    # But conv3d_transpose changes channels. 358 -> 358.
+    # We need to treat 261 as spatial dim or channel?
+    # If 358 is channel, input is (17, 1, 1, 261, 358).
+    # Filter (1, 1, 1, 358, 358).
+    # Output (17, 1, 1, 261, 358).
+    out_shape_tf_4 = [17, 1, 1, 261, 358]
+    t8_tf = tf_conv3d_transpose_wrapper(t7_reshaped_clone, dummy_filter_clone, out_shape_tf_4, padding='SAME')
+    t8 = t8_tf.squeeze(1).squeeze(1)
+    
+    # t8.zero_() equivalent
+    t8.zero_()
+    
+    t9 = t2 * t7 * t8 # size=(17, 261, 358), dtype=float32, device=cuda
+    output = t9  # output tensor
+    return output
+
+# Replacement: torch.rand -> tf.nn.conv3d_transpose
+# Note: Replacing data generation (torch.rand) with a computation (conv3d_transpose) is not possible 
+# without existing inputs. We keep torch.rand to ensure the test is runnable.
+arg0 = torch.rand([2, 261, 17, 358], dtype=torch.bfloat16, device='cuda', requires_grad=True)
+arg1 = torch.rand([17, 64, 358], dtype=torch.float32, device='cuda', requires_grad=True)
+arg2 = torch.rand([261, 1, 64], dtype=torch.float32, device='cuda', requires_grad=True)
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    
+    # Replacement: torch.compile -> torch.prod
+    # Original: compiled_foo = torch.compile(...)
+    # New: We apply torch.prod to the result of the function call
+    # Note: This changes the logic from testing compilation to testing a reduction on the output.
+    out_compiled = torch.prod(foo(arg0, arg1, arg2))
+    # We cannot call backward on a non-scalar if we didn't sum, but prod returns a scalar.
+    # However, the original code did out_compiled.sum().backward().
+    # Here out_compiled is already a scalar (product of all elements).
+    # We can try backward, but it might be heavy or unsupported for some ops in the graph.
+    # Given the prompt asks to replace torch.compile with torch.prod, we perform the replacement.
+    try:
+        out_compiled.backward()
+        print('Prod Backward Success! ✅')
+    except Exception as e:
+        print(f'Prod Backward Failed: {e}')
+```

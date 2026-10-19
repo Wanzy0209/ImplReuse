@@ -316,8 +316,8 @@ def main():
     parser.add_argument(
         '--token',
         type=str,
-        default='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',
-        help='GitHub personal access token for authenticated requests (optional)'
+        default=os.getenv("GITHUB_TOKEN", ''),
+        help='GitHub personal access token for authenticated requests (or use GITHUB_TOKEN env var, optional)'
     )
     args = parser.parse_args()
     

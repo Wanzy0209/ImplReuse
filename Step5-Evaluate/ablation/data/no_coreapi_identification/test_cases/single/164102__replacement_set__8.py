@@ -1,0 +1,78 @@
+import torch
+import torch.nn.utils.rnn as rnn_utils
+
+# Replacements for torch._dynamo.config and torch._inductor.config
+torch.backends.mps.is_built()
+torch.backends.mps.is_built()
+torch.backends.mps.is_built()
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, sentinel):
+    # t0 = arg0
+    # t1 = arg1
+    # t2 = arg2
+    # t3 = arg3
+    # t4 = arg4
+    
+    # Replacement: torch.cat -> torch.isinf
+    # Original: t5 = torch.cat([t0, t1, t2, t3, t4], dim=2)
+    t5 = torch.isinf(t0)
+    
+    # Replacement: t5.contiguous -> torch.backends.mps.is_built
+    # Original: t6 = t5.contiguous()
+    t6 = torch.backends.mps.is_built()
+    
+    # t7 = arg5
+    
+    # Replacement: torch.exp -> torch.div
+    # Original: t8 = torch.exp(t7)
+    t8 = torch.div(t7, 1.0)
+    
+    # Replacement: torch.rms_norm -> torch.nn.functional.sigmoid (Similar API)
+    # Original: t9 = torch.rms_norm(t8, (62, 8))
+    t9 = torch.nn.functional.sigmoid(t8)
+    
+    # t10 = arg6
+    
+    # Replacement: torch.exp -> torch.div
+    # Original: t11 = torch.exp(t10)
+    t11 = torch.div(t10, 1.0)
+    
+    # t12 = arg7
+    
+    # Replacement: torch.nn.functional.interpolate -> torch.nn.utils.rnn.pad_sequence
+    # Original: t13 = torch.nn.functional.interpolate(t12, size=(127,), mode='nearest')
+    t13 = rnn_utils.pad_sequence([t12], batch_first=True)
+    
+    # Replacement: torch.cat -> torch.isinf
+    # Original: t14 = torch.cat([t11, t13], dim=0)
+    t14 = torch.isinf(t11)
+    
+    # Replacement: torch.baddbmm -> torch.tile
+    # Original: t15 = torch.baddbmm(t6, t9, t14)
+    t15 = torch.tile(t6, [1, 1, 1])
+    
+    output = t15 + sentinel
+    return output
+
+# Replacement: torch.rand -> torch.backends.mps.is_built
+arg0 = torch.backends.mps.is_built()
+arg1 = torch.backends.mps.is_built()
+arg2 = torch.backends.mps.is_built()
+arg3 = torch.backends.mps.is_built()
+arg4 = torch.backends.mps.is_built()
+arg5 = torch.backends.mps.is_built()
+arg6 = torch.backends.mps.is_built()
+arg7 = torch.backends.mps.is_built()
+
+sentinel = torch.tensor(0.0)
+
+# Run the test
+if __name__ == "__main__":
+    try:
+        result = foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, sentinel)
+        print("Test case executed successfully.")
+        # Basic assertion to ensure output is a tensor
+        assert isinstance(result, torch.Tensor)
+    except Exception as e:
+        print(f"Test case failed with error: {e}")
+        raise

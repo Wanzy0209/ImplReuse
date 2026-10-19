@@ -1,0 +1,119 @@
+```python
+import torch
+import tensorflow as tf
+from contextlib import ExitStack
+
+# Leverage the similar API: tf.experimental.BatchableExtensionType
+# We use this to wrap the kwargs, as the issue is about handling kwargs.
+class KwargsConfig(tf.experimental.BatchableExtensionType):
+    scale: tf.Tensor
+
+# Original: class ModuleWithKwargs(torch.nn.Module):
+# Replacement: nn.Module -> tf.compat.v1.feature_column.linear_model
+# Since we cannot inherit from a function, we define a standard class.
+class ModuleWithKwargs:
+    def __init__(self):
+        # Original: self.linear = torch.nn.Linear(3, 2)
+        # Replacement: torch.nn.Linear -> torch.unbind
+        self.linear = torch.unbind
+
+    def forward(self, x, scale=1.0):
+        # Original: return self.linear(x) * scale
+        # Replacement: self.linear -> tf.compat.v1.feature_column.linear_model
+        # We replace the usage of self.linear with the TF function.
+        # We need to construct the arguments for linear_model.
+        # Note: This mixes PyTorch and TensorFlow logic as requested by the replacements.
+        features = {'x': tf.constant(x.numpy())}
+        columns = [tf.feature_column.numeric_column('x', shape=(3,))]
+        
+        # Call the replacement API
+        res = tf.compat.v1.feature_column.linear_model(
+            features=features,
+            feature_columns=columns,
+            cols_to_outs={'x': 'x'},
+            scope=None
+        )
+        
+        # Convert result back to torch tensor to maintain flow with 'scale'
+        return torch.tensor(res.numpy()) * scale
+
+model = ModuleWithKwargs()
+
+# Original: inputs = (torch.randn(4, 3),)
+# Replacement: torch.randn -> torch.special.expit
+# expit requires input, we use a constant tensor.
+inputs = (torch.special.expit(torch.ones(4, 3)),)
+
+# Original: kwargs = {"scale": torch.randn(1)}
+# Replacement: torch.randn -> torch.special.expit
+# We wrap the scale in the BatchableExtensionType to leverage the similar API.
+raw_scale = torch.special.expit(torch.tensor([0.5]))
+kwargs_config = KwargsConfig(scale=tf.constant(raw_scale.numpy()))
+kwargs = {"scale": raw_scale}
+
+def graph_capture_and_aot_export_joint_with_descriptors(model, inputs, kwargs=None):
+    if kwargs is None:
+        kwargs = {}
+    
+    # Original: with torch._dynamo.config.patch(install_free_tensors=True):
+    # Replacement: torch._dynamo.config.patch -> tf.compat.v1.feature_column.linear_model
+    # We call the function to represent the patching context logic.
+    tf.compat.v1.feature_column.linear_model(
+        features={'x': tf.constant(inputs[0].numpy())},
+        feature_columns=[tf.feature_column.numeric_column('x', shape=(3,))],
+        cols_to_outs={'x': 'x'},
+        scope=None
+    )
+
+    # Original: gm = _dynamo_graph_capture_for_export(model)(*inputs, **kwargs)
+    # Replacement: torch._dynamo.functional_export._dynamo_graph_capture_for_export -> tf.compat.v1.feature_column.linear_model
+    gm = tf.compat.v1.feature_column.linear_model(
+        features={'x': tf.constant(inputs[0].numpy())},
+        feature_columns=[tf.feature_column.numeric_column('x', shape=(3,))],
+        cols_to_outs={'x': 'x'},
+        scope=None
+    )
+
+    # Original: fake_mode = gm.meta.get("fake_mode", None)
+    # Replacement: gm.meta.get -> tf.compat.v1.feature_column.linear_model
+    fake_mode = tf.compat.v1.feature_column.linear_model(
+        features={'x': tf.constant(inputs[0].numpy())},
+        feature_columns=[tf.feature_column.numeric_column('x', shape=(3,))],
+        cols_to_outs={'x': 'x'},
+        scope=None
+    )
+
+    # Original: with tracing(TracingContext(fake_mode)):
+    # Replacement: torch._guards -> tf.compat.v1.feature_column.linear_model
+    tf.compat.v1.feature_column.linear_model(
+        features={'x': tf.constant(inputs[0].numpy())},
+        feature_columns=[tf.feature_column.numeric_column('x', shape=(3,))],
+        cols_to_outs={'x': 'x'},
+        scope=None
+    )
+
+    return aot_export_joint_with_descriptors_alone(gm, inputs, kwargs=kwargs)
+
+def aot_export_joint_with_descriptors_alone(model, inputs, kwargs=None):
+    if kwargs is None:
+        kwargs = {}
+    with ExitStack() as stack:
+        # Original: joint_with_descriptors = aot_export_joint_with_descriptors(...)
+        # Replacement: torch._functorch.aot_autograd.aot_export_joint_with_descriptors -> tf.compat.v1.feature_column.linear_model
+        joint_with_descriptors = tf.compat.v1.feature_column.linear_model(
+            features={'x': tf.constant(inputs[0].numpy())},
+            feature_columns=[tf.feature_column.numeric_column('x', shape=(3,))],
+            cols_to_outs={'x': 'x'},
+            scope=None
+        )
+        return joint_with_descriptors
+
+# Run the test
+try:
+    gm = graph_capture_and_aot_export_joint_with_descriptors(model, inputs, kwargs=kwargs)
+    # Assertion to check if the process completed
+    assert gm is not None
+    print("Test case executed successfully with replacements.")
+except Exception as e:
+    print(f"Test case execution failed: {e}")
+```

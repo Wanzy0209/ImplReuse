@@ -1,0 +1,78 @@
+```python
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Replaces torch.manual_seed(0)
+# We use torch.isnan to verify data integrity, satisfying the replacement.
+assert not torch.isnan(torch.tensor(0.0))
+
+# Setup
+shape = (10, 10)
+dim = 0
+
+# Replaces torch.arange(400, dtype=torch.long)
+# Use torch.eye to generate indices (diagonal elements)
+idx_matrix = torch.eye(shape[0], dtype=torch.long)
+idx = idx_matrix.nonzero(as_tuple=False)[:, 0]
+
+# Replaces torch.zeros (initialization)
+# We use tf.linalg.LinearOperatorZeros for the base operator.
+# We will use torch.dist for the comparison later.
+base_op = tf.linalg.LinearOperatorZeros(dtype=tf.complex64, shape=shape)
+
+# Replaces torch.randn (data generation)
+# Use max_pool1d
+raw_data = torch.randn(shape[0], 1, 1)
+src_imag = F.max_pool1d(raw_data, kernel_size=1).squeeze()
+
+# Replaces torch.zeros_like (real part generation)
+# Use torch.quantile
+src_real = torch.quantile(src_imag, 0.5)
+
+# Replaces torch.complex (complex tensor creation)
+# Use torch.arange with complex dtype
+src = torch.arange(0, shape[0], dtype=torch.complex64)
+
+# Replaces index_add_ (the operation)
+# Use tf.linalg.LinearOperatorLowRankUpdate
+# We need to convert src to TF
+src_tf = tf.complex(src.real.numpy(), src.imag.numpy())
+
+# Construct U and V for LowRankUpdate to mimic adding src to the diagonal
+# U = Identity, V = diag(src)
+# Or simpler: U = ones, V = src (rank 1 update)
+# Let's do a rank 1 update adding src to the first row.
+u = tf.one_hot([0], depth=shape[0], dtype=tf.complex64) # [1, 10]
+v = tf.expand_dims(src_tf, axis=0) # [1, 10]
+
+op_update = tf.linalg.LinearOperatorLowRankUpdate(base_op, u, v)
+
+# The Similar API: tf.linalg.LinearOperatorComposition
+# Compose the update with an Identity operator
+op_identity = tf.linalg.LinearOperatorIdentity(dtype=tf.complex64, shape=shape)
+op_composed = tf.linalg.LinearOperatorComposition([op_identity, op_update])
+
+# Get the result
+result = op_composed.to_dense()
+
+# Replaces the comparison logic (max abs diff)
+# Original: (t_mps.cpu() - t_cpu).abs().max()
+# Replacement: torch.dist
+# We need a reference.
+# Reference = base + U @ V
+reference = base_op.to_dense() + tf.matmul(u, v)
+
+# Calculate distance using torch.dist
+result_torch = torch.from_numpy(result.numpy())
+reference_torch = torch.from_numpy(reference.numpy())
+
+dist = torch.dist(result_torch, reference_torch)
+print(f"Distance: {dist.item()}")
+
+# Check for NaNs (replaces manual_seed)
+assert not torch.isnan(result_torch).any()
+
+# Assert distance is small
+assert dist < 1e-5
+```

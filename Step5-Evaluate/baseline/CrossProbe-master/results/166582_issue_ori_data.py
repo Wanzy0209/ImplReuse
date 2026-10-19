@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.python.ops.control_flow_v2_toggles import disable_control_flow_v2
 from tensorflow.python.ops.numerics import add_check_numerics_ops
@@ -55,4 +54,3 @@ def make_backend(dut):
         return compiled_func
 
     return _backend
-```

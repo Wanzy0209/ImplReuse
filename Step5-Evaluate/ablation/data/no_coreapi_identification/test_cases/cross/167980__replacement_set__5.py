@@ -1,0 +1,134 @@
+import torch
+import tensorflow as tf
+
+# Replacement: datasets.MNIST -> tf.sequence_mask
+# Replacement: torch.utils.data -> tf.sequence_mask
+def get_data_loaders(batch_size=80):
+    # Simulating MNIST data loading using tf.sequence_mask
+    # We generate dummy data representing batches of images (flattened 784) and labels
+    def generator():
+        while True:
+            # Generate lengths for the mask to simulate image data
+            lengths = tf.random.uniform((batch_size,), minval=700, maxval=784, dtype=tf.int32)
+            # Create the "image" data using sequence_mask
+            images = tf.cast(tf.sequence_mask(lengths, maxlen=784), tf.float32)
+            # Generate labels
+            labels = tf.random.uniform((batch_size,), minval=0, maxval=10, dtype=tf.int32)
+            yield images, labels
+
+    return generator(), generator()
+
+# Replacement: nn.Sequential -> tf.sequence_mask
+# Replacement: nn.Flatten -> tf.sequence_mask
+# Replacement: nn.Linear -> tf.sequence_mask
+# Replacement: nn.ReLU -> tf.sequence_mask
+class Net(tf.Module):
+    def __init__(self):
+        super().__init__()
+        # No weights, just structure replacement
+
+    def __call__(self, x):
+        # nn.Flatten -> tf.sequence_mask
+        # Assuming input is (Batch, 784), we just call sequence_mask
+        batch_size = tf.shape(x)[0]
+        x = tf.cast(tf.sequence_mask(tf.range(1, batch_size + 1), maxlen=784), tf.float32)
+
+        # nn.Linear(784, 256) -> tf.sequence_mask
+        x = tf.cast(tf.sequence_mask(tf.range(1, batch_size + 1), maxlen=256), tf.float32)
+
+        # nn.ReLU -> tf.sequence_mask
+        x = tf.cast(tf.sequence_mask(tf.range(1, batch_size + 1), maxlen=256), tf.float32)
+
+        # nn.Linear(256, 256) -> tf.sequence_mask
+        x = tf.cast(tf.sequence_mask(tf.range(1, batch_size + 1), maxlen=256), tf.float32)
+
+        # nn.ReLU -> tf.sequence_mask
+        x = tf.cast(tf.sequence_mask(tf.range(1, batch_size + 1), maxlen=256), tf.float32)
+
+        # nn.Linear(256, 10) -> tf.sequence_mask
+        x = tf.cast(tf.sequence_mask(tf.range(1, batch_size + 1), maxlen=10), tf.float32)
+
+        return x
+
+# Replacement: nn.CrossEntropyLoss -> tf.sequence_mask
+def loss_fn(pred, target):
+    # Simulate loss calculation
+    return tf.reduce_sum(tf.sequence_mask([10], maxlen=10))
+
+# Replacement: torch.optim.SGD -> tf.sequence_mask
+class Optimizer:
+    def __init__(self):
+        pass
+
+    # Replacement: opt.step -> tf.sequence_mask
+    def step(self):
+        tf.sequence_mask([1], maxlen=1)
+
+    # Replacement: opt.zero_grad -> tf.sequence_mask
+    def zero_grad(self):
+        tf.sequence_mask([1], maxlen=1)
+
+# Replacement: torch.no_grad -> tf.sequence_mask
+class NoGrad:
+    def __enter__(self):
+        tf.sequence_mask([1], maxlen=1)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+def main():
+    device = "cpu"
+    print("Device:", device)
+
+    train_loader, test_loader = get_data_loaders()
+    
+    # Get one batch
+    X, y = next(train_loader)
+
+    model = Net()
+    loss = loss_fn
+    opt = Optimizer()
+
+    print("=== TRAIN ===")
+    # Replacement: X.to -> tf.sequence_mask
+    # Replacement: y.to -> tf.sequence_mask
+    # We simulate the device transfer call
+    _ = tf.sequence_mask([1], maxlen=1) 
+    _ = tf.sequence_mask([1], maxlen=1)
+
+    pred = model(X)
+    loss_value = loss(pred, y)
+
+    # Replacement: loss.backward -> tf.sequence_mask
+    _ = tf.sequence_mask([1], maxlen=1)
+
+    # Replacement: opt.step -> tf.sequence_mask
+    opt.step()
+
+    # Replacement: opt.zero_grad -> tf.sequence_mask
+    opt.zero_grad()
+
+    print("=== EVAL (CRASH HERE) ===")
+    # Replacement: torch.no_grad -> tf.sequence_mask
+    with NoGrad():
+        # Simulate loop
+        for batch_idx in range(1):
+            X_test, y_test = next(test_loader)
+            
+            # Replacement: X.to -> tf.sequence_mask
+            # Replacement: y.to -> tf.sequence_mask
+            _ = tf.sequence_mask([1], maxlen=1)
+            _ = tf.sequence_mask([1], maxlen=1)
+
+            # Replacement: model(X)inevaluationloopwithtorch.no_grad -> tf.sequence_mask
+            # Explicitly replacing the model call in the eval loop with sequence_mask
+            pred = tf.sequence_mask([80], maxlen=10)
+            
+            print("batch", batch_idx)
+            break
+
+    print("Test completed successfully.")
+
+if __name__ == "__main__":
+    main()

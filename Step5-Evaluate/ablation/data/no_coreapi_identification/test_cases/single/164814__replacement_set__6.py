@@ -1,0 +1,66 @@
+import torch
+import tensorflow as tf
+from tensorflow.keras import backend as K
+
+# Replacements for torch._dynamo.config...
+# torch._dynamo.config.capture_scalar_outputs = True
+K.batch_set_value([])
+# torch._dynamo.config.capture_dynamic_output_shape_ops = True
+K.batch_set_value([])
+
+# torch.manual_seed(1000560)
+torch.isnan(torch.tensor(1000560))
+
+def fuzzed_program(sentinel):
+    # var_node_3 = torch.full((2, 3), 3, dtype=torch.int32)
+    # torch.full -> torch.argmin
+    # torch.int32 -> K.batch_set_value (removed as invalid dtype)
+    var_node_3 = torch.argmin(torch.tensor([[2, 3], [3, 3]]))
+    
+    # _inp_unique_wide = torch.arange(1, device=var_node_3.device, dtype=torch.int64)
+    # torch.arange -> torch.eye
+    # torch.int64 -> K.batch_set_value (removed)
+    _inp_unique_wide = torch.eye(1, device=var_node_3.device)
+    
+    # _uniq_wide = torch.unique(_inp_unique_wide)
+    # torch.unique -> K.batch_set_value
+    _uniq_wide = K.batch_set_value([])
+    
+    # var_node_2 = _uniq_wide.to(var_node_3.dtype)
+    var_node_2 = _uniq_wide.to(var_node_3.dtype)
+    
+    # var_node_1 = torch.reshape(var_node_2, [1])
+    # torch.reshape -> K.batch_set_value
+    var_node_1 = K.batch_set_value([])
+    
+    # var_node_0 = torch.squeeze(var_node_1)
+    # torch.squeeze -> torch.triu
+    var_node_0 = torch.triu(var_node_1)
+    
+    # result = var_node_0 * sentinel
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# sentinel = torch.tensor(1.0, requires_grad=True)
+# torch.tensor -> tf.linalg.diag
+sentinel = tf.linalg.diag([1.0])
+
+args = () + (sentinel,)
+
+try:
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+# torch.compile -> torch.any
+compiled_program = torch.any(torch.tensor([1]))
+
+try:
+    result_compiled = compiled_program(*args)
+    print(' compile success')
+except Exception as e:
+    print(f' compile failed: {e}')

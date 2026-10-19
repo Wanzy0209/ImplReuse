@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import numpy as np
 
@@ -26,4 +25,3 @@ with tf.device('/GPU:0'):
     # w.cpu().numpy() -> w.numpy()
     out_np = np.einsum("fd,bd->bf", w.numpy(), x.numpy())
     print(out_np.shape, out_np.strides)
-```

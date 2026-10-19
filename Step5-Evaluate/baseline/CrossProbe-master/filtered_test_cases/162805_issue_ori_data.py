@@ -1,1 +1,0 @@
-import torch; torch.linalg.eigh(torch.randn(4096,4096))

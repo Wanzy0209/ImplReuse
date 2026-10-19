@@ -1,0 +1,46 @@
+import torch
+import tensorflow as tf
+
+# Helper function to replace torch.rand with tf.keras.ops.relu
+# Since tf.keras.ops.relu requires an input tensor, we use tf.ones as a base
+# to generate the data, apply the replacement API, and convert to PyTorch.
+def create_tensor(shape, dtype, device):
+    # Create a base tensor in TensorFlow
+    if dtype == torch.complex64:
+        # Create complex ones
+        real = tf.ones(shape, dtype=tf.float32)
+        imag = tf.ones(shape, dtype=tf.float32)
+        t = tf.complex(real, imag)
+    else:
+        t = tf.ones(shape, dtype=dtype)
+
+    # Apply the replacement API: tf.keras.ops.relu
+    t = tf.keras.ops.relu(t)
+
+    # Convert to PyTorch tensor
+    # Note: tf.keras.ops.relu on complex numbers might behave differently depending on TF version.
+    # We assume it returns a tensor that can be converted to numpy.
+    return torch.from_numpy(t.numpy()).to(device)
+
+# Test case for large tensors (the failing case in the bug report)
+a = create_tensor((64, 300), torch.complex64, "mps")
+b = create_tensor((64, 10000), torch.complex64, "mps")
+c = create_tensor((10000, 300), torch.complex64, "mps")
+
+# Run the API under test
+out = torch.addmm(a, b, c, alpha=1.0, beta=0.5)
+
+# CPU reference
+out_cpu = torch.addmm(a.cpu(), b.cpu(), c.cpu(), alpha=1.0, beta=0.5)
+
+# Verification using the replacement for torch.testing.assert_close
+# Original: torch.testing.assert_close(out.cpu(), out_cpu)
+# Replacement: torch.nn.functional.cross_entropy
+# We treat out.cpu() as input and out_cpu as target.
+# Note: cross_entropy expects float inputs. We take the real part of the complex tensors
+# to ensure the code is runnable.
+loss = torch.nn.functional.cross_entropy(out.cpu().real, out_cpu.real)
+
+# Since we replaced the assertion with a loss calculation, we just output the loss.
+# In a real test scenario, one might check if loss is close to 0, but here we just perform the replacement.
+print(f"Cross entropy loss: {loss.item()}")

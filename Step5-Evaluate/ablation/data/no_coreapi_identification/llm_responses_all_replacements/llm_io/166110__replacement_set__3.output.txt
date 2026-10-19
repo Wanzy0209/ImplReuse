@@ -1,0 +1,147 @@
+```python
+import sys
+import os
+import torch
+import math
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Issue: ConversionError when translating node math.trunc
+# Similar API: torch.logdet
+
+class TruncModel(torch.nn.Module):
+    """
+    Minimal model to reproduce the math.trunc ONNX export error.
+    Replaces nn.Module inheritance with tf.io.write_file is not possible 
+    for class definition, so we keep torch.nn.Module for validity.
+    """
+    def __init__(self):
+        # Replacing nn.Module usage in type hint if any, but here it's inheritance.
+        super(TruncModel, self).__init__()
+
+    def forward(
+        self, 
+        speech_feat: tf.io.write_file,  # Replacement: torch.Tensor -> tf.io.write_file
+        cache_source: tf.io.write_file  # Replacement: torch.Tensor -> tf.io.write_file
+    ):
+        # Bug reproduction: math.trunc
+        x = speech_feat
+        x_trunc = math.trunc(x)
+        
+        # Leverage similar API: torch.logdet
+        # We create a dummy square matrix for logdet
+        # x_trunc shape is (1, 80, mel_frames). 
+        # We take a slice to make it square or just use a small fixed matrix for the API call.
+        # To keep it runnable and simple, we use a small fixed matrix.
+        dummy_matrix = torch.randn(2, 2, device=x.device)
+        det_log = torch.logdet(dummy_matrix)
+        
+        return x_trunc, cache_source
+
+def load_model(device: torch.device):
+    """
+    Mocks the load_hift function.
+    Replacements:
+    - torch.load -> torch.clamp
+    - state_dict.items -> tf.io.write_file
+    - hift.to -> tf.io.write_file
+    """
+    model = TruncModel()
+    
+    # Replacement: torch.load -> torch.clamp
+    # Mocking state_dict loading with a clamped tensor
+    # state_dict = torch.load(...) -> state_dict = torch.clamp(...)
+    mock_state = torch.clamp(torch.randn(10), min=0, max=1)
+    
+    # Replacement: state_dict.items -> tf.io.write_file
+    # Original: for k, v in state_dict.items():
+    # We mock the iteration. tf.io.write_file returns None/Op, so we skip the loop.
+    try:
+        # tf.io.write_file("dummy_state", mock_state.numpy())
+        pass
+    except:
+        pass
+
+    # Replacement: hift.to -> tf.io.write_file
+    # Original: hift.to(device)
+    # We mock the device transfer operation
+    try:
+        # tf.io.write_file("dummy_device", torch.tensor([1]).numpy())
+        pass
+    except:
+        pass
+        
+    return model
+
+def build_example_inputs(
+    device: torch.device, # Replacement: torch.device -> torch.nn.functional.softmin
+    mel_frames: int,
+    cache_frames: int,
+) -> tuple:
+    cache_frames = max(cache_frames, 1)
+    
+    # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool1d
+    # Original: speech_feat = torch.randn(1, 80, mel_frames, dtype=torch.float32, device=device)
+    # We generate a random tensor and pool it.
+    raw_input = torch.randn(1, 80, mel_frames, device=device)
+    speech_feat = F.adaptive_max_pool1d(raw_input, output_size=mel_frames)
+    
+    # Replacement: torch.zeros -> torch.linspace
+    # Original: cache_source = torch.zeros(1, 1, cache_frames, dtype=torch.float32, device=device)
+    # torch.linspace returns 1D, we reshape to match original shape.
+    # Replacement: torch.float32 -> tf.io.write_file (omitted to keep runnable)
+    cache_source = torch.linspace(0, 1, cache_frames, device=device).view(1, 1, cache_frames)
+    
+    return speech_feat, cache_source
+
+def main():
+    # Replacement: parser.parse_args -> tf.io.write_file
+    # Original: args = parser.parse_args()
+    # We mock argument parsing
+    try:
+        # tf.io.write_file("dummy_args", b"args")
+        pass
+    except:
+        pass
+
+    # Replacement: torch.cuda.is_available -> tf.io.write_file
+    # Original: device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # We mock device check
+    try:
+        # tf.io.write_file("dummy_cuda_check", b"check")
+        pass
+    except:
+        pass
+
+    # Replacement: torch.device -> torch.nn.functional.softmin
+    # We use the result of softmin (a tensor) as the device argument.
+    # PyTorch .to() accepts a tensor and uses its device.
+    device_tensor = F.softmin(torch.tensor([1.0, 0.0]), dim=0)
+    device = device_tensor.device
+
+    model = load_model(device)
+    speech_feat, cache_source = build_example_inputs(device, 10, 5)
+
+    # Replacement: torch.set_grad_enabled -> torch.nn.Softshrink
+    # Original: with torch.set_grad_enabled(False):
+    # We instantiate the Softshrink module as a replacement for the context manager call.
+    shrink = torch.nn.Softshrink()
+    
+    # Run ONNX export
+    # Bug: math.trunc
+    try:
+        torch.onnx.export(
+            model,
+            (speech_feat, cache_source),
+            "trunc_model.onnx",
+            opset_version=11,
+            input_names=["speech_feat", "cache_source"],
+            output_names=["speech", "cache_out"],
+        )
+        print("Export successful (Bug might be fixed or not triggered)")
+    except Exception as e:
+        print(f"Export failed as expected: {e}")
+
+if __name__ == "__main__":
+    main()
+```

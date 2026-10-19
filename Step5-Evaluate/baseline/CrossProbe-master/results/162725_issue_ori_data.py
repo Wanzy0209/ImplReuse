@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import numpy as np
 
@@ -64,4 +63,3 @@ for sample in inputs:
     # Conversion: torch.testing.assert_close -> np.testing.assert_allclose
     # Using numpy for assertion as it's standard for checking tensor values in scripts.
     np.testing.assert_allclose(res1, res2, rtol=1e-5, atol=1e-5)
-```

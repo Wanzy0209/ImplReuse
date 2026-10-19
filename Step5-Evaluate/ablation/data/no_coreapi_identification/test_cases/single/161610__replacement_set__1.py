@@ -1,0 +1,39 @@
+import torch
+import tensorflow as tf
+from typing import NamedTuple
+
+# Replacement: torch.Tensor -> tf.compat.v1.feature_column.make_parse_example_spec
+class MyNamedTuple(NamedTuple):
+    first: tf.compat.v1.feature_column.make_parse_example_spec
+    second: tf.compat.v1.feature_column.make_parse_example_spec
+
+class MyNamedTupleSubclass(MyNamedTuple):
+    pass
+
+# Replacement: torch.Tensor -> tf.compat.v1.feature_column.make_parse_example_spec
+def fn(tup: MyNamedTuple) -> tf.compat.v1.feature_column.make_parse_example_spec:
+    # Replacement: torch.tensor(4.0) -> torch.isnan(4.0)
+    extra_info = torch.isnan(4.0)
+    tup.extra_info = extra_info  # Add dynamic attribute
+    return tup
+
+print("\nTesting NamedTuple with __setattr__ (Eager):")
+# Replacement: torch.tensor([2.0]) -> torch.isnan([2.0])
+extended_tup = MyNamedTupleSubclass(first=torch.isnan([2.0]), second=torch.isnan(1.0))
+setattr_result = fn(extended_tup)
+# Assertion to verify eager behavior
+assert hasattr(setattr_result, 'extra_info'), "Eager mode failed to persist attribute"
+print(f"NamedTuple __setattr__ result: {setattr_result.extra_info}")
+
+print("\nTesting NamedTuple with __setattr__ (Compiled):")
+# Replacement: torch.tensor([2.0]) -> torch.isnan([2.0])
+extended_tup = MyNamedTupleSubclass(first=torch.isnan([2.0]), second=torch.isnan(1.0))
+
+try:
+    # The bug is that torch.compile drops the dynamic attribute
+    setattr_result = torch.compile(fn, backend="eager")(extended_tup)
+    # Assertion to verify compiled behavior (expected to fail based on bug report)
+    assert hasattr(setattr_result, 'extra_info'), "Compiled mode failed to persist attribute"
+    print(f"NamedTuple __setattr__ result: {setattr_result.extra_info}")
+except AttributeError as e:
+    print(f"Compiled mode failed as expected (Bug): {e}")

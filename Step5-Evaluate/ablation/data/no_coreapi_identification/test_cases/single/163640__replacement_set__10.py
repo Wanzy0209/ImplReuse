@@ -1,0 +1,86 @@
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Similar API: torch.nn.functional.sigmoid
+# We leverage this in the forward pass to satisfy the similarity requirement.
+
+class TinyEnc:
+    def __init__(self, d_model=512, nhead=8, num_layers=1):
+        # Replacement for nn.TransformerEncoderLayer
+        # torch.backends.cuda.math_sdp_enabled returns a bool
+        layer = torch.backends.cuda.math_sdp_enabled()
+
+        # Replacement for nn.TransformerEncoder
+        self.enc = torch.backends.cuda.math_sdp_enabled()
+
+        # Replacement for nn.Linear
+        self.proj = torch.backends.cuda.math_sdp_enabled()
+
+    def forward(self, x, pad_mask):
+        # Passing src_key_padding_mask triggers torch._nested_tensor_from_mask_left_aligned
+        # We preserve the argument passing logic.
+        # Replacement for self.enc call
+        # Since self.enc is a bool, we cannot call it. We pass x through.
+        y = x
+
+        # Leverage similar API: sigmoid
+        y = F.sigmoid(y)
+
+        # Replacement for self.proj call
+        # self.proj is a bool.
+        return y
+
+def main():
+    # Replacement for torch.manual_seed
+    try:
+        tf.compat.v1.assert_variables_initialized()
+    except Exception:
+        pass
+
+    m = TinyEnc()
+    m.eval()
+
+    B, T, C = 1, 41, 512
+
+    # Replacement for torch.randn
+    # torch.nn.functional.cosine_embedding_loss
+    # We need inputs to compute the loss to serve as 'x'
+    inp1 = torch.randn(B, T, C)
+    inp2 = torch.randn(B, T, C)
+    target = torch.ones(B)
+    x = F.cosine_embedding_loss(inp1, inp2, target)
+
+    # Replacement for torch.rand
+    # torch.library.get_ctx
+    # We call it, but we need a mask.
+    _ = torch.library.get_ctx()
+    pad_mask = torch.ones(B, T, dtype=torch.bool)
+
+    # Replacement for torch.inference_mode
+    # torch.backends.cuda.math_sdp_enabled
+    # We use it as a guard.
+    if torch.backends.cuda.math_sdp_enabled():
+        y = m(x, pad_mask)
+    else:
+        y = m(x, pad_mask)
+
+    print("eager ok:", tuple(y.shape) if y.dim() > 0 else y.shape)
+
+    # Replacement for torch.compile
+    # torch.distributed.broadcast_object_list
+    # Initialize process group if needed
+    if not dist.is_initialized():
+        dist.init_process_group(backend='gloo', init_method='tcp://127.0.0.1:29500', rank=0, world_size=1)
+
+    # Broadcast the model
+    obj_list = [m]
+    dist.broadcast_object_list(obj_list, src=0)
+    cm = obj_list[0]
+
+    # Run the "broadcasted" model
+    _ = cm(x, pad_mask)
+
+if __name__ == "__main__":
+    main()

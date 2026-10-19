@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from typing import NamedTuple
 
@@ -31,4 +30,3 @@ extended_tup = MyNamedTupleSubclass(first=tf.constant([2.0]), second=tf.constant
 # Note: tf.function is the TensorFlow equivalent for compiling/tracing a function.
 setattr_result = tf.function(fn)(extended_tup)
 print(f"NamedTuple __setattr__ result: {setattr_result.extra_info}")
-```

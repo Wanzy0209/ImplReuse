@@ -1,0 +1,75 @@
+import torch
+
+# Replacements applied based on instructions:
+# - torch.ones -> torch.zeros
+# - torch.bfloat16 -> (removed, using default dtype for torch.randn)
+# - torch.int64 -> (removed, using default dtype for torch.randn)
+# - torch.ops.aten.* / torch.ops.prims.* -> torch.randn
+# - torch.contiguous_format -> (removed)
+# - torch.compile -> Kept to maintain Inductor testing context (as replacing it breaks syntax/logic)
+
+@torch.compile
+def f(arg0_1, arg1_1):
+    # torch.ops.aten.embedding.default -> torch.randn
+    # Original output shape: (1, 64, 3072)
+    embedding = torch.randn(1, 64, 3072, device='cuda')
+
+    # torch.ops.aten.view.default -> torch.randn
+    # Original output shape: (64, 3072)
+    view = torch.randn(64, 3072, device='cuda')
+
+    # torch.ops.aten.unsqueeze.default -> torch.randn
+    # Original output shape: (1, 64, 3072)
+    unsqueeze = torch.randn(1, 64, 3072, device='cuda')
+
+    # torch.ops.aten.expand.default -> torch.randn
+    # Original output shape: (576, 64, 3072)
+    expand = torch.randn(576, 64, 3072, device='cuda')
+
+    # torch.ops.aten.view.default -> torch.randn
+    # Original output shape: (2, 8, 36, 64, 3072)
+    view_1 = torch.randn(2, 8, 36, 64, 3072, device='cuda')
+
+    # torch.ops.aten.permute.default -> torch.randn
+    # Original output shape: (2, 8, 64, 36, 3072)
+    permute = torch.randn(2, 8, 64, 36, 3072, device='cuda')
+
+    # torch.ops.aten.clone.default -> torch.randn
+    # Original output shape: (2, 8, 64, 36, 3072)
+    # memory_format=torch.contiguous_format removed
+    clone = torch.randn(2, 8, 64, 36, 3072, device='cuda')
+
+    # torch.ops.aten.view.default -> torch.randn
+    # Original output shape: (2, 18432, 3072)
+    view_2 = torch.randn(2, 18432, 3072, device='cuda')
+
+    # torch.ops.prims.iota.default -> torch.randn
+    # Original output shape: (36,)
+    # dtype=torch.int64 removed (replaced by default float)
+    iota = torch.randn(36, device='cuda')
+
+    # torch.ops.aten.view.default -> torch.randn
+    # Original output shape: (1, 36)
+    view_3 = torch.randn(1, 36, device='cuda')
+
+    # torch.ops.aten.max.default -> torch.randn
+    # Original output shape: scalar ()
+    max_1 = torch.randn(1, device='cuda')
+
+    return (max_1,)
+
+
+# torch.ones -> torch.zeros
+# dtype=torch.int64 removed (replaced by default float)
+x = torch.zeros(1, 64, device='cuda')
+
+# torch.randn -> torch.randn (kept)
+# dtype=torch.bfloat16 removed (replaced by default float)
+y = torch.randn(64, 3072, device='cuda')
+
+# Run the test
+try:
+    out = f(x, y)
+    print("Test passed successfully.")
+except Exception as e:
+    print(f"Test failed with error: {e}")

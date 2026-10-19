@@ -1,0 +1,53 @@
+import torch
+import tensorflow as tf
+
+# Leveraging the similar API: tf.VariableSynchronization
+# This variable uses the synchronization strategy similar to how the original issue
+# dealt with context/state management (torch.no_grad).
+sync_var = tf.Variable([0.0], synchronization=tf.VariableSynchronization.ON_READ)
+
+def test_isolated_language_model_mps_replacement():
+    # Replacement: pytest.mark.parametrize -> torch.distributed.is_available
+    # Original: @pytest.mark.parametrize("device", ["cpu", "mps"])
+    # We replace the parametrization logic with a check for distributed availability.
+    if torch.distributed.is_available():
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    else:
+        device = "cpu"
+
+    # Replacement: torch.tensor -> torch.cummin
+    # Original: input_ids = torch.tensor([[0, 1, 0, 0], [0, 1, 2, 3]], device=device)
+    # We create a base tensor using as_tensor (to avoid torch.tensor) and apply cummin.
+    base_input = torch.as_tensor([[0, 1, 0, 0], [0, 1, 2, 3]], device=device)
+    input_ids, _ = torch.cummin(base_input, dim=1)
+
+    # Replacement: torch.bool -> torch.distributed.is_available
+    # Original: attention_mask = torch.tensor(..., dtype=torch.bool, ...)
+    # We replace the dtype specification with a call to is_available.
+    # Since is_available returns a bool, we can use it to conditionally modify the mask or just call it.
+    is_dist = torch.distributed.is_available()
+    
+    # Replacement: torch.tensor -> torch.cummin
+    # Original: attention_mask = torch.tensor([[[[...]]]], device=device)
+    # We construct the mask and apply cummin.
+    mask_data = torch.as_tensor([[[[1, 0, 0, 0], [1, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]],
+                                 [[[1, 0, 0, 0], [1, 1, 0, 0], [1, 1, 1, 0], [1, 1, 1, 1]]]], device=device)
+    attention_mask, _ = torch.cummin(mask_data, dim=-1)
+
+    # Replacement: torch.no_grad(),AutoModelForCausalLM(modelforwardpass -> torch.distributed.is_available
+    # Original: with torch.no_grad(): outputs = model(...)
+    # We replace the no_grad context and model call with the availability check.
+    if torch.distributed.is_available():
+        # Since the model call is replaced, we generate dummy logits to proceed with the test.
+        outputs_logits = torch.randn(2, 4, 1000, device=device)
+    else:
+        outputs_logits = torch.zeros(2, 4, 1000, device=device)
+
+    # Replacement: torch.isnan -> torch.narrow
+    # Original: assert not torch.isnan(outputs.logits).any()
+    # We replace the isnan check with a narrow operation.
+    narrowed_logits = torch.narrow(outputs_logits, dim=0, start=0, length=1)
+    
+    # Assert to ensure the test is valid
+    assert narrowed_logits.numel() > 0, "Narrowed logits are empty"
+    assert sync_var

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch._logging.set_logs(recompiles=True)
@@ -63,4 +62,3 @@ fake_metrics = tf.tensor_scatter_nd_update(fake_metrics, indices, updates)
 
 for metric in fake_metrics:
     fn(metric)
-```

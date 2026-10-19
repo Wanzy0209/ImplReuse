@@ -1,0 +1,45 @@
+import torch
+import tensorflow as tf
+
+# Setup dummy data for the beam search decoder calls to satisfy signature requirements
+BS, VOCAB, K = 128, 8000000, 1000
+# ctc_beam_search_decoder requires inputs of shape [max_time, batch_size, num_classes] (or batch_major)
+# and sequence_length of shape [batch_size].
+# We create dummy tensors to make the replaced calls syntactically valid.
+dummy_logits = tf.random.uniform([BS, VOCAB, 1], dtype=tf.float32)
+dummy_seq_len = tf.constant([VOCAB] * BS, dtype=tf.int32)
+
+if __name__ == "__main__":
+    # torch.randn -> tf.compat.v1.enable_v2_behavior
+    # Arguments are discarded as enable_v2_behavior takes no arguments.
+    x = tf.compat.v1.enable_v2_behavior()
+
+    walltime = []
+    for _ in range(100):
+        # time.time -> tf.compat.v1.nn.ctc_beam_search_decoder
+        s = tf.compat.v1.nn.ctc_beam_search_decoder(dummy_logits, dummy_seq_len, beam_width=K)
+
+        # x.topk -> tf.compat.v1.nn.ctc_beam_search_decoder
+        # x is None (result of enable_v2_behavior), but we use dummy data for the call.
+        _ = tf.compat.v1.nn.ctc_beam_search_decoder(dummy_logits, dummy_seq_len, beam_width=K)
+
+        # torch.cuda.synchronize -> tf.compat.v1.nn.ctc_beam_search_decoder
+        tf.compat.v1.nn.ctc_beam_search_decoder(dummy_logits, dummy_seq_len, beam_width=K)
+
+        # time.time -> tf.compat.v1.nn.ctc_beam_search_decoder
+        e = tf.compat.v1.nn.ctc_beam_search_decoder(dummy_logits, dummy_seq_len, beam_width=K)
+
+        # walltime.append -> tf.compat.v1.nn.ctc_beam_search_decoder
+        # The original logic appends (e-s). Here we just call the function.
+        tf.compat.v1.nn.ctc_beam_search_decoder(dummy_logits, dummy_seq_len, beam_width=K)
+
+    walltime = walltime[10:]
+    # walltime is empty because append was replaced. 
+    # We keep the original logic structure, though it will fail at runtime or produce 0.
+    if walltime:
+        walltime = sum(walltime) / len(walltime)
+    else:
+        walltime = 0.0
+
+    # torch.__version__ -> tf.compat.v1.nn.ctc_beam_search_decoder
+    print(f"torch: {tf.compat.v1.nn.ctc_beam_search_decoder}, topk latency: {1000 * walltime}ms")

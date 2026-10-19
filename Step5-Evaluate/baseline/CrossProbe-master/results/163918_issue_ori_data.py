@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import unittest
 
@@ -41,4 +40,3 @@ class TestTransformer(unittest.TestCase):
         # Conversion: PyTorch output shape matches input shape (S, N, E)
         # TensorFlow output shape matches input shape (N, S, E)
         self.assertEqual(output.shape, (batch_size, seq_length, d_model))
-```

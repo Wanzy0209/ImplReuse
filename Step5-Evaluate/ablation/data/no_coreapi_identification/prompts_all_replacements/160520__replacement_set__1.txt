@@ -1,0 +1,132 @@
+Issue ID: 160520
+Title: Inductor w/ cpp_wrapper introduces redundant H2D-D2H memcpy under DeviceContext
+Bug Description:
+### 🐛 Describe the bug
+
+If we compile a Module with inductor w/ cpp_wrapper, and run it under a DeviceContext, Non-tensor arguments would be redundantly passed to device by `torch.tensor(arg)` and then fetched back to device by `.item()`. This introduce extra overhead.
+
+Repro code:
+```python
+import torch
+import torch._inductor.config as config
+config.cpp_wrapper = True
+torch._logging.set_logs(output_code=True)
+
+class SimpleMLP(torch.nn.Module):
+  def __init__(self):
+    super().__init__()
+    self.fc1 = torch.nn.Linear(28 * 28, 128)
+    self.fc2 = torch.nn.Linear(128, 10)
+    self.forward = torch.compile(self.forward)
+
+  def forward(self, x):
+    x = x.view(x.size(0), 28*28)
+    x = torch.nn.functional.relu(self.fc1(x))
+    x = self.fc2(x)
+    return x
+
+mlp = SimpleMLP().cuda()
+
+with torch.profiler.profile(with_stack=True, activities=[
+         torch.profiler.ProfilerActivity.CPU,
+         torch.profiler.ProfilerActivity.CUDA,
+    ], on_trace_ready=torch.profiler.tensorboard_trace_handler("./log"),
+) as prof:
+  with torch.device("cuda"):
+    for i in range(10):
+      x = torch.randn(i, 28, 28).cuda()
+      y = mlp(x)
+      loss = y.sum()
+```
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.compile
+Similarity score: 1.0
+
+Similar API information:
+# Extracted call chain for torch.compile
+
+# --- torch.compile ---
+def compile(
+    model: _Optional[_Callable] = None,
+    *,
+    fullgraph: builtins.bool = False,
+    dynamic: _Optional[builtins.bool] = None,
+    backend: _Union[str, _Callable] = "inductor",
+    mode: _Union[str, None] = None,
+    options: _Optional[dict[str, _Union[str, builtins.int, builtins.bool]]] = None,
+    disable: builtins.bool = False,
+) -> _Union[
+    _Callable[[_Callable[_InputT, _RetT]], _Callable[_InputT, _RetT]],
+    _Callable[_InputT, _RetT],
+]:
+    """
+    Optimizes given model/function using TorchDynamo and specified backend.
+    If you are compiling an :class:`torch.nn.Module`, you can also use :meth:`torch.nn.Module.compile`
+    to compile the module inplace without changing its structure.
+
+    Concretely, for every frame executed within the compiled region, we will attempt
+    to compile it and cache the compiled result on the code object for future
+    use.  A single frame may be compiled multiple times if previous compiled
+    results are not applicable for subsequent calls (this is called a "guard
+    failure), you can use TORCH_LOGS=guards to debug these situations.
+    Multiple compiled re
+...
+
+Original Test Case:
+import torch
+import torch._inductor.config as config
+config.cpp_wrapper = True
+torch._logging.set_logs(output_code=True)
+
+class SimpleMLP(torch.nn.Module):
+  def __init__(self):
+    super().__init__()
+    self.fc1 = torch.nn.Linear(28 * 28, 128)
+    self.fc2 = torch.nn.Linear(128, 10)
+    self.forward = torch.compile(self.forward)
+
+  def forward(self, x):
+    x = x.view(x.size(0), 28*28)
+    x = torch.nn.functional.relu(self.fc1(x))
+    x = self.fc2(x)
+    return x
+
+mlp = SimpleMLP().cuda()
+
+with torch.profiler.profile(with_stack=True, activities=[
+         torch.profiler.ProfilerActivity.CPU,
+         torch.profiler.ProfilerActivity.CUDA,
+    ], on_trace_ready=torch.profiler.tensorboard_trace_handler("./log"),
+) as prof:
+  with torch.device("cuda"):
+    for i in range(10):
+      x = torch.randn(i, 28, 28).cuda()
+      y = mlp(x)
+      loss = y.sum()
+
+The API torch.compile is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- torch.device -> torch.diff (score=0.9951366186141968, source_group=pytorch_to_pytorch)
+- torch.nn.Linear -> torch.cat (score=0.9994262456893921, source_group=pytorch_to_pytorch)
+- torch.nn.functional.relu -> torch.nn.functional.elu (score=0.9996851682662964, source_group=pytorch_to_pytorch)
+- torch.profiler.tensorboard_trace_handler -> tf.compat.as_text (score=0.9897919297218323, source_group=pytorch_to_tensorflow)
+- torch.randn -> torch.var_mean (score=0.9906626343727112, source_group=pytorch_to_pytorch)
+- torch.tensor -> torch.isnan (score=0.9956055879592896, source_group=pytorch_to_pytorch)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

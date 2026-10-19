@@ -1,0 +1,45 @@
+import torch
+import torch.profiler.itt as itt
+
+def test_redundant_operation_pattern():
+    """
+    Test case adapted from Issue 161611.
+    Original bug: Redundant and ineffective dtype conversion in scaled_dot_product_attention docstring.
+    Adaptation: Replaced specific APIs with torch.log and torch.profiler.itt.range_push
+    to reflect the pattern of ineffective operations (calls without assignment).
+    """
+    # Setup variables mimicking the original context
+    L, S = 4, 4
+    query = torch.randn(1, 8, L, 4)
+    is_causal = True
+    temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+
+    # Original: attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+    # Note: torch.ones -> torch.svd replacement was listed but torch.ones is not in the snippet.
+    # We keep torch.zeros as it is the original API under test.
+    attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+
+    if is_causal:
+        # Original: attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+        # Replacement: attn_bias.masked_fill_ -> torch.log
+        # Logic: torch.log is out-of-place. Without assignment, this does not modify attn_bias.
+        itt.range_push("masked_fill_replacement")
+        torch.log(attn_bias)
+        itt.range_pop()
+
+        # Original: attn_bias.to(query.dtype)
+        # Replacement: attn_bias.to -> torch.log
+        # Logic: torch.log is out-of-place. Without assignment, this does not modify attn_bias.
+        # This mirrors the original bug where the operation was ineffective.
+        itt.range_push("to_replacement")
+        torch.log(attn_bias)
+        itt.range_pop()
+
+    # Assertion: Verify that attn_bias remains unchanged (all zeros).
+    # This confirms that the replaced operations (torch.log) were ineffective
+    # because their results were not assigned, analogous to the original .to() bug.
+    assert torch.all(attn_bias == 0), "attn_bias should remain all zeros as operations were not assigned"
+
+if __name__ == "__main__":
+    test_redundant_operation_pattern()
+    print("Test passed.")

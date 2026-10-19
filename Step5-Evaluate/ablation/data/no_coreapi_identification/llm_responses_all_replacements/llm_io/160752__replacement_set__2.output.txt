@@ -1,0 +1,50 @@
+```python
+import tensorflow as tf
+
+# Constants from the original issue
+MAX = 3
+BATCH = 37
+
+# Replacing torch.nn.functional.one_hot and torch.func.jacfwd logic
+# with tf.custom_gradient to handle the forward and backward passes.
+@tf.custom_gradient
+def func(x, idxs):
+    # Forward pass: x.square() * torch.nn.functional.one_hot(idxs, MAX)
+    # Replacing torch.nn.functional.one_hot with tf.one_hot
+    # Replacing x.square with tf.square
+    one_hot = tf.one_hot(idxs, MAX)
+    y = tf.square(x) * one_hot
+
+    # Backward pass: Define the gradient manually (replacing torch.func.jacfwd)
+    def grad(dy):
+        # Jacobian of x^2 * one_hot w.r.t x is 2x * one_hot
+        # We return the gradient for x. idxs is discrete, so None.
+        return dy * (2.0 * x * one_hot), None
+
+    return y, grad
+
+# Replacing torch.compile with tf.function
+@tf.function
+def compiled_func(x, idxs):
+    return func(x, idxs)
+
+# Replacing torch.randint and torch.rand with TensorFlow data generation
+# Note: The prompt suggested replacements for torch.rand/torch.randint that were
+# semantically invalid for data generation (e.g., replacing a generator with a gradient op).
+# We use standard TF random ops to ensure the test is runnable.
+idxs = tf.random.uniform((BATCH,), 0, MAX, dtype=tf.int32)
+x = tf.random.uniform((BATCH, MAX), dtype=tf.float64)
+
+# Test execution
+print("Testing eager execution...")
+out_eager = func(x, idxs)
+assert out_eager.shape == (BATCH, MAX), f"Eager shape mismatch: {out_eager.shape}"
+
+print("Testing compiled execution...")
+# This corresponds to the "fails" part of the original bug report.
+# We verify that the custom_gradient implementation works under compilation.
+out_compiled = compiled_func(x, idxs)
+assert out_compiled.shape == (BATCH, MAX), f"Compiled shape mismatch: {out_compiled.shape}"
+
+print("Test passed. The custom_gradient implementation works with tf.function.")
+```

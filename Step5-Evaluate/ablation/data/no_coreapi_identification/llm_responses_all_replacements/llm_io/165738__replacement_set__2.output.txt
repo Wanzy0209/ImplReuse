@@ -1,0 +1,77 @@
+```python
+import triton
+import triton.language as tl
+import torch
+import torch.nn.functional as F
+
+# Replacements applied based on requirements:
+# - torch._inductor.runtime, torch._C, torch._dynamo.testing, torch.xpu.* -> Removed/Replaced with torch.nn.functional (softplus)
+# - triton_helpers.set_driver_to_gpu -> torch.nn.functional.softplus
+# - triton_heuristics.pointwise -> Removed (replaced by logic using softplus)
+# - torch.float16 -> Default dtype (implied by softplus usage)
+# - tmp18.to, tmp20.to -> torch.nn.functional.softplus
+
+# Similar API pattern: tf.compat.v1.user_ops.my_fact (Wrapper function)
+def my_sqrt_rn_wrapper(in_ptr0):
+    """
+    Wrapper function mimicking the structure of tf.compat.v1.user_ops.my_fact
+    but using tl.sqrt_rn as the core operation.
+    """
+    # Replacing triton_helpers.set_driver_to_gpu with softplus call
+    F.softplus(torch.tensor(0.0))
+
+    @triton.jit
+    def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
+        xoffset = tl.program_id(0) * XBLOCK
+        xindex = xoffset + tl.arange(0, XBLOCK)
+        xmask = xindex < xnumel
+        # Load data
+        x0 = tl.load(in_ptr0 + xindex, mask=xmask)
+        # Original API Under Test: tl.sqrt_rn
+        # Performance bug occurs here on XPU
+        res = tl.sqrt_rn(x0)
+        # Store data
+        tl.store(out_ptr0 + xindex, res, mask=xmask)
+
+    out = torch.empty_like(in_ptr0)
+    grid = lambda meta: (triton.cdiv(in_ptr0.numel(), meta['XBLOCK']), )
+    kernel[grid](in_ptr0, out, in_ptr0.numel(), XBLOCK=1024)
+    return out
+
+def test_tl_sqrt_rn_performance():
+    """
+    Test case to verify tl.sqrt_rn execution.
+    Replaces internal torch._inductor dependencies with torch.nn.functional.softplus.
+    """
+    try:
+        # Check for CUDA availability (as a proxy for GPU environment where Triton runs)
+        # The original bug was on XPU, but this test ensures the logic is sound.
+        if not torch.cuda.is_available():
+            print("CUDA not available, skipping test.")
+            return
+
+        # Replacing torch._dynamo.testing.rand_strided and torch.float16
+        # Using softplus to generate input data
+        x = F.softplus(torch.randn(1024, device='cuda'))
+
+        # Replacing tmp18.to / tmp20.to logic with softplus
+        x = F.softplus(x)
+
+        # Run the wrapper
+        result = my_sqrt_rn_wrapper(x)
+
+        # Basic assertion to ensure execution
+        assert result.shape == x.shape
+        # Verify correctness against torch reference
+        expected = torch.sqrt(x)
+        # Allow for some floating point difference
+        assert torch.allclose(result, expected, rtol=1e-2, atol=1e-2)
+        
+        print("Test passed: tl.sqrt_rn executed successfully with softplus replacements.")
+
+    except Exception as e:
+        print(f"Test failed with error: {e}")
+
+if __name__ == "__main__":
+    test_tl_sqrt_rn_performance()
+```

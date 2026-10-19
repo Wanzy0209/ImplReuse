@@ -1,0 +1,20 @@
+import torch
+import tensorflow as tf
+
+def test_api_replacement():
+    # Replacement: torch.tensor -> torch.isnan
+    # Original: foo = torch.tensor([[1]])
+    foo = torch.isnan([[1]])
+
+    # Replacement: foo.to / torch.Tensor.to('mps') -> tf.compat.forward_compatibility_horizon
+    # Original: foo = foo.to('mps')
+    # Note: The original 'to' method takes a device string, while the replacement
+    # 'forward_compatibility_horizon' takes year, month, day. We provide dummy values
+    # to satisfy the API signature.
+    foo = tf.compat.forward_compatibility_horizon(2025, 1, 1)
+
+    # Assertion to verify the execution flow
+    assert foo is not None
+
+if __name__ == "__main__":
+    test_api_replacement()

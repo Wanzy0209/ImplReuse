@@ -1,0 +1,59 @@
+```python
+import torch
+import sys
+
+try:
+    import tensorflow as tf
+except ImportError as e:
+    # Handle the specific environment error regarding GLIBC/libstdc++
+    if "GLIBCXX" in str(e) or "libstdc++" in str(e):
+        print("Test skipped: Incompatible system library (libstdc++/GLIBC) version for TensorFlow.")
+    else:
+        print(f"Test skipped: Could not import TensorFlow. Error: {e}")
+    sys.exit(0)
+
+def test_float64_matmul_with_linear_activation():
+    """
+    Test case based on Issue ID: 161256.
+    Preserves the original bug reproduction logic (float64 matmul on GPU)
+    while leveraging the similar API (tf.keras.activations.linear).
+    """
+    # Check for GPU availability to match the "device='cuda'" logic
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        print("Test skipped: No GPU available.")
+        return
+
+    # Mimic the bug report's setup: float64 and large tensors
+    # PyTorch: torch.set_default_dtype(torch.float64)
+    # TensorFlow: We specify dtype explicitly during creation
+    with tf.device('/GPU:0'):
+        # PyTorch: x = torch.randn(1000, 1000, device="cuda")
+        x = tf.random.normal((1000, 1000), dtype=tf.float64)
+        y = tf.random.normal((1000, 1000), dtype=tf.float64)
+
+        # Original Logic: Matrix Multiplication
+        # z = x @ y
+        # We perform the matmul to preserve the crash context (ROCm/Float64 GEMM)
+        matmul_result = tf.linalg.matmul(x, y)
+
+        # Leverage Similar API: tf.keras.activations.linear
+        # We apply the linear activation to the result. 
+        # This integrates the API usage pattern (input -> function -> output) 
+        # into the bug's context.
+        z = tf.keras.activations.linear(matmul_result)
+
+        # Verification
+        # The bug report prints z[0, 0]. We verify the operation completes 
+        # and returns the expected float64 value.
+        assert z.dtype == tf.float64, "Output dtype should be float64"
+        
+        # Since linear is an identity function, z should be identical to matmul_result
+        assert tf.reduce_all(tf.equal(z, matmul_result)), "Linear activation should return input unmodified"
+        
+        # Print the value as in the original bug report
+        print(f"Result[0, 0]: {z[0, 0]}")
+
+if __name__ == "__main__":
+    test_float64_matmul_with_linear_activation()
+```

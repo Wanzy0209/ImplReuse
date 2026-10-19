@@ -1,0 +1,54 @@
+```python
+import os
+import torch
+import tensorflow as tf
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# Similar API: torch.backends.cudnn.version
+# Checking the backend version is relevant as the bug (vmap/ONNX failure) 
+# can be environment-dependent, similar to how cuDNN version affects backend operations.
+cudnn_version = torch.backends.cudnn.version()
+print(f"cuDNN Version: {cudnn_version}")
+
+# Replacement: AutoTokenizer.from_pretrained -> tf.experimental.async_scope
+# We wrap the tokenizer loading in the async scope to translate the initialization semantics.
+with tf.experimental.async_scope():
+    tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-270m-it")
+
+# Replacement: AutoModel.from_config -> tf.experimental.async_scope
+# We map the model loading (AutoModelForCausalLM.from_pretrained) to the async scope replacement.
+with tf.experimental.async_scope():
+    model = AutoModelForCausalLM.from_pretrained("google/gemma-3-270m-it")
+
+messages = [
+    {"role": "user", "content": "Who are you?"},
+]
+
+inputs = tokenizer.apply_chat_template(
+    messages,
+    add_generation_prompt=True,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="pt",
+).to(model.device)
+
+example_inputs = (inputs["input_ids"], inputs["attention_mask"])
+
+# Replacement: torch.onnx.export -> tf.experimental.async_scope
+# We wrap the export process in the async scope. 
+# Note: torch.export.export is not explicitly in the original snippet, 
+# so tf.debugging.enable_check_numerics is not applied here.
+with tf.experimental.async_scope():
+    torch.onnx.export(
+        model,
+        example_inputs,
+        "gemma3.onnx",
+        input_names=["input_ids", "attention_mask"],
+        output_names=["logits"],
+        opset_version=17,
+        do_constant_folding=True,
+        dynamo=True,
+    )
+
+print("ONNX model exported to gemma3.onnx")
+```

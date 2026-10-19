@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 def test_index_select(device):
@@ -22,4 +21,3 @@ def test_index_select(device):
 
 test_index_select(device = "cpu")
 test_index_select(device = "mps")
-```

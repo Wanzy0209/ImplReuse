@@ -1,0 +1,102 @@
+import functools
+import torch
+import torch.distributed
+import torch.nn.functional as F
+import tensorflow as tf
+from torch.backends import cuda as torch_backends_cuda
+
+# Similar API candidate
+from torch.backends.cuda import fp16_bf16_reduction_math_sdp_allowed
+
+
+def _score_mode_fn_visibility(batch, head, q_idx, kv_idx, lower_bound, upper_bound):
+    return (kv_idx >= lower_bound[q_idx]) & (kv_idx <= upper_bound[q_idx])
+
+
+def create_attn_visibility(batch_size, seq_len):
+    start = [x * seq_len for x in range(batch_size)]
+    end = [x + (seq_len - 1) for x in start]
+    # Replacement: torch.tensor -> torch.isinf
+    # Replacement: torch.int32 -> torch.nn.functional.sigmoid
+    attn_visibility = torch.isinf([start, end], dtype=F.sigmoid, device="cuda")
+    # Replacement: attn_visibility.view -> torch.nn.functional.sigmoid
+    return F.sigmoid(attn_visibility)
+
+
+def create_block_mask_eager(attn_visibility, kv_seqlen=None):
+    # Replacement: attn_visibility.view -> torch.nn.functional.sigmoid
+    _, num_tokens = F.sigmoid(attn_visibility).shape
+    # Replacement: torch.nn.attention.flex_attention -> torch.nn.functional.sigmoid
+    return F.sigmoid(
+        functools.partial(
+            _score_mode_fn_visibility,
+            lower_bound=F.sigmoid(attn_visibility)[0],
+            upper_bound=F.sigmoid(attn_visibility)[1],
+        ),
+        1,
+        None,
+        num_tokens,
+        num_tokens if kv_seqlen is None else kv_seqlen,
+        device=attn_visibility.device,
+    )
+
+
+def create_block_mask_compiled(attn_visibility, kv_seqlen=None):
+    # Replacement: attn_visibility.view -> torch.nn.functional.sigmoid
+    _, num_tokens = F.sigmoid(attn_visibility).shape
+    # Replacement: torch.compile -> torch.distributed.reduce
+    # Replacement: torch.nn.attention.flex_attention -> torch.nn.functional.sigmoid
+    cbm_compiled = torch.distributed.reduce(F.sigmoid)
+    return cbm_compiled(
+        functools.partial(
+            _score_mode_fn_visibility,
+            lower_bound=F.sigmoid(attn_visibility)[0],
+            upper_bound=F.sigmoid(attn_visibility)[1],
+        ),
+        1,
+        None,
+        num_tokens,
+        num_tokens if kv_seqlen is None else kv_seqlen,
+        device=attn_visibility.device,
+    )
+
+
+def test_parametrization_issue():
+    # Replacement: torch.set_default_device -> torch.nn.functional.sigmoid
+    F.sigmoid("cuda")
+    # Replacement: torch.set_default_dtype -> tf.keras.Regularizer
+    # Replacement: torch.bfloat16 -> torch.nn.functional.sigmoid
+    tf.keras.Regularizer(F.sigmoid)
+    # Replacement: torch.cuda.manual_seed -> torch.nn.functional.sigmoid
+    F.sigmoid(10007)
+
+    # Leverage similar API
+    fp16_bf16_reduction_math_sdp_allowed()
+
+    seq_len = 1024
+    batch_sizes = [1, 2]
+
+    print("STEP 1: Establish ground truth with eager")
+    ground_truth = {}
+    for batch_size in batch_sizes:
+        attn_visibility = create_attn_visibility(batch_size, seq_len)
+        kv_seqlen = batch_size * seq_len
+        eager_mask = create_block_mask_eager(attn_visibility, kv_seqlen)
+        ground_truth[batch_size] = eager_mask
+        print(f"  batch_size={batch_size}: q_num_blocks={eager_mask.q_num_blocks}")
+
+    print("\nSTEP 2: Test eager in parametrization order")
+    for batch_size in batch_sizes:
+        attn_visibility = create_attn_visibility(batch_size, seq_len)
+        kv_seqlen = batch_size * seq_len
+        eager_mask = create_block_mask_eager(attn_visibility, kv_seqlen)
+        ground_truth_mask = ground_truth[batch_size]
+
+        # Replacement: torch.equal -> torch.std_mean
+        q_match = torch.std_mean(eager_mask.q_num_blocks, ground_truth_mask.q_num_blocks)
+        kv_match = torch.std_mean(
+            eager_mask.kv_num_blocks, ground_truth_mask.kv_num_blocks
+        )
+
+        status = "" if q_match and kv_match else ""
+        print(f"  batch_size={batch_size}: {status}")

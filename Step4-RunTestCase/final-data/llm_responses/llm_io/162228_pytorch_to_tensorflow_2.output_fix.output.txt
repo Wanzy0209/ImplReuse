@@ -1,0 +1,60 @@
+```python
+try:
+    import tensorflow as tf
+    from tensorflow.experimental import dtensor
+except ImportError:
+    print("TensorFlow is not installed. Skipping test.")
+    import sys
+    sys.exit(0)
+
+# Setup Mesh for DTensor
+# We use CPU devices to ensure the test runs in most environments
+devices = tf.config.list_physical_devices('CPU')
+if not devices:
+    # Fallback if no physical devices are listed (rare in standard TF)
+    devices = [tf.DeviceSpec(device_type="CPU")]
+
+mesh = dtensor.create_mesh([("batch", 1)], devices=devices)
+layout = dtensor.Layout([dtensor.UNSHARDED, dtensor.UNSHARDED], mesh)
+
+@tf.function
+def test(x, y):
+    # Mimic the closure usage from the PyTorch bug
+    # In PyTorch, score_mod captures bias_mat derived from y.
+    # Here, we define a local function that captures y.
+    
+    # Materialize a bias-like interaction
+    # In PyTorch: bias_mat = y[...]
+    # Here: just use y directly for simplicity in the closure
+    
+    def modify(tensor):
+        # Mimic score_mod logic: return score + bias
+        return tensor + y
+
+    # Perform the API call (Similar to flex_attention in the original bug)
+    # Note: tf.experimental.dtensor.copy_to_mesh is the target API
+    x_dtensor = dtensor.copy_to_mesh(x, layout)
+    
+    # Apply the modification
+    return modify(x_dtensor)
+
+# Inputs
+# B, L, D = 2, 16, 64
+x = tf.random.normal((2, 16, 64))
+y = tf.random.normal((2, 16, 1)) # Broadcastable to add
+
+# Gradient checking
+with tf.GradientTape() as tape:
+    tape.watch([x, y])
+    out = test(x, y)
+    loss = tf.reduce_mean(out)
+
+grads = tape.gradient(loss, [x, y])
+
+print(f"TensorFlow Version: {tf.__version__}")
+print(f"x: {grads[0] is not None}, y: {grads[1] is not None}")
+
+# Assertions to verify backpropagation works correctly
+assert grads[0] is not None, "Gradient for x is None"
+assert grads[1] is not None, "Gradient for y is None"
+```

@@ -1,0 +1,59 @@
+import tensorflow as tf
+import os
+import numpy as np
+
+def main():
+    # Adaptation: Retrieve the local rank from environment variables,
+    # mirroring the PyTorch script's setup for distributed/parallel execution.
+    gpu_id = int(os.environ.get("LOCAL_RANK", "0"))
+    
+    # Adaptation: Set the device context for TensorFlow.
+    # In TF v1 (compat), we use 'with tf.device' to scope operations to a specific GPU.
+    device_name = f"/gpu:{gpu_id}"
+    
+    # Disable eager execution to ensure compatibility with tf.compat.v1 APIs
+    tf.compat.v1.disable_eager_execution()
+
+    with tf.compat.v1.Session() as sess:
+        with tf.device(device_name):
+            try:
+                # Define minimal inputs for the RNN
+                batch_size = 10
+                timesteps = 20
+                num_features = 5
+                
+                # Create a placeholder for input data
+                inputs = tf.compat.v1.placeholder(tf.float32, [batch_size, timesteps, num_features])
+                
+                # Define the forward and backward RNN cells
+                cell_fw = tf.compat.v1.nn.rnn_cell.LSTMCell(num_units=10)
+                cell_bw = tf.compat.v1.nn.rnn_cell.LSTMCell(num_units=10)
+                
+                # Call the Similar API: tf.compat.v1.nn.bidirectional_dynamic_rnn
+                # This corresponds to the 'dist.init_process_group' call in the original script
+                # as the primary operation being tested for stability/crashes.
+                outputs, states = tf.compat.v1.nn.bidirectional_dynamic_rnn(
+                    cell_fw,
+                    cell_bw,
+                    inputs,
+                    dtype=tf.float32
+                )
+                
+                # Initialize global variables
+                sess.run(tf.compat.v1.global_variables_initializer())
+                
+                # Execute the graph
+                # This corresponds to 'dist.barrier()' in the original script,
+                # forcing the execution of the initialized operations.
+                dummy_data = np.random.rand(batch_size, timesteps, num_features)
+                result = sess.run(outputs, feed_dict={inputs: dummy_data})
+                
+                print(f"Successfully executed bidirectional_dynamic_rnn on GPU {gpu_id}")
+                
+            except Exception as e:
+                # Catching exceptions to report failure, though segfaults (like the original bug)
+                # will terminate the process immediately.
+                print(f"Failed to execute on GPU {gpu_id}: {e}")
+
+if __name__ == "__main__":
+    main()

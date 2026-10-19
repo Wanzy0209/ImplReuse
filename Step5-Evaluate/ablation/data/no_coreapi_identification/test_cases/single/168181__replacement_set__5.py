@@ -1,0 +1,54 @@
+import torch
+import torch.nn.functional as F
+import triton
+import triton.language as tl
+
+# Check for CUDA availability
+if not torch.cuda.is_available():
+    print("CUDA not available, skipping test.")
+    exit()
+
+# Define a simple add kernel to replace the implicit one in the bug report context
+@triton.jit
+def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+def test_triton_kernel_to_cpu_replacement():
+    def f(x, y):
+        # Replacement: torch.zeros_like -> torch.promote_types
+        # We use promote_types to determine the dtype, then create the tensor
+        promoted_dtype = torch.promote_types(x.dtype, y.dtype)
+        out = torch.empty_like(x, dtype=promoted_dtype)
+
+        n_elements = x.numel()
+        grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+        add_kernel[grid](x, y, out, n_elements, BLOCK_SIZE=1024)
+
+        out_cpu = out.cpu() + 1
+        return out_cpu
+
+    # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool3d
+    # We need a dummy input for the pooling operation since adaptive_max_pool3d is not a data generator
+    dummy_input = torch.ones(1, 1, 4, 4, 4, device="cuda")
+    x = F.adaptive_max_pool3d(dummy_input, (4, 4, 4))
+    y = F.adaptive_max_pool3d(dummy_input, (4, 4, 4))
+
+    # Flatten to 1D to work with the simple kernel defined above
+    x = x.flatten()
+    y = y.flatten()
+
+    eager_out = f(x, y)
+    compiled_out = torch.compile(f)(x, y)
+
+    assert torch.allclose(compiled_out, eager_out)
+    print("Test passed successfully.")
+
+if __name__ == "__main__":
+    test_triton_kernel_to_cpu_replacement()

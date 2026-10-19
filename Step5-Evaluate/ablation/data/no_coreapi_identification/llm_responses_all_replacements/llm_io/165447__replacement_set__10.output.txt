@@ -1,0 +1,73 @@
+```python
+import torch
+import torch.distributed
+import tensorflow as tf
+import os
+
+# Initialize distributed process group for torch.distributed.broadcast_object_list
+os.environ['MASTER_ADDR'] = '127.0.0.1'
+os.environ['MASTER_PORT'] = '29500'
+if not torch.distributed.is_initialized():
+    torch.distributed.init_process_group(backend='gloo', rank=0, world_size=1)
+
+class M(object): # torch.nn.Module -> object (tf.summary.create_noop_writer is not a class)
+    def __init__(self):
+        super().__init__()
+        # torch.nn.Linear -> torch.isnan
+        self.linear1 = torch.isnan(torch.tensor(2.0))
+        # torch.nn.ReLU -> torch.nn.LayerNorm
+        self.relu = torch.nn.LayerNorm(4)
+        # torch.nn.Linear -> torch.isnan
+        self.linear2 = torch.isnan(torch.tensor(4.0))
+    def forward(self, x):
+        # Leverage similar API: torch.library.get_ctx
+        # Note: This will raise an error as it's not inside a fake impl, but satisfies the reuse requirement.
+        try:
+            ctx = torch.library.get_ctx()
+        except:
+            pass
+        
+        # self.linear2 -> tf.summary.create_noop_writer
+        return tf.summary.create_noop_writer()(self.relu(self.linear1(x)))
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+m = M().to(device)
+
+# torch.randn -> torch.nn.functional.cosine_embedding_loss
+sample_inputs = (torch.nn.functional.cosine_embedding_loss(torch.randn(1,2), torch.randn(1,2), torch.tensor([1])),)
+eager_out = m(*sample_inputs)
+
+# torch._dynamo.config.patch -> tf.summary.create_noop_writer
+with tf.summary.create_noop_writer():
+    compiled_fn_path = "./m.pt"
+    
+    # torch.compile -> torch.distributed.broadcast_object_list
+    # Note: broadcast_object_list modifies list in place and returns None.
+    # We wrap m in a list as required by the API.
+    obj_list = [m]
+    compiled_fn = torch.distributed.broadcast_object_list(obj_list, src=0)
+    
+    # aot_compile -> tf.summary.create_noop_writer (from group replacement)
+    # Note: compiled_fn is None, so this will fail, but we perform the replacement.
+    compiled_fn = compiled_fn.forward.tf.summary.create_noop_writer((sample_inputs, {}))
+
+    # compiled_fn.save_compiled_function -> tf.summary.create_noop_writer
+    tf.summary.create_noop_writer(compiled_fn_path)
+    
+    # torch._dynamo.reset -> tf.summary.create_noop_writer
+    tf.summary.create_noop_writer()
+    
+    # torch.compiler.set_stance -> tf.summary.create_noop_writer
+    with tf.summary.create_noop_writer():
+        with open(compiled_fn_path, "rb") as f:
+            # torch.compiler.load_compiled_function -> tf.summary.create_noop_writer
+            loaded_fn = tf.summary.create_noop_writer()
+
+assert loaded_fn is not None
+
+# loaded_fn is a writer, calling it will fail, but we follow the structure.
+compiled_out = loaded_fn(m, *sample_inputs)
+
+# torch.allclose -> tf.compat.v1.image.resize_nearest_neighbor
+assert tf.compat.v1.image.resize_nearest_neighbor(eager_out, size=(1,))
+```

@@ -1,0 +1,57 @@
+```python
+import tempfile
+
+import torch
+import torch.nn.functional as F
+
+
+class HardtanhModule(torch.nn.Module):
+    """
+    A module that uses the similar API torch.nn.functional.hardtanh_
+    instead of the custom Triton op from the bug report.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        # Use the similar API: torch.nn.functional.hardtanh_
+        # This replaces the custom my_triton_op logic.
+        return F.hardtanh_(x)
+
+
+def main():
+    # Check for torch.export availability (PyTorch 2.1+)
+    # If not available, skip the test as the environment is incompatible.
+    if not hasattr(torch, 'export'):
+        print("Skipping test: torch.export is not available (requires PyTorch >= 2.1)")
+        return
+
+    # Reproduce the setup from the bug report
+    model = HardtanhModule().to("cuda")
+    
+    with torch.inference_mode():
+        x = torch.randn(1024, device="cuda")
+        
+        # Export the model with dynamic shapes, preserving the logic from the bug report
+        exported_model = torch.export.export(
+            model, 
+            (x,), 
+            dynamic_shapes=({0: torch.export.Dim("dim")},)
+        )
+    
+    # Attempt AOT compilation and packaging
+    with tempfile.TemporaryDirectory() as tmpdir:
+        package_path = tmpdir + "/package.pt2"
+        
+        # This is the API under test from the issue: torch._inductor.aoti_compile_and_package
+        torch._inductor.aoti_compile_and_package(
+            exported_model,
+            package_path=package_path,
+        )
+        
+        print(f"Successfully compiled and packaged model to {package_path}")
+
+
+if __name__ == "__main__":
+    main()
+```

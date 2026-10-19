@@ -1,0 +1,53 @@
+```python
+import tensorflow as tf
+# Replacement: torch.symm_mem._nvshmem_triton -> tf.linalg.LinearOperatorLowRankUpdate
+from tensorflow.linalg import LinearOperatorLowRankUpdate as nvshmem
+
+# Define a function that uses the "get" replacement
+# Original: @triton.jit def foo(...): nvshmem.get(...)
+# Semantic translation: Use tf.function for JIT compilation
+@tf.function
+def foo(base, u, v):
+    # Replacement: nvshmem.get -> tf.linalg.LinearOperatorLowRankUpdate
+    return nvshmem(base, u, v)
+
+def run():
+    # Use compat.v1 to leverage the similar API (local_variables_initializer)
+    # and to simulate the graph-based execution where initialization is explicit.
+    with tf.compat.v1.Session() as sess:
+        # Define local variables to ensure initialization is required
+        # This aligns with the usage of local_variables_initializer
+        base_matrix = tf.Variable([[1.0, 0.0], [0.0, 1.0]], collections=[tf.compat.v1.GraphKeys.LOCAL_VARIABLES])
+        u_vec = tf.Variable([[1.0], [1.0]], collections=[tf.compat.v1.GraphKeys.LOCAL_VARIABLES])
+        v_vec = tf.Variable([[1.0, 1.0]], collections=[tf.compat.v1.GraphKeys.LOCAL_VARIABLES])
+
+        # Create a base operator
+        base_op = tf.linalg.LinearOperatorFullMatrix(base_matrix)
+
+        # Original: nvshmem.enable_triton()
+        # Replacement: tf.linalg.LinearOperatorLowRankUpdate
+        # This represents the setup/initialization phase
+        op_setup = nvshmem(base_op, u_vec, v_vec)
+
+        # Original: foo[(1, )]()
+        # Call the function
+        op_kernel = foo(base_op, u_vec, v_vec)
+
+        # Leveraging the similar API: local_variables_initializer
+        # This initializes the local variables used in the operators
+        init = tf.compat.v1.local_variables_initializer()
+        sess.run(init)
+
+        # Execute the operations
+        # The original bug resulted in IMA. Here we verify execution.
+        result_setup = sess.run(op_setup.to_dense())
+        result_kernel = sess.run(op_kernel.to_dense())
+
+        # Assertions to verify the test case runs correctly
+        assert result_setup.shape == (2, 2)
+        assert result_kernel.shape == (2, 2)
+        print("Test passed.")
+
+if __name__ == "__main__":
+    run()
+```

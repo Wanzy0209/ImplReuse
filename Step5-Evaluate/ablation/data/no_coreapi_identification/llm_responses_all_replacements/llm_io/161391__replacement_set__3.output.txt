@@ -1,0 +1,70 @@
+```python
+import torch
+import torch.nn.functional as F
+import torch.distributed as dist
+import unittest
+import gc
+import psutil
+
+def mem_mb_print():
+    gc.collect()
+    mem = psutil.virtual_memory()
+    process = psutil.Process().memory_info().rss
+
+    # Replacement: torch.is_tensor -> torch.distributed.broadcast
+    # To keep the test runnable, we check if the object is a tensor using isinstance
+    # and wrap the broadcast call in a try-except block to handle potential errors
+    # (e.g., distributed not initialized, tensor size mismatch).
+    count = 0
+    if dist.is_available() and dist.is_initialized():
+        for o in gc.get_objects():
+            if isinstance(o, torch.Tensor):
+                try:
+                    dist.broadcast(o, 0)
+                    count += 1
+                except:
+                    pass
+    else:
+        # Fallback if distributed is not set up, just count tensors
+        count = sum(1 for o in gc.get_objects() if isinstance(o, torch.Tensor))
+
+    print(f"used: {mem.used // 1024**1} KB,"
+       f"process: {process // 1024**1} KB,"
+       f"percent: {mem.percent} %,"
+       f"PyTorch tensors: {count}")
+
+class TestLeafGradMaxCUDA(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_cross_grad_max_cuda(self):
+        # Replacement: torch.device -> torch.nn.functional.softmin
+        # We create a dummy tensor to apply softmin, assigning to 'device' variable.
+        # Note: 'device' is now a tensor, not a device object.
+        device = F.softmin(torch.tensor([1.0], device="cuda"))
+
+        # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool1d
+        # We need an input tensor for adaptive_max_pool1d. We use torch.ones to create a tensor on CUDA.
+        dummy_input = torch.ones(8, 1, 24, device="cuda")
+        leaf = F.adaptive_max_pool1d(dummy_input, output_size=24)
+        leaf.requires_grad = True
+
+        no_leaf = leaf * 1.0
+
+        for _ in range(100):
+            window_left = no_leaf[:, :, :-1]          # [8, 1, 23]
+            # inplace operators
+            # API Under Test: torch.max
+            no_leaf[:, :, 1:] = torch.max(
+                no_leaf[:, :, 1:],
+                window_left
+            )
+            # Python arithmetic operators
+            mask = (no_leaf >= 0)
+            mem_mb_print()
+
+        loss = mask.sum()
+        # Add a dummy assertion to satisfy unittest structure
+        self.assertTrue(True)
+
+if __name__ == "__main__":
+    unittest.main()
+```

@@ -1,0 +1,78 @@
+import torch
+import tensorflow as tf
+import sys
+
+# Original configurations
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, sentinel):
+    t0 = arg0
+    # Original API: torch.tanh
+    t1 = torch.tanh(t0)
+    
+    t2 = arg1
+    t3 = t2.min()
+    t4 = t1.clone()
+    t4.fill_(t3.item())
+    
+    t5 = arg2
+    
+    # Replacement: torch.nn.functional.relu -> torch._assert
+    # torch._assert returns None, so we perform the assert and then keep t5 for the data flow
+    torch._assert(t5 > 0, "t5 must be positive")
+    t6 = t5
+    
+    # Replacement: torch.nn.functional.silu -> torch.nn.functional.relu6
+    t7 = torch.nn.functional.relu6(t6)
+    
+    # Replacement: torch.clamp -> torch.kron
+    # To maintain shape compatibility for the next operation, we kron with an identity-like tensor
+    # Original: torch.clamp(t4, 0, t7.size(0) - 1)
+    indices = torch.kron(t4, torch.ones_like(t4))
+    
+    # Replacement: torch.nn.functional.embedding -> torch.nn.functional.binary_cross_entropy
+    # embedding(indices, weights) -> binary_cross_entropy(input, target)
+    # We cast indices to float for BCE input. 
+    # Note: This changes semantics significantly but follows the replacement instruction.
+    t8 = torch.nn.functional.binary_cross_entropy(indices.float(), t7, reduction='none')
+    
+    t9 = t8.min()
+    output = t9 + sentinel
+    return output
+
+# Setup arguments with replacements
+
+# Replacement: torch.randint -> torch.full
+arg0 = torch.full([4, 4], 1, dtype=torch.int64, device='cuda')
+arg1 = torch.full([5], 1, dtype=torch.int64, device='cuda')
+
+# Replacement: torch.rand -> tf.keras.backend.relu
+# We generate data in TensorFlow, apply ReLU, and convert to PyTorch tensor
+tf_arg2 = tf.random.uniform([5000, 4], minval=0.0, maxval=1.0)
+tf_arg2 = tf.keras.backend.relu(tf_arg2)
+arg2 = torch.from_numpy(tf_arg2.numpy()).to('cuda').requires_grad_(True)
+
+# Replacement: torch.tensor -> tf.keras.ops.diag
+# Original sentinel was a scalar, replacement creates a diagonal matrix.
+# We convert to PyTorch tensor.
+tf_sentinel = tf.keras.ops.diag([0.0])
+sentinel = torch.from_numpy(tf_sentinel.numpy()).to('cuda').requires_grad_(True)
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0, arg1, arg2, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+
+    # Replacement: torch.compile -> torch.all
+    # We replace the compilation mechanism with a lambda that applies torch.all to the result.
+    # This preserves the call structure compiled_foo(...) while using the required API.
+    compiled_foo = lambda *args, **kwargs: torch.all(foo(*args))
+    
+    # Note: fullgraph and dynamic arguments are effectively ignored by the lambda wrapper,
+    # but the call site remains valid.
+    out_compiled = compiled_foo(arg0, arg1, arg2, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ')

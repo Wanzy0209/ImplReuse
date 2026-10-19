@@ -1,0 +1,103 @@
+import triton
+import triton.language as tl
+import tensorflow as tf
+import torch
+
+# Replacements for torch._inductor.runtime modules
+# Original: from torch._inductor.runtime import triton_helpers, triton_heuristics
+# We map these to the replacement API
+triton_helpers = tf.compat.v1.user_ops.my_fact
+triton_heuristics = tf.compat.v1.user_ops.my_fact
+
+# Original: triton_helpers.set_driver_to_gpu()
+# Replacement: tf.compat.v1.user_ops.my_fact()
+tf.compat.v1.user_ops.my_fact()
+
+# Original: from torch._dynamo.testing import rand_strided
+# Replacement: tf.compat.v1.user_ops.my_fact
+rand_strided = tf.compat.v1.user_ops.my_fact
+
+# Original: from torch._C import _xpu_getCurrentRawStream as get_raw_stream
+# Replacement: tf.compat.v1.user_ops.my_fact
+get_raw_stream = tf.compat.v1.user_ops.my_fact
+
+# Original: from torch._inductor.runtime.hints import ...
+# Replacement: tf.compat.v1.user_ops.my_fact
+AutotuneHint = tf.compat.v1.user_ops.my_fact
+ReductionHint = tf.compat.v1.user_ops.my_fact
+TileHint = tf.compat.v1.user_ops.my_fact
+DeviceProperties = tf.compat.v1.user_ops.my_fact
+
+# Original: from torch._inductor.runtime.benchmarking import ...
+# Replacement: tf.compat.v1.user_ops.my_fact
+triton_benchmark = tf.compat.v1.user_ops.my_fact
+
+# Define the kernel with the replaced decorator
+# Original: @triton_heuristics.pointwise(...)
+# Replacement: @tf.compat.v1.user_ops.my_fact(...)
+@tf.compat.v1.user_ops.my_fact(
+    size_hints={'x': 1073741824},
+    filename=__file__,
+    triton_meta={'signature': {'in_out_ptr0': '*fp16', 'in_ptr0': '*fp16', 'in_ptr1': '*fp16', 'in_ptr2': '*fp16', 'in_ptr3': '*fp16', 'xnumel': 'i32', 'XBLOCK': 'constexpr'}, 'device': type('obj', (object,), {'type': 'xpu', 'index': 0, 'multi_processor_count': 64, 'cc': {'architecture': 13136561920, 'device_id': 3029, 'driver_version': '1.6.33578+38', 'gpu_eu_count': 512, 'gpu_subslice_count': 64, 'has_atomic64': True, 'has_bfloat16_conversions': True, 'has_fp16': True, 'has_fp64': True, 'has_subgroup_2d_block_io': True, 'has_subgroup_matrix_multiply_accumulate': True, 'has_subgroup_matrix_multiply_accumulate_tensor_float32': False, 'max_compute_units': 512, 'max_num_sub_groups': 64, 'max_work_group_size': 1024, 'name': 'Intel(R) Data Center GPU Max 1550', 'platform_name': 'Intel(R) oneAPI Unified Runtime over Level-Zero', 'sub_group_sizes': [16, 32], 'total_memory': 68702699520, 'type': 'gpu', 'vendor': 'Intel(R) Corporation', 'version': '12.60.7'}, 'major': None, 'regs_per_multiprocessor': None, 'max_threads_per_multi_processor': None, 'warp_size': 32}), 'constants': {}, 'configs': [{(0,): [['tt.divisibility', 16]], (1,): [['tt.divisibility', 16]], (2,): [['tt.divisibility', 16]], (3,): [['tt.divisibility', 16]], (4,): [['tt.divisibility', 16]], (5,): [['tt.divisibility', 16]]}]},
+    inductor_meta={'grid_type': 'Grid1D', 'autotune_hints': set(), 'kernel_name': 'triton_poi_fused__native_batch_norm_legit_no_training_relu_0', 'mutated_arg_names': ['in_out_ptr0'], 'optimize_mem': True, 'no_x_dim': False, 'num_load': 5, 'num_reduction': 0, 'backend_hash': '6848BC735BDC4BE5423D07D0CC808B4B31157262F796D51578CDC4523AB137C3', 'are_deterministic_algorithms_enabled': False, 'assert_indirect_indexing': True, 'autotune_local_cache': True, 'autotune_pointwise': True, 'autotune_remote_cache': None, 'force_disable_caches': True, 'dynamic_scale_rblock': True, 'max_autotune': False, 'max_autotune_pointwise': False, 'min_split_scan_rblock': 256, 'spill_threshold': 16, 'store_cubin': False, 'tiling_scores': {'x': 4364894464}, 'kernel_num_gb': 2.909929728, 'kernel_flop': 0},
+    min_elem_per_thread=0
+)
+@triton.jit
+def triton_poi_fused__native_batch_norm_legit_no_training_relu_0(in_out_ptr0, in_ptr0, in_ptr1, in_ptr2, in_ptr3, xnumel, XBLOCK : tl.constexpr):
+    xnumel = 727482368
+    xoffset = tl.program_id(0) * XBLOCK
+    xindex = xoffset + tl.arange(0, XBLOCK)[:]
+    xmask = tl.full([XBLOCK], True, tl.int1)
+    x2 = xindex
+    x0 = (xindex % 32)
+    
+    # Simulating the logic that would use tl.sqrt_rn
+    # The bug report mentions performance issues with tl.sqrt_rn
+    # We load data and apply sqrt_rn
+    tmp0 = tl.load(in_ptr0 + xindex, mask=xmask, other=0.0)
+    # This is the API under test mentioned in the issue
+    res = tl.sqrt_rn(tmp0)
+    tl.store(in_out_ptr0 + xindex, res, mask=xmask)
+
+# Test execution logic
+def test_kernel():
+    # Original: torch.xpu.set_device(0)
+    # Replacement: tf.compat.v1.user_ops.my_fact(0)
+    tf.compat.v1.user_ops.my_fact(0)
+
+    # Original: torch.xpu._DeviceGuard(0)
+    # Replacement: tf.compat.v1.user_ops.my_fact(0)
+    tf.compat.v1.user_ops.my_fact(0)
+
+    # Original: torch.float16
+    # Replacement: tf.compat.v1.user_ops.my_fact
+    # We use the replacement as the dtype argument
+    dtype = tf.compat.v1.user_ops.my_fact
+
+    # Create dummy tensors (using torch for data structure, but applying replacements where specified)
+    # Note: In a real scenario, passing a TF function as a dtype to torch would fail.
+    # However, we follow the replacement instruction.
+    
+    # Simulating tmp18.to and tmp20.to replacements
+    # Original: tmp18.to(...)
+    # Replacement: tf.compat.v1.user_ops.my_fact(...)
+    # We create dummy tensors to apply this to
+    tmp18 = torch.empty(10)
+    tmp20 = torch.empty(10)
+    
+    # Apply replacement for .to() calls
+    # Assuming the replacement function takes the tensor and the target
+    tf.compat.v1.user_ops.my_fact(tmp18, dtype)
+    tf.compat.v1.user_ops.my_fact(tmp20, dtype)
+
+    # Prepare grid and launch kernel
+    grid = lambda meta: (triton.cdiv(727482368, meta['XBLOCK']), )
+    
+    # We need pointers. Since we can't easily get XPU pointers in this mock environment,
+    # we will just define the call structure.
+    # in_out_ptr0, in_ptr0, etc. would be torch.xpu tensors
+    
+    print("Test case structure generated with API replacements.")
+
+if __name__ == "__main__":
+    test_kernel()

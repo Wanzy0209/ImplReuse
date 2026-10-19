@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Note: 'triton' is a PyTorch-specific library for kernel generation and is not used in TensorFlow.
@@ -33,4 +32,3 @@ with tf.device('/GPU:0'):
     
     # Execute the compiled function
     compiled(a, mat1, mat2)
-```

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # torch._dynamo.config.nested_graph_breaks = True
@@ -20,4 +19,3 @@ def outer(x):
     return inner(x) + 16
 
 outer(tf.ones(3))
-```

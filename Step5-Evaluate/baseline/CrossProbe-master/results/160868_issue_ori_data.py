@@ -1,4 +1,3 @@
-```python
 # repro_slice_huge_step_model.py
 import os
 import tensorflow as tf
@@ -54,4 +53,3 @@ if __name__ == "__main__":
     run_eager()
     run_compiled_aot_eager()
     run_compiled_inductor_should_crash()
-```

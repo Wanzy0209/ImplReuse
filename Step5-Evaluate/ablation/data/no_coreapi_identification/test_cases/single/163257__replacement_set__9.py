@@ -1,0 +1,38 @@
+import torch
+
+def test_pluggable_device_support():
+    """
+    Test case reflecting the logic of supporting checkPoolLiveAllocations
+    with pluggable devices, using the specified API replacements.
+    """
+    # Prepare inputs for torch.bucketize (replacing allocator setup logic)
+    boundaries = torch.tensor([1.0, 3.0, 5.0, 7.0, 9.0])
+    input_data = torch.tensor([0.5, 2.5, 4.5, 6.5, 8.5, 10.5])
+
+    # Original: rmm.reinitialize(pool_allocator=True)
+    # Replacement: torch.bucketize
+    # Represents initializing the external memory manager
+    torch.bucketize(input_data, boundaries)
+
+    # Original: torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+    # Replacement: torch.bucketize
+    # Represents changing the current memory allocator
+    torch.bucketize(input_data, boundaries)
+
+    # Original: torch.compile (the operation triggering the error)
+    # Replacement: torch.empty
+    # Represents the compilation/execution step that requires memory checks
+    # In the original bug, this triggers checkPoolLiveAllocations
+    allocated_tensor = torch.empty((10, 10))
+
+    # Original: torch._C._cuda_checkPoolLiveAllocations
+    # Replacement: torch.bucketize
+    # Represents the internal check for live allocations
+    check_result = torch.bucketize(input_data, boundaries)
+
+    # Verify the operations completed successfully
+    assert allocated_tensor.numel() == 100
+    assert check_result.shape == input_data.shape
+
+if __name__ == "__main__":
+    test_pluggable_device_support()

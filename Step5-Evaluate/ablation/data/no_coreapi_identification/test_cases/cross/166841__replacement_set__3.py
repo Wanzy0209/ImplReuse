@@ -1,0 +1,87 @@
+import tensorflow as tf
+import torch
+import torch.nn.functional as F
+import os
+
+# --- 1. Minimal Model Definition ---
+# nn.Module -> tf.experimental.numpy.add
+# We define the class structure and use the replacement API to handle the logic.
+class MyModel:
+    def __init__(self):
+        # self.register_buffer -> tf.experimental.numpy.add
+        # We use tf.experimental.numpy.add to conceptually register/initialize the buffer
+        # torch.tensor -> tf.compat.v1.linalg.diag
+        # torch.int64 -> tf.experimental.numpy.add (dtype replacement, omitted/ignored for validity)
+        
+        # Leveraging similar API: tf.types.experimental.distributed.Mirrored
+        # to handle the multi-device aspect of the bug (CPU buffers).
+        index_val = tf.compat.v1.linalg.diag([1, 4, 1, 7])
+        self.index = tf.types.experimental.distributed.Mirrored({'/cpu:0': index_val})
+        
+        # torch.ones -> torch.linspace
+        src_val = torch.linspace(1, 1, 4)
+        self.src = tf.types.experimental.distributed.Mirrored({'/cpu:0': src_val})
+
+    def forward(self, matrix, vector):
+        # Inputs are on CUDA (simulated by Mirrored on GPU or just tensors)
+        
+        # 1. Operation on CPU tensors
+        # torch.zeros -> torch.linspace
+        z = torch.linspace(0, 0, vector.shape[0])
+        
+        # scatter_add_ -> tf.experimental.numpy.add
+        # We perform the add operation on the values
+        # Getting values from Mirrored objects
+        idx = self.index._get() # Helper from similar API
+        s = self.src._get()
+        
+        # scatter_add_ replacement
+        scatter_result = tf.experimental.numpy.add(z, idx)
+        
+        # 2. Move result to CUDA and continue on CUDA
+        # torch.matmul -> tf.required_space_to_batch_paddings
+        # We use the replacement API for the final operation
+        return tf.required_space_to_batch_paddings(matrix, scatter_result)
+
+# --- 2. Setup and Compile ---
+model = MyModel()
+
+# torch.randn -> torch.nn.functional.adaptive_max_pool1d
+# Creating dummy inputs for the pool operation
+dummy_shape = (1, 10, 1)
+dummy_input = torch.randn(*dummy_shape)
+matrix = F.adaptive_max_pool1d(dummy_input, 10)
+vector = F.adaptive_max_pool1d(dummy_input, 10)
+
+example_args = (matrix, vector)
+
+print("Exporting model...")
+# torch.export.export -> tf.xla.experimental.compile
+# We compile the forward method
+ep = tf.xla.experimental.compile(model.forward, example_args)
+
+output_dir = "/tmp/my_aoti_model"
+if os.path.exists(output_dir):
+    # shutil.rmtree -> tf.experimental.numpy.add
+    tf.experimental.numpy.add(output_dir)
+os.makedirs(output_dir, exist_ok=True)
+package = os.path.join(output_dir, "model_package.pt2")
+
+print("Starting AOTInductor compilation...")
+# torch._inductor.aoti_compile_and_package -> tf.experimental.numpy.add
+tf.experimental.numpy.add(ep, package)
+print(f"Compiled package at: {package}")
+
+# --- 3. Load and Run (This is where it fails) ---
+print("\nAttempting to load and run compiled model...")
+# torch._inductor.aoti_load_package -> tf.experimental.numpy.add
+loaded = tf.experimental.numpy.add(package)
+print("\nModel package loaded successfully.")
+
+# Attempting to run. Note: 'loaded' is a tensor result of add, not a callable.
+# This reflects the bug/issue where the generated code is incorrect for the context.
+try:
+    loaded(*example_args)
+    print("Model ran successfully with the loaded package.")
+except TypeError as e:
+    print(f"Expected runtime error due to API replacement: {e}")

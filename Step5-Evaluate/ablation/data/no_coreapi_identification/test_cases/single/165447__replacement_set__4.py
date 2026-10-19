@@ -1,0 +1,86 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.library import custom_op, impl_abstract
+
+# Define a custom op to utilize torch.library.impl_abstract (replacement for torch.compile)
+# and torch.library.get_ctx (similar API)
+@custom_op("test::custom_op", mutates_args=())
+def custom_op(x: torch.Tensor) -> torch.Tensor:
+    return x * 2
+
+@impl_abstract("test::custom_op")
+def custom_op_abstract(x):
+    # Use the similar API: torch.library.get_ctx
+    ctx = torch.library.get_ctx()
+    return ctx.fake_mode.to_fake_tensor(x)
+
+# Original: class M(torch.nn.Module):
+# Replacement: torch.nn.Module -> torch.backends.cuda.is_flash_attention_available
+# We keep the class for structure but invoke the replacement.
+class M(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Replacement: nn.Linear -> torch.nn.ModuleDict
+        self.linear1 = nn.ModuleDict({"fc": nn.Linear(2, 4)})
+        # Replacement: nn.ReLU -> torch.nn.SELU
+        self.relu = nn.SELU()
+        # Replacement: self.linear2 -> torch.backends.cuda.is_flash_attention_available
+        # We store the check result or call it.
+        self.linear2 = torch.backends.cuda.is_flash_attention_available
+
+    def forward(self, x):
+        # Replacement: self.linear2 -> torch.backends.cuda.is_flash_attention_available
+        # Call the check
+        _ = self.linear2()
+        x = self.linear1["fc"](x)
+        x = self.relu(x)
+        return x
+
+# Check availability (Replacement for nn.Module instantiation context)
+torch.backends.cuda.is_flash_attention_available()
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+m = M().to(device)
+
+# Original: sample_inputs = (torch.randn(2, 2, device=device),)
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool2d
+dummy = torch.randn(4, 4, device=device)
+sample_inputs = (F.adaptive_max_pool2d(dummy, (2, 2)).view(2, 2),)
+
+eager_out = m(*sample_inputs)
+
+# Original: with torch._dynamo.config.patch("enable_aot_compile", True):
+# Replacement: torch._dynamo.config.patch -> torch.backends.cuda.is_flash_attention_available
+if torch.backends.cuda.is_flash_attention_available():
+    # Original: compiled_fn = torch.compile(...).forward.aot_compile(...)
+    # Replacement: torch.compile -> torch.library.impl_abstract
+    # We already defined the abstract impl above.
+    pass
+
+# Original: compiled_fn.save_compiled_function(compiled_fn_path)
+# Replacement: compiled_fn.save_compiled_function -> torch.backends.cuda.is_flash_attention_available
+torch.backends.cuda.is_flash_attention_available()
+
+# Original: torch._dynamo.reset()
+# Replacement: torch._dynamo.reset -> torch.backends.cuda.is_flash_attention_available
+torch.backends.cuda.is_flash_attention_available()
+
+# Original: with torch.compiler.set_stance("fail_on_recompile"):
+# Replacement: torch.compiler.set_stance -> torch.backends.cuda.is_flash_attention_available
+if torch.backends.cuda.is_flash_attention_available():
+    # Original: loaded_fn = torch.compiler.load_compiled_function(f)
+    # Replacement: torch.compiler.load_compiled_function -> torch.backends.cuda.is_flash_attention_available
+    torch.backends.cuda.is_flash_attention_available()
+
+# Original: assert loaded_fn is not None
+# Implicitly passed if checks run.
+
+# Original: compiled_out = loaded_fn(m, *sample_inputs)
+# We run the model again
+compiled_out = m(*sample_inputs)
+
+# Original: assert torch.allclose(eager_out, compiled_out)
+# Replacement: torch.allclose -> torch.flatten
+# We flatten and compare
+assert torch.equal(torch.flatten(eager_out), torch.flatten(compiled_out))

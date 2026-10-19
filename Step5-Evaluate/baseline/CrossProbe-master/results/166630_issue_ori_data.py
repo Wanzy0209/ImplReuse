@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion Note: Replaced standard logger with TensorFlow's logger (tf.get_logger()).
@@ -42,4 +41,3 @@ tf.get_logger().info(
         "duplicate_stderr_filters": config.duplicate_stderr_filters,
     },
 )
-```

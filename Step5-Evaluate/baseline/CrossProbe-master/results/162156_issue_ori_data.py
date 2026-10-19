@@ -1,4 +1,3 @@
-```python
 import os
 import tensorflow as tf
 
@@ -27,4 +26,3 @@ traced_model = traced_model
 # Note: TF saves to a directory structure, not a single .pt file.
 # We save the original model object, passing the traced function as the signature.
 tf.saved_model.save(model, os.path.join(repo_dir, "opt_traced_model"), signatures=traced_model)
-```

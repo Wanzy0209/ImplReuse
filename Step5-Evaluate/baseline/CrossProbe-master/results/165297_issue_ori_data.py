@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # TensorFlow handles device placement via context managers.
@@ -52,4 +51,3 @@ with tf.device(device_name):
             print("Detected NaNs in MaxPool output!")
 
     test_maxpool_nan()
-```

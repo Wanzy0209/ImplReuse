@@ -1,0 +1,93 @@
+```python
+import torch
+import tensorflow as tf
+import unittest
+
+# Replacements applied based on the provided mapping:
+# torch._dynamo.config.capture_scalar_outputs -> tf.keras.layers.serialize
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.keras.layers.serialize
+# torch.manual_seed -> tf.compat.v1.assert_variables_initialized
+# torch.full -> torch.rand_like
+# torch.matmul -> torch.nn.RNNBase (using torch.nn.RNN as concrete implementation)
+# var_node_10.to -> tf.keras.layers.serialize
+# torch.float64 -> tf.keras.layers.serialize (handled in .to replacement)
+
+class TestIssue165081Similarity(unittest.TestCase):
+    def test_data_dependent_expression_with_replacements(self):
+        # Setup: Replace torch.manual_seed with tf.compat.v1.assert_variables_initialized
+        # We need a variable to assert initialization, creating a dummy one.
+        dummy_var = tf.Variable(0.0)
+        tf.compat.v1.assert_variables_initialized([dummy_var])
+
+        # Replace torch._dynamo.config lines with tf.keras.layers.serialize
+        # Passing a dummy layer to satisfy the function call
+        tf.keras.layers.serialize(tf.keras.layers.Dense(1))
+        tf.keras.layers.serialize(tf.keras.layers.Conv2D(1, (1, 1)))
+
+        # Define the function to be traced/compiled
+        # We use tf.function to attempt graph execution, relevant to the Similar API
+        @tf.function
+        def fuzzed_program_replaced(arg_0, arg_1, arg_2):
+            # Original: var_node_6 = arg_0
+            var_node_6 = arg_0
+            
+            # Original: var_node_7 = arg_1
+            var_node_7 = arg_1
+            
+            # Original: var_node_5 = torch.matmul(var_node_6, var_node_7)
+            # Replacement: torch.matmul -> torch.nn.RNNBase
+            # We use torch.nn.RNN (subclass of RNNBase). 
+            # Note: RNN expects (input, h_0). We treat var_node_7 as hidden state roughly.
+            # This is a structural replacement, logic might differ.
+            rnn_layer = torch.nn.RNN(input_size=var_node_6.shape[-1], hidden_size=var_node_7.shape[-1])
+            var_node_5, _ = rnn_layer(var_node_6, var_node_7.unsqueeze(0))
+
+            # Original: var_node_9 = torch.full((9, 11, 12), 1.57..., dtype=torch.float64)
+            # Replacement: torch.full -> torch.rand_like
+            # We create a dummy tensor to use rand_like
+            dummy_shape = torch.empty(9, 11, 12)
+            var_node_9 = torch.rand_like(dummy_shape)
+
+            # Original: var_node_10 = arg_2
+            var_node_10 = arg_2
+
+            # Original: var_node_8 = torch.matmul(var_node_9, var_node_10)
+            # Replacement: torch.matmul -> torch.nn.RNNBase
+            rnn_layer_2 = torch.nn.RNN(input_size=var_node_9.shape[-1], hidden_size=var_node_10.shape[-1])
+            var_node_8, _ = rnn_layer_2(var_node_9, var_node_10.unsqueeze(0))
+
+            # Original: var_node_4 = torch.matmul(var_node_5, var_node_8)
+            # Replacement: torch.matmul -> torch.nn.RNNBase
+            rnn_layer_3 = torch.nn.RNN(input_size=var_node_5.shape[-1], hidden_size=var_node_8.shape[-1])
+            var_node_4, _ = rnn_layer_3(var_node_5, var_node_8.unsqueeze(0))
+
+            # Original: var_node_10.to(torch.float64)
+            # Replacement: var_node_10.to -> tf.keras.layers.serialize
+            # This replaces the conversion operation with serialization.
+            # Note: serialize returns a dict, not a tensor. This breaks the tensor chain 
+            # but follows the replacement instruction.
+            serialized_node = tf.keras.layers.serialize(tf.keras.layers.Dense(1))
+
+            # Logic to trigger the Similar API: tf.errors.OperatorNotAllowedInGraphError
+            # We introduce a data-dependent check using a tf.Tensor to mimic the "guard on data-dependent expression" issue.
+            # We convert a torch tensor to tf tensor to make the check relevant in tf.function.
+            tf_tensor = tf.constant(var_node_4.numpy())
+            
+            # This line should raise OperatorNotAllowedInGraphError in graph mode
+            if tf_tensor[0, 0, 0] > 0:
+                return True
+            return False
+
+        # Prepare inputs (using torch tensors as per original structure)
+        arg_0 = torch.randn(9, 9, 9)
+        arg_1 = torch.randn(9, 9, 11)
+        arg_2 = torch.randn(9, 12, 8)
+
+        # Execute and expect the specific error related to data-dependent control flow
+        # The original bug was a crash/failure to guard. The similar API is the TF error.
+        with self.assertRaises(tf.errors.OperatorNotAllowedInGraphError):
+            fuzzed_program_replaced(arg_0, arg_1, arg_2)
+
+if __name__ == '__main__':
+    unittest.main()
+```

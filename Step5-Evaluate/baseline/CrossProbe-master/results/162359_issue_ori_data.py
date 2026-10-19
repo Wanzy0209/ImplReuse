@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import matplotlib.pyplot as plt
 
@@ -75,4 +74,3 @@ for step in range(total_steps):
 
 plt.plot(lrs)
 plt.show()
-```

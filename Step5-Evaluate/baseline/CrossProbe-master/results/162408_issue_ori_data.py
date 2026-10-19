@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: PyTorch sets default dtype globally. In TF, this is typically handled via Keras mixed precision policy.
@@ -22,4 +21,3 @@ with tf.device(device):
 # Ground truth answer: [   0,  434, 512, 613, 1024]
 # Conversion: Use .numpy() to print the array values like PyTorch
 print(f"cu_seqlens={cu_seqlens.numpy()}")
-```

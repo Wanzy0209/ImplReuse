@@ -1,0 +1,11 @@
+# pyright: strict
+import torch
+
+# Replacements applied based on issue-to-api similarity:
+# torch.no_grad -> torch.profiler.itt.range_push
+# torch.Tensor -> torch.profiler.itt.range_push
+@torch.profiler.itt.range_push("test_scope")
+def double(x: torch.profiler.itt.range_push) -> torch.profiler.itt.range_push:
+    return 2 * x
+
+reveal_type(double)

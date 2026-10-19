@@ -1,0 +1,83 @@
+```python
+import tensorflow as tf
+import sys
+
+# Conversion: Implementing flex_attention using Scaled Dot-Product Attention
+# to match the behavior of torch.nn.attention.flex_attention for the given tensor shapes.
+def flex_attention(q, k, v):
+    # q, k, v shapes: (Batch, SeqLen, Heads, HeadDim)
+    # Logic: (Q @ K.T) * scale -> Softmax -> @ V
+    # tf.matmul handles the batch dimensions automatically.
+    scale = tf.math.rsqrt(tf.cast(tf.shape(q)[-1], tf.float32))
+    
+    # QK^T
+    # q: (..., H_q, D), k: (..., H_k, D) -> k.T: (..., D, H_k)
+    # result: (..., H_q, H_k)
+    attn_scores = tf.matmul(q, k, transpose_b=True) * scale
+    
+    # Softmax
+    attn_weights = tf.nn.softmax(attn_scores, axis=-1)
+    
+    # Weighted Sum
+    # weights: (..., H_q, H_k), v: (..., H_k, D)
+    # result: (..., H_q, D)
+    output = tf.matmul(attn_weights, v)
+    return output
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10):
+    t0 = arg0 # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t1 = arg1 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t2 = arg2 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t3 = flex_attention(t0, t1, t2) # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t4 = arg3 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t5 = arg4 # size=(27, 26, 248, 122), stride=(174096, 6448, 248, 1), dtype=float32, device=cuda
+    t6 = arg5 # size=(27, 26, 248, 122), stride=(174096, 6448, 248, 1), dtype=float32, device=cuda
+    t7 = flex_attention(t4, t5, t6) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t8 = flex_attention(t3, t7, t7) # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+    t9 = arg6 # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t10 = arg7 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t11 = flex_attention(t9, t7, t10) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t12 = flex_attention(t11, t8, t3) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t13 = arg8 # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t14 = arg9 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t15 = flex_attention(t13, t2, t14) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t16 = arg10 # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    # Conversion: t16.clone(); t17.zero_() -> tf.zeros_like
+    t17 = tf.zeros_like(t16) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t18 = flex_attention(t17, t8, t3) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+    t19 = flex_attention(t15, t17, t18) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+    t20 = flex_attention(t8, t12, t19) # size=(27, 26, 62, 122), stride=(196664, 7564, 122, 1), dtype=float32, device=cuda
+    output = t20  # output tensor
+    return output
+
+# Conversion: torch.rand -> tf.random.uniform
+# Conversion: requires_grad=True -> tf.Variable (to track gradients)
+arg0 = tf.Variable(tf.random.uniform([27, 26, 62, 122], dtype=tf.float32)) # size=(27, 26, 62, 122), stride=(43524, 1612, 62, 1), dtype=float32, device=cuda
+arg1 = tf.Variable(tf.random.uniform([27, 26, 124, 122], dtype=tf.float32)) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+arg2 = tf.Variable(tf.random.uniform([27, 26, 124, 122], dtype=tf.float32)) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+arg3 = tf.Variable(tf.random.uniform([27, 26, 124, 122], dtype=tf.float32)) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+arg4 = tf.Variable(tf.random.uniform([27, 26, 248, 122], dtype=tf.float32)) # size=(27, 26, 248, 122), stride=(174096, 6448, 248, 1), dtype=float32, device=cuda
+arg5 = tf.Variable(tf.random.uniform([27, 26, 248, 122], dtype=tf.float32)) # size=(27, 26, 248, 122), stride=(174096, 6448, 248, 1), dtype=float32, device=cuda
+arg6 = tf.Variable(tf.random.uniform([27, 26, 31, 122], dtype=tf.float32)) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+arg7 = tf.Variable(tf.random.uniform([27, 26, 124, 122], dtype=tf.float32)) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+arg8 = tf.Variable(tf.random.uniform([27, 26, 31, 122], dtype=tf.float32)) # size=(27, 26, 31, 122), stride=(21762, 806, 31, 1), dtype=float32, device=cuda
+arg9 = tf.Variable(tf.random.uniform([27, 26, 124, 122], dtype=tf.float32)) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+arg10 = tf.Variable(tf.random.uniform([27, 26, 124, 122], dtype=tf.float32)) # size=(27, 26, 124, 122), stride=(87048, 3224, 124, 1), dtype=float32, device=cuda
+
+if __name__ == '__main__':
+    # Conversion: Eager execution with GradientTape
+    with tf.GradientTape() as tape:
+        out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+        loss = tf.reduce_sum(out_eager)
+    grads = tape.gradient(loss, [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10])
+    print('Eager Success! ✅')
+    
+    # Conversion: torch.compile -> tf.function
+    compiled_foo = tf.function(foo, jit_compile=True)
+    
+    with tf.GradientTape() as tape:
+        out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+        loss = tf.reduce_sum(out_compiled)
+    grads = tape.gradient(loss, [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10])
+    print('Compile Success! ✅')
+```

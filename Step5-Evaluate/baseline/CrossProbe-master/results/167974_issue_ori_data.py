@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.nn.EmbeddingBag(10, 3, mode='sum', include_last_offset=True)
@@ -14,4 +13,3 @@ input = tf.constant([[1, 2, 4, 5], [4, 3, 2, 9]], dtype=tf.int64)
 # PyTorch EmbeddingBag performs lookup and reduction (sum) in one step.
 # In TF, we lookup embeddings and then reduce along the sequence axis (axis=1).
 tf.reduce_sum(embedding_sum(input), axis=1)
-```

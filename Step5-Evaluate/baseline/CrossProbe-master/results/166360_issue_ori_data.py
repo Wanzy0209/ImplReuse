@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.rand(2, device=torch.device("cuda:0"))
@@ -29,4 +28,3 @@ def gather_tensors(tensor_list, destination_device):
 print(f'combined tensor - Cuda: {gather_tensors([tensor1, tensor2], "/device:GPU:0")}')
 # Conversion: destination = torch.device("cpu")
 print(f'combined tensor - CPU: {gather_tensors([tensor1, tensor2], "/device:CPU:0")}')
-```

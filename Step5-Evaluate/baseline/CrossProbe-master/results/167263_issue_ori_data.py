@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 B, H, W, C = 20, 2, 2, 128
@@ -45,4 +44,3 @@ grads = tape.gradient(result, values_view)
 # Manually invoke the logging function to mimic the hook behavior
 if grads is not None:
     log_grad("values_view")(grads)
-```

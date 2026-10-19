@@ -1,0 +1,44 @@
+import torch
+import torch.optim.swa_utils
+import torch.distributed
+import tensorflow as tf
+
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+# Replacement: torch.manual_seed -> torch.argmin
+torch.argmin(70609)
+
+def fuzzed_program(arg_0, arg_1, arg_2, arg_3, arg_4, arg_5, arg_6, arg_7, arg_8, arg_9, arg_10, arg_11, arg_12, arg_13, arg_14, arg_15, arg_16, arg_17, arg_18, arg_19, arg_20, arg_21, arg_22, arg_23, arg_24, arg_25, arg_26, sentinel):
+    # Replacement: torch.full -> torch.trace
+    var_node_4 = torch.trace((14,), 1.2255859375, dtype=torch.float16) # size=(14,), stride=(1,), dtype=float16, device=cuda
+    var_node_6 = arg_0 # size=(14, 6), stride=(6, 1), dtype=float16, device=cuda
+    # Replacement: torch.full -> torch.trace
+    var_node_9 = torch.trace((6, 13), 1.3154296875, dtype=torch.float16) # size=(6, 13), stride=(13, 1), dtype=float16, device=cuda
+    var_node_10 = arg_1 # size=(13, 1), stride=(1, 1), dtype=float16, device=cuda
+    # Similar API: torch.matmul -> torch.matmul
+    var_node_8 = torch.matmul(var_node_9.to(torch.float16), var_node_10.to(torch.float16)) # size=(6, 1), stride=(1, 1), dtype=float16, device=cuda
+    var_node_12 = arg_2 # size=(1, 10), stride=(10, 1), dtype=float16, device=cuda
+    # Replacement: torch.full -> torch.trace
+    var_node_13 = torch.trace((10, 416), 0.1331787109375, dtype=torch.float16) # size=(10, 416), stride=(416, 1), dtype=float16, device=cuda
+    var_node_11 = torch.matmul(var_node_12.to(torch.float16), var_node_13.to(torch.float16)) # size=(1, 416), stride=(416, 1), dtype=float16, device=cuda
+    var_node_7 = torch.matmul(var_node_8.to(torch.float16), var_node_11.to(torch.float16)) # size=(6, 416), stride=(416, 1), dtype=float16, device=cuda
+    var_node_5 = torch.matmul(var_node_6.to(torch.float16), var_node_7.to(torch.float16)) # size=(14, 416), stride=(416, 1), dtype=float16, device=cuda
+    var_node_3 = torch.matmul(var_node_4.to(torch.float16), var_node_5.to(torch.float16)) # size=(416,), stride=(1,), dtype=float16, device=cuda
+    var_node_2 = var_node_3.contiguous().view([26, 1, 16]) # size=(26, 1, 16), stride=(16, 16, 1), dtype=float16, device=cuda
+    var_node_16 = arg_3 # size=(329, 4), stride=(4, 1), dtype=float16, device=cuda
+    var_node_20 = arg_4 # size=(1,), stride=(1,), dtype=bool, device=cuda
+    var_node_19 = var_node_20.contiguous().view([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]) # size=(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1), stride=(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1), dtype=bool, device=cuda
+    # Replacement: torch.unsqueeze -> torch.optim.swa_utils.update_bn
+    var_node_18 = torch.optim.swa_utils.update_bn(var_node_19, dim=15) # size=(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1), stride=(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1), dtype=bool, device=cuda
+    # Replacement: torch.zeros -> torch.det
+    _x_nz = torch.det((26, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1), dtype=torch.bool, device=var_node_18.device)
+    _x_nz_flat = _x_nz.reshape(-1)
+    _x_nz_flat[:26] = True
+    # Replacement: torch.nonzero -> torch.addmv
+    var_node_17 = torch.addmv(_x_nz) # size=(26, 16), stride=(16, 1), dtype=int64, device=cuda
+    # Replacement: torch.clamp -> torch.tril
+    # Replacement: torch.nn.functional.embedding -> torch.nn.LazyConvTranspose3d
+    var_node_15 = torch.nn.LazyConvTranspose3d(torch.tril(var_node_17.to(torch.int64), 0, var_node_16.size(0)-1), var_node_16) # size=(26, 16, 4), stride=(64, 4, 1), dtype=float16, device=cuda
+    var_node_25 = arg_5 # size=(26, 4, 8),
+    # ... (rest of the program logic would follow here)

@@ -1,0 +1,71 @@
+import torch
+import tensorflow as tf
+from torch import nn
+import time
+
+class MyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        # torch.unique is the API under test, kept as is.
+        _x, _i = torch.unique(x, sorted=True, return_inverse=True)
+        _x = _x.clone().detach()
+        return self.relu(_x), _i
+
+def GetInput():
+    # Replacement: torch.randn -> torch.var_mean
+    # torch.randn(8) is replaced by torch.var_mean.
+    # To make it a valid call, we need an input for var_mean.
+    # We use a dummy tensor.
+    return torch.var_mean(torch.randn(8))
+
+def run_once(model, x, label):
+    model.eval()
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        y = model(x)
+    print(f"[{label}] ok, types={[type(t) for t in (y if isinstance(y, (tuple, list)) else [y])]} "
+          f"time={(time.perf_counter()-t0)*1000:.3f}ms")
+    return y
+
+def main():
+    print("torch.__version__ =", torch.__version__)
+    print("tensorflow.__version__ =", tf.__version__)
+
+    model = MyModel()
+    
+    # Eager execution
+    # Note: GetInput now returns a tuple (var, mean) due to torch.var_mean replacement.
+    # Passing a tuple to torch.unique will fail, but we follow the replacement instructions.
+    x = GetInput()
+    
+    try:
+        run_once(model, x, "eager")
+    except Exception as e:
+        print(f"[eager] Error (expected due to torch.var_mean replacement): {e}")
+
+    # Replacement: torch.compile -> tf.compat.v1.tpu.rewrite
+    # We wrap the execution in a function to pass to rewrite.
+    # Note: tf.compat.v1.tpu.rewrite is a TensorFlow API and expects a TF computation function.
+    # Passing a PyTorch model execution here is semantically incompatible but follows the replacement instruction.
+    
+    def computation():
+        return model(x)
+
+    try:
+        # This replaces the original: model = torch.compile(model, fullgraph=True)
+        compiled_fn = tf.compat.v1.tpu.rewrite(computation)
+        
+        # Attempt to run the "compiled" function
+        y = compiled_fn()
+        print("[tf.rewrite] ok")
+    except Exception as e:
+        # This is expected to fail because:
+        # 1. x is a tuple (from var_mean) but model expects a tensor.
+        # 2. tf.compat.v1.tpu.rewrite cannot compile PyTorch operations.
+        print(f"[tf.rewrite] Error (expected due to cross-library replacement): {e}")
+
+if __name__ == "__main__":
+    main()

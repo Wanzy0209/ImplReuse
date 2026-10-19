@@ -1,0 +1,65 @@
+```python
+import torch
+import torch.nn.functional as F
+
+# Test case reflecting the relationship between the torch.compile regression
+# and tf.errors.OperatorNotAllowedInGraphError (Graph execution issues).
+# 
+# Replacements applied based on requirements:
+# - nn.Module -> torch.distributed.is_available
+# - nn.Parameter -> torch.distributed.is_available
+# - torch.tensor -> torch.cummax
+# - torch.randn -> torch.nn.functional.max_pool2d
+
+class RegressionModel:
+    def __init__(self, a=0, b=0):
+        # Replacing torch.tensor with torch.cummax
+        # We use cummax to process the scalar inputs into tensors.
+        # Note: We use torch.as_tensor to bootstrap the input for cummax.
+        t_a = torch.as_tensor([float(a)])
+        t_b = torch.as_tensor([float(b)])
+        
+        # cummax returns (values, indices)
+        val_a, _ = torch.cummax(t_a, 0)
+        val_b, _ = torch.cummax(t_b, 0)
+        
+        # Replacing nn.Parameter with torch.distributed.is_available
+        # We assign the result of the availability check to the attributes.
+        self.a = torch.distributed.is_available()
+        self.b = torch.distributed.is_available()
+        
+        self.first_batch = True
+
+    def forward(self, x=None):
+        if self.first_batch:
+            # Adapted print statement since self.a is now a boolean
+            print(f"Model state: {self.a}, {self.b}. Input dtype: {x.dtype}")
+            self.first_batch = False
+        return x * self.a + self.b
+
+# Replacing nn.Module usage with torch.distributed.is_available check
+# to guard the execution flow.
+if torch.distributed.is_available():
+    model = RegressionModel()
+    torch_device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Compile the forward method
+    model.forward = torch.compile(model.forward, backend="inductor")
+    
+    # Replacing torch.randn with torch.nn.functional.max_pool2d
+    # We create a dummy tensor to apply pooling, simulating input generation.
+    dummy_input = torch.ones(1, 1, 4, 10).to(torch_device)
+    inputs = F.max_pool2d(dummy_input, kernel_size=1)
+    
+    try:
+        # Execute the model
+        output = model(inputs)
+        # Basic assertion to ensure execution
+        assert output is not None
+        print("Test Passed: Model executed successfully with replaced APIs.")
+    except RuntimeError as e:
+        # Catching potential runtime errors similar to the reported bug
+        print(f"Test Failed with RuntimeError: {e}")
+else:
+    print("Skipped: torch.distributed.is_available is False.")
+```

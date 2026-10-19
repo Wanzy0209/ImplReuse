@@ -1,0 +1,48 @@
+import torch
+import torch.nn as nn
+import unittest
+
+class TestMPSConvTranspose3dAutocast(unittest.TestCase):
+    """
+    Test case for Issue 160332: Use FP32 for ConvTranspose3D when using autocast on MPS.
+    
+    The bug occurs when torch.amp.autocast attempts to use FP16 for ConvTranspose3d 
+    on MPS, which only supports FP32/Complex64. This test verifies that the operation 
+    completes successfully and falls back to FP32 when FP16 is not supported.
+    """
+    
+    @unittest.skipIf(not torch.backends.mps.is_available(), "MPS backend not available")
+    def test_convtranspose3d_autocast_mps_fp32_fallback(self):
+        device = torch.device('mps')
+        
+        # Initialize model and input
+        # Note: Weights are float32 by default
+        m = nn.ConvTranspose3d(16, 33, 3, stride=2)
+        m.to(device)
+        
+        # Input tensor explicitly float32
+        x = torch.randn(20, 16, 10, 50, 100, dtype=torch.float32).to(device)
+        
+        # The bug: RuntimeError: ConvTranspose 3D with BF16 or FP16 types is not supported on MPS
+        # The fix: Autocast should detect this and execute in FP32
+        with torch.amp.autocast(device_type=device.type):
+            output = m(x)
+        
+        # Assertions
+        # 1. Check that the operation ran and produced a tensor
+        self.assertIsInstance(output, torch.Tensor)
+        
+        # 2. Check output shape
+        # Formula: (H_in - 1) * stride - 2*padding + dilation*(kernel_size-1) + output_padding + 1
+        # 10 -> (9)*2 + 2 + 1 = 21
+        # 50 -> (49)*2 + 2 + 1 = 101
+        # 100 -> (99)*2 + 2 + 1 = 201
+        expected_shape = (20, 33, 21, 101, 201)
+        self.assertEqual(output.shape, expected_shape)
+        
+        # 3. Check dtype. Since MPS doesn't support FP16 for this op, 
+        # autocast should have kept it at FP32.
+        self.assertEqual(output.dtype, torch.float32)
+
+if __name__ == '__main__':
+    unittest.main()

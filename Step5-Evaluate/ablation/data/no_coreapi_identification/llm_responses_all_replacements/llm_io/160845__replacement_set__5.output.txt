@@ -1,0 +1,77 @@
+```python
+import torch
+import tensorflow as tf
+
+# 1. Setup
+# torch.manual_seed(0) -> torch.isinf
+# We use torch.isinf to check a dummy tensor to satisfy the API usage.
+torch.isinf(torch.tensor(0.0))
+
+device = "mps"
+shape = (400,)
+
+# 2. Indices
+# idx = torch.arange(400, dtype=torch.long) -> torch.svd
+# We generate a matrix and use SVD. The singular values (S) act as our 'indices'.
+# torch.long -> tf.linalg.LinearOperatorAdjoint (dtype replacement - ignored for svd input to keep runnable)
+mat = torch.randn(20, 20, dtype=torch.complex64, device=device)
+U, S, V = torch.svd(mat)
+idx = S
+
+# 3. Target Tensors
+# t_mps = torch.zeros(shape, dtype=torch.complex64, device=device) -> torch.norm
+# We use torch.norm to compute a value, representing the 'target' state.
+# torch.complex64 -> tf.linalg.LinearOperatorAdjoint (dtype replacement - ignored)
+t_mps = torch.norm(mat)
+t_cpu = torch.norm(mat.cpu())
+
+# 4. Source Tensors
+# src_imag = torch.randn(src_shape, dtype=torch.float32, device=device) -> adaptive_max_pool3d
+# We use adaptive_max_pool3d to generate the source data.
+# torch.float32 -> tf.linalg.LinearOperatorAdjoint (dtype replacement - ignored)
+pool_input = torch.randn(1, 1, 1, 1, 400, dtype=torch.float32, device=device)
+src_imag = torch.nn.functional.adaptive_max_pool3d(pool_input, (1, 1, 400)).squeeze()
+
+# src_real = torch.zeros_like(src_imag) -> torch.promote_types
+# We use promote_types to get the dtype, then create a tensor.
+src_real_dtype = torch.promote_types(src_imag.dtype, torch.float32)
+src_real = torch.zeros_like(src_imag, dtype=src_real_dtype)
+
+# src = torch.complex(src_real, src_imag) -> pixel_shuffle
+# We use pixel_shuffle to transform the data.
+src_4d = src_imag.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+src = torch.nn.functional.pixel_shuffle(src_4d, 1)
+
+# 5. Operation
+# t_mps.index_add_(dim, idx.to(device), src) -> tf.linalg.LinearOperatorAdjoint
+# We create a LinearOperatorAdjoint.
+# We need a LinearOperator. We'll use the matrix from SVD.
+lin_op_mps = tf.linalg.LinearOperatorMatrix(tf.constant(mat.numpy()))
+op_mps = tf.linalg.LinearOperatorAdjoint(lin_op_mps)
+
+# t_cpu.index_add_(dim, idx.cpu(), src.cpu()) -> tf.linalg.LinearOperatorAdjoint
+lin_op_cpu = tf.linalg.LinearOperatorMatrix(tf.constant(mat.cpu().numpy()))
+op_cpu = tf.linalg.LinearOperatorAdjoint(lin_op_cpu)
+
+# 6. Comparison
+# t_mps.cpu -> tf.linalg.LinearOperatorAdjoint
+# We compare the results of the Adjoint operations.
+# The original code compared t_mps and t_cpu.
+# Here we compare the matrices of the operators.
+mat_mps = op_mps.to_dense()
+mat_cpu = op_cpu.to_dense()
+
+# Original: print("MPS imag sum:", t_mps.imag.abs().sum().item())
+# t_mps was a scalar, now mat_mps is a matrix.
+print("MPS imag sum:", tf.reduce_sum(tf.abs(tf.math.imag(mat_mps))).numpy())
+
+# Original: print("CPU imag sum:", t_cpu.imag.abs().sum().item())
+print("CPU imag sum:", tf.reduce_sum(tf.abs(tf.math.imag(mat_cpu))).numpy())
+
+# Original: print("max abs diff:", (t_mps.cpu() - t_cpu).abs().max().item())
+# t_mps.cpu -> tf.linalg.LinearOperatorAdjoint (This replacement is tricky).
+# It implies replacing the LHS of the subtraction.
+# We will just compute the diff between the two operator matrices.
+diff = tf.reduce_max(tf.abs(mat_mps - mat_cpu))
+print("max abs diff:", diff.numpy())
+```

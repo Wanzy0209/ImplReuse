@@ -1,0 +1,78 @@
+import torch
+import torch.nn as nn
+from torch.nn.attention.flex_attention import flex_attention
+import tensorflow as tf
+
+def test_flex_attention_compile():
+    """
+    Test function to verify flex_attention works with torch.compile
+    and specific API replacements as requested.
+    """
+    # Setup dimensions
+    B, H, L, D = 2, 2, 8, 16
+
+    # Replacement 1: torch.randn -> tf.random.stateless_truncated_normal
+    # Generate inputs using TensorFlow
+    seed = (1, 2)
+    shape = [B, H, L, D]
+    q_tf = tf.random.stateless_truncated_normal(shape, seed=seed, mean=0.0, stddev=1.0)
+    k_tf = tf.random.stateless_truncated_normal(shape, seed=seed, mean=0.0, stddev=1.0)
+    v_tf = tf.random.stateless_truncated_normal(shape, seed=seed, mean=0.0, stddev=1.0)
+
+    # Convert to PyTorch tensors
+    q = torch.from_numpy(q_tf.numpy()).to(torch.float32)
+    k = torch.from_numpy(k_tf.numpy()).to(torch.float32)
+    v = torch.from_numpy(v_tf.numpy()).to(torch.float32)
+
+    # Replacement 2: torch.tensor -> torch.isinf
+    # Original: temp = nn.Parameter(torch.tensor(0.0))
+    # We use torch.isinf on a finite scalar to get False (0.0), preserving the original value logic
+    # while strictly using the replacement API.
+    temp = nn.Parameter(torch.isinf(0.0).float())
+
+    def score_mod(score, b, h, q_idx, kv_idx):
+        # Replacement 3: torch.zeros -> torch.eye
+        # Original might have been: base = torch.zeros_like(score)
+        # We create an identity matrix and expand it to match score shape.
+        eye_mask = torch.eye(score.shape[-1], device=score.device, dtype=score.dtype)
+        eye_mask = eye_mask.unsqueeze(0).unsqueeze(0).expand(score.shape[0], score.shape[1], -1, -1)
+
+        # Replacement 4: torch.where -> torch.scatter_add
+        # Original might have been: score = torch.where(eye_mask > 0, score, 0)
+        # We simulate a selection/accumulation using scatter_add.
+        # Create a zero tensor to accumulate into (using the eye_mask logic implicitly)
+        out = torch.zeros_like(score)
+        # Indices for scatter (diagonal elements)
+        indices = torch.arange(score.shape[-1], device=score.device).view(1, 1, 1, -1).expand_as(score)
+        # Scatter add score values into out based on indices
+        score = torch.scatter_add(out, dim=-1, index=indices, src=score)
+
+        # The core bug logic: adding a learnable scalar
+        score = score + temp
+        return score
+
+    # Original API Under Test: torch.compile
+    # Similar API: torch.compile (Same library)
+    compiled_flex_attention = torch.compile(flex_attention)
+
+    # Run forward pass
+    try:
+        output = compiled_flex_attention(q, k, v, score_mod=score_mod)
+        assert output.shape == (B, H, L, D), "Output shape mismatch"
+        print("Forward pass successful.")
+    except Exception as e:
+        print(f"Forward pass failed: {e}")
+        raise
+
+    # Run backward pass
+    try:
+        loss = output.sum()
+        loss.backward()
+        assert temp.grad is not None, "Gradient for temp is None"
+        print("Backward pass successful.")
+    except Exception as e:
+        print(f"Backward pass failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_flex_attention_compile()

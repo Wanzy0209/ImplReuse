@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # PyTorch: device="cuda" -> TensorFlow: tf.device('/GPU:0')
@@ -17,4 +16,3 @@ with tf.device('/GPU:0'):
         return tf.linalg.matmul(input, weight, output_type=tf.float32)
 
     linear(A, B)
-```

@@ -1,0 +1,140 @@
+Issue ID: 163374
+Title: [DTensor] Inplace ops preduces wrong result
+Bug Description:
+```
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import torch
+from torch import distributed as dist
+from torch.utils.debug_mode import DebugMode
+
+
+if __name__ == '__main__':
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    partial_dt = in_dtensor.sum()
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        out = partial_dt.clamp_(max=2)
+        full = out.full_tensor()
+
+    if rank == 0:
+        print(debug_mode.debug_string())
+        # redistribute_input(0, [P] -> [R])
+        #   _c10d_functional::all_reduce(t: f32[], sum, 0)
+        #   _c10d_functional::wait_tensor(t: f32[])
+        # aten::clamp_(t: f32[], None, 2)
+        # _c10d_functional::all_reduce(t: f32[], sum, 0)
+        # _c10d_functional::wait_tensor(t: f32[])
+        # aten::view(t: f32[], [])
+
+        print(out.placements)
+        # (Partial(sum),)
+        # Expected (Replicate(),)
+
+        print(full)
+        # tensor(144., device='cuda:0')
+        # Expected tensor(2., device='cuda:0')
+``` 
+
+Placement is wrong, it should be replicated, instead of Partial(sum)
+
+Original API Under Test: torch.clamp_
+Library Scope: Issue-to-API
+Similarity Type: Issue-to-API code similarity
+Similar API: tf.test.Benchmark
+Similarity score: 0.995551347732544
+
+Similar API information:
+# Extracted call chain for tf.test.Benchmark
+
+# --- tensorflow.compiler.tests.xla_test.Benchmark ---
+def Benchmark(
+    tf_bench, builder_fn, use_xla_jit, device, separate_compiled_gradients=False
+):
+  """Build a graph and run benchmarks against it, with or without XLA.
+
+  Args:
+    tf_bench: An instance of tf.test.Benchmark, used to run the benchmark.
+    builder_fn: A function that builds a graph when invoked, and returns (name,
+      fetches), where name is the name of the test, and fetches is a list of
+      tensors to fetch as output.
+    use_xla_jit: If true compile with the XLA JIT, otherwise use regular TF.
+    device: The tensorflow device to run on, e.g. "cpu", "gpu".
+    separate_compiled_gradients: If true put each gradient subgraph into a
+      separate compilation scope. This gives fine-grained control over which
+      portions of the graph will be compiled as a single unit. Compiling
+      gradients separately may yield better performance for some graphs. The
+      scope is named based on the scope of the forward computation as well as
+      the name of the gradients. As a result, the gradients will be compiled in
+      a scope that is separate from both the forward
+...
+
+Original Test Case:
+from torch.distributed._tensor import Shard, distribute_tensor, init_device_mesh, DTensor, Replicate
+import torch
+from torch import distributed as dist
+from torch.utils.debug_mode import DebugMode
+
+
+if __name__ == '__main__':
+    dist.init_process_group(backend="nccl", world_size=2)
+    rank = dist.get_rank()
+    mesh = init_device_mesh('cuda', (2,))
+
+    tensor = torch.ones(12, 12, device="cuda")
+    in_dtensor = distribute_tensor(tensor, mesh, [Shard(0)]) 
+
+    partial_dt = in_dtensor.sum()
+    with DebugMode(record_torchfunction=False) as debug_mode:
+        out = partial_dt.clamp_(max=2)
+        full = out.full_tensor()
+
+    if rank == 0:
+        print(debug_mode.debug_string())
+        # redistribute_input(0, [P] -> [R])
+        #   _c10d_functional::all_reduce(t: f32[], sum, 0)
+        #   _c10d_functional::wait_tensor(t: f32[])
+        # aten::clamp_(t: f32[], None, 2)
+        # _c10d_functional::all_reduce(t: f32[], sum, 0)
+        # _c10d_functional::wait_tensor(t: f32[])
+        # aten::view(t: f32[], [])
+
+        print(out.placements)
+        # (Partial(sum),)
+        # Expected (Replicate(),)
+
+        print(full)
+        # tensor(144., device='cuda:0')
+        # Expected tensor(2., device='cuda:0')
+
+This similarity is based on code similarity between the issue's repro/fix code and the API implementation or usage pattern. Please generate a test case that reflects that relationship.
+Please generate a new test case that preserves the original bug reproduction logic while leveraging the similar API as a candidate for reuse.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+5. For issue-to-API similarity, focus on how the similar API's code pattern relates to the reported bug and adapt the test accordingly.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- DTensor.clamp_ -> tf.raw_ops.Assert (score=0.9947068691253662, source_group=issue_to_api)
+- debug_mode.debug_string -> tf.raw_ops.Assert (score=0.9947068691253662, source_group=issue_to_api)
+- dist.init_process_group -> tf.keras.layers.Masking (score=0.9951862096786499, source_group=issue_to_api)
+- out.full_tensor -> tf.raw_ops.Assert (score=0.9947068691253662, source_group=issue_to_api)
+- partial_dt.clamp_ -> tf.raw_ops.Assert (score=0.9947068691253662, source_group=issue_to_api)
+- partial_sum_dt.clamp_ -> tf.raw_ops.Assert (score=0.9947068691253662, source_group=issue_to_api)
+- torch.distributed._tensor -> tf.raw_ops.Assert (score=0.9947068691253662, source_group=issue_to_api)
+- torch.ones -> torch.norm (score=0.9993372559547424, source_group=pytorch_to_pytorch)
+- torch.utils.debug_mode -> tf.raw_ops.Assert (score=0.9947068691253662, source_group=issue_to_api)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

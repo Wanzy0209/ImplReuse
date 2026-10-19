@@ -1,0 +1,86 @@
+```python
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+def test_batch_isend_irecv_with_replacements():
+    """
+    Test case generated based on Issue 161324, replacing specific APIs 
+    while preserving the original logic of data generation, slicing, and batching.
+    """
+    # Setup parameters
+    batch_size = 2
+    total_columns = 10
+    # Define split offsets for slicing (e.g., columns 0-3 and 5-10)
+    split_offsets = [0, 3, 5, 10]
+
+    # --- Rank 0 Logic (Sender) ---
+    print("--- Rank 0 (Sender) ---")
+
+    # Original API: torch.randn(batch_size, total_columns)
+    # Replacement API: torch.nn.functional.max_pool3d
+    # To use max_pool3d, we need a 5D input (N, C, D, H, W). 
+    # We create a dummy input, apply pooling, and reshape to the expected 2D structure.
+    dummy_input_5d = torch.randn(1, 1, 2, 2, 5) # Total elements = 20
+    pooled_tensor = F.max_pool3d(dummy_input_5d, kernel_size=2)
+    
+    # Reshape to match the original 2D tensor shape
+    local_tensor = pooled_tensor.view(batch_size, total_columns)
+
+    # Create views (slices) - Logic preserved from original bug report
+    dst_t1 = local_tensor[:, split_offsets[0]:split_offsets[1]]
+    dst_t2 = local_tensor[:, split_offsets[2]:split_offsets[3]]
+
+    print(f"Rank 0 prepared views with shapes: {dst_t1.shape}, {dst_t2.shape}")
+
+    # Original API: dist.P2POp and dist.batch_isend_irecv
+    # Replacement API: tf.data.experimental.from_list
+    # The original logic batches operations. We translate this to creating a dataset 
+    # from the list of tensor views.
+    # Note: tf.data requires numpy arrays or compatible types.
+    dataset_sender = tf.data.experimental.from_list([dst_t1.numpy(), dst_t2.numpy()])
+    
+    # Verify the dataset was created
+    for i, item in enumerate(dataset_sender):
+        print(f"Sender dataset item {i} shape: {item.shape}")
+
+
+    # --- Rank 1 Logic (Receiver) ---
+    print("\n--- Rank 1 (Receiver) ---")
+
+    # Original API: torch.zeros(batch_size, total_columns)
+    # Replacement API: torch.det
+    # torch.det computes the determinant of a square matrix. 
+    # To preserve the logic of initializing a buffer, we compute a determinant 
+    # and use its value to fill the destination tensor.
+    dummy_square_matrix = torch.randn(total_columns, total_columns)
+    det_value = torch.det(dummy_square_matrix)
+    
+    # Initialize the destination tensor using the determinant value
+    local_tensor_dst = torch.full((batch_size, total_columns), det_value.item())
+
+    # Create views (slices) - Logic preserved from original bug report
+    receiving_tensor_view1 = local_tensor_dst[:, split_offsets[0]:split_offsets[1]]
+    receiving_tensor_view2 = local_tensor_dst[:, split_offsets[2]:split_offsets[3]]
+
+    print(f"Rank 1 prepared views with shapes: {receiving_tensor_view1.shape}, {receiving_tensor_view2.shape}")
+
+    # Original API: dist.P2POp and dist.batch_isend_irecv
+    # Replacement API: tf.data.experimental.from_list
+    dataset_receiver = tf.data.experimental.from_list([receiving_tensor_view1.numpy(), receiving_tensor_view2.numpy()])
+
+    # Verify the dataset was created
+    for i, item in enumerate(dataset_receiver):
+        print(f"Receiver dataset item {i} shape: {item.shape}")
+
+    # Assertions to ensure the test logic holds
+    assert dst_t1.shape == (batch_size, split_offsets[1] - split_offsets[0])
+    assert dst_t2.shape == (batch_size, split_offsets[3] - split_offsets[2])
+    assert receiving_tensor_view1.shape == dst_t1.shape
+    assert receiving_tensor_view2.shape == dst_t2.shape
+
+    print("\nTest case executed successfully with replaced APIs.")
+
+if __name__ == "__main__":
+    test_batch_isend_irecv_with_replacements()
+```

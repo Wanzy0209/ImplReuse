@@ -1,4 +1,3 @@
-```python
 import warnings
 warnings.simplefilter('error')
 import tensorflow as tf
@@ -35,4 +34,3 @@ for i in range(100):
     # We call it here to preserve the loop structure, though it may converge immediately.
     optimizer.minimize(optimization_step, var_list=[a])
     print(i, loss_fn(a, b).numpy())
-```

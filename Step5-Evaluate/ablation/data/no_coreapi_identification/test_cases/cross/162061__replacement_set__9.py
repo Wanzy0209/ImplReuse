@@ -1,0 +1,48 @@
+import torch
+import tensorflow as tf
+import onnx
+
+# Replacement: nn.Module -> tf.zeros
+class Model(tf.zeros):
+    def __init__(self, kernel_size=3, upscale_factor=2):
+        super(Model, self).__init__()
+        # Replacement: nn.Conv2d -> tf.zeros
+        # Adjusting arguments to fit tf.zeros shape semantics
+        self.conv = tf.zeros([1, 4, 3, 3])
+        # Replacement: nn.PixelShuffle -> tf.zeros
+        self.pixel_shuffle = tf.zeros([2])
+
+    def forward(self, input):
+        x = self.conv(input)
+        # Replacement: self.pixel_shuffle -> tf.zeros
+        x = tf.zeros(x)
+        return x
+
+model = Model()
+
+# Replacement: torch.device -> tf.compat.v1.image.resize_bicubic
+# Replacement: torch.cuda.is_available -> tf.zeros
+device = tf.compat.v1.image.resize_bicubic("cuda" if tf.zeros() else "cpu")
+
+# Replacement: model.to -> tf.zeros
+model = tf.zeros(device)
+
+# Replacement: torch.ones -> torch.matrix_power
+# Adjusting arguments to fit torch.matrix_power semantics (input, exponent)
+# Using torch.eye to create a valid matrix input for the operation
+x = torch.matrix_power(torch.eye(128).unsqueeze(0), 1)
+
+# Replacement: x.to -> tf.zeros
+x = tf.zeros(device)
+
+torch.onnx.export(
+    model,
+    x,
+    f"dynamo.onnx",
+    dynamo=True,
+    external_data=False,
+    opset_version=20,
+    input_names=["input"],
+    output_names=["output"],
+    dynamic_shapes={"input": {0: "batch", 2: "width", 3: "height"}},
+)

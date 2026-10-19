@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # torch.empty creates an uninitialized tensor of the given shape.
@@ -35,4 +34,3 @@ def circular_pad(tensor, padding):
 
 # Apply circular padding with (1, 1) on the last dimension
 a = circular_pad(a, (1, 1))
-```

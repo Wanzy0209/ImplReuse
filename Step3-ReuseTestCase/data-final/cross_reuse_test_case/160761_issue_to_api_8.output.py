@@ -1,0 +1,63 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import os
+
+# Define a minimal model that uses the similar API (torch.nn.functional.softsign)
+# to test ONNX export behavior. This mirrors the structure of the original issue
+# where a functional API (torch.vmap) was suspected to cause the failure.
+class SoftsignModel(nn.Module):
+    def __init__(self, vocab_size, hidden_size):
+        super().__init__()
+        self.embed = nn.Embedding(vocab_size, hidden_size)
+        self.linear = nn.Linear(hidden_size, vocab_size)
+
+    def forward(self, input_ids, attention_mask):
+        x = self.embed(input_ids)
+        # Apply the similar API: torch.nn.functional.softsign
+        # This tests the ONNX export pipeline's robustness against functional APIs
+        # similar to the reported torch.vmap issue.
+        x = F.softsign(x)
+        logits = self.linear(x)
+        return logits
+
+def test_onnx_export_with_softsign():
+    # Setup similar to the original issue
+    vocab_size = 1000
+    hidden_size = 128
+    model = SoftsignModel(vocab_size, hidden_size)
+    model.eval()
+
+    # Create dummy inputs matching the original issue's input structure
+    batch_size = 1
+    seq_len = 10
+    input_ids = torch.randint(0, vocab_size, (batch_size, seq_len))
+    attention_mask = torch.ones(batch_size, seq_len)
+
+    example_inputs = (input_ids, attention_mask)
+
+    # ONNX Export logic preserved from the original issue
+    onnx_path = "softsign_model.onnx"
+    
+    try:
+        torch.onnx.export(
+            model,
+            example_inputs,
+            onnx_path,
+            input_names=["input_ids", "attention_mask"],
+            output_names=["logits"],
+            opset_version=17,
+            do_constant_folding=True,
+            dynamo=True, # Testing with dynamo as in the issue
+        )
+        assert os.path.exists(onnx_path), "ONNX export failed to create file."
+        print("Test Passed: ONNX model exported successfully using softsign.")
+    except Exception as e:
+        print(f"Test Failed: {e}")
+        raise
+    finally:
+        if os.path.exists(onnx_path):
+            os.remove(onnx_path)
+
+if __name__ == "__main__":
+    test_onnx_export_with_softsign()

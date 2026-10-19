@@ -1,0 +1,50 @@
+```python
+import torch
+import unittest
+import warnings
+
+class TestPixelShuffleFPE(unittest.TestCase):
+    """
+    Test case for Issue 162251: Floating point exception in torch.nn.PixelShuffle.
+    
+    The bug is triggered by passing an extremely large upscale factor to PixelShuffle.
+    The internal shape check calculates (upscale_factor * upscale_factor), which 
+    overflows a 64-bit integer, potentially leading to a division by zero (FPE) 
+    when checking modulo operations.
+    """
+    
+    def test_pixel_shuffle_large_upscale_factor_complex32(self):
+        # Suppress the UserWarning regarding experimental ComplexHalf support
+        warnings.filterwarnings("ignore", message=".*ComplexHalf support is experimental.*")
+        
+        # Reproduce the specific inputs from the bug report
+        # Shape: (Batch, Channels, Height, Width) = (5, 5, 9, 3)
+        # dtype: complex32 (experimental support)
+        t = torch.zeros((5, 5, 9, 3), dtype=torch.complex32)
+        
+        # The large upscale factor that causes the overflow
+        upscale_factor = 545460846592
+        
+        # Initialize the PixelShuffle layer
+        layer = torch.nn.PixelShuffle(upscale_factor)
+        
+        # This call is expected to trigger a Floating Point Exception (FPE) 
+        # in the buggy version due to integer overflow in shape validation.
+        # Note: In a fixed version, this should ideally raise a ValueError 
+        # regarding invalid shapes or overflow.
+        try:
+            output = layer(t)
+            # If we reach here, the bug might be fixed or the behavior changed.
+            # We can assert the output shape if it doesn't crash, but the primary
+            # goal of this test is to catch the crash.
+            self.fail("Expected FloatingPointException or ValueError, but operation succeeded.")
+        except (FloatingPointError, ValueError) as e:
+            # If the library is fixed to raise an error instead of crashing, this is good.
+            print(f"Caught expected exception: {e}")
+        except RuntimeError as e:
+            # PyTorch often wraps C++ errors in RuntimeError
+            print(f"Caught RuntimeError (possibly from C++ check): {e}")
+
+if __name__ == "__main__":
+    unittest.main()
+```

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 # Conversion comment: torch.fx.graph_module.GraphModule -> Not directly applicable, using tf.Module
 # Conversion comment: torch.fx.node.Node -> Not directly applicable
@@ -90,4 +89,3 @@ class ModuleWithSubmodules(tf.Module):
 module_with_submodules = ModuleWithSubmodules(my_module)
 print(module_with_submodules)
 module_with_submodules(*inputs)
-```

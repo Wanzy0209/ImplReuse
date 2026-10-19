@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 def f(real: tf.Tensor, imag: tf.Tensor) -> tf.Tensor:
@@ -24,4 +23,3 @@ compiled = tf.function(f)
 
 _ = compiled(r_src, i_src)
 _ = compiled(r_mismatch, i_mismatch)
-```

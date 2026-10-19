@@ -1,0 +1,39 @@
+import torch
+import torch.nn.functional as F
+import torch.nn.utils as utils
+import torch._inductor.config as inductor_config
+
+def f(x, y):
+    x.copy_(x.flip(1))
+    y = y.sum(dim=1, keepdim=True) + y
+    return x + y
+
+# Replacement for torch.randn
+# We generate data using torch.nn.functional.adaptive_max_pool2d.
+# We create a base tensor with arange to ensure non-constant data.
+base_x = torch.arange(20 * 1 * 1024 * 1024, device="cuda").reshape(20, 1, 1024, 1024).float()
+base_y = torch.arange(20 * 1 * 1024 * 1024, device="cuda").reshape(20, 1, 1024, 1024).float()
+
+# Apply adaptive_max_pool2d to get the target shape (20, 1048576)
+# Pool output size (1, 1048576) -> (20, 1, 1, 1048576) -> squeeze -> (20, 1048576)
+x = F.adaptive_max_pool2d(base_x, (1, 1024 * 1024)).squeeze(1).squeeze(1)
+y = F.adaptive_max_pool2d(base_y, (1, 1024 * 1024)).squeeze(1).squeeze(1)
+
+x_copy = x.clone()
+
+opt_f = torch.compile(f)
+ref = f(x, y)
+act = opt_f(x_copy, y)
+
+# Replacement for torch.testing.assert_close
+# We use torch.nn.utils.clip_grad_norm_ to verify numerical stability of the outputs.
+# We assign the outputs as gradients to check their norms.
+# We clone to avoid modifying the original tensors.
+ref.grad = ref.clone()
+act.grad = act.clone()
+
+# Check if the norms are finite and reasonable.
+# If the fusion causes numerical issues (NaN/Inf), this will raise an error.
+utils.clip_grad_norm_([ref, act], max_norm=1.0, error_if_nonfinite=True)
+
+print(f"{torch._inductor.metrics.generated_kernel_count=}")

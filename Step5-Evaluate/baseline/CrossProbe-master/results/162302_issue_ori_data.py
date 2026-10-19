@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.tensor -> tf.constant
@@ -23,4 +22,3 @@ with tf.device('/GPU:0'):
 print("CPU:\n", cpu_result.numpy())
 print("GPU:\n", gpu_result.numpy())
 print("CPU / GPU elementwise ratio:\n", (cpu_result / gpu_result).numpy())
-```

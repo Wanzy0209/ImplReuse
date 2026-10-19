@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.python.framework.func_graph import func_graph_from_py_func
 
@@ -38,4 +37,3 @@ graph = func_graph_from_py_func(
     args=[input], # Concrete args for initial trace structure
     signature=input_signature # Defines the dynamic interface
 )
-```

@@ -1,0 +1,67 @@
+import torch
+import tensorflow as tf
+
+# Replacements for torch._dynamo.config
+# torch._dynamo.config.capture_scalar_outputs -> tf.raw_ops.RandomUniform
+_ = tf.raw_ops.RandomUniform(shape=[], minval=0.0, maxval=1.0, dtype=tf.float32)
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.raw_ops.RandomUniform
+_ = tf.raw_ops.RandomUniform(shape=[], minval=0.0, maxval=1.0, dtype=tf.float32)
+
+# torch.manual_seed -> tf.compat.v1.assign
+seed_var = tf.Variable(0.0)
+tf.compat.v1.assign(seed_var, 19989)
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = -6
+    # torch.int64 -> tf.raw_ops.RandomUniform
+    _ = tf.raw_ops.RandomUniform(shape=[], minval=0.0, maxval=1.0, dtype=tf.float32)
+    
+    var_node_3 = arg_0
+    # torch.int32 -> tf.raw_ops.RandomUniform
+    _ = tf.raw_ops.RandomUniform(shape=[], minval=0.0, maxval=1.0, dtype=tf.float32)
+    
+    var_node_1 = var_node_2 * var_node_3
+    
+    # torch.full -> torch.fmin
+    # Original: torch.full((), 1, dtype=torch.int64)
+    var_node_5 = torch.fmin(torch.tensor(1), torch.tensor(1))
+    
+    # var_node_5.item -> tf.raw_ops.RandomUniform
+    # Original: var_node_4 = var_node_5.item()
+    var_node_4 = tf.raw_ops.RandomUniform(shape=[], minval=1.0, maxval=1.0, dtype=tf.float64)
+    
+    var_node_0 = var_node_1 / var_node_4.numpy()
+    
+    result = var_node_0 * sentinel
+    
+    # result.is_complex -> tf.raw_ops.RandomUniform
+    # Original: if result.is_complex():
+    if tf.raw_ops.RandomUniform(shape=[], minval=0.0, maxval=1.0, dtype=tf.float32).numpy() > 0.5:
+        result = result.real
+        
+    return result
+
+# Sentinel tensor
+# torch.tensor -> torch.isinf
+sentinel = torch.isinf(torch.tensor(1.0, requires_grad=True))
+
+# arg_0 setup
+# torch.randn -> tf.random.stateless_truncated_normal
+tf_rand = tf.random.stateless_truncated_normal(shape=(), seed=[1, 2], dtype=tf.float32)
+# torch.tensor -> torch.isinf
+# torch.int32 -> tf.raw_ops.RandomUniform
+_ = tf.raw_ops.RandomUniform(shape=[], minval=0.0, maxval=1.0, dtype=tf.float32)
+arg_0 = torch.isinf(torch.from_numpy(tf_rand.numpy())).item()
+
+args = (arg_0,) + (sentinel,)
+result_original = fuzzed_program(*args)
+print(' eager success')
+
+# torch.compile -> tf.raw_ops.RandomUniform
+# Original: compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+compiled_program = tf.raw_ops.RandomUniform(shape=[], minval=0.0, maxval=1.0, dtype=tf.float32)
+
+# Original: result_compiled = compiled_program(*args)
+# Since compiled_program is now a tensor, we assign it directly to result_compiled
+result_compiled = compiled_program
+print(' compile success')

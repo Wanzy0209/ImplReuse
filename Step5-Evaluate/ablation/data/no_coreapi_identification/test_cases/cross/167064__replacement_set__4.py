@@ -1,0 +1,30 @@
+import torch
+import tensorflow as tf
+
+def test_issue_167064_replacement():
+    """
+    Test case adapted from Issue 167064 logic.
+    Replaces torch.compile and torch.distributions.Distribution.set_default_validate_args
+    with tf.keras.backend.gather.
+    """
+    # Setup data mimicking the context of the original bug (block mask creation)
+    # Original: _compiled_create_block_mask = torch.compile(create_block_mask)
+    # Replacement: tf.keras.backend.gather
+    data = tf.constant([1, 2, 3, 4, 5])
+    indices = tf.constant([0, 2, 4])
+
+    # This call replaces the torch.compile call
+    _compiled_mask = tf.keras.backend.gather(data, indices)
+
+    # Original: torch.distributions.Distribution.set_default_validate_args(False)
+    # Replacement: tf.keras.backend.gather
+    # This call replaces the distribution setting call
+    # We perform a gather operation on the result
+    _validation_args = tf.keras.backend.gather(_compiled_mask, [1])
+
+    # Verify the result using tf.equal (similar to torch.eq)
+    expected = tf.constant([3])
+    assert tf.reduce_all(tf.equal(_validation_args, expected))
+
+if __name__ == "__main__":
+    test_issue_167064_replacement()

@@ -1,0 +1,46 @@
+```python
+import torch
+import torch.nn.functional as F
+
+# Note: This test case assumes a 'privateuse1' backend is registered and 
+# configured to use CPU fallback for unimplemented operations, as described in Issue 165549.
+
+def test_issue_165549_replacements():
+    # Setup: Create a base tensor to feed into the replacement API for torch.randn
+    # We use torch.ones to ensure valid inputs for subsequent operations (like log2)
+    # Shape (4, 4) is used to match the dimensionality of the original test case.
+    base_input = torch.ones(4, 4, device='privateuse1')
+
+    # Replacement: torch.randn -> torch.nn.functional.max_pool1d
+    # Original: t = torch.randn(4, 4, device='privateuse1')
+    # New: t is generated via max_pool1d. 
+    # max_pool1d on 2D input (C, L) returns (C, L_out).
+    t = F.max_pool1d(base_input, kernel_size=2)
+    expected_shape = t.shape
+
+    # 1. Test torch.abs (The failing operation in the bug report)
+    # Bug: result.shape would be torch.Size([0])
+    result = torch.abs(t)
+    assert result.shape == expected_shape, f"Expected shape {expected_shape}, got {result.shape}"
+
+    # 2. Test torch.abs with out argument (The workaround mentioned in the bug report)
+    pre_allocated_tensor = torch.empty_like(t)
+    torch.abs(t, out=pre_allocated_tensor)
+    assert pre_allocated_tensor.shape == expected_shape
+
+    # 3. Test in-place abs (The workaround mentioned in the bug report)
+    # We clone t to preserve it for the next check, though the original code modified t directly.
+    t_inplace = t.clone()
+    t_inplace.abs_()
+    assert t_inplace.shape == expected_shape
+
+    # 4. Replacement: torch.neg -> torch.log2
+    # Original: torch.neg(t) # Works (uses structured_delegate)
+    # New: torch.log2(t)
+    # Since t contains positive values (from max_pool1d on ones), log2 is safe.
+    result_log2 = torch.log2(t)
+    assert result_log2.shape == expected_shape
+
+if __name__ == "__main__":
+    test_issue_165549_replacements()
+```

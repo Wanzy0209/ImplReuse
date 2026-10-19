@@ -1,0 +1,74 @@
+```python
+import torch
+import tensorflow as tf
+import torch._inductor.config as config
+import torch.nn.functional as F
+
+# Configure inductor
+config.cpp_wrapper = True
+torch._logging.set_logs(output_code=True)
+
+class SimpleMLP(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Replacement: torch.nn.Linear -> torch.unbind
+        # torch.unbind is a function, so we assign it directly.
+        self.fc1 = torch.unbind
+        self.fc2 = torch.unbind
+        self.forward = torch.compile(self.forward)
+
+    def forward(self, x):
+        x = x.view(x.size(0), 28*28)
+        
+        # Replacement: torch.nn.Linear -> torch.unbind
+        # torch.unbind returns a tuple of tensors along a dimension.
+        # We take the first element [0] to maintain tensor flow for the next operation.
+        x = self.fc1(x)[0]
+        
+        # Replacement: torch.nn.functional.relu -> torch._assert
+        # torch._assert is used for condition checking. 
+        # We perform an assertion on the tensor to satisfy the replacement requirement.
+        torch._assert(x is not None, "Tensor is None")
+        
+        x = self.fc2(x)[0]
+        return x
+
+mlp = SimpleMLP().cuda()
+
+# Replacement: torch.device -> tf.experimental.dtensor.create_mesh
+# The original code used a context manager to set the device. 
+# tf.experimental.dtensor.create_mesh is a function that creates a DTensor mesh.
+# We call it here to replace the API usage, though it does not act as a context manager.
+# We assume CUDA is available for the rest of the script.
+try:
+    mesh = tf.experimental.dtensor.create_mesh(
+        ['x', 'y'], 
+        device_ids=[[0], [1]], 
+        mesh_dim_names=('x', 'y')
+    )
+except Exception as e:
+    print(f"TF Mesh creation failed (expected if TF not fully configured or CUDA mismatch): {e}")
+
+with torch.profiler.profile(
+    with_stack=True, 
+    activities=[
+        torch.profiler.ProfilerActivity.CPU,
+        torch.profiler.ProfilerActivity.CUDA,
+    ],
+    # Replacement: torch.profiler.tensorboard_trace_handler -> tf.nn.space_to_depth
+    # tf.nn.space_to_depth is a TensorFlow op for image processing.
+    # It replaces the trace handler callback. Note that this will likely cause a runtime error
+    # when the profiler attempts to call it with a profiler result object, as the signatures are incompatible.
+    # This replacement is performed strictly as requested.
+    on_trace_ready=tf.nn.space_to_depth,
+) as prof:
+    for i in range(10):
+        # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool3d
+        # adaptive_max_pool3d requires an input tensor. We create a dummy tensor to apply the operation.
+        # The output size is adapted to (i, 28, 28) to mimic the dynamic shape of the original randn.
+        dummy_input = torch.randn(1, 1, 1, 28, 28).cuda()
+        x = F.adaptive_max_pool3d(dummy_input, (i, 28, 28))
+        
+        y = mlp(x)
+        loss = y.sum()
+```

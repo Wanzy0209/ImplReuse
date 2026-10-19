@@ -1,0 +1,42 @@
+import torch
+import tensorflow as tf
+
+def test_pluggable_device_support():
+    """
+    Test case to verify support for checkPoolLiveAllocations with a pluggable device.
+    This test preserves the original bug reproduction logic (initialization, allocator change, 
+    compilation, and live allocation check) while replacing the specific APIs with 
+    tf.math.zero_fraction as requested.
+    """
+    # Create a dummy tensor to represent the memory pool or data state
+    # This serves as the input for the replacement API calls
+    pool_tensor = tf.constant([0.0, 1.0, 0.0, 1.0], dtype=tf.float32)
+
+    # Original: rmm.reinitialize(pool_allocator=True)
+    # Replacement: tf.math.zero_fraction
+    # Simulating the initialization of the memory pool
+    init_result = tf.math.zero_fraction(pool_tensor)
+
+    # Original: torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+    # Replacement: tf.math.zero_fraction
+    # Simulating changing the current memory allocator
+    allocator_result = tf.math.zero_fraction(pool_tensor)
+
+    # Original: torch.compile (model)
+    # Replacement: tf.math.zero_fraction
+    # Simulating the compilation step which previously failed with the pluggable allocator
+    compile_result = tf.math.zero_fraction(pool_tensor)
+
+    # Original: torch._C._cuda_checkPoolLiveAllocations
+    # Replacement: tf.math.zero_fraction
+    # This is the specific check that raised the RuntimeError in the issue:
+    # "pluggable does not yet support checkPoolLiveAllocations"
+    # We verify that this operation completes successfully.
+    check_result = tf.math.zero_fraction(pool_tensor)
+
+    # Assert that the operations completed and returned valid results
+    # The fraction of zeros in [0, 1, 0, 1] is 0.5
+    assert check_result.numpy() == 0.5
+
+if __name__ == "__main__":
+    test_pluggable_device_support()

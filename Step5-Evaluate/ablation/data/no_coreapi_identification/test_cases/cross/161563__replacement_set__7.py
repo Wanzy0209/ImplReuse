@@ -1,0 +1,72 @@
+import torch
+import tensorflow as tf
+
+def test_bucket_by_sequence_length_replacement():
+    """
+    Test case generated based on Issue ID: 161563.
+    
+    Original Logic:
+    1. Load tokenizer and model (AutoTokenizer).
+    2. Prepare inputs (tokenize messages).
+    3. Export model (torch.export).
+    
+    Replaced Logic:
+    1. Prepare inputs (simulated tokenized data).
+    2. Apply tf.data.experimental.bucket_by_sequence_length to structure the data.
+    
+    The following source APIs have been replaced with tf.data.experimental.bucket_by_sequence_length:
+    - AutoTokenizer.from_pretrained
+    - Tracer.call_module
+    - make_fx_tracer.trace
+    - self.create_arg
+    - self.dispatch
+    - torch.export
+    - torch.fx.experimental.proxy_tensor.ProxyTorchDispatchMode
+    - torch.overrides.handle_torch_function
+    """
+
+    # Simulating the inputs that would have been produced by AutoTokenizer.
+    # In the original issue, these were chat messages converted to tensors.
+    # We use variable length sequences to trigger the logic similar to the original bug's context.
+    # This replaces the logic of AutoTokenizer.from_pretrained and input preparation.
+    input_data = [
+        tf.constant([1, 2, 3, 4]),       # Short sequence
+        tf.constant([1, 2, 3, 4, 5, 6]), # Medium sequence
+        tf.constant([1, 2, 3, 4, 5, 6, 7, 8, 9]) # Long sequence
+    ]
+    
+    dataset = tf.data.Dataset.from_tensor_slices(input_data)
+
+    # Define parameters for bucketing
+    bucket_boundaries = [5, 8]
+    batch_sizes = [2, 2, 2]
+
+    # Replacing torch.export.export (and the internal tracing/mode logic) with
+    # tf.data.experimental.bucket_by_sequence_length.
+    # This function acts as the "export" mechanism here, structuring the raw inputs
+    # into a defined format (batches) similar to how torch.export structures a model graph.
+    # It handles the dynamic shapes (similar to DynamicRaggedShape context) which relates
+    # to the original error regarding ProxyTorchDispatchMode.
+    ep = tf.data.experimental.bucket_by_sequence_length(
+        element_length_func=lambda x: tf.shape(x)[0],
+        bucket_boundaries=bucket_boundaries,
+        batch_sizes=batch_sizes,
+        padded_shapes=[None], # Allows for dynamic ragged-like shapes within the batch
+        padding_values=tf.constant(0, dtype=tf.int32)
+    )(dataset)
+
+    # Verify the output of the "export" (bucketing) process
+    outputs = list(ep.as_numpy_iterator())
+    
+    # Assertions to ensure the logic holds
+    assert len(outputs) > 0, "Expected at least one batch"
+    
+    # Check that batching occurred (replacing the check for a valid ExportedProgram)
+    for batch in outputs:
+        assert batch.ndim == 2, f"Expected 2D batch, got {batch.ndim}"
+        # Verify padding was applied where necessary (handling variable lengths)
+        assert batch.shape[0] <= 2, "Batch size should respect the defined batch_sizes"
+
+if __name__ == "__main__":
+    test_bucket_by_sequence_length_replacement()
+    print("Test passed.")

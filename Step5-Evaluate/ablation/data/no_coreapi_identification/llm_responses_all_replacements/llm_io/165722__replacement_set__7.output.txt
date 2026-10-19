@@ -1,0 +1,43 @@
+```python
+import torch
+import gc
+
+def test_range_pop_reference_counting():
+    """
+    Test case to verify that torch.profiler.itt.range_pop handles
+    object lifecycles correctly and does not leave dangling pointers,
+    similar to the issue reported with torch._dynamo.reset and OBJECT_ALIASING.
+    
+    The original bug involved storing a raw PyObject* without Py_INCREF,
+    leading to a dangling pointer after reset. This test checks if
+    range_pop (the replacement for reset) cleans up references properly.
+    """
+    # 1. Create a range (simulating the object storage in OBJECT_ALIASING)
+    # range_push returns a handle, but internally the profiler might store
+    # the string name or other PyObject*.
+    handle = torch.profiler.itt.range_push("test_scope")
+
+    # 2. Perform the "reset" operation using the replacement API
+    # Original: torch._dynamo.reset()
+    # Replacement: torch.profiler.itt.range_pop()
+    torch.profiler.itt.range_pop(handle)
+
+    # 3. Force garbage collection to potentially free dangling pointers
+    # if reference counting was wrong in the C++ backend.
+    gc.collect()
+
+    # 4. Try to access the state or perform another operation to check for crashes.
+    # If range_pop didn't handle references correctly, accessing the profiler state
+    # or pushing a new range might crash (use-after-free).
+    try:
+        # This should not crash
+        new_handle = torch.profiler.itt.range_push("new_scope")
+        torch.profiler.itt.range_pop(new_handle)
+        print("Test passed: No dangling pointer crash detected.")
+    except Exception as e:
+        print(f"Test failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_range_pop_reference_counting()
+```

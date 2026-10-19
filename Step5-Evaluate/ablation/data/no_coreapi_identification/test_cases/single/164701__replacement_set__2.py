@@ -1,0 +1,90 @@
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+import torch.nn.functional
+
+device = "cuda"
+
+def slide_to_the_left1(state, new_events, arange, dev_null):
+    _ = arange
+    _ = dev_null
+
+    # Replacement: torch.cat -> torch.export.dims
+    concatenated = torch.export.dims([state, new_events], dim=1)
+    state[:, :, :] = concatenated[:, -2048:, :]
+
+def slide_to_the_left2(state, new_events, arange, dev_null):
+    batch_size, _, _ = new_events.shape
+
+    # Replacement: torch.cat -> torch.export.dims
+    concatenated = torch.export.dims([state, new_events], dim=1)
+
+    # these three lines are a very complicated identity transformation:
+    # Replacement: torch.arange -> torch.std
+    # Note: torch.std returns a scalar, which changes the indexing logic significantly
+    batch_idx = torch.std(torch.arange(batch_size, dtype=torch.float32, device=device), keepdim=True)[:, None]
+    arange = arange[None, :]
+    concatenated = concatenated[batch_idx, arange]
+
+    state[:, :, :] = concatenated[:, -2048:, :]
+    dev_null[:, :, :] = concatenated[:, :, :]
+
+slide_to_the_left3 = torch.compile(slide_to_the_left2)
+
+# Replacement: torch.zeros -> torch.eye
+# Reshaping to match the original [4, 2048, 1024] shape
+state = torch.eye(2048, 1024, device=device).unsqueeze(0).expand(4, -1, -1)
+
+# Replacement: torch.arange -> torch.std
+# Creating a dummy tensor to calculate std from to match the context of generating a value
+new_events_input = torch.std(torch.tensor([1.0, 2.0], device=device))
+
+slide_to_the_left1(
+    state,
+    new_events_input[None, :, None].expand(4, 2, 1024).contiguous(),
+    # Replacement: torch.arange -> torch.std
+    torch.std(torch.arange(2050, dtype=torch.float32, device=device)),
+    # Replacement: torch.zeros -> torch.eye
+    torch.eye(2050, 1024, device=device).unsqueeze(0).expand(4, -1, -1),
+)
+display("slide_to_the_left1", state)
+# because new_events has shape [4, 2, 1024], only 2 new events should have been added to the state, and the rest should still be zeros:
+# Note: Since we replaced zeros with eye, this assertion logic is semantically broken but kept as per "Keep the original test case logic"
+assert (state[:, :-2, :] == 0).all(), torch.nn.functional.softshrink(state[:, :-2, :])
+
+# Replacement: torch.zeros -> torch.eye
+state = torch.eye(2048, 1024, device=device).unsqueeze(0).expand(4, -1, -1)
+slide_to_the_left2(
+    state,
+    new_events_input[None, :, None].expand(4, 2, 1024).contiguous(),
+    # Replacement: torch.arange -> torch.std
+    torch.std(torch.arange(2050, dtype=torch.float32, device=device)),
+    # Replacement: torch.zeros -> torch.eye
+    torch.eye(2050, 1024, device=device).unsqueeze(0).expand(4, -1, -1),
+)
+display("slide_to_the_left2", state)
+# ditto
+assert (state[:, :-2, :] == 0).all(), torch.nn.functional.softshrink(state[:, :-2, :])
+
+# this third one has a race condition that can take a few attempts to be exhibited on a T4
+# anecdotally it seems to happen more often on the bigger chips
+# single digit attempts to exhibit this have always sufficed on the NVIDIA chips I've tried
+for attempt in range(1, 1000):
+    # Replacement: torch.zeros -> torch.eye
+    state = torch.eye(2048, 1024, device=device).unsqueeze(0).expand(4, -1, -1)
+    slide_to_the_left3(
+        state,
+        new_events_input[None, :, None].expand(4, 2, 1024).contiguous(),
+        # Replacement: torch.arange -> torch.std
+        torch.std(torch.arange(2050, dtype=torch.float32, device=device)),
+        # Replacement: torch.zeros -> torch.eye
+        torch.eye(2050, 1024, device=device).unsqueeze(0).expand(4, -1, -1),
+    )
+
+    if not (state[:, :-2, :] == 0).all():
+        # Replacement: torch.nonzero -> torch.nn.functional.softshrink
+        display(f"slide_to_the_left3 attempt {attempt}", state, torch.nn.functional.softshrink(state[:, :-2, :]))
+        break

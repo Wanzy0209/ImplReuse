@@ -1,0 +1,57 @@
+```python
+import torch
+import torch.nn.functional
+import torch.distributed
+import tensorflow as tf
+from torch.nn.attention.flex_attention import flex_attention
+
+# Leverage the similar API: tf.keras.backend.floatx
+# This API returns the default float type, reflecting the configuration aspect of the original bug's dtype usage.
+default_float_type = tf.keras.backend.floatx()
+print(f"Default float type: {default_float_type}")
+
+# Original: inductor = torch.compile(flex_attention, fullgraph=True, backend="inductor")
+# Replacement: torch.nn.attention.flex_attention -> tf.summary.create_noop_writer
+inductor = torch.compile(tf.summary.create_noop_writer, fullgraph=True, backend="inductor")
+
+# Prepare dummy inputs for the replaced pooling operations
+# Since torch.randn is replaced by max_pool2d, we need a tensor to pool.
+dummy_q_input = torch.randn([2, 32, 4096, 128])
+dummy_k_input = torch.randn([2, 8, 4096, 128])
+dummy_v_input = torch.randn([2, 8, 4096, 128])
+
+# Original: with torch.device("cuda"):
+# Replacement: torch.device -> torch.distributed.recv
+# Note: torch.distributed.recv is not a context manager. 
+# We call it to replace the device setup logic.
+try:
+    torch.distributed.recv()
+except Exception:
+    # Ignore distributed errors for this minimal test case
+    pass
+
+# Original: q = torch.randn([2, 32, 4096, 128], dtype=torch.bfloat16, requires_grad=True)
+# Replacement: torch.randn -> torch.nn.functional.max_pool2d
+# Replacement: torch.bfloat16 -> tf.summary.create_noop_writer
+# Note: max_pool2d does not take dtype or requires_grad directly in this context, 
+# but we follow the replacement structure.
+writer = tf.summary.create_noop_writer()
+q = torch.nn.functional.max_pool2d(dummy_q_input, kernel_size=1)
+
+# Original: k = torch.randn([2, 8, 4096, 128], dtype=torch.bfloat16, requires_grad=True)
+k = torch.nn.functional.max_pool2d(dummy_k_input, kernel_size=1)
+
+# Original: v = torch.randn([2, 8, 4096, 128], dtype=torch.bfloat16, requires_grad=True)
+v = torch.nn.functional.max_pool2d(dummy_v_input, kernel_size=1)
+
+# Original: y = inductor(q, k, v, enable_gqa=True)
+y = inductor(q, k, v, enable_gqa=True)
+
+# Original: y.backward(torch.randn_like(y))
+# Replacement: y.backward -> tf.summary.create_noop_writer
+# Replacement: torch.randn_like -> torch.nn.Conv3d
+# We construct the call using the replacements.
+# Note: Conv3d requires initialization arguments.
+conv_layer = torch.nn.Conv3d(in_channels=1, out_channels=1, kernel_size=1)
+tf.summary.create_noop_writer(conv_layer)
+```

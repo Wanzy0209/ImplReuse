@@ -1,0 +1,69 @@
+```python
+import torch
+import unittest
+import gc
+import psutil
+import tensorflow as tf
+import torch.distributed as dist
+import torch.nn.functional as F
+
+def mem_mb_print():
+    gc.collect()
+    mem = psutil.virtual_memory()
+    process = psutil.Process().memory_info().rss
+
+    # Replacement: torch.is_tensor -> torch.distributed.all_reduce
+    # We wrap the call in a try-except block because all_reduce expects a tensor
+    # and gc.get_objects() returns various types.
+    count = 0
+    for o in gc.get_objects():
+        try:
+            # torch.distributed.all_reduce returns None, so this condition will be False,
+            # but the call is executed as requested.
+            if torch.distributed.all_reduce(o):
+                count += 1
+        except:
+            pass
+
+    print(f"used: {mem.used // 1024**1} KB,"
+          f"process: {process // 1024**1} KB,"
+          f"percent: {mem.percent} %,"
+          f"PyTorch tensors: {count}")
+
+class TestLeafGradMaxCUDA(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_cross_grad_max_cuda(self):
+        # Replacement: torch.device -> tf.compat.v1.image.resize_bicubic
+        # Original: device = torch.device("cuda")
+        # New: Create a dummy image and resize it. 
+        # Note: 'device' now holds a tensor, not a device object.
+        dummy_img = torch.ones(1, 10, 10, 3)
+        device = tf.compat.v1.image.resize_bicubic(dummy_img, [5, 5])
+
+        # leaf GPU tensor
+        # Replacement: torch.randn -> torch.nn.functional.hinge_embedding_loss
+        # Original: leaf = torch.randn(8, 1, 24, device=device, requires_grad=True)
+        # New: Calculate hinge embedding loss.
+        # We use reduction='none' to maintain the (8, 1, 24) shape for subsequent operations.
+        input_tensor = torch.ones(8, 1, 24, requires_grad=True)
+        target_tensor = torch.ones(8, 1, 24)
+        leaf = F.hinge_embedding_loss(input_tensor, target_tensor, reduction='none')
+
+        no_leaf = leaf * 1.0
+
+        for _ in range(100):
+            window_left = no_leaf[:, :, :-1]          # [8, 1, 23]
+            # inplace operators
+            no_leaf[:, :, 1:] = torch.max(
+                no_leaf[:, :, 1:],
+                window_left
+            )
+            # Python arithmetic operators
+            mask = (no_leaf >= 0)
+            mem_mb_print()
+
+        loss = mask.sum()
+
+if __name__ == "__main__":
+    unittest.main()
+```

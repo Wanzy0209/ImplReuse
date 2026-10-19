@@ -1,0 +1,51 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Replacements:
+# torch.matmul -> tf.keras.backend.resize_volumes
+# torch.sigmoid -> torch.mul
+def f(x, y):
+    # Convert torch tensors to numpy for TensorFlow compatibility
+    x_np = x.detach().numpy()
+    y_np = y.detach().numpy()
+    
+    # tf.keras.backend.resize_volumes(x, depth_factor, height_factor, width_factor, data_format)
+    # Using 1.0 for factors to preserve shape, 'channels_first' for (N, C, D, H, W) format
+    res1 = tf.keras.backend.resize_volumes(x_np, 1.0, 1.0, 1.0, 'channels_first')
+    res2 = tf.keras.backend.resize_volumes(res1, 1.0, 1.0, 1.0, 'channels_first')
+    
+    # Convert back to torch tensor
+    res2_torch = torch.from_numpy(res2.numpy())
+    
+    # torch.mul replacement for torch.sigmoid
+    # Original logic: torch.sigmoid(...) * y
+    return torch.mul(res2_torch, y)
+
+# functools.partial -> torch.backends.mkldnn.is_available
+context_fn1 = torch.backends.mkldnn.is_available
+
+# torch.compile -> torch.all
+# We define g normally and wrap the call site with torch.all
+def g(x, y):
+    # torch.utils.checkpoint -> torch.backends.mkldnn.is_available
+    # We use the replacement API to conditionally execute the function logic
+    if context_fn1():
+        return f(x, y)
+    else:
+        return f(x, y)
+
+# torch.randn -> torch.nn.functional.adaptive_max_pool3d
+# We need a source tensor to apply pooling to
+dummy_input = torch.randn(1, 1, 4, 4, 4, requires_grad=True)
+a = torch.nn.functional.adaptive_max_pool3d(dummy_input, (4, 4, 4))
+b = torch.nn.functional.adaptive_max_pool3d(dummy_input, (4, 4, 4))
+
+# Execution
+# Original: g(a, b).sum().backward()
+# Applying torch.all replacement for the compile decorator
+result = torch.all(g(a, b))
+result.sum().backward()
+
+# Assertion to ensure the test runs and gradients are computed
+assert dummy_input.grad is not None

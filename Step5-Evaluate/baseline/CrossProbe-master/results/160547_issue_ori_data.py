@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from collections import namedtuple
 from tensorflow.python.framework.func_graph import func_graph_from_py_func
@@ -30,4 +29,3 @@ def test_namedtuple(self):
     inp_kwargs = {field: getattr(inp, field) for field in inp._fields}
     ep = func_graph_from_py_func(M(), args=(), kwargs=inp_kwargs, name='export_kwargs')
     print(ep)
-```

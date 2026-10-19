@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 class TestModel(tf.keras.Model):
@@ -17,4 +16,3 @@ model = TestModel()
 print("Eager output:", model(x))
 # tf.function is the TensorFlow equivalent to torch.compile for graph optimization
 print("Compiled output:", tf.function(model)(x))
-```

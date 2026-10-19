@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 # Importing the specific API mentioned in the prompt mapping
 from tensorflow.python.distribute import cross_device_utils
@@ -33,4 +32,3 @@ with SimpleTensorMode():
 
     # Execute the reduction
     result = strategy.run(all_reduce_step)
-```

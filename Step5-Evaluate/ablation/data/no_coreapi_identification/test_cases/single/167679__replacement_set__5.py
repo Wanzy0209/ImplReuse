@@ -1,0 +1,21 @@
+import sys
+import platform
+import torch
+import tensorflow as tf
+
+print("Python:", sys.version)
+print("Executable:", sys.executable)
+print("PyTorch:", torch.__version__)
+print("macOS:", platform.mac_ver()[0])
+print("platform:", platform.platform())
+print("arch:", platform.machine())
+print("is_macos_or_newer(14,0):",
+      getattr(torch.backends.mps, "is_macos_or_newer", lambda *a: "no-func")(14, 0))
+
+# Replacement: torch.backends.mps.is_built -> tf.experimental.numpy.trace
+# tf.experimental.numpy.trace requires an array input. We provide a dummy array.
+dummy_array = [[1, 0], [0, 1]]
+print("MPS built?:", tf.experimental.numpy.trace(dummy_array))
+
+# Original API under test
+print("MPS available?:", torch.backends.mps.is_available())

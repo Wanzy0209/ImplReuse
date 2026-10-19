@@ -1,0 +1,87 @@
+```python
+import torch
+import tensorflow as tf
+
+# Check for MPI availability (Replacement for MPS check)
+# Original: assert torch.backends.mps.is_available()
+# Replacement: torch.distributed.is_mpi_available
+if hasattr(torch.distributed, 'is_mpi_available'):
+    assert torch.distributed.is_mpi_available(), "MPI is not available"
+else:
+    print("Warning: torch.distributed.is_mpi_available not found in this PyTorch version. Skipping assertion.")
+
+# Wrapper over the custom MPS soft shrink kernel.
+# Replacement: nn.Module -> tf.linalg.LinearOperatorComposition
+class MPSSoftshrink(tf.linalg.LinearOperatorComposition):
+    __constants__ = ["lambd"]
+    lambd: float
+
+    def __init__(self, input_dim, lambd: float = 0.5) -> None:
+        super().__init__([tf.linalg.LinearOperatorIdentity(input_dim)])
+        self.lambd = lambd
+
+    def extra_repr(self):
+        return str(self.lambd)
+
+# Wrapper over the Sequential layer, using the custom MPS kernel soft shrink implementation.
+# Replacement: nn.Module -> tf.linalg.LinearOperatorComposition
+class CustomMPSSoftshrinkModel(tf.linalg.LinearOperatorComposition):
+    def __init__(
+        self,
+        input_size: int = 784,
+        lin1_size: int = 256,
+        lin2_size: int = 256,
+        lin3_size: int = 256,
+        output_size: int = 10,
+    ):
+        # Define weights as variables
+        self.w1 = tf.Variable(tf.random.normal((lin1_size, input_size)))
+        self.w2 = tf.Variable(tf.random.normal((lin2_size, lin1_size)))
+        self.w3 = tf.Variable(tf.random.normal((lin3_size, lin2_size)))
+        self.w4 = tf.Variable(tf.random.normal((output_size, lin3_size)))
+
+        # Define Linear layers
+        # Replacement: nn.Linear -> tf.linalg.LinearOperatorComposition
+        l1 = tf.linalg.LinearOperatorComposition([tf.linalg.LinearOperatorFullMatrix(self.w1)])
+        l2 = tf.linalg.LinearOperatorComposition([tf.linalg.LinearOperatorFullMatrix(self.w2)])
+        l3 = tf.linalg.LinearOperatorComposition([tf.linalg.LinearOperatorFullMatrix(self.w3)])
+        l4 = tf.linalg.LinearOperatorComposition([tf.linalg.LinearOperatorFullMatrix(self.w4)])
+
+        # Define Softshrink layers
+        # Replacement: compiled_lib.mps_softshrink -> tf.linalg.LinearOperatorComposition
+        s1 = MPSSoftshrink(lin1_size)
+        s2 = MPSSoftshrink(lin2_size)
+        s3 = MPSSoftshrink(lin3_size)
+
+        # Define the model structure
+        # Original: nn.Sequential
+        # Replacement: tf.linalg.LinearOperatorComposition
+        # Replacement: self.model -> tf.linalg.LinearOperatorComposition
+        # Note: LinearOperatorComposition applies operators in reverse order of the list (A(B(x))).
+        # Sequential applies in order (B(A(x))).
+        # So we reverse the list of layers to match Sequential logic.
+        layers = [l4, s3, l3, s2, l2, s1, l1]
+        
+        super().__init__(layers)
+
+    def forward(self, x):
+        # In LinearOperator, matmul is the equivalent of forward
+        return self.matmul(x)
+
+# Instantiate the model
+model = CustomMPSSoftshrinkModel()
+
+# Leverage the Similar API: tf.compat.v1.global_variables_initializer
+# This initializes the global variables (weights).
+# In TF2 (eager execution), variables are initialized on creation, but we call this
+# to reflect the usage pattern of the similar API.
+init_op = tf.compat.v1.global_variables_initializer()
+
+# Run the model
+x = tf.random.normal((1, 784))
+y = model.forward(x)
+
+# Assertions
+assert y.shape == (1, 10)
+print("Test passed. Output shape:", y.shape)
+```

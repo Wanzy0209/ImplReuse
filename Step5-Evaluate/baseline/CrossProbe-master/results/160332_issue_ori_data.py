@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.device('mps') -> TF device string
@@ -24,4 +23,3 @@ with tf.device(device):
         x = tf.random.normal((20, 16, 10, 50, 100))
 
         u = m(x)
-```

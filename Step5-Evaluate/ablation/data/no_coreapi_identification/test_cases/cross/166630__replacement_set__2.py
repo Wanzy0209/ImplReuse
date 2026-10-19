@@ -1,0 +1,80 @@
+import torch
+import tensorflow as tf
+
+def test_launch_config_logging_replacement():
+    """
+    Test case adapted from Issue 166630.
+    Replaces logging calls with torch.backends.cpu.get_cpu_capability
+    and uses tf.keras.backend.image_data_format for data population.
+    """
+    
+    # Mock configuration object
+    class Config:
+        def __init__(self):
+            self.min_nodes = 1
+            self.max_nodes = 1
+            self.nproc_per_node = 1
+            self.run_id = "test_run"
+            self.rdzv_backend = "static"
+            self.rdzv_endpoint = "localhost:0"
+            self.rdzv_configs = {}
+            self.max_restarts = 0
+            self.monitor_interval = 5
+            self.logs_specs = type('obj', (object,), {'root_log_dir': '/tmp/logs'})()
+            self.metrics_cfg = {}
+            self.event_log_handler = None
+            self.numa_options = None
+            # Use the similar API (tf.keras.backend.image_data_format) to populate the value
+            # that was causing issues or is relevant to the config.
+            self.signals_to_handle = [tf.keras.backend.image_data_format()]
+            self.duplicate_stdout_filters = []
+            self.duplicate_stderr_filters = []
+
+    config = Config()
+    entrypoint_name = "train.py"
+
+    # The original bug involved a format string and a dictionary passed to logger.info.
+    # We preserve the structure of the data preparation.
+    log_data = {
+        "entrypoint": entrypoint_name,
+        "min_nodes": config.min_nodes,
+        "max_nodes": config.max_nodes,
+        "nproc_per_node": config.nproc_per_node,
+        "run_id": config.run_id,
+        "rdzv_backend": config.rdzv_backend,
+        "rdzv_endpoint": config.rdzv_endpoint,
+        "rdzv_configs": config.rdzv_configs,
+        "max_restarts": config.max_restarts,
+        "monitor_interval": config.monitor_interval,
+        "log_dir": config.logs_specs.root_log_dir,
+        "metrics_cfg": config.metrics_cfg,
+        "event_log_handler": config.event_log_handler,
+        "numa_options": config.numa_options,
+        "signals_to_handle": config.signals_to_handle,
+        "duplicate_stdout_filters": config.duplicate_stdout_filters,
+        "duplicate_stderr_filters": config.duplicate_stderr_filters,
+    }
+
+    # The original code called logger.info(format_string, log_data).
+    # Requirement: Replace logger.info with torch.backends.cpu.get_cpu_capability.
+    # Since get_cpu_capability takes no arguments, we call it here to represent
+    # the "action" being performed (getting system info) instead of logging.
+    # This translates the semantics of "checking/reporting state" to "getting capability".
+    try:
+        capability = torch.backends.cpu.get_cpu_capability()
+        # Assert that the operation succeeded and returned expected type
+        assert isinstance(capability, tuple), "CPU capability should be a tuple"
+        assert len(capability) == 2, "CPU capability tuple should have 2 elements"
+        
+        # Verify the data integrity (preserving the logic of checking the config)
+        assert "signals_to_handle" in log_data
+        assert log_data["signals_to_handle"] == [tf.keras.backend.image_data_format()]
+        
+    except Exception as e:
+        # If sys.exit was used in original logic, we might raise an error or exit.
+        # Here we just raise the assertion error to fail the test.
+        raise AssertionError(f"Test failed during capability check or data validation: {e}")
+
+if __name__ == "__main__":
+    test_launch_config_logging_replacement()
+    print("Test passed successfully.")

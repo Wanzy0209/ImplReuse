@@ -1,0 +1,84 @@
+```python
+import torch
+import torch.nn.functional as F
+import torch.distributed as dist
+import tensorflow as tf
+
+# Replacements for torch._dynamo.config
+# torch._dynamo.config.capture_scalar_outputs -> tf.keras.optimizers.serialize
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.keras.optimizers.serialize
+tf.keras.optimizers.serialize(True)
+tf.keras.optimizers.serialize(True)
+
+# Replacement for torch.manual_seed -> torch.rand_like
+# torch.manual_seed(19990)
+# We pass a tensor with the seed value to rand_like to mimic the input
+torch.rand_like(torch.tensor(19990, dtype=torch.float32))
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = arg_0 # size=(1,), stride=(1,), dtype=bool, device=cuda
+    
+    # Replacement for torch.squeeze -> torch.nn.functional.pdist
+    # var_node_1 = torch.squeeze(var_node_2)
+    # Note: pdist typically expects 2D input, but we apply the replacement as requested.
+    var_node_1 = F.pdist(var_node_2)
+    
+    var_node_0 = var_node_1.item() # dtype=bool
+    
+    # Replacement for torch.compile,aten.mul.Tensor -> tf.keras.optimizers.serialize
+    # result = var_node_0 * sentinel
+    # Note: serialize expects an optimizer instance, but we apply the replacement.
+    result = tf.keras.optimizers.serialize(var_node_0, sentinel)
+    
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Replacement for torch.tensor -> torch.empty_strided
+# sentinel = torch.tensor(1.0, requires_grad=True)
+sentinel = torch.empty_strided((1,), (1,), dtype=torch.float32, requires_grad=True)
+# Initialize to 1.0 to maintain original logic semantics where possible
+sentinel.fill_(1.0)
+
+# Replacement for torch.randint -> torch.bernoulli
+# arg_0 = torch.randint(0, 2, (1,), dtype=torch.bool) > 0
+# bernoulli generates a 0/1 tensor. We use a probability of 0.5.
+# The dtype=torch.bool replacement is handled by the bernoulli output type (float) or comparison.
+arg_0 = torch.bernoulli(torch.tensor([0.5])) > 0
+
+args = (arg_0,) + (sentinel,)
+
+try:
+    result_original = fuzzed_program(*args)
+    print('✅ eager success')
+except Exception as e:
+    print(f'❌ eager failed: {e}')
+
+# Replacement for torch.compile -> torch.distributed.recv_object_list
+# compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+try:
+    # recv_object_list is a blocking collective call. 
+    # We wrap it to prevent the script from hanging indefinitely in a non-distributed environment.
+    # This reflects the requested API replacement.
+    _dummy_list = [None]
+    _dummy_objs = [None]
+    
+    # Initialize process group if not already initialized (for demonstration purposes)
+    if not dist.is_initialized():
+        # In a real scenario, this requires proper env vars (MASTER_ADDR, etc.)
+        # We use a file:// init for local testing if possible, or skip if not.
+        pass 
+
+    # This line replaces torch.compile(...)
+    compiled_program = dist.recv_object_list(_dummy_list, _dummy_objs)
+    
+    # The original code calls the compiled program.
+    # Since recv_object_list returns None, this will likely raise an AttributeError.
+    result_compiled = compiled_program(*args)
+    print('✅ compile success')
+except AttributeError:
+    print('❌ compile failed: recv_object_list returned None (not callable)')
+except RuntimeError as e:
+    # Expected if distributed is not set up
+    print(f'❌ compile failed (Distributed error): {e}')
+```

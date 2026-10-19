@@ -1,0 +1,61 @@
+```python
+import tensorflow as tf
+import gc
+
+def test_keras_backend_reset_and_reference_handling():
+    """
+    Test case adapted from PyTorch Issue #165722.
+    
+    Replaces:
+    - torch._dynamo.reset -> tf.keras.backend.clear_session
+    - OBJECT_ALIASING class logic -> tf.keras.backend state management
+    
+    This test verifies that holding a reference to a backend object
+    across a session reset does not lead to dangling pointer issues
+    (crashes), mimicking the scenario described in the bug report.
+    """
+    
+    # 1. Create a tensor using tf.keras.backend (replaces the tensor input in OBJECT_ALIASING)
+    # We use a variable to ensure it is tied to the backend session state.
+    initial_val = [1.0, 2.0, 3.0]
+    tensor_a = tf.keras.backend.variable(initial_val)
+
+    # 2. Store the reference (simulating the _first_tensor member in OBJECT_ALIASING)
+    stored_ref = tensor_a
+
+    # 3. Reset the state (replaces torch._dynamo.reset)
+    # This clears the Keras session, which should invalidate the underlying C++ handles
+    # if reference counting is not handled correctly.
+    tf.keras.backend.clear_session()
+
+    # Force garbage collection to attempt to trigger the dangling pointer scenario
+    # if the reference counting was incorrect (as in the original bug).
+    gc.collect()
+
+    # 4. Attempt to access the stored reference
+    # In the original bug, accessing _first_tensor after reset would access a dangling pointer.
+    # In this test, we verify that the system handles the reset gracefully.
+    # We expect either a clean error (if the object is invalidated) or successful access
+    # (if the Python object keeps the C++ object alive), but NOT a segmentation fault.
+    try:
+        # Attempt to get the value using the backend
+        val = tf.keras.backend.get_value(stored_ref)
+        # If successful, the reference was valid.
+        assert val is not None
+    except (ValueError, AttributeError, RuntimeError) as e:
+        # If an error is raised, it confirms the session was cleared and the object
+        # is no longer valid in the new session context. This is acceptable behavior
+        # as long as it is a handled exception and not a crash.
+        pass
+    except Exception as e:
+        # Catch any other unexpected exceptions
+        raise AssertionError(f"Unexpected exception during reference access: {e}")
+
+    # 5. Verify we can create new objects and continue (system is stable)
+    tensor_b = tf.keras.backend.variable([4.0, 5.0, 6.0])
+    assert tensor_b is not None
+
+if __name__ == "__main__":
+    test_keras_backend_reset_and_reference_handling()
+    print("Test passed.")
+```

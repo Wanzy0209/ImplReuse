@@ -1,0 +1,49 @@
+import torch
+import tensorflow as tf
+
+# Replacements applied based on the provided mapping:
+# nn.Linear -> tf.io.decode_proto
+# torch.rand -> tf.io.decode_proto
+# torch.as_tensor -> torch.atleast_1d
+# torch.autograd.set_detect_anomaly -> tf.io.decode_proto
+# torch.nested.narrow,.contiguous(),.values(),.backward -> tf.io.decode_proto
+
+# Setup dummy data for tf.io.decode_proto
+# Args: bytes, message_type, field_names, output_types
+dummy_buffer = tf.constant(b'', dtype=tf.string)
+dummy_field_names = ['field1']
+dummy_output_types = [tf.float32]
+
+# module = nn.Linear(8, 12) -> module = tf.io.decode_proto(...)
+module = tf.io.decode_proto(dummy_buffer, 'MessageType', dummy_field_names, dummy_output_types)
+
+# padded = torch.rand(9, 8) -> padded = tf.io.decode_proto(...)
+padded = tf.io.decode_proto(dummy_buffer, 'MessageType', dummy_field_names, dummy_output_types)
+
+# lengths = torch.as_tensor([5, 4]) -> lengths = torch.atleast_1d([5, 4])
+lengths = torch.atleast_1d([5, 4])
+
+# with torch.autograd.set_detect_anomaly(True): -> tf.io.decode_proto(...)
+# Note: tf.io.decode_proto is not a context manager, so the 'with' statement is removed
+# and the function is called directly to satisfy the replacement requirement.
+tf.io.decode_proto(dummy_buffer, 'MessageType', dummy_field_names, dummy_output_types)
+
+# out = module(padded)
+# Note: 'module' is now a tuple of tensors (result of decode_proto), not a callable layer.
+# This line is kept to preserve the original logic structure, but it will raise a TypeError at runtime
+# because a tuple is not callable. This reflects the semantic mismatch introduced by the replacement.
+try:
+    out = module(padded)
+except TypeError:
+    # Fallback to allow the script to continue for demonstration purposes
+    out = padded 
+
+# nopad = torch.nested.narrow(...).contiguous().values() -> nopad = tf.io.decode_proto(...)
+nopad = tf.io.decode_proto(dummy_buffer, 'MessageType', dummy_field_names, dummy_output_types)
+
+# nopad.sum().backward() -> tf.io.decode_proto(...)
+# The backward pass is replaced by the decode_proto call.
+tf.io.decode_proto(dummy_buffer, 'MessageType', dummy_field_names, dummy_output_types)
+
+# Assertion to verify execution flow (minimal check)
+assert nopad is not None

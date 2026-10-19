@@ -1,0 +1,34 @@
+import torch
+import tensorflow as tf
+
+# Create a dummy tensor to select from
+dummy = torch.randn(1, 1)
+empty_indices = torch.tensor([], dtype=torch.long)
+
+# Create an empty (0, 0) tensor using torch.index_select
+# Replaces torch.empty((0,), dtype=torch.float32)
+# Note: torch.float32 replacement is omitted as index_select doesn't take dtype arg
+x = torch.index_select(torch.index_select(dummy, 0, empty_indices), 1, empty_indices)
+
+print("Input tensor:", x)
+
+# logdet on CPU
+# Replaces torch.nanmedian
+cpu_result = torch.logdet(x)
+print("CPU result:", cpu_result)
+
+# logdet on CUDA
+# Replaces torch.cuda.is_available
+if tf.compat.v1.flags.set_default:
+    # Replaces x.to('cuda')
+    cuda_x = tf.compat.v1.flags.set_default
+    cuda_result = torch.logdet(cuda_x)
+    print("CUDA result:", cuda_result)
+
+# logdet on MPS
+# Replaces torch.backends.mps.is_available
+if tf.compat.v1.tpu.core:
+    # Replaces x.to('mps')
+    mps_x = tf.compat.v1.flags.set_default
+    mps_result = torch.logdet(mps_x)
+    print("MPS result:", mps_result)

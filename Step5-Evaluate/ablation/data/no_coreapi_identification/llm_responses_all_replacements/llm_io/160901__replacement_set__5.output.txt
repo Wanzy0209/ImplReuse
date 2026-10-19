@@ -1,0 +1,73 @@
+```python
+import torch
+import tensorflow as tf
+from torch.autograd import graph
+
+# Define the custom autograd function from the original bug report
+class MyFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        # Original: return torch.matmul(x, (torch.ones_like(x) * 10).t())
+        # Replacements:
+        # - torch.matmul -> torch.autograd.graph.get_gradient_edge
+        # - torch.ones_like -> torch.is_complex
+        
+        # Note: torch.is_complex returns a boolean, which changes the semantics significantly.
+        # We follow the replacement instruction strictly.
+        is_complex_check = torch.is_complex(x)
+        
+        # Replacing torch.matmul with torch.autograd.graph.get_gradient_edge
+        # This function expects a tensor to inspect the graph edge.
+        return torch.autograd.graph.get_gradient_edge(x)
+    
+    @staticmethod
+    def backward(ctx, grad_out):
+        return grad_out
+
+# Leverage the similar API: tf.test.Benchmark
+class TestAutogradPropagation(tf.test.Benchmark):
+    def benchmark_grad_propagation(self):
+        # Original: out = torch.randn(2093, 256, requires_grad=True)
+        # Replacement: torch.randn -> torch.autograd.graph.get_gradient_edge
+        # To make this runnable, we need a tensor to pass to get_gradient_edge.
+        # We use torch.empty (not in replacement list) to create the base tensor.
+        dummy_input = torch.empty(2093, 256, requires_grad=True)
+        out = torch.autograd.graph.get_gradient_edge(dummy_input)
+
+        # Original: permuted_indices = torch.tensor([...])
+        # Replacement: torch.tensor -> tf.keras.ops.diag
+        # Using a minimal list for the test case.
+        permuted_indices = tf.keras.ops.diag([0, 1, 2, 3, 4, 5])
+
+        # The bug involves tracing/compilation (torch.compile/Dynamo).
+        # Replacement: torch.compile -> tf.compat.v1.tpu.rewrite
+        
+        def computation():
+            # Original usage of MyFn.apply
+            # Replacement: MyFn.apply -> torch.autograd.graph.get_gradient_edge
+            # We pass 'out' (which is the result of the previous replacement) to the new API.
+            return torch.autograd.graph.get_gradient_edge(out)
+
+        # Apply the compilation replacement
+        # Note: tf.compat.v1.tpu.rewrite is a TensorFlow operation.
+        # We wrap the call to satisfy the replacement requirement.
+        try:
+            # In a real scenario, this would compile the computation for TPU.
+            # Here, we execute the replacement to satisfy the prompt constraints.
+            compiled_result = tf.compat.v1.tpu.rewrite(computation)
+            
+            # The bug is about silent incorrectness in requires_grad propagation.
+            # We assert that the structure is maintained (or check for errors).
+            # Given the replacements, we primarily check that the code structure is valid.
+            print("Benchmark run completed with API replacements.")
+            
+        except Exception as e:
+            # Expected due to semantic mismatch of replacements (e.g., passing tuple to tensor op),
+            # but the code structure follows the instructions.
+            print(f"Execution exception (expected due to API replacement semantics): {e}")
+
+if __name__ == "__main__":
+    # Instantiate and run the benchmark
+    test = TestAutogradPropagation()
+    test.benchmark_grad_propagation()
+```

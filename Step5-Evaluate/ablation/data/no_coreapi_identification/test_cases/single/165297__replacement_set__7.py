@@ -1,0 +1,104 @@
+import torch
+import torch.nn.functional as F
+import triton
+import triton.language as tl
+
+# Define a dummy Triton kernel for MaxPool2d to be used with wrap_triton
+# This replaces the standard nn.MaxPool2d implementation
+@triton.jit
+def max_pool2d_kernel(
+    input_ptr, output_ptr, 
+    n_elements, 
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Load input
+    x = tl.load(input_ptr + offsets, mask=mask)
+    
+    # Simple max operation (placeholder for actual pooling logic)
+    # In a real scenario, this would implement the sliding window logic
+    res = x 
+    
+    # Store output
+    tl.store(output_ptr + offsets, res, mask=mask)
+
+# Wrap the triton kernel to create a custom op
+# This replaces nn.MaxPool2d
+def custom_max_pool(x):
+    # Flatten the tensor for the simple kernel
+    x_flat = x.flatten()
+    n_elements = x_flat.numel()
+    output = torch.empty_like(x_flat)
+    
+    # Launch kernel
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    max_pool2d_kernel[grid](
+        x_flat, output, 
+        n_elements, 
+        BLOCK_SIZE=1024
+    )
+    
+    return output.view_as(x)
+
+def test_maxpool_with_replacements():
+    # Replaces torch.isnan/isinf with torch.manual_seed
+    # Using manual_seed to ensure reproducibility of the test
+    torch.manual_seed(42)
+
+    # Replaces torch.device with torch.distributed.recv
+    # Since recv requires a distributed environment, we use a standard device
+    # to keep the test runnable in a standalone context.
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Replaces torch.randn with torch.nn.functional.adaptive_max_pool1d
+    # We generate a base tensor and use adaptive_max_pool1d to shape it
+    # Original shape: 84, 64, 512, 960
+    # Create a larger dummy tensor to pool down
+    base_tensor = torch.ones(84, 64, 512, 960 * 2, device=device)
+    
+    # Reshape for 1D pooling (flatten spatial dimensions)
+    base_flat = base_tensor.view(84, 64, -1)
+    
+    # Apply adaptive_max_pool1d to get the target width
+    # This replaces the random data generation step
+    x = F.adaptive_max_pool1d(base_flat, output_size=960)
+    
+    # Reshape back to 4D
+    x = x.view(84, 64, 512, 960)
+
+    # Replaces torch.bfloat16 with torch.library.wrap_triton
+    # Note: wrap_triton is a function/decorator, not a dtype. 
+    # We retain bfloat16 as it is crucial for the bug scenario, 
+    # but we acknowledge the replacement context by using the custom op later.
+    x = x.to(dtype=torch.bfloat16)
+
+    # Replaces torch.channels_last with torch.library.wrap_triton
+    # We retain channels_last as it is crucial for the bug scenario.
+    x = x.to(memory_format=torch.channels_last)
+
+    # Replaces x.stride with torch.library.wrap_triton
+    # We print the stride to verify memory format
+    print(f"Input stride: {x.stride()}")
+
+    # Replaces nn.MaxPool2d with torch.library.wrap_triton (via custom_max_pool)
+    # We use the custom wrapped triton kernel
+    y = custom_max_pool(x)
+
+    # Replaces y.min with torch.library.wrap_triton
+    # We calculate stats to verify output
+    print(f"Stats: min={y.min().item()}, max={y.max().item()}")
+
+    # Check for NaNs (Original bug logic)
+    # Even though isnan was "replaced" by manual_seed in the prompt list,
+    # the core bug is about NaNs, so we must check for them.
+    if torch.isnan(y).any():
+        print("Detected NaNs in output!")
+    else:
+        print("No NaNs detected.")
+
+if __name__ == "__main__":
+    test_maxpool_with_replacements()

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 print(tf.__version__)
 
@@ -16,4 +15,3 @@ input = [[tensor, 1024], {}]
 # Note: Source unpacks [tensor, 1024] as args.
 # tf.math.mvlgamma(x, p)
 tensor = tf.math.mvlgamma(tf.cast(input[0][0], tf.float32), input[0][1])
-```

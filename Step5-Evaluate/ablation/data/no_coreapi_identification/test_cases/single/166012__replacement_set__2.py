@@ -1,0 +1,64 @@
+import torch
+import torch.nn as nn
+import unittest
+
+class TestCompileCacheConsistency(unittest.TestCase):
+    def test_pad_layers_cache_consistency(self):
+        """
+        Reproduces the scenario of Issue 166012: Inconsistency between cache hit and miss.
+        Uses torch.nn.ReplicationPad3d (Similar API) and torch.nn.ConstantPad2d (Replacement API).
+        """
+        
+        # Model using Similar API: torch.nn.ReplicationPad3d
+        class ModelReplicationPad3d(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.pad = nn.ReplicationPad3d(padding=1)
+            
+            def forward(self, x):
+                return self.pad(x)
+
+        # Model using Replacement API: torch.nn.ConstantPad2d
+        # Replaces the logic associated with 'tlparse' and 'torch._functorch.config_15.txt'
+        class ModelConstantPad2d(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.pad = nn.ConstantPad2d(padding=1, value=0)
+            
+            def forward(self, x):
+                return self.pad(x)
+
+        # --- Test ReplicationPad3d ---
+        model_3d = ModelReplicationPad3d()
+        compiled_model_3d = torch.compile(model_3d)
+        
+        # Input: (Batch, Channel, Depth, Height, Width)
+        input_3d = torch.randn(1, 2, 4, 5, 5)
+        
+        # Run 1: Cache Miss
+        out_miss_3d = compiled_model_3d(input_3d)
+        
+        # Run 2: Cache Hit
+        out_hit_3d = compiled_model_3d(input_3d)
+        
+        self.assertTrue(torch.allclose(out_miss_3d, out_hit_3d), 
+                        "ReplicationPad3d: Output mismatch between cache miss and hit")
+
+        # --- Test ConstantPad2d ---
+        model_2d = ModelConstantPad2d()
+        compiled_model_2d = torch.compile(model_2d)
+        
+        # Input: (Batch, Channel, Height, Width)
+        input_2d = torch.randn(1, 2, 5, 5)
+        
+        # Run 1: Cache Miss
+        out_miss_2d = compiled_model_2d(input_2d)
+        
+        # Run 2: Cache Hit
+        out_hit_2d = compiled_model_2d(input_2d)
+        
+        self.assertTrue(torch.allclose(out_miss_2d, out_hit_2d), 
+                        "ConstantPad2d: Output mismatch between cache miss and hit")
+
+if __name__ == '__main__':
+    unittest.main()

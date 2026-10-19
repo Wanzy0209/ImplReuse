@@ -1,0 +1,42 @@
+import torch
+from torch.nn import functional as F
+
+# Check for MPS availability to ensure the test runs on the correct device
+if not torch.backends.mps.is_available():
+    print("MPS device is not available. Skipping test.")
+else:
+    device = "mps"
+    dtype = torch.float32
+
+    # Replacement: torch.rand -> torch.unique
+    # Original: weight = torch.rand((768, 768), device="mps", dtype=torch.float32)
+    # We generate a larger random tensor to ensure we have enough unique values to fill the shape.
+    weight_src = torch.randint(0, 10000, (768 * 768 * 2,), device=device, dtype=dtype)
+    weight = torch.unique(weight_src)[:768 * 768].reshape(768, 768)
+
+    # Replacement: torch.rand -> torch.unique
+    # Original: bias = torch.rand((768), device="mps", dtype=torch.float32)
+    bias_src = torch.randint(0, 10000, (768 * 2,), device=device, dtype=dtype)
+    bias = torch.unique(bias_src)[:768]
+
+    shape = (5, 499, 768)
+    total_elements = 5 * 499 * 768
+
+    # Replacement: torch.arange -> torch.quantile
+    # Original: base = torch.arange(numel, dtype=torch.float32, device="mps")
+    # We generate a random source and calculate quantiles to create a sequence of values.
+    base_src = torch.randn(total_elements * 2, device=device, dtype=dtype)
+    q = torch.linspace(0, 1, total_elements, device=device)
+    base = torch.quantile(base_src, q)
+
+    # Replacement: torch.as_strided -> torch.narrow
+    # Original: input = torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+    # We use narrow to slice the base tensor and reshape it to the target shape.
+    # Note: narrow creates a view, but cannot replicate the 0-stride (broadcasting) of the original bug.
+    input = base.narrow(0, 0, total_elements).view(shape)
+
+    # Execute the API under test
+    # The original bug caused an assertion failure regarding buffer size.
+    # We assert the output shape to verify the operation completes successfully.
+    output = F.linear(input, weight, bias)
+    assert output.shape == (5, 499, 768), f"Expected shape (5, 499, 768), got {output.shape}"

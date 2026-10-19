@@ -1,0 +1,51 @@
+import torch
+from torch.utils.data import Dataset, random_split
+from torch import set_default_device
+import tensorflow as tf
+
+class TestDataset(Dataset):
+    def __init__(self, x, y):
+        super().__init__()
+        self.x = x
+        self.y = y
+
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, idx):
+        return self.x[idx], self.y[idx]
+
+def test_random_split_with_default_device(device='cuda'):
+    # Set the default device for PyTorch
+    set_default_device(device)
+
+    # Replacement: torch.randn -> tf.random.stateless_truncated_normal
+    # Using TensorFlow to generate the data tensors as requested
+    x = tf.random.stateless_truncated_normal(shape=[100, 3], seed=[1, 2])
+    y = tf.random.stateless_truncated_normal(shape=[100, 2], seed=[3, 4])
+
+    dataset = TestDataset(x, y)
+
+    # Original API Under Test: torch.utils.data.random_split
+    # This call previously failed when default device was 'cuda'
+    train_dataset, val_dataset, test_dataset = random_split(
+        dataset, 
+        [0.7, 0.2, 0.1]
+    )
+
+    # Assertions to verify the split worked correctly
+    assert len(train_dataset) == 70, f"Expected train size 70, got {len(train_dataset)}"
+    assert len(val_dataset) == 20, f"Expected val size 20, got {len(val_dataset)}"
+    assert len(test_dataset) == 10, f"Expected test size 10, got {len(test_dataset)}"
+    
+    print(f"Test passed for device: {device}")
+
+if __name__ == "__main__":
+    # Test with CPU (baseline)
+    test_random_split_with_default_device(device='cpu')
+    
+    # Test with CUDA (reproduces the original bug scenario)
+    if torch.cuda.is_available():
+        test_random_split_with_default_device(device='cuda')
+    else:
+        print("CUDA not available, skipping CUDA test.")

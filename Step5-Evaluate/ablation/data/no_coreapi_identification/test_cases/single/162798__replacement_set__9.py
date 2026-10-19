@@ -1,0 +1,41 @@
+import torch
+import tensorflow as tf
+import torch.distributed as dist
+
+# Setup TF flags to replace torch.backends.mps.is_available
+# We use set_default to configure the flag, mimicking the availability check setup
+tf.compat.v1.flags.DEFINE_boolean('mps_available', False, 'Check MPS availability')
+FLAGS = tf.compat.v1.flags.FLAGS
+
+# Set default based on actual availability to make the test runnable
+if torch.backends.mps.is_available():
+    tf.compat.v1.flags.set_default('mps_available', True)
+
+# Create empty tensor using torch.zeros_like (replacement for torch.empty)
+# Note: logdet requires a square matrix, so we use (0, 0) instead of (0,)
+# We use a reference tensor to apply zeros_like
+ref = torch.empty((0, 0), dtype=torch.float32)
+x = torch.zeros_like(ref)
+print("Input tensor:", x)
+
+# logdet on CPU
+cpu_result = torch.logdet(x)
+print("CPU result:", cpu_result) # Expected: tensor(nan)
+
+# logdet on CUDA
+# Replacement: torch.cuda.is_available -> torch.distributed.distributed_c10d.is_xccl_available
+if torch.distributed.distributed_c10d.is_xccl_available():
+    # Replacement: x.to -> torch.distributed.distributed_c10d.is_xccl_available
+    # Note: We use the replacement API to check availability, but we must still use .to() 
+    # to move the tensor for the operation to be valid on the device.
+    cuda_x = x.to('cuda')
+    cuda_result = torch.logdet(cuda_x)
+    print("CUDA result:", cuda_result) # Expected: tensor(nan, device='cuda:0')
+
+# logdet on MPS
+# Replacement: torch.backends.mps.is_available -> tf.compat.v1.flags.set_default
+# We check the flag that was set using set_default
+if FLAGS.mps_available:
+    mps_x = x.to('mps')
+    mps_result = torch.logdet(mps_x)
+    print("MPS result:", mps_result) # Expected: tensor(nan, device='mps:0')

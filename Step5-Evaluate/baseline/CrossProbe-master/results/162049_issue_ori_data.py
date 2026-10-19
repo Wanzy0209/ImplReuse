@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Convert torch.nested.nested_tensor to tf.ragged.constant
@@ -11,4 +10,3 @@ x = tf.ragged.constant(
 # Convert x.max(dim=1).values to tf.reduce_max(x, axis=1)
 # PyTorch's max returns a named tuple (values, indices), while tf.reduce_max returns just the values
 print(tf.reduce_max(x, axis=1))
-```

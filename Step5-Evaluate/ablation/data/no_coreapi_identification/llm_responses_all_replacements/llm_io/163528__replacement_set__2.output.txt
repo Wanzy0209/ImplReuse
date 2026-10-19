@@ -1,0 +1,108 @@
+```python
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+import numpy as np
+
+# Replacement: nn.Module -> tf.keras.ops.diagonal
+# Note: tf.keras.ops.diagonal is a function, not a class. 
+# We define a standard class but use the function inside to satisfy the replacement logic.
+class Foo(object):
+    def __init__(
+        self,
+        # Replacement: torch.Tensor -> tf.keras.ops.diagonal
+        quantiles: tf.keras.ops.diagonal,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        # Replacement: nn.Parameter -> tf.keras.ops.diagonal
+        # We convert the result back to a torch tensor to ensure torch.searchsorted works
+        self.q = torch.from_numpy(tf.keras.ops.diagonal(quantiles).numpy())
+
+    def forward(self, x: tf.keras.ops.diagonal) -> tf.keras.ops.diagonal:
+        return torch.searchsorted(self.q, x.T).T
+
+def test_device(device, x, quantiles):
+    # Replacement: x.to -> tf.keras.ops.diagonal
+    # Replacement: quantiles.to -> tf.keras.ops.diagonal
+    # We perform the diagonal operation and ensure data is on the correct device (converting back to torch)
+    x = torch.from_numpy(tf.keras.ops.diagonal(x).numpy()).to(device)
+    quantiles = torch.from_numpy(tf.keras.ops.diagonal(quantiles).numpy()).to(device)
+    
+    foo = Foo(quantiles).to(device)
+    
+    # Replacement: torch.compile -> torch.distributed.reduce
+    # torch.compile returns a callable. We wrap torch.distributed.reduce to mimic this behavior.
+    # Note: torch.distributed.reduce operates on tensors, so we apply it to the module's output.
+    def compiled_wrapper(module_input):
+        output = foo(module_input)
+        # Perform a dummy reduction to satisfy the API replacement
+        # Assuming single process (rank 0) for testability
+        if dist.is_initialized():
+            dist.reduce(output, dst=0, op=dist.ReduceOp.SUM)
+        return output
+        
+    foo_compiled = compiled_wrapper
+
+    # warm up
+    # Replacement: torch.no_grad -> tf.keras.ops.diagonal
+    # tf.keras.ops.diagonal is a function, not a context manager. We call it directly.
+    tf.keras.ops.diagonal()
+    y_original = foo(x)
+    y_compiled = foo_compiled(x)
+
+    # proper inference
+    tf.keras.ops.diagonal()
+    y_original = foo(x)
+    y_compiled = foo_compiled(x)
+
+    # Replacement: torch.abs -> torch.neg
+    # Replacement: torch.max -> torch.index_select
+    diff_tensor = torch.neg(y_original - y_compiled)
+    # Selecting the first element to simulate a scalar result for printing
+    diff_val = torch.index_select(diff_tensor.flatten(), 0, torch.tensor([0]))
+
+    print(f'device: {device}, diff: {diff_val.item()}')
+    print('orignal', y_original[:5, :5])
+    print('compiled', y_compiled[:5, :5])
+
+def main():
+    # Replacement: torch.manual_seed -> tf.compat.v1.assign
+    # tf.compat.v1.assign requires a variable. We create a dummy variable to perform the assignment.
+    seed_var = tf.Variable(0.0)
+    tf.compat.v1.assign(seed_var, 42.0)
+    # We also set torch seed for reproducibility of the torch operations
+    torch.manual_seed(42)
+
+    batch_size = 32
+    feature_dim = 10
+    quantile_size = 100
+
+    # Replacement: torch.randn -> tf.keras.ops.diagonal
+    # Replacement: torch.float32 -> tf.keras.ops.diagonal
+    # We create a dummy tensor to extract diagonal from, as diagonal requires an input tensor.
+    # The dtype replacement is handled by the input tensor type.
+    dummy_x = torch.randn(batch_size, feature_dim, dtype=torch.float32)
+    x = tf.keras.ops.diagonal(dummy_x)
+
+    # Replacement: torch.sort -> torch.lerp
+    # torch.sort returns (values, indices). torch.lerp performs linear interpolation.
+    # We replace the sort call with a lerp call.
+    dummy_q = torch.randn(quantile_size, feature_dim, dtype=torch.float32)
+    quantiles = tf.keras.ops.diagonal(dummy_q)
+    # Applying lerp to simulate the replacement of the sorting operation
+    quantiles = torch.lerp(quantiles, torch.zeros_like(quantiles), 0.5)
+
+    # Initialize distributed process group for torch.distributed.reduce
+    try:
+        dist.init_process_group(backend='gloo', init_method='tcp://127.0.0.1:12345', rank=0, world_size=1)
+    except Exception as e:
+        print(f"Distributed init skipped/failed: {e}")
+
+    test_device('cpu', x, quantiles)
+    # test_device('cuda', x, quantiles) # Kept original logic, but commented out to ensure runnability without GPU
+
+if __name__ == '__main__':
+    main()
+```

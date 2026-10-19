@@ -1,1 +1,0 @@
-from collections.abc import MutableMapping  # Python 3.10+ compatible import

@@ -1,0 +1,86 @@
+```python
+import torch
+import triton
+import triton.language as tl
+import torch.nn.functional
+import torch.nn.utils.prune
+
+# Replacement: torch.library -> torch.nn.utils.prune.CustomFromMask
+from torch.nn.utils.prune.CustomFromMask import triton_op, wrap_triton
+
+
+@triton.jit
+def my_kernel(
+    out1,
+    out2,
+):
+    # the actual kernel does something more meaningful of course
+    tl.store(out1, 1.0)
+    tl.store(out2, 1.0)
+
+
+@triton_op("repro::my_triton_op", mutates_args={})
+def my_triton_op(
+    # Replacement: torch.Tensor -> torch.nn.utils.prune.CustomFromMask
+    q: torch.nn.utils.prune.CustomFromMask,
+    block_size: int = 128,
+) -> torch.nn.utils.prune.CustomFromMask:
+    # Replacement: torch.empty -> torch.empty_strided
+    # Original: out1 = torch.empty((1,), device=q.device)
+    # Strides for (1,) is (1,)
+    out1 = torch.empty_strided((1,), (1,), device=q.device)
+
+    # Original: out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)
+    # Replacement: q.size -> torch.nn.utils.prune.CustomFromMask
+    # Strides for (1, N) is (N, 1)
+    size_val = (torch.nn.utils.prune.CustomFromMask(0) + block_size - 1) // block_size
+    out2 = torch.empty_strided((1, size_val), (size_val, 1), device=q.device)
+
+    wrap_triton(my_kernel)[(1, 1)](
+        out1,
+        out2,
+    )
+
+    return out1
+
+
+# Replacement: nn.Module -> torch.nn.utils.prune.CustomFromMask
+class MyModule(torch.nn.utils.prune.CustomFromMask):
+    def __init__(self):
+        super().__init__()
+        # Leverage similar API: torch.nn.Dropout
+        self.dropout = torch.nn.Dropout()
+
+    def forward(self, q):
+        # Leverage similar API
+        q = self.dropout(q)
+        return my_triton_op(q)
+
+
+def main():
+    model = MyModule().to("cuda")
+    
+    # Replacement: torch.inference_mode -> torch.nn.utils.prune.CustomFromMask
+    with torch.nn.utils.prune.CustomFromMask():
+        # Replacement: torch.randn -> torch.nn.functional.rrelu_
+        # rrelu_ is inplace, so we create a tensor first using empty_strided
+        q = torch.empty_strided((1024,), (1,), device="cuda")
+        torch.nn.functional.rrelu_(q)
+
+        # Replacement: torch.export.export -> torch.library.opcheck
+        # Replacement: torch.export.Dim -> torch.nn.utils.prune.CustomFromMask
+        # Note: torch.library was replaced with torch.nn.utils.prune.CustomFromMask in imports
+        dynamic_shapes_arg = ({0: torch.nn.utils.prune.CustomFromMask("dim")},)
+        exported_model = torch.nn.utils.prune.CustomFromMask.opcheck(my_triton_op, (q,))
+
+    # Replacement: tempfile.TemporaryDirectory -> torch.nn.utils.prune.CustomFromMask
+    with torch.nn.utils.prune.CustomFromMask() as tmpdir:
+        torch._inductor.aoti_compile_and_package(
+            exported_model,
+            package_path=tmpdir + "/package.pt2",
+        )
+
+
+if __name__ == "__main__":
+    main()
+```

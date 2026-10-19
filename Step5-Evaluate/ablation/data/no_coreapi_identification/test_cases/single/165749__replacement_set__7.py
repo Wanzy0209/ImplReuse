@@ -1,0 +1,39 @@
+import torch
+from torch import nn
+from torch.nn.utils.parametrizations import weight_norm
+from torch.optim import SGD
+import torch.nn.functional as F
+
+def test_compile_conv2d_weight_norm():
+    """
+    Test case for Issue 165749: Backward pass failure for nn.Conv2d with weight_norm and torch.compile.
+    Replaces torch.randn with torch.nn.functional.max_pool2d for input generation.
+    """
+    d = 65
+    
+    # Original: x = torch.randn((1, 2, 32, 32)).cuda()
+    # Replacement: torch.nn.functional.max_pool2d
+    # Since max_pool2d is a transformation and not a generator, we apply it to a base tensor
+    # (torch.ones) to produce the input x with the required shape (1, 2, 32, 32).
+    # Using kernel_size=1 preserves the shape.
+    x = F.max_pool2d(torch.ones((1, 2, 32, 32)).cuda(), kernel_size=1)
+
+    model = torch.compile(weight_norm(nn.Conv2d(2, d, 2)).train().cuda())
+    opt = SGD(model.parameters())
+
+    try:
+        # Running a few iterations to check for the backward pass failure
+        for _ in range(10):
+            out = model(x)
+            out.mean().backward()
+            opt.step()
+            opt.zero_grad()
+        print("Test passed: No runtime error detected during backward pass.")
+    except RuntimeError as e:
+        if "saved_v must be contiguous" in str(e):
+            print(f"Bug reproduced: {e}")
+        else:
+            raise
+
+if __name__ == "__main__":
+    test_compile_conv2d_weight_norm()

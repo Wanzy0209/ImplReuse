@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: @torch.compile(fullgraph=True) -> @tf.function
@@ -24,4 +23,3 @@ with tf.device("/GPU:0"):
 # or uses generic shapes based on input.
 
 print(f(x))
-```

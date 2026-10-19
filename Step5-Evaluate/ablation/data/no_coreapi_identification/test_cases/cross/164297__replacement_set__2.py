@@ -1,0 +1,29 @@
+import torch
+import unittest
+import tensorflow as tf
+
+class TestAPIStability(unittest.TestCase):
+    def test_int_conversion_no_segfault(self):
+        """
+        Reproduces the logic of Issue 164297 where calling __int__ on a 
+        C-bound object caused a segfault.
+        
+        The original bug occurred when accessing torch._C._onnx.OperatorExportTypes
+        and implicitly calling __int__ on it. This test verifies that the similar
+        API, tf.experimental.dispatch_for_unary_elementwise_apis, handles such
+        access without causing a memory corruption or segmentation fault.
+        """
+        # Access the replacement API
+        # Original: torch._C._onnx.OperatorExportTypes
+        # Replacement: tf.experimental.dispatch_for_unary_elementwise_apis
+        api = tf.experimental.dispatch_for_unary_elementwise_apis
+        
+        # Attempt to convert the API object to an integer.
+        # In the PyTorch bug, this call (cfunction_call -> __int__) led to a segfault.
+        # For this TensorFlow API, we expect a TypeError because it is a function,
+        # but the test passes as long as the interpreter does not crash.
+        with self.assertRaises(TypeError):
+            int(api)
+
+if __name__ == '__main__':
+    unittest.main()

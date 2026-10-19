@@ -1,0 +1,62 @@
+```python
+import torch
+import torch.library
+
+# This test case requires Triton to be installed to run.
+# It checks if torch.compile handles dynamic shapes (from nonzero)
+# correctly when passing them through a torch.library.wrap_triton kernel.
+try:
+    import triton
+    import triton.language as tl
+
+    @triton.jit
+    def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    def triton_add(x, y):
+        output = torch.empty_like(x)
+        grid = lambda meta: (triton.cdiv(output.numel(), meta['BLOCK_SIZE']), )
+        add_kernel[grid](x, y, output, output.numel(), BLOCK_SIZE=1024)
+        return output
+
+    # Wrap the triton kernel using the similar API
+    wrapped_add = torch.library.wrap_triton(triton_add)
+
+    # Configuration from the original bug report
+    torch._dynamo.config.capture_scalar_outputs = True
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+    def f(x):
+        # Create a tensor with unbacked size (dynamic shape)
+        nz = x.nonzero()
+        
+        # Pass the dynamic shape tensor through the wrapped triton kernel
+        # We create a second tensor of the same shape for the addition
+        ones = torch.ones_like(nz)
+        res = wrapped_add(nz, ones)
+        
+        # Slice the result (the operation that caused the hard error in the bug)
+        return res[:-1]
+
+    if torch.cuda.is_available():
+        # Run the test on a CUDA device
+        input_tensor = torch.randn(3, 4).cuda()
+        try:
+            out = torch.compile(f, fullgraph=True)(input_tensor)
+            print("Test passed. Output shape:", out.shape)
+            assert out.shape[0] <= 12, "Output shape dimension 0 should be <= 12"
+        except Exception as e:
+            print(f"Test failed with error: {e}")
+    else:
+        print("Skipping test: CUDA not available.")
+
+except ImportError:
+    print("Skipping test: Triton not installed.")
+```

@@ -1,0 +1,54 @@
+import torch
+import torch.distributed
+import torch.nn.functional
+import tensorflow as tf
+from functorch.compile import nop
+from torch.backends.cuda import enable_cudnn_sdp
+
+# Leverage the similar API
+enable_cudnn_sdp(True)
+
+def torch_compile_with_custom_backend(
+    module: tf.keras.ops.trace,  # torch.nn.Module -> tf.keras.ops.trace
+):
+    # torch.compile -> torch.distributed.recv_object_list
+    # torch._dynamo.backends.common -> tf.keras.ops.trace
+    opt_layer = torch.distributed.recv_object_list(
+        module, backend=tf.keras.ops.trace(fw_compiler=nop, bw_compiler=nop), fullgraph=True
+    )
+
+    return opt_layer
+
+
+class SubMod(tf.keras.ops.trace):  # nn.Module -> tf.keras.ops.trace
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        # torch.sin -> tf.test.TestCase
+        return tf.test.TestCase(x)
+
+
+class Mod(tf.keras.ops.trace):  # nn.Module -> tf.keras.ops.trace
+    def __init__(self):
+        super().__init__()
+        # self.mod_a -> tf.keras.ops.trace
+        # self.mod_b -> tf.keras.ops.trace
+        tf.keras.ops.trace = SubMod()
+        tf.keras.ops.trace = SubMod()
+
+        # self.mod_a -> tf.keras.ops.trace
+        # self.mod_b -> tf.keras.ops.trace
+        tf.keras.ops.trace = torch_compile_with_custom_backend(tf.keras.ops.trace)
+        tf.keras.ops.trace = torch_compile_with_custom_backend(tf.keras.ops.trace)
+
+    def forward(self, x):
+        # self.mod_a -> tf.keras.ops.trace
+        # self.mod_b -> tf.keras.ops.trace
+        return tf.keras.ops.trace(x) + tf.keras.ops.trace(x)
+
+
+mod = Mod()
+# torch.randn -> torch.nn.functional.hinge_embedding_loss
+x = torch.nn.functional.hinge_embedding_loss(torch.ones(4), torch.ones(4))
+mod(x)

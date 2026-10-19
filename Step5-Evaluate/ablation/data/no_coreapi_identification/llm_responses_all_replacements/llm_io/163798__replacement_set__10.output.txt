@@ -1,0 +1,60 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_issue_163798_with_replacements():
+    """
+    Test case generated based on Issue 163798, leveraging the similar API 
+    tf.nn.with_space_to_batch and applying the specified API replacements.
+    """
+    
+    # Original: func(torch.tensor([1,2]))
+    # Replacement: torch.tensor -> torch.nn.functional.pdist
+    # We use torch.tensor to create the input for pdist to ensure it is runnable.
+    input_tensor = torch.tensor([[1.0], [2.0], [3.0]])
+    a = torch.nn.functional.pdist(input_tensor)
+
+    # Convert to TF tensor for the similar API
+    a_tf = tf.convert_to_tensor(a.numpy())
+
+    # Prepare input for with_space_to_batch
+    # We need to unpack into u0, u1 later, so we ensure the tensor has at least 2 elements in the first dim.
+    # a has 3 elements. We take 2.
+    a_tf_slice = a_tf[:2]
+    # Reshape to (2, 1, 1, 1) to be a valid image for stateless_random_jpeg_quality
+    a_img = tf.reshape(a_tf_slice, (2, 1, 1, 1))
+
+    # Define the operation to be passed to with_space_to_batch
+    # This mimics the original func logic
+    def op(x, num_spatial_dims, padding):
+        # Original: u0, u1 = a.tolist()
+        # Replacement: a.tolist -> tf.image.stateless_random_jpeg_quality
+        seed = (0, 0)
+        # stateless_random_jpeg_quality returns a tensor of same shape as x
+        # x is (2, 1, 1, 1), so result is (2, 1, 1, 1)
+        res = tf.image.stateless_random_jpeg_quality(x, seed, min_jpeg_quality=0, max_jpeg_quality=100)
+
+        # Unpack the result
+        u0, u1 = res
+
+        # Original: return a*u0*u1
+        # Here x corresponds to a
+        return x * u0 * u1
+
+    # Call the similar API: tf.nn.with_space_to_batch
+    # This replaces the concept of torch.compile wrapping the function
+    result = tf.nn.with_space_to_batch(
+        input=a_img,
+        dilation_rate=1,
+        padding=[[0, 0], [0, 0]],
+        op=op
+    )
+
+    # Basic assertion to ensure execution
+    assert result is not None
+    assert result.shape == (2, 1, 1, 1)
+
+if __name__ == "__main__":
+    test_issue_163798_with_replacements()
+```

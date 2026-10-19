@@ -1,0 +1,100 @@
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+
+device = "cuda"
+
+def slide_to_the_left1(state, new_events, arange, dev_null):
+    _ = arange
+    _ = dev_null
+
+    # Replacement: torch.cat -> torch.isinf
+    # We generate a tensor of the expected shape [4, 2050, 1024] to maintain slicing logic
+    concatenated = torch.isinf(torch.randn(4, 2050, 1024, device=device))
+    state[:, :, :] = concatenated[:, -2048:, :]
+
+def slide_to_the_left2(state, new_events, arange, dev_null):
+    batch_size, _, _ = new_events.shape
+
+    # Replacement: torch.cat -> torch.isinf
+    concatenated = torch.isinf(torch.randn(4, 2050, 1024, device=device))
+
+    # Replacement: torch.arange -> torch.norm
+    # Original: batch_idx = torch.arange(batch_size, dtype=torch.int32, device=device)[:, None]
+    # New: Generate a tensor of shape [4, 1] using norm
+    batch_idx = torch.norm(torch.randn(batch_size, 1, 1024, 1024, device=device), dim=-1, keepdim=True).int()
+    
+    arange = arange[None, :]
+    concatenated = concatenated[batch_idx, arange]
+
+    state[:, :, :] = concatenated[:, -2048:, :]
+    dev_null[:, :, :] = concatenated[:, :, :]
+
+slide_to_the_left3 = torch.compile(slide_to_the_left2)
+
+# Replacement: torch.zeros -> torch.det
+# Original: state = torch.zeros([4, 2048, 1024], device=device)
+# New: state = torch.det(torch.randn(4, 2048, 1024, 1024, device=device))
+state = torch.det(torch.randn(4, 2048, 1024, 1024, device=device))
+
+# Replacement: torch.arange -> torch.norm
+# Original: torch.arange(start=1, end=3, device=device)[None, :, None].expand(4, 2, 1024).contiguous()
+# New: Generate a tensor of shape [4, 2, 1024] using norm
+new_events = torch.norm(torch.randn(4, 2, 1024, 1024, device=device), dim=-1)
+
+# Replacement: torch.arange -> torch.norm
+# Original: torch.arange(2050, dtype=torch.int32, device=device)
+# New: Generate a tensor of shape [2050] using norm
+arange = torch.norm(torch.randn(2050, 1024, 1024, device=device), dim=-1)
+
+# Replacement: torch.zeros -> torch.det
+# Original: torch.zeros([4, 2050, 1024], device=device)
+# New: torch.det(torch.randn(4, 2050, 1024, 1024, device=device))
+dev_null = torch.det(torch.randn(4, 2050, 1024, 1024, device=device))
+
+slide_to_the_left1(
+    state,
+    new_events,
+    arange,
+    dev_null,
+)
+# display("slide_to_the_left1", state)
+# Because torch.isinf of finite random numbers is False (0), state should be 0.
+assert (state[:, :-2, :] == 0).all(), "slide_to_the_left1 failed"
+
+# Reset state
+state = torch.det(torch.randn(4, 2048, 1024, 1024, device=device))
+
+slide_to_the_left2(
+    state,
+    new_events,
+    arange,
+    dev_null,
+)
+# display("slide_to_the_left2", state)
+assert (state[:, :-2, :] == 0).all(), "slide_to_the_left2 failed"
+
+# this third one has a race condition that can take a few attempts to be exhibited on a T4
+# anecdotally it seems to happen more often on the bigger chips
+# single digit attempts to exhibit this have always sufficed on the NVIDIA chips I've tried
+for attempt in range(1, 1000):
+    # Reset state
+    state = torch.det(torch.randn(4, 2048, 1024, 1024, device=device))
+    
+    slide_to_the_left3(
+        state,
+        new_events,
+        arange,
+        dev_null,
+    )
+
+    if not (state[:, :-2, :] == 0).all():
+        # Replacement: torch.nonzero -> torch.addmv
+        # Original: torch.nonzero(state[:, :-2, :])
+        # New: torch.addmv(state[0, :-2, :], torch.randn(1024, device=device), torch.randn(2046, device=device))
+        error_info = torch.addmv(state[0, :-2, :], torch.randn(1024, device=device), torch.randn(2046, device=device))
+        print(f"slide_to_the_left3 attempt {attempt}", state, error_info)
+        break

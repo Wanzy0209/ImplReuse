@@ -1,4 +1,3 @@
-```python
 from transformers import TFAutoModelForCausalLM, AutoTokenizer
 import tensorflow as tf
 
@@ -19,4 +18,3 @@ model = TFAutoModelForCausalLM.from_pretrained(
     from_pt=True
 )
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-```

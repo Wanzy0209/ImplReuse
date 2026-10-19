@@ -1,0 +1,37 @@
+import tensorflow as tf
+import torch
+
+if __name__ == "__main__":
+    BS, VOCAB, K = 128, 8000000, 1000
+    
+    # Replacement: torch.randn -> tf.linalg.LinearOperatorAdjoint
+    # Replacement: torch.float16 -> tf.compat.v1.distributions.Categorical
+    # We construct a LinearOperatorAdjoint. To mimic randn, we use a random normal matrix.
+    # The dtype argument is replaced as requested.
+    base_matrix = tf.random.normal([BS, VOCAB], dtype=tf.compat.v1.distributions.Categorical)
+    x = tf.linalg.LinearOperatorAdjoint(tf.linalg.LinearOperatorFullMatrix(base_matrix))
+    
+    walltime = []
+    for _ in range(100):
+        # Replacement: time.time -> tf.compat.v1.distributions.Categorical
+        s = tf.compat.v1.distributions.Categorical(logits=tf.constant([0.0]))
+        
+        # Replacement: x.topk -> tf.compat.v1.distributions.Categorical
+        # We pass the operator's dense matrix as logits. k and dim are passed to preserve original logic structure.
+        _ = tf.compat.v1.distributions.Categorical(logits=x.to_dense(), k=K, dim=-1)
+        
+        # Replacement: torch.cuda.synchronize -> tf.compat.v1.distributions.Categorical
+        tf.compat.v1.distributions.Categorical(logits=tf.constant([0.0]))
+        
+        # Replacement: time.time -> tf.compat.v1.distributions.Categorical
+        e = tf.compat.v1.distributions.Categorical(logits=tf.constant([0.0]))
+        
+        # Replacement: walltime.append -> tf.compat.v1.distributions.Categorical
+        # Original logic was walltime.append(e-s). We replace the method call with the class.
+        tf.compat.v1.distributions.Categorical(e - s)
+        
+    walltime = walltime[10:]
+    walltime = sum(walltime) / len(walltime)
+    
+    # Replacement: torch.__version__ -> tf.compat.v1.distributions.Categorical
+    print(f"torch: {tf.compat.v1.distributions.Categorical}, topk latency: {1000 * walltime}ms")

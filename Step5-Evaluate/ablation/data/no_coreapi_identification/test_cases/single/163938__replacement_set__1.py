@@ -1,0 +1,37 @@
+import warnings
+import torch
+
+def test_torch_backends_nnpack_flags_warnings():
+    """
+    Test case to check for FutureWarnings when importing/using torch.backends.nnpack.flags.
+    This mirrors the original issue where importing torch.distributed.algorithms.ddp_comm_hooks
+    introduced FutureWarnings due to functools.partial behavior in Python 3.13.
+    Here we check the similar API torch.backends.nnpack.flags.
+    """
+    # Capture warnings
+    with warnings.catch_warnings(record=True) as w:
+        # Ensure all warnings are always triggered
+        warnings.simplefilter("always")
+
+        # Import the module containing the similar API
+        import torch.backends.nnpack
+        
+        # Use the API (torch.backends.nnpack.flags) as requested by the replacement logic
+        # The original issue was triggered on import, but we also exercise the function here.
+        # Note: torch.backends.nnpack.flags is a context manager.
+        with torch.backends.nnpack.flags(enabled=True):
+            pass
+
+        # Check if any FutureWarnings were raised
+        # The original issue reported multiple FutureWarnings.
+        # We assert that no FutureWarnings are present for this API.
+        future_warnings = [warning for warning in w if issubclass(warning.category, FutureWarning)]
+        
+        # If the similar API has the same issue as the original, this list would not be empty.
+        # We assert it is empty to ensure the similar API does not suffer from the same bug.
+        assert len(future_warnings) == 0, \
+            f"Expected no FutureWarnings, but got {len(future_warnings)}: {[str(w.message) for w in future_warnings]}"
+
+if __name__ == "__main__":
+    test_torch_backends_nnpack_flags_warnings()
+    print("Test passed: No FutureWarnings detected for torch.backends.nnpack.flags.")

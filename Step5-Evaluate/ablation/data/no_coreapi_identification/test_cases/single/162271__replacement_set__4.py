@@ -1,0 +1,31 @@
+import torch
+import tensorflow as tf
+
+# Define a custom operator to apply the abstract implementation
+torch.library.define("custom_fill::op(Tensor x) -> Tensor")
+
+# Replacement for @torch.compile(dynamic=True)
+# We use torch.library.impl_abstract to define the behavior for dynamic shapes
+@torch.library.impl_abstract("custom_fill::op")
+def f(x):
+    # Replacement for x.fill_diagonal_(True)
+    # We use tf.broadcast_dynamic_shape to handle the shape logic
+    # This replaces the in-place modification with a shape computation
+    shape_x = list(x.shape)
+    tf.broadcast_dynamic_shape(shape_x, shape_x)
+    return x
+
+# Concrete implementation for CPU to ensure the test is runnable
+@torch.library.impl("custom_fill::op", "CPU")
+def f_cpu(x):
+    return x
+
+# Replacement for torch.zeros
+x = torch.normal(0, 1, size=(4, 4))
+
+# Execute the operation
+# The original code called f(x). Here we call the custom op.
+result = torch.ops.custom_fill.op(x)
+
+# Basic assertion to verify execution
+assert result.shape == x.shape

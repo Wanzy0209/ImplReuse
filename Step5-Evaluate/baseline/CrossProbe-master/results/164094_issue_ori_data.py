@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 class BackwardStream:
@@ -20,4 +19,3 @@ class BackwardStream:
             return grad_output
 
         return input_tensor, grad
-```

@@ -1,0 +1,26 @@
+import tensorflow as tf
+
+# Replaces @triton.jit
+# The original function foo contained nvshmem.get(...)
+# We replace nvshmem.get with tf.executing_eagerly
+def foo():
+    # Replaces nvshmem.get(...)
+    return tf.executing_eagerly()
+
+def run():
+    # Replaces nvshmem.enable_triton()
+    # In the original, this enables the feature.
+    # Here, we check the context.
+    is_eager = tf.executing_eagerly()
+
+    # Replaces foo[(1, )]()
+    # Execute the operation
+    result = foo()
+
+    # Assertion to ensure the test is valid and runnable
+    # In eager mode, both should be True.
+    # In graph mode (tf.compat.v1), both would be False (usually).
+    assert is_eager == result, "Context state changed unexpectedly"
+
+if __name__ == "__main__":
+    run()

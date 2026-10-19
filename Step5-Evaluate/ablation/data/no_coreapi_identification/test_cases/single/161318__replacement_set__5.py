@@ -1,0 +1,39 @@
+import torch
+import torch.nn.functional as F
+
+# The function under test, decorated with torch.compile
+@torch.compile(fullgraph=True)
+def fn(encoder_attention_mask, encoder_hidden_states):
+    encoder_hidden_states = encoder_hidden_states.new_zeros([1, 512, 3072])
+    text_len = encoder_attention_mask.sum().item()
+    encoder_hidden_states = encoder_hidden_states[:, :text_len]
+    return encoder_hidden_states
+
+# Configuration required for the bug scenario
+torch._dynamo.config.capture_scalar_outputs = True
+
+# Replacement 1: torch.arange -> torch.svd
+# Original: mask = (torch.arange(512) < 8).unsqueeze(0).cuda()
+# We generate a matrix, perform SVD, and use the singular values to create the mask.
+# This ensures the shape is compatible (512,) and the logic flows similarly.
+svd_input = torch.randn(512, 512).cuda()
+_, s, _ = torch.svd(svd_input)
+mask = (s < 8).unsqueeze(0)
+
+# Replacement 2: torch.randn -> torch.nn.functional.adaptive_max_pool3d
+# Original: hidden = torch.randn((1, 512, 4096)).cuda()
+# We create a 5D input tensor, apply adaptive max pooling to reduce spatial dimensions,
+# and squeeze to match the original shape (1, 512, 4096).
+pool_input = torch.randn(1, 512, 10, 10, 10).cuda()
+hidden = F.adaptive_max_pool3d(pool_input, (1, 1, 4096)).squeeze(2).squeeze(2)
+
+# Execute the test
+if __name__ == "__main__":
+    try:
+        result = fn(mask, hidden)
+        # Basic assertion to ensure execution and shape consistency
+        assert result is not None
+        print("Test case executed successfully.")
+    except Exception as e:
+        print(f"Test case failed: {e}")
+        raise

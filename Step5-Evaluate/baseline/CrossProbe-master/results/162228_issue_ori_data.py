@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: @torch.compile -> @tf.function
@@ -95,4 +94,3 @@ print(f"x: {(grads[0] is not None) and (x_grad_norm > 0)}, y: {(grads[1] is not 
 # Using numpy() to evaluate tensor scalars for python assert
 assert x_grad_norm.numpy() > 0
 assert y_grad_norm.numpy() > 0
-```

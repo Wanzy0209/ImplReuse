@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 def addcmul_func(x, y, z):
@@ -18,4 +17,3 @@ print("eager mode passed")
 addcmul_func_compiled = tf.function(addcmul_func)
 out = addcmul_func_compiled(x, y, z)
 print("torch.compile passed")
-```

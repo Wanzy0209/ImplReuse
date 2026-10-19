@@ -1,0 +1,75 @@
+```python
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+import os
+
+def setup_distributed():
+    if not dist.is_initialized():
+        # Initialize distributed process group for single-process execution
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '29500'
+        dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+def repro():
+    n = 8
+
+    # Replacement: torch.complex64 -> torch.logspace
+    # Original: dtype = torch.complex64
+    # We replace the API call, but since logspace returns a tensor, we store it as a reference.
+    # We will use the dtype of the generated tensor A for subsequent operations to maintain runnability.
+    dtype_ref = torch.logspace(0, 1, 10)
+
+    # Replacement: torch.randn -> tf.random.stateless_truncated_normal
+    # Original: A = torch.randn(4, n, n, dtype=dtype, requires_grad=True)
+    # We use the TensorFlow API to generate the tensor and convert it to PyTorch.
+    # Note: stateless_truncated_normal generates float32, so we convert to complex64 to match original logic intent.
+    tf_A = tf.random.stateless_truncated_normal(shape=[4, n, n], seed=[0, 0])
+    A = torch.from_numpy(tf_A.numpy()).to(torch.complex64).requires_grad_(True)
+
+    # Replacement: torch.contiguous_format -> torch.logspace
+    # Original: A = A.clone(memory_format=torch.contiguous_format)
+    # We replace the clone operation with a logspace generation to satisfy the API replacement,
+    # reshaping to match the original dimensions and preserving requires_grad.
+    A = torch.logspace(0, 1, 4*n*n, dtype=torch.complex64).view(4, n, n).requires_grad_(True)
+
+    # Replacement: torch.eye -> torch.ones
+    # Original: I0 = torch.eye(n, dtype=A.dtype, device=A.device)
+    # We replace eye with ones.
+    I0 = torch.ones(n, n, dtype=A.dtype, device=A.device)
+    I = I0.unsqueeze(0).expand(A.shape[0], n, n).contiguous()
+
+    # Similar API: torch.swapaxes
+    # Original: A = I + 0.5 * (A @ A.mH)
+    # We leverage torch.swapaxes to implement the matrix conjugate transpose (.mH).
+    # .mH is equivalent to swapping the last two dimensions and applying conjugation.
+    A_H = torch.conj(torch.swapaxes(A, -1, -2))
+    A = I + 0.5 * (A @ A_H)
+
+    # Replacement: torch.linalg.cholesky -> torch.logspace
+    # Original: R = torch.linalg.cholesky(A, upper=True)
+    # We replace the decomposition with a logspace tensor generation.
+    R = torch.logspace(0, 1, 4*n*n, dtype=torch.complex64).view(4, n, n)
+
+    loss = R.abs().sum()
+    loss.backward()
+    
+    return loss
+
+if __name__ == '__main__':
+    setup_distributed()
+    
+    # Replacement: torch.compile -> torch.distributed.reduce
+    # Original: repro = torch.compile(repro, backend="inductor"); repro()
+    # We replace the compilation and execution with execution and distributed reduction.
+    loss = repro()
+    
+    # Perform the reduction on the loss tensor
+    # Note: In a single-process setup, this is a no-op but satisfies the API usage.
+    dist.reduce(loss, dst=0)
+    
+    print(f"Test completed. Loss: {loss}")
+    
+    # Cleanup
+    dist.destroy_process_group()
+```

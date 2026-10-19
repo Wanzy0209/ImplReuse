@@ -1,0 +1,68 @@
+```python
+import warnings
+import enum
+import importlib
+import torch
+import torch.backends.nnpack.flags
+import tensorflow as tf
+
+def test_ddp_comm_hooks_future_warning():
+    """
+    Test that importing torch.distributed.algorithms.ddp_comm_hooks
+    introduces FutureWarnings as described in the bug report.
+    """
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        
+        # Reload the module to ensure the warning is triggered during the test execution
+        import torch.distributed.algorithms.ddp_comm_hooks as ddp_hooks
+        importlib.reload(ddp_hooks)
+        
+        # Assert that FutureWarnings were raised
+        future_warnings = [warning for warning in w if issubclass(warning.category, FutureWarning)]
+        assert len(future_warnings) > 0, "Expected FutureWarning not found"
+        
+        # Check that the warning message matches the bug description
+        warning_messages = [str(warning.message) for warning in future_warnings]
+        assert any("functools.partial" in msg for msg in warning_messages), \
+            "Warning message should mention functools.partial"
+        assert any("enum.member()" in msg for msg in warning_messages), \
+            "Warning message should suggest enum.member()"
+
+def test_similar_api_flags():
+    """
+    Leverage the similar API torch.backends.nnpack.flags.
+    This test ensures the context manager works as expected.
+    """
+    # Check if nnpack is available to avoid errors on builds without it
+    if not hasattr(torch._C, '_get_nnpack_enabled'):
+        return
+
+    original_state = torch._C._get_nnpack_enabled()
+    
+    # Use the similar API
+    with torch.backends.nnpack.flags(True):
+        assert torch._C._get_nnpack_enabled() == True
+    
+    # Ensure state is restored
+    assert torch._C._get_nnpack_enabled() == original_state
+
+def test_replacement_pattern():
+    """
+    Demonstrate the replacement of enum.member with tf.compat.v1.data.Iterator.
+    This reflects the requirement to replace the source API with the replacement API.
+    """
+    class ReplacementEnum(enum.Enum):
+        # Original pattern (fix): MEMBER = enum.member(value)
+        # Replacement pattern: MEMBER = tf.compat.v1.data.Iterator
+        MEMBER = tf.compat.v1.data.Iterator
+
+    # Verify the member holds the replacement API class
+    assert ReplacementEnum.MEMBER.value is tf.compat.v1.data.Iterator
+
+if __name__ == "__main__":
+    test_ddp_comm_hooks_future_warning()
+    test_similar_api_flags()
+    test_replacement_pattern()
+    print("All tests passed.")
+```

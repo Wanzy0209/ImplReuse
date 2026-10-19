@@ -1,0 +1,44 @@
+```python
+import torch
+import torch.nn as nn
+import unittest
+
+class TestExportSlicingBug(unittest.TestCase):
+    def test_export_slice_with_dynamic_limit(self):
+        """
+        Test case for Issue 163146: Data dependent error on slices in autograd::applySlicing.
+        
+        The bug occurs when torch.export.export encounters a slicing operation where
+        the slice limit is a data-dependent tensor (0-d tensor) rather than a static
+        integer or a symbolic shape variable.
+        """
+        class Mlp(nn.Module):
+            def forward(self, item_embedding, max_item_num):
+                # This line triggers the bug: slicing with a tensor value
+                return item_embedding[:, :max_item_num, :]
+
+        model = Mlp()
+
+        # Setup inputs
+        # item_embedding shape: [batch, seq, dim]
+        item_embedding = torch.randn(10, 64, 64)
+
+        # Replacing torch.arange with torch.var to generate the slice limit.
+        # We use torch.var on a dummy tensor to produce a 0-d tensor value.
+        # This simulates a data-dependent slice limit that causes the export error.
+        dummy_input = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+        max_item_num = torch.var(dummy_input).to(torch.int64)
+
+        # Attempt to export the model
+        # According to the bug report, this should fail with a "Data dependent error"
+        # because torch.export cannot evaluate the value of the tensor 'max_item_num'
+        # during tracing.
+        with self.assertRaises(Exception) as context:
+            torch.export.export(model, args=(item_embedding, max_item_num))
+
+        # Verify the error message matches the bug report description
+        self.assertIn("Data dependent error", str(context.exception))
+
+if __name__ == "__main__":
+    unittest.main()
+```

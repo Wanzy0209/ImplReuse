@@ -1,0 +1,29 @@
+import torch
+
+# Keep the original configuration to reproduce the bug environment
+torch._inductor.config.combo_kernels = True
+
+@torch.compile
+def fn(x, y, z):
+    # Replace x.sum with torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+    # Replace z.cumsum with torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+    # y.mean is not in the replacement list, so it remains to ensure tensor operations are present
+    return (
+        torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed(),
+        y.mean(1),
+        torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
+    )
+
+inps = (
+    # Replace torch.rand for x with torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+    # x is used in a replaced operation, so a bool input is acceptable
+    torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed(),
+    # Keep torch.rand for y because y.mean is not replaced and requires a tensor
+    torch.rand(32, 128, device="cuda"),
+    # Replace torch.rand for z with torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+    # z is used in a replaced operation, so a bool input is acceptable
+    torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed(),
+)
+
+# Run the function to verify behavior
+fn(*inps)

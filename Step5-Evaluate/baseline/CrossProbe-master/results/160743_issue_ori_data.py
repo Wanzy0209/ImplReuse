@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import numpy as np
 
@@ -54,4 +53,3 @@ try:
         print(out_mps)
 except RuntimeError as e:
     print(f"GPU not available or error: {e}")
-```

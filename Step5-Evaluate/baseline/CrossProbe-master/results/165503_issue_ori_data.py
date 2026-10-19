@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 if __name__ == '__main__':
@@ -87,4 +86,3 @@ if __name__ == '__main__':
     # > True
     print(tf.reduce_all(tf.abs(y_loop - y_vec2) < 1e-5))
     # > False (due to collision handling difference)
-```

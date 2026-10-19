@@ -1,0 +1,72 @@
+```python
+import torch
+import tensorflow as tf
+import triton
+import triton.language as tl
+from torch.library import triton_op, wrap_triton
+import torch.nn.functional as F
+
+@triton.jit
+def my_kernel(out1, out2):
+    tl.store(out1, 1.0)
+    tl.store(out2, 1.0)
+
+@triton_op("repro::my_triton_op", mutates_args={})
+def my_triton_op(q, block_size: int = 128):
+    # Replacement: torch.empty -> torch.narrow
+    # Original: out1 = torch.empty((1,), device=q.device)
+    out1 = torch.narrow(q, 0, 0, 1)
+    
+    # Replacement: q.size -> torch.nn.functional.rrelu_
+    # Original: q.size(0)
+    # New: F.rrelu_(q).numel()
+    dim_size = F.rrelu_(q).numel()
+    out2_size = (dim_size + block_size - 1) // block_size
+    
+    # Replacement: torch.empty -> torch.narrow
+    # Original: out2 = torch.empty((1, out2_size), device=q.device)
+    # Using q as base tensor for narrow
+    out2 = torch.narrow(q, 0, 0, out2_size)
+
+    wrap_triton(my_kernel)[(1, 1)](out1, out2)
+    return out1
+
+# Replacement: nn.Module -> torch.nn.functional.rrelu_
+# Original: class MyModule(torch.nn.Module):
+# New: def MyModule(q):
+def MyModule(q):
+    # Leverage Similar API: torch.nn.Dropout
+    x = torch.nn.Dropout(p=0.5)(q)
+    # Replacement: nn.Module usage -> rrelu_
+    return F.rrelu_(my_triton_op(x))
+
+def main():
+    model = MyModule
+    
+    # Replacement: torch.inference_mode -> torch.nn.functional.rrelu_
+    # Original: with torch.inference_mode():
+    F.rrelu_(torch.zeros(1, device="cuda"))
+    
+    # Replacement: torch.randn -> torch.nn.functional.leaky_relu_
+    # Original: q = torch.randn(1024, device="cuda")
+    q = torch.zeros(1024, device="cuda")
+    F.leaky_relu_(q)
+    
+    # Replacement: tempfile.TemporaryDirectory -> torch.nn.functional.rrelu_
+    # Original: with tempfile.TemporaryDirectory() as tmpdir:
+    tmpdir = "/tmp/test_aot"
+    F.rrelu_(torch.zeros(1, device="cuda"))
+    
+    # Replacement: torch.export.export -> tf.data.experimental.snapshot
+    # Original: exported_model = torch.export.export(model, (q,), dynamic_shapes=...)
+    # Replacement: torch.export.Dim -> torch.nn.functional.rrelu_ (handled by removing dynamic_shapes)
+    exported_model = tf.data.experimental.snapshot(tmpdir + "/snap", compression="GZIP")
+    
+    torch._inductor.aoti_compile_and_package(
+        exported_model,
+        package_path=tmpdir + "/package.pt2",
+    )
+
+if __name__ == "__main__":
+    main()
+```

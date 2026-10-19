@@ -1,0 +1,54 @@
+import torch
+import tensorflow as tf
+import sys
+
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0
+    # Replacement: torch.sigmoid -> torch.add
+    # torch.add requires two arguments, using 0.0 as the second argument to maintain shape and approximate value
+    t1 = torch.add(t0, 0.0) 
+    
+    t2 = arg1
+    # Replacement: torch.sigmoid -> torch.add
+    t3 = torch.add(t2, 0.0)
+    
+    t4 = arg2
+    # Replacement: torch.exp -> torch.nn.functional.softplus
+    t5 = torch.nn.functional.softplus(t4)
+    
+    # Replacement: torch.baddbmm -> torch.fmod
+    # torch.fmod requires two arguments (input, divisor). Using t1 and t3.
+    t6 = torch.fmod(t1, t3)
+    
+    t7 = t6.reshape((193, 386, 459))
+    output = t7
+    return output
+
+# Helper to generate inputs using the replacement API
+def generate_input(shape):
+    # Replacement: torch.rand -> tf.experimental.numpy.add
+    # We simulate data generation by adding zeros and ones, then converting to torch
+    a = tf.zeros(shape, dtype=tf.bfloat16)
+    b = tf.ones(shape, dtype=tf.bfloat16)
+    res = tf.experimental.numpy.add(a, b)
+    
+    # Convert result to PyTorch tensor with required properties
+    return torch.from_numpy(res.numpy()).to('cuda').requires_grad_(True)
+
+arg0 = generate_input([5699097, 6, 1])
+arg1 = generate_input([5699097, 6, 256])
+arg2 = generate_input([5699097, 256, 1])
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+    
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2)
+    out_compiled.sum().backward()
+    print('Compile Success! ')

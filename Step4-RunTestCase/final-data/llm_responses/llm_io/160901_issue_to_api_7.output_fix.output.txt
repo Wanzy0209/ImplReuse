@@ -1,0 +1,52 @@
+```python
+import torch
+
+class MyTraceFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        # Save input for backward pass
+        ctx.save_for_backward(x)
+        # Use torch.trace as the similar API to the original matmul
+        return torch.trace(x)
+    
+    @staticmethod
+    def backward(ctx, grad_out):
+        # Retrieve saved input
+        x, = ctx.saved_tensors
+        # Propagate gradient to ensure requires_grad is handled correctly.
+        # We return a matrix filled with the output gradient to verify 
+        # that the connection between the output and input is maintained.
+        return torch.ones_like(x) * grad_out
+
+def test_trace_autograd_requires_grad():
+    # Setup input with requires_grad=True
+    x = torch.randn(10, 10, requires_grad=True)
+    
+    # 1. Eager Mode Execution
+    y_eager = MyTraceFn.apply(x)
+    y_eager.backward()
+    grad_eager = x.grad.clone()
+    
+    # Reset gradients
+    x.grad = None
+    
+    # 2. Compiled Mode Execution (torch.compile/dynamo)
+    # This is where the bug "traced autograd.Function silently incorrect" manifests
+    compiled_fn = torch.compile(MyTraceFn.apply)
+    y_compiled = compiled_fn(x)
+    y_compiled.backward()
+    grad_compiled = x.grad
+    
+    # 3. Verification
+    # Check that gradients are not None (propagation happened)
+    assert grad_eager is not None, "Eager gradient is None"
+    assert grad_compiled is not None, "Compiled gradient is None (requires_grad propagation failed)"
+    
+    # Check that gradients are correct
+    assert torch.allclose(grad_eager, grad_compiled), \
+        f"Gradients differ between eager and compiled modes.\nEager: {grad_eager}\nCompiled: {grad_compiled}"
+
+if __name__ == "__main__":
+    test_trace_autograd_requires_grad()
+    print("Test passed.")
+```

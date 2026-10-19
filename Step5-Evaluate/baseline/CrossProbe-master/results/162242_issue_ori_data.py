@@ -1,4 +1,3 @@
-```python
 import numpy as np
 import tensorflow as tf
 
@@ -105,4 +104,3 @@ def test_non_deterministic():
 
 if __name__ == "__main__":
     test_non_deterministic()
-```

@@ -1,0 +1,105 @@
+```python
+import unittest
+import tempfile
+import torch
+
+# Attempt to import triton and check for CUDA availability
+HAS_TRITON = False
+try:
+    import triton
+    import triton.language as tl
+    from torch.library import triton_op, wrap_triton
+    HAS_TRITON = True
+except ImportError:
+    pass
+
+# Define the kernel and module only if triton is available
+if HAS_TRITON:
+    @triton.jit
+    def my_kernel(
+        out1,
+        out2,
+    ):
+        # the actual kernel does something more meaningful of course
+        tl.store(out1, 1.0)
+        tl.store(out2, 1.0)
+
+    @triton_op("repro::my_triton_op", mutates_args={})
+    def my_triton_op(
+        q: torch.Tensor,
+        block_size: int = 128,
+    ) -> torch.Tensor:
+        out1 = torch.empty((1,), device=q.device)
+        out2 = torch.empty((1, (q.size(0) + block_size - 1) // block_size), device=q.device)
+
+        wrap_triton(my_kernel)[(1, 1)](
+            out1,
+            out2,
+        )
+
+        return out1
+
+    class MyModule(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+
+        def forward(self, q):
+            return my_triton_op(q)
+
+@unittest.skipIf(not HAS_TRITON, "Triton is not installed")
+class TestTritonAOTCompilation(unittest.TestCase):
+    """
+    Test case for AOT compilation of Triton ops.
+    This test mirrors the structure of the reported issue and leverages
+    error handling patterns similar to the referenced API context.
+    """
+
+    def test_aot_compile_and_package(self):
+        """
+        Tests that aoti_compile_and_package works with a custom Triton op.
+        This reproduces the logic from Issue 160646.
+        """
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is not available")
+
+        model = MyModule().to("cuda")
+        
+        with torch.inference_mode():
+            q = torch.randn(1024, device="cuda")
+            
+            # Attempt to export the model
+            try:
+                exported_model = torch.export.export(
+                    model, 
+                    (q,), 
+                    dynamic_shapes=({0: torch.export.Dim("dim")},)
+                )
+            except Exception as e:
+                self.fail(f"Export failed: {e}")
+
+            # Attempt AOT compilation and packaging
+            with tempfile.TemporaryDirectory() as tmpdir:
+                package_path = tmpdir + "/package.pt2"
+                
+                # We wrap the compilation call in a try-except block to handle
+                # potential failures, similar to how long-running operations
+                # might raise errors (like CancelledError in the similar API context).
+                try:
+                    torch._inductor.aoti_compile_and_package(
+                        exported_model,
+                        package_path=package_path,
+                    )
+                except Exception as e:
+                    # In the context of the bug report, this is expected to fail in 2.8.
+                    # For a regression test, we might want to assert this doesn't happen.
+                    # Here we re-raise to ensure the test signals the failure.
+                    raise RuntimeError(f"AOT compilation failed as reported in issue 160646: {e}") from e
+                
+                # Verify the package was created
+                import os
+                self.assertTrue(os.path.exists(package_path), "Package file was not created.")
+
+
+if __name__ == "__main__":
+    unittest.main()
+```

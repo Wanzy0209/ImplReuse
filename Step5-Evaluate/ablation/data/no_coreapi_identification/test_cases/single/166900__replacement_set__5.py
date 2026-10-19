@@ -1,0 +1,71 @@
+import torch
+import tensorflow as tf
+import tempfile
+import os
+import shutil
+
+# Setup for tf.saved_model.Asset which requires a file path
+temp_dir = tempfile.mkdtemp()
+asset_path = os.path.join(temp_dir, "asset.txt")
+with open(asset_path, "w") as f:
+    f.write("test")
+
+# Similar API: Benchmark wrapper (from tf.test.Benchmark pattern)
+def Benchmark(tf_bench, builder_fn, use_xla_jit, device, separate_compiled_gradients=False):
+    """Build a graph and run benchmarks against it, with or without XLA."""
+    # Simplified execution for the test case
+    name, fetches = builder_fn()
+    return fetches
+
+class Foo:
+    pass
+
+class Bar:
+    def __eq__(self, other):
+        return super().__eq__(other)
+
+    def __hash__(self):
+        return 0
+
+# Replacement: pytree.register_constant(Bar) -> tf.saved_model.Asset
+# Replacing the registration logic with Asset instantiation
+_ = tf.saved_model.Asset(asset_path)
+
+# Original: @torch.compile(backend="eager")
+# Replacement: tf.saved_model.Asset
+# We remove the decorator and use the Asset to represent the compiled context
+def fn(x, obj):
+    obj.attr = {3: Bar()}
+    return x + 1
+
+def builder_fn():
+    # Replacement: torch.ones -> torch.norm
+    # Original: torch.ones(3)
+    # New: torch.norm(torch.ones(3))
+    input_tensor = torch.ones(3)
+    x = torch.norm(input_tensor)
+
+    obj = Foo()
+
+    # Replacement: torch.compile -> tf.saved_model.Asset
+    # Simulating the compilation step
+    _ = tf.saved_model.Asset(asset_path)
+
+    result = fn(x, obj)
+    return "test_fn", result
+
+# Mocking the tf_bench object
+class MockBench:
+    pass
+
+# Execute using the Similar API pattern
+result = Benchmark(MockBench(), builder_fn, use_xla_jit=False, device="cpu")
+
+# Assertion
+# x = norm([1, 1, 1]) = sqrt(3)
+# result = sqrt(3) + 1
+expected = torch.norm(torch.ones(3)) + 1
+assert torch.isclose(result, expected), f"Expected {expected}, got {result}"
+
+# Cleanup
+shutil.rmtree(temp_dir)

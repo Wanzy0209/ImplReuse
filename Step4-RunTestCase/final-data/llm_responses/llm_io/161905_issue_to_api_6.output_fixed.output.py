@@ -1,0 +1,137 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import unittest
+
+# Handle the ImportError caused by urllib3/OpenSSL incompatibility in the environment.
+# If torchvision fails to import, we provide a mock ResNet-18 model to allow the test to run.
+try:
+    from torchvision.models import resnet18
+except ImportError:
+    class resnet18(nn.Module):
+        """
+        Mock ResNet-18 model to be used if torchvision is unavailable due to
+        environment issues (e.g., urllib3/OpenSSL version mismatch).
+        """
+        def __init__(self, num_classes=1000, **kwargs):
+            super(resnet18, self).__init__()
+            # Simplified structure to mimic a CNN model similar to ResNet input/output
+            self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+            self.bn1 = nn.BatchNorm2d(64)
+            self.relu = nn.ReLU(inplace=True)
+            self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+            
+            # Simplified "layers" to ensure some depth/complexity
+            self.layer1 = self._make_layer(64, 64, 2)
+            self.layer2 = self._make_layer(64, 128, 2, stride=2)
+            
+            self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+            self.fc = nn.Linear(128, num_classes)
+
+        def _make_layer(self, inplanes, planes, blocks, stride=1):
+            layers = []
+            layers.append(nn.Conv2d(inplanes, planes, kernel_size=3, stride=stride, padding=1, bias=False))
+            layers.append(nn.BatchNorm2d(planes))
+            layers.append(nn.ReLU(inplace=True))
+            for _ in range(1, blocks):
+                layers.append(nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False))
+                layers.append(nn.BatchNorm2d(planes))
+                layers.append(nn.ReLU(inplace=True))
+            return nn.Sequential(*layers)
+
+        def forward(self, x):
+            x = self.conv1(x)
+            x = self.bn1(x)
+            x = self.relu(x)
+            x = self.maxpool(x)
+            
+            x = self.layer1(x)
+            x = self.layer2(x)
+            
+            x = self.avgpool(x)
+            x = torch.flatten(x, 1)
+            x = self.fc(x)
+            return x
+
+class TestMPSCompileBackward(unittest.TestCase):
+    """
+    Test case for Issue 161905: torch.compile ResNet-18 model fails during loss.backward() on MPS backend.
+    
+    This test leverages the code pattern from the similar API 'tf.compat.v1.summary.all_v2_summary_ops'.
+    The TF API checks 'context.executing_eagerly()' to determine whether to return None or a collection of ops.
+    Here, we translate this pattern to PyTorch by checking 'torch.compiler.is_compiling()' to verify
+    the execution context and ensure the backward pass (graph ops) executes correctly in compiled mode on MPS.
+    """
+
+    def test_resnet18_mps_compile_backward(self):
+        # Skip if MPS is not available
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS backend not available")
+
+        BATCH_SIZE = 4
+        NUM_CLASSES = 10
+        LEARNING_RATE = 0.01
+        device = 'mps'
+
+        model = resnet18(num_classes=NUM_CLASSES)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+
+        model = model.to(device)
+        model.train()
+
+        # Helper function mimicking the logic of tf.compat.v1.summary.all_v2_summary_ops
+        # which checks context.executing_eagerly() to determine behavior.
+        def get_execution_context_ops():
+            # TF equivalent: if context.executing_eagerly(): return None
+            if not torch.compiler.is_compiling():
+                return None
+            
+            # TF equivalent: return ops.get_collection(...)
+            # In PyTorch, we verify we are in the compiled context where the graph ops exist.
+            return "compiled_graph_ops"
+
+        @torch.compile
+        def train_step(images, labels):
+            images = images.to(device)
+            labels = labels.to(device)
+            
+            optimizer.zero_grad()
+
+            # Check execution context, similar to the TF API pattern
+            context_status = get_execution_context_ops()
+
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            
+            # The bug occurs here: backward pass in compiled mode on MPS
+            loss.backward()
+            
+            optimizer.step()
+            
+            return loss, context_status
+
+        images = torch.randn(BATCH_SIZE, 3, 224, 224)
+        labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,))
+
+        # Execute the compiled step
+        loss, status = train_step(images, labels)
+        
+        # Assertions
+        self.assertIsNotNone(loss, "Loss should not be None")
+        
+        # Verify we are in the compiled context (mimicking the TF API's logic branch)
+        self.assertEqual(status, "compiled_graph_ops", 
+                         "Expected execution in compiled graph mode")
+        
+        # Verify gradients were computed (checking the result of the backward ops)
+        grad_found = False
+        for param in model.parameters():
+            if param.requires_grad:
+                self.assertIsNotNone(param.grad, f"Gradient for parameter is None")
+                grad_found = True
+        
+        self.assertTrue(grad_found, "No gradients were computed during backward pass")
+
+if __name__ == '__main__':
+    unittest.main()

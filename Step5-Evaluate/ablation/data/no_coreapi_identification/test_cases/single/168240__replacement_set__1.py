@@ -1,0 +1,18 @@
+import torch
+import torchvision
+import torch.nn.functional as F
+
+model = torchvision.models.mobilenet_v2(weights=None)
+
+# Replacement: torch.rand -> torch.flipud
+# We generate a random tensor and flip it up/down to create the input.
+x = torch.flipud(torch.rand((1, 3, 224, 224)))
+
+ep = torch.export.export(model, (x,))
+
+# Replacement: torch.testing.assert_close -> torch.nn.functional.binary_cross_entropy_with_logits
+# We calculate the binary cross entropy with logits between the original model output
+# and the exported program output. To maintain the test case logic (verifying correctness),
+# we assert that the loss is below a certain threshold.
+loss = F.binary_cross_entropy_with_logits(model(x), ep.module()(x))
+assert loss < 1.0

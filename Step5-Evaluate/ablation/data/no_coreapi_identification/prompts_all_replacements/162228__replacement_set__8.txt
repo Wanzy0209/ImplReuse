@@ -1,0 +1,133 @@
+Issue ID: 162228
+Title: Backpropagation to flex_attentionscore_modbiases fails based on presence of graph breaks
+Bug Description:
+### 🐛 Describe the bug
+
+The following minimal code snippet:
+```python
+import torch
+from torch.nn.attention.flex_attention import flex_attention
+
+@torch.compile()
+def test(x, y):
+    # Materialize a bias matrix
+    B, L, device = x.shape[0], x.shape[1], x.device
+    b = torch.arange(B, device=device, dtype=torch.long).view(B, 1, 1)
+    q_idx = torch.arange(L, device=device, dtype=torch.long).view(1, L, 1)
+    kv_idx = torch.arange(L, device=device, dtype=torch.long).view(1, 1, L)
+    bias_mat = y[b, q_idx] + y[b, kv_idx] # (B, L, L)
+
+    # Dummy score_mod retrieving bias values
+    def score_mod(score, b, h, q_idx, kv_idx):
+        return score + bias_mat[b, q_idx, kv_idx]
+
+    x_ = x[:, :, None].repeat(1, 1, 16, 1)
+    # torch._dynamo.graph_break()
+    return flex_attention(x_, x_, x_, score_mod=score_mod)
+
+
+DEVICE = "cuda"
+B, L, D = 2, 16, 64
+
+x = torch.randn(B, L, D, device=DEVICE, requires_grad=True)
+y = torch.randn(B, L, device=DEVICE, requires_grad=True)
+
+out = test(x, y).mean().backward()
+
+print(torch.__version__)
+print(f"x: {(x.grad is not None) and (x.grad.norm() > 0)}, y: {(y.grad is not None) and (y.grad.norm() > 0)}")
+assert x.grad.norm() > 0
+assert y.grad.norm() > 0
+```
+fails to properly backpropagate gradients into `y` for me (on the current stable PyTorch 2.8.0-cu12.8 installed via pip, the current nightly, and `2.8.0a0+34c6371d24.nv25.08` via the `nvidia/pytorch:25.08-py3` container, across two differently configured systems with H100s & H200s).
+
+Original API Under Test: torch.compile
+Library Scope: Same-library
+Similarity Type: Same-library similar API
+Similar API: torch.compile
+Similarity score: 1.0
+
+Similar API information:
+# Extracted call chain for torch.compile
+
+# --- torch.compile ---
+def compile(
+    model: _Optional[_Callable] = None,
+    *,
+    fullgraph: builtins.bool = False,
+    dynamic: _Optional[builtins.bool] = None,
+    backend: _Union[str, _Callable] = "inductor",
+    mode: _Union[str, None] = None,
+    options: _Optional[dict[str, _Union[str, builtins.int, builtins.bool]]] = None,
+    disable: builtins.bool = False,
+) -> _Union[
+    _Callable[[_Callable[_InputT, _RetT]], _Callable[_InputT, _RetT]],
+    _Callable[_InputT, _RetT],
+]:
+    """
+    Optimizes given model/function using TorchDynamo and specified backend.
+    If you are compiling an :class:`torch.nn.Module`, you can also use :meth:`torch.nn.Module.compile`
+    to compile the module inplace without changing its structure.
+
+    Concretely, for every frame executed within the compiled region, we will attempt
+    to compile it and cache the compiled result on the code object for future
+    use.  A single frame may be compiled multiple times if previous compiled
+    results are not applicable for subsequent calls (this is called a "guard
+    failure), you can use TORCH_LOGS=guards to debug these situations.
+    Multiple compiled re
+...
+
+Original Test Case:
+import torch
+from torch.nn.attention.flex_attention import flex_attention
+
+@torch.compile()
+def test(x, y):
+    # Materialize a bias matrix
+    B, L, device = x.shape[0], x.shape[1], x.device
+    b = torch.arange(B, device=device, dtype=torch.long).view(B, 1, 1)
+    q_idx = torch.arange(L, device=device, dtype=torch.long).view(1, L, 1)
+    kv_idx = torch.arange(L, device=device, dtype=torch.long).view(1, 1, L)
+    bias_mat = y[b, q_idx] + y[b, kv_idx] # (B, L, L)
+
+    # Dummy score_mod retrieving bias values
+    def score_mod(score, b, h, q_idx, kv_idx):
+        return score + bias_mat[b, q_idx, kv_idx]
+
+    x_ = x[:, :, None].repeat(1, 1, 16, 1)
+    # torch._dynamo.graph_break()
+    return flex_attention(x_, x_, x_, score_mod=score_mod)
+
+
+DEVICE = "cuda"
+B, L, D = 2, 16, 64
+
+x = torch.randn(B, L, D, device=DEVICE, requires_grad=True)
+y = torch.randn(B, L, device=DEVICE, requires_grad=True)
+
+out = test(x, y).mean().backward()
+
+print(torch.__version__)
+print(f"x: {(x.grad is not None) and (x.grad.norm() > 0)}, y: {(y.grad is not None) and (y.grad.norm() > 0)}")
+assert x.grad.norm() > 0
+assert y.grad.norm() > 0
+
+The API torch.compile is identified as same-library similar to the original PyTorch API torch.compile.
+Please keep the test case in PyTorch and replace or adapt the original call site to verify the similar PyTorch API.
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. If the API is cross-library, translate semantics appropriately.
+
+Additional requirement:
+Please modify the prompt below to also replace the following source APIs with their corresponding replacement APIs in one single test case.
+Keep the original test case logic and translate semantics appropriately.
+Replacements:
+- torch.arange -> torch.norm (score=0.9959793090820312, source_group=pytorch_to_pytorch)
+- torch.randn -> torch.nn.functional.max_pool3d (score=0.9858288168907166, source_group=pytorch_to_pytorch)
+IMPORTANT:
+1. Output valid Python test case code.
+2. Keep the test case runnable and minimal.
+3. Include any necessary imports and assertions.
+4. Replace all listed source APIs in the original test case with the given APIs.

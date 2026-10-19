@@ -1,4 +1,3 @@
-```python
 '''
 Copyright © 2023 Apple Inc.
 
@@ -76,4 +75,3 @@ class CustomMPSSoftshrinkModel(tf.keras.Model):
     # Conversion: forward -> call
     def call(self, x):
         return self.model(x)
-```

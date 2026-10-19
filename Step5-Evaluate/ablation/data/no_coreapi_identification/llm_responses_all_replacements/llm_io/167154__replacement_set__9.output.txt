@@ -1,0 +1,58 @@
+```python
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+import numpy as np
+
+# Check for MPS availability
+if not torch.backends.mps.is_available():
+    print("MPS device not found. This test requires an Apple Silicon device.")
+else:
+    # 1. Replace torch.rand with tf.compat.v1.math.add
+    # We use TensorFlow to generate the weight and bias data and then convert to PyTorch tensors.
+    w_shape = (768, 768)
+    b_shape = (768,)
+
+    # Create random tensors in TensorFlow to simulate torch.rand
+    tf_w1 = tf.random.uniform(w_shape, dtype=tf.float32)
+    tf_w2 = tf.zeros(w_shape, dtype=tf.float32)
+    # Apply the replacement API
+    tf_weight = tf.compat.v1.math.add(tf_w1, tf_w2)
+
+    tf_b1 = tf.random.uniform(b_shape, dtype=tf.float32)
+    tf_b2 = tf.zeros(b_shape, dtype=tf.float32)
+    # Apply the replacement API
+    tf_bias = tf.compat.v1.math.add(tf_b1, tf_b2)
+
+    # Convert TensorFlow tensors to PyTorch tensors on MPS
+    weight = torch.from_numpy(tf_weight.numpy()).to("mps")
+    bias = torch.from_numpy(tf_bias.numpy()).to("mps")
+
+    # 2. Replace torch.arange with torch.zeros
+    # Calculate the number of elements based on the target shape
+    shape = (5, 499, 768)
+    numel = 5 * 499 * 768
+    # Apply the replacement API
+    base = torch.zeros(numel, dtype=torch.float32, device="mps")
+
+    # 3. Replace torch.as_strided with torch.chunk
+    # torch.as_strided was used to create a specific view. 
+    # To adapt to torch.chunk, we reshape the base to the target dimensions first.
+    base_reshaped = base.view(shape)
+    
+    # Apply the replacement API: chunk the tensor along the first dimension
+    chunks = torch.chunk(base_reshaped, chunks=5, dim=0)
+    
+    # Select the first chunk to serve as the input tensor
+    input = chunks[0]
+
+    # Run the API under test
+    # Note: The input shape is now (1, 499, 768) due to chunking, 
+    # whereas the original was (5, 499, 768).
+    output = F.linear(input, weight, bias)
+
+    # Assertion to verify the test runs successfully
+    assert output is not None
+    assert output.shape == (1, 499, 768)
+    print("Test case executed successfully.")
+```

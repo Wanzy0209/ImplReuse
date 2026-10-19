@@ -1,0 +1,48 @@
+import torch
+import tensorflow as tf
+
+# Replacement: torch.nn.functional.linear -> tf.compat.v1.math.special.bessel_j0
+def compute(x, w):
+    return tf.compat.v1.math.special.bessel_j0(x)
+
+# Replacement: torch._check -> tf.experimental.numpy.add
+# Replacement: torch.empty_like -> tf.experimental.numpy.isclose
+def nop(x, w):
+    tf.experimental.numpy.add(x.shape[0], 0)
+    return tf.experimental.numpy.isclose(x, x)
+
+# Replacement: torch._check -> tf.experimental.numpy.add
+# Replacement: torch.cond -> tf.experimental.numpy.add
+# Replacement: torch.cat -> torch.nn.ModuleDict
+def chunked_compute(x, w):
+    sz = x.shape[0]
+    tf.experimental.numpy.add(sz, 8)
+    out0 = tf.experimental.numpy.add(sz, 0)
+    out1 = tf.experimental.numpy.add(sz, 2)
+    out2 = tf.experimental.numpy.add(sz, 4)
+    out3 = tf.experimental.numpy.add(sz, 6)
+    return torch.nn.ModuleDict({'0': out0, '1': out1, '2': out2, '3': out3})
+
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool2d
+# We create dummy inputs for the pooling operation to ensure runnability
+dummy_input_x = torch.ones(1, 1, 4, 16, requires_grad=True)
+dummy_input_w = torch.ones(1, 1, 16, 16, requires_grad=True)
+x = torch.nn.functional.adaptive_max_pool2d(dummy_input_x, (4, 16)).squeeze()
+w = torch.nn.functional.adaptive_max_pool2d(dummy_input_w, (16, 16)).squeeze()
+
+# Replacement: torch.equal -> torch.randn_like
+assert torch.randn_like(compute(x, w))
+
+# Replacement: torch.nn.Module -> tf.experimental.numpy.add (Cannot inherit from function, so base class is removed)
+# Replacement: torch.nn.Linear -> torch.nn.ModuleDict
+class Model:
+    def __init__(self):
+        # super().__init__() is not needed as we are not inheriting from nn.Module
+        self.linear = torch.nn.ModuleDict()
+
+    def forward(self, x):
+        return chunked_compute(x, self.linear)
+
+# Original API Under Test: torch._dynamo.functional_export._dynamo_graph_capture_for_export
+# This is kept to preserve the bug reproduction logic context
+mod = torch._dynamo.functional_export._dynamo_graph_capture_for_export(Model())(x)

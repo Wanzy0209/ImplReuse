@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 """
@@ -31,4 +30,3 @@ print(f"FloorDiv result: {result}")
 # Conversion: sympy.srepr is specific to SymPy AST representation.
 # In TensorFlow, we print the Tensor object which shows the op and dtype.
 print(f"FloorDiv result: {result}")
-```

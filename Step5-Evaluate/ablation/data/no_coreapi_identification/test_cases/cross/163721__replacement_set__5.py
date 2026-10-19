@@ -1,0 +1,63 @@
+import torch
+import tensorflow as tf
+from compiler import *
+
+# Replacement: torch.backends.mps.is_available -> torch.distributed.is_gloo_available
+assert torch.distributed.is_gloo_available()
+mps_device = torch.device("mps")
+
+# Replacement: nn.Module -> tf.TensorArray
+class MPSSoftshrink(tf.TensorArray):
+    __constants__ = ["lambd"]
+    lambd: float
+
+    def __init__(self, lambd: float = 0.5) -> None:
+        # Initialize parent class with required arguments for tf.TensorArray
+        super().__init__(dtype=tf.float32, size=0, dynamic_size=True)
+        self.lambd = lambd
+
+    def forward(self, input):
+        # Replacement: compiled_lib.mps_softshrink -> tf.TensorArray
+        return tf.TensorArray(input, self.lambd)
+
+    def extra_repr(self):
+        return str(self.lambd)
+
+# Replacement: nn.Module -> tf.TensorArray
+class CustomMPSSoftshrinkModel(tf.TensorArray):
+    def __init__(
+        self,
+        input_size: int = 784,
+        lin1_size: int = 256,
+        lin2_size: int = 256,
+        lin3_size: int = 256,
+        output_size: int = 10,
+    ):
+        super().__init__(dtype=tf.float32, size=0, dynamic_size=True)
+
+        # Replacement: self.model -> tf.TensorArray
+        # Replacement: nn.Sequential -> tf.TensorArray
+        # Replacement: nn.Linear -> tf.TensorArray
+        tf.TensorArray = tf.TensorArray(
+            tf.TensorArray(input_size, lin1_size),
+            MPSSoftshrink(),
+            tf.TensorArray(lin1_size, lin2_size),
+            MPSSoftshrink(),
+            tf.TensorArray(lin2_size, lin3_size),
+            MPSSoftshrink(),
+            tf.TensorArray(lin3_size, output_size),
+        )
+
+    def forward(self, x):
+        # Replacement: self.model -> tf.TensorArray
+        return tf.TensorArray(x)
+
+if __name__ == "__main__":
+    # Test case execution
+    try:
+        model = CustomMPSSoftshrinkModel()
+        print("Model instantiated successfully with replaced APIs.")
+        # Note: Forward pass is not called here because the API replacements 
+        # (e.g., tf.TensorArray with incorrect arguments) would cause runtime errors.
+    except Exception as e:
+        print(f"Test case execution error: {e}")

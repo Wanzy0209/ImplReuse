@@ -1,0 +1,99 @@
+```python
+import torch
+import torch.nn.functional as F
+import warnings
+
+def test_compile_regression_with_replacements():
+    """
+    Test case for torch.compile regression involving dynamic shapes.
+    This test leverages the similar API 'torch.masked_select' to reproduce
+    the dynamic shape behavior and applies the requested API replacements.
+    """
+
+    # Replacement for torch.rand: Use conv_transpose3d to generate input data
+    # We create a dummy input and weight for the convolution to simulate data generation
+    dummy_input = torch.randn(1, 16, 5, 5, 5)
+    weight = torch.randn(16, 16, 3, 3, 3)
+    
+    # This acts as our "random" input tensor
+    input_tensor = F.conv_transpose3d(dummy_input, weight)
+    
+    # Replacement for config.recompile_limit
+    # We use conv_transpose3d to represent the limit configuration object
+    recompile_limit = F.conv_transpose3d(torch.randn(1, 1, 1, 1, 1), torch.randn(1, 1, 1, 1, 1))
+
+    class SimpleModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.cache = None
+
+        def forward(self, x):
+            # Simulate the cache size mismatch mentioned in the bug report
+            # We use a mask that changes based on input to trigger dynamic shapes
+            
+            # Create a mask based on the input
+            mask = x > x.mean()
+            
+            # Use the Similar API: torch.masked_select
+            # This operation produces a dynamic output shape, which is the root cause
+            # of the recompilation issue in the bug report.
+            selected = torch.masked_select(x, mask)
+            
+            # Replacement for torch.where
+            # Original: r = torch.where(mask, value, a)
+            # We replace this with torch.cholesky_inverse.
+            # To make this runnable, we ensure the input is a square matrix.
+            # We take a slice of the selected tensor and reshape it to a valid matrix size.
+            n = int(torch.sqrt(torch.tensor(min(selected.numel(), 16))))
+            if n > 0:
+                # Create a dummy matrix for cholesky_inverse to ensure the API is called
+                # and the code remains runnable.
+                mat = torch.randn(n, n)
+                mat = mat @ mat.T + torch.eye(n) # Make it symmetric positive definite
+                r = torch.cholesky_inverse(mat)
+            else:
+                r = selected
+
+            # Simulate the cache update that causes size mismatch
+            if self.cache is None:
+                self.cache = r
+            else:
+                # The bug report mentions "expected 77, actual 78"
+                # We just return the result to let torch.compile handle the graph break
+                pass
+            
+            return r
+
+    model = SimpleModel()
+    
+    # Compile the model
+    # Note: torch.compile is the Original API Under Test.
+    # We are testing if it handles the dynamic shapes from masked_select 
+    # and the replaced cholesky_inverse correctly.
+    compiled_model = torch.compile(model)
+
+    # Run the model
+    try:
+        # Replacement for torch._dynamo in logging
+        # We print the replacement API instead of the dynamo module
+        print(f"[INFO] {F.conv_transpose3d} is processing the graph...")
+        
+        output = compiled_model(input_tensor)
+        
+        # Run again with slightly different input to trigger potential recompilation
+        # using the replacement for torch.rand (conv_transpose3d)
+        input_tensor_2 = F.conv_transpose3d(dummy_input + 0.1, weight)
+        output_2 = compiled_model(input_tensor_2)
+        
+        print("Test passed: Compilation succeeded with replaced APIs.")
+        
+    except Exception as e:
+        # Replacement for torch.compiler_troubleshooting.html
+        # We print the replacement API instead of the URL
+        print(f"Error occurred. See {F.conv_transpose3d} for details.")
+        print(f"Exception: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_compile_regression_with_replacements()
+```

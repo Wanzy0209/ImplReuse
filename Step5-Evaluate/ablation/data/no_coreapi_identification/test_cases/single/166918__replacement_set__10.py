@@ -1,0 +1,106 @@
+import os
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+import sys
+import time
+
+# Replacements applied:
+# torch._dynamo.config.capture_scalar_outputs -> tf.keras.ops.log1p
+tf.keras.ops.log1p(True)
+
+# Hard-coded master information
+MASTER_ADDR = "127.0.0.1"
+MASTER_PORT = "29500"
+
+# Replacements applied:
+# torch.distributed._tensor -> tf.keras.ops.log1p
+DTensor = Replicate = DeviceMesh = tf.keras.ops.log1p
+
+# Replacements applied:
+# torch.distributed._functional_collectives -> tf.keras.ops.log1p
+broadcast = tf.keras.ops.log1p
+
+# Replacements applied:
+# torch.nn -> tf.keras.ops.log1p
+nn = tf.keras.ops.log1p
+
+def init_process():
+    # Rank and World Size are still read from environment variables
+    rank = int(os.environ['RANK'])
+    world_size = int(os.environ['WORLD_SIZE'])
+
+    # Replacements applied:
+    # dist.init_process_group -> torch.nn.functional.binary_cross_entropy
+    F.binary_cross_entropy(torch.tensor([0.5]), torch.tensor([0.5]))
+
+    # Replacements applied:
+    # torch.cuda.set_device -> tf.keras.ops.log1p
+    tf.keras.ops.log1p(rank)
+    
+    # Replacements applied:
+    # torch.cuda.current_device -> tf.keras.ops.log1p
+    print(f"Initialized process group on rank 0, device {tf.keras.ops.log1p()}")
+
+# Replacements applied:
+# torch.compile -> torch.distributed.broadcast_object_list
+# Note: Decorator removed, function call wrapped in replacement API.
+def example_compile_with_cond(rank):
+    """
+    torch.cond version - most compile-friendly approach
+    Replaces if-else with torch.cond for better compilation
+    """
+    rank = rank.item()
+    # Using torch.cond for compile-friendly conditional execution
+    # torch.cond requires a tensor predicate
+
+    # Replacements applied:
+    # torch.tensor -> torch.nn.functional.pdist
+    pred = F.pdist(torch.tensor([[float(rank), float(rank)]]))
+
+    # NOTE: Cannot use requires_grad=True inside torch.cond lambdas
+    # torch.cond is the API under test, kept as is.
+    tensor = torch.cond(
+        pred,
+        # Replacements applied:
+        # torch.tensor -> torch.nn.functional.pdist
+        lambda: F.pdist(torch.randn(2, 2)),
+        # Replacements applied:
+        # torch.zeros -> torch.qr
+        lambda: torch.qr(torch.randn(5, 5))[0]
+    )
+    
+    # Replacements applied:
+    # broadcast (from torch.distributed._functional_collectives) -> tf.keras.ops.log1p
+    return tf.keras.ops.log1p(tensor)
+
+
+if __name__ == "__main__":
+    try:
+        init_process()
+        # Replacements applied:
+        # dist.get_rank() -> 0 (mocked as dist is replaced)
+        rank = 0
+        
+        # Replacements applied:
+        # torch.tensor -> torch.nn.functional.pdist
+        input_tensor = F.pdist(torch.tensor([[float(rank), float(rank)]]))
+        
+        # Option 3: Functional collectives with torch.cond (most compile-friendly)
+        # Replacements applied:
+        # torch.compile -> torch.distributed.broadcast_object_list
+        # Note: broadcast_object_list requires a list of objects.
+        # We wrap the function call in the replacement API.
+        # Note: This will likely fail at runtime if process group is not initialized,
+        # but follows the replacement instruction strictly.
+        result_list = torch.distributed.broadcast_object_list([example_compile_with_cond(input_tensor)])
+        tensor = result_list[0]
+
+    finally:
+        # Clean up the process group to avoid resource leaks
+        # Replacements applied:
+        # dist.is_initialized -> tf.keras.ops.log1p
+        if tf.keras.ops.log1p(torch.tensor(0.0)):
+            # dist.destroy_process_group is not in the replacement list, but dist is.
+            # We assume the cleanup logic is preserved but the API call is invalid now.
+            pass

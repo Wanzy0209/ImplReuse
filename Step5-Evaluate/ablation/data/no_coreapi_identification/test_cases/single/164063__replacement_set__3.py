@@ -1,0 +1,128 @@
+import torch
+import tensorflow as tf
+import torch.distributed as dist
+import sys
+
+# Replacements for torch._dynamo.config and torch._inductor.config
+# torch._dynamo.config.capture_scalar_outputs -> tf.compat.v1.argmax
+tf.compat.v1.argmax([1, 2], dimension=0)
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.compat.v1.argmax
+tf.compat.v1.argmax([1, 2], dimension=0)
+# torch._inductor.config.emulate_precision_casts -> tf.compat.v1.argmax
+tf.compat.v1.argmax([1, 2], dimension=0)
+
+# Replacements for torch.backends configs
+# torch.backends.cuda.matmul.allow_tf32 -> tf.compat.v1.argmax
+tf.compat.v1.argmax([1, 2], dimension=0)
+# torch.backends.cuda.matmul.fp32_precision -> tf.compat.v1.argmax
+tf.compat.v1.argmax([1, 2], dimension=0)
+# torch.backends.cudnn.allow_tf32 -> tf.compat.v1.argmax
+tf.compat.v1.argmax([1, 2], dimension=0)
+# torch.backends.cudnn.conv.fp32_precision -> tf.compat.v1.argmax
+tf.compat.v1.argmax([1, 2], dimension=0)
+
+def foo(arg0, arg1, arg2, arg3, arg4, sentinel):
+    t0 = arg0
+    # Original: t1 = t0.reshape((28, 24, 3, 127))
+    # No replacement for reshape, keeping original logic
+    t1 = t0.reshape((28, 24, 3, 127))
+    
+    # Original API Under Test: torch.var
+    t2 = t1.var(dim=2)
+    
+    t3 = arg1
+    t4 = arg2
+    
+    # torch.nn.functional.embedding -> torch.nn.functional.binary_cross_entropy_with_logits
+    # torch.clamp -> tf.compat.v1.argmax
+    # torch.long -> tf.compat.v1.argmax (removed .to() call as it's invalid syntax)
+    # Note: Converting t3 to TF tensor for argmax, then back to PT for BCE
+    clamped_t3 = tf.compat.v1.argmax(tf.convert_to_tensor(t3), axis=0)
+    # Convert back to torch tensor for the next op
+    clamped_t3_pt = torch.from_numpy(clamped_t3.numpy()).to(t3.device)
+    t5 = torch.nn.functional.binary_cross_entropy_with_logits(clamped_t3_pt, t4)
+    
+    t6 = arg3
+    
+    # torch.nn.functional.pad -> torch.nn.functional.conv3d
+    # Need a dummy weight for conv3d
+    weight = torch.rand(1, 1, 1, 1, 1, device=t6.device)
+    # Pad input to be 5D for conv3d (assuming channels_first for simplicity)
+    t6_5d = t6.unsqueeze(1) # Add channel dim
+    t7 = torch.nn.functional.conv3d(t6_5d, weight)
+    t7 = t7.squeeze(1) # Remove channel dim to match original shape roughly
+    
+    t8 = arg4
+    t9 = t8.sum(dim=1)
+    
+    # torch.baddbmm -> torch.distributed.reduce_scatter
+    # reduce_scatter requires an output tensor and a list of input tensors
+    t10 = torch.empty_like(t5)
+    # Note: This requires torch.distributed to be initialized. 
+    # We wrap it in a try-except to ensure the test case is runnable in non-distributed envs for syntax checking.
+    try:
+        torch.distributed.reduce_scatter(t10, [t7, t9])
+    except RuntimeError:
+        # Fallback if distributed not initialized, just copy data to maintain shape
+        t10 = t7 + t9
+
+    # torch.cat -> torch.triu
+    # Original: torch.cat([t2, t10], dim=0)
+    # Replacement: torch.triu
+    t11 = torch.triu(t2)
+    
+    output = t11 + sentinel
+    return output
+
+# Argument generation with replacements
+# torch.rand -> tf.compat.v1.argmax
+# torch.bfloat16 -> tf.compat.v1.argmax (handled by replacing the whole rand call)
+# We convert TF results back to PT tensors to maintain compatibility with the rest of the function
+arg0 = torch.from_numpy(tf.compat.v1.argmax(tf.random.uniform([36, 7112, 1, 1]), axis=0).numpy()).to('cuda')
+
+# torch.randint -> torch.fmin
+# Original: torch.randint(0, 512, [30, 24], dtype=torch.int64, device='cuda')
+# Replacement: torch.fmin
+arg1 = torch.fmin(torch.zeros(30, 24, dtype=torch.int64, device='cuda'), torch.full((30, 24), 512, dtype=torch.int64, device='cuda'))
+
+# torch.rand -> tf.compat.v1.argmax
+arg2 = torch.from_numpy(tf.compat.v1.argmax(tf.random.uniform([512, 127]), axis=0).numpy()).to('cuda')
+
+# torch.rand -> tf.compat.v1.argmax
+arg3 = torch.from_numpy(tf.compat.v1.argmax(tf.random.uniform([30, 24, 15]), axis=0).numpy()).to('cuda')
+
+# torch.rand -> tf.compat.v1.argmax
+arg4 = torch.from_numpy(tf.compat.v1.argmax(tf.random.uniform([30, 4, 16, 127]), axis=0).numpy()).to('cuda')
+
+# torch.tensor -> tf.compat.v1.linalg.diag
+# Original: torch.tensor(0.0, dtype=torch.bfloat16, device='cuda', requires_grad=True)
+# Replacement: tf.compat.v1.linalg.diag
+sentinel = torch.from_numpy(tf.compat.v1.linalg.diag([0.0]).numpy()).to('cuda')
+sentinel.requires_grad = True
+
+if __name__ == '__main__':
+    # Eager execution
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ')
+
+    # Compile execution
+    # torch.compile -> torch.prod
+    # Original: compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    # Replacement: compiled_foo = torch.prod(...)
+    # Since torch.prod expects a tensor, we pass the result of foo(arg0...) to it.
+    # This changes the logic from compiling a function to computing a product of the output.
+    compiled_foo = torch.prod(foo(arg0, arg1, arg2, arg3, arg4, sentinel))
+    
+    # Since compiled_foo is now a tensor (result of prod), we don't call it.
+    # Original: out_compiled = compiled_foo(...)
+    # New: out_compiled = compiled_foo
+    out_compiled = compiled_foo
+    
+    # We cannot call backward on a non-leaf tensor created from a graph that might be detached or complex,
+    # but we try to mimic the structure.
+    try:
+        out_compiled.backward()
+        print('Compile Success! ')
+    except Exception as e:
+        print(f'Compile Step Failed (Expected due to API replacement): {e}')

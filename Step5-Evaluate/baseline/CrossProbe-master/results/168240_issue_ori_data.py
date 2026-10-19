@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import tensorflow.keras.applications as applications
 import numpy as np
@@ -33,4 +32,3 @@ ep = ExportedProgram(model, (x,))
 # PyTorch: torch.testing.assert_close(model(x), ep.module()(x))
 # Conversion: torch.testing.assert_close checks tensor equality. Using np.testing.assert_allclose.
 np.testing.assert_allclose(model(x), ep.module()(x), rtol=1e-5, atol=1e-5)
-```

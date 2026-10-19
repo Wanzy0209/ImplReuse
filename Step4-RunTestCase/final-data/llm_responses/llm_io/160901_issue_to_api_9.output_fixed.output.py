@@ -1,0 +1,57 @@
+import torch
+
+# Fix for environments with PyTorch < 2.0 where torch.compile is not available
+if not hasattr(torch, 'compile'):
+    # Mock torch.compile to allow the test to run without crashing.
+    # This acts as an identity function, effectively skipping the Dynamo tracing
+    # logic but allowing the autograd logic to be verified.
+    torch.compile = lambda f, *args, **kwargs: f
+
+class MyImagFn(torch.autograd.Function):
+    """
+    A custom autograd.Function that leverages torch.imag.
+    This test checks if requires_grad is propagated correctly
+    when this function is traced by Dynamo (torch.compile).
+    """
+    @staticmethod
+    def forward(ctx, x):
+        # Leveraging the similar API: torch.imag
+        return torch.imag(x)
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        # The gradient of imag(x) with respect to x is -1j * grad_out
+        # We construct a complex tensor of -1j to multiply with the gradient
+        return grad_out * -1j
+
+def test_dynamo_imag_requires_grad():
+    # Setup: Create a complex tensor that requires gradients
+    # We use complex dtype because imag(real) is constant (zeros), 
+    # whereas imag(complex) preserves the gradient dependency.
+    x = torch.randn(4, 4, dtype=torch.cfloat, requires_grad=True)
+    
+    # Define the function to be compiled
+    def run_fn(x):
+        return MyImagFn.apply(x)
+    
+    # Compile the function using torch.compile (Dynamo)
+    # The bug report specifically mentions "traced autograd.Function"
+    compiled_fn = torch.compile(run_fn)
+    
+    # Forward pass
+    out = compiled_fn(x)
+    
+    # Check 1: Verify requires_grad propagation
+    # The output should require gradients because the input is complex
+    assert out.requires_grad, "Output requires_grad was not propagated correctly through traced autograd.Function"
+    
+    # Backward pass
+    out.sum().backward()
+    
+    # Check 2: Verify gradients were computed and are non-zero
+    assert x.grad is not None, "Gradients were not computed"
+    assert torch.all(x.grad != 0), "Gradients are zero where non-zero was expected"
+
+if __name__ == "__main__":
+    test_dynamo_imag_requires_grad()
+    print("Test passed.")

@@ -1,0 +1,71 @@
+```python
+import torch
+import tensorflow as tf
+from tensorflow.experimental import dtensor
+import torch.nn.functional as F
+
+# Similar API: torch.is_storage
+# We use this to check the nature of the tensor created, 
+# relating to the original bug's confusion about tensor attributes.
+def check_tensor_properties(xs):
+    return torch.is_storage(xs)
+
+# Original: def f(xs): return xs.split(1, dim=0)
+# Replacement: xs.split -> tf.keras.initializers.LecunNormal
+def f(xs):
+    # Replacing xs.split with tf.keras.initializers.LecunNormal
+    # We instantiate the initializer to mimic the return of an object/callable
+    return tf.keras.initializers.LecunNormal()
+
+# Original: def backend(gm, inps): gm.print_readable(); return gm
+# Replacement: gm.print_readable -> tf.keras.initializers.LecunNormal
+# Replacement: nn.Module -> tf.keras.initializers.LecunNormal
+def backend(gm, inps):
+    # Replacing gm.print_readable with tf.keras.initializers.LecunNormal
+    initializer = tf.keras.initializers.LecunNormal()
+    
+    # Preserving the logic of inspecting the graph (commented in original)
+    # but replacing the internal API calls found in the bug report comments
+    # Original comment: # split = torch._tensor.split(l_xs_, 1, dim = 0);
+    # Replacement: torch._tensor.split -> tf.keras.initializers.LecunNormal
+    # split = tf.keras.initializers.LecunNormal(l_xs_, 1, dim = 0)
+    
+    return gm
+
+# Original: with torch.device("cuda"):
+# Replacement: torch.device -> tf.experimental.dtensor.create_mesh
+# create_mesh is a function, not a context manager, so we call it directly.
+try:
+    # We attempt to create a mesh to replace the device context setup
+    mesh = dtensor.create_mesh(
+        ["batch", "model"],
+        devices=[tf.config.list_physical_devices("CPU")[0]]
+    )
+except Exception as e:
+    # Fallback if TF devices are not configured correctly in the environment
+    print(f"Mesh creation skipped: {e}")
+    mesh = None
+
+# Original: xs = torch.randn(2, 2, device="cuda")
+# Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool3d
+# adaptive_max_pool3d requires an input tensor. We create a dummy one first.
+dummy_input = torch.randn(1, 2, 2, 2)
+xs = F.adaptive_max_pool3d(dummy_input, output_size=(1, 1, 1))
+
+# Eager works
+result_eager = f(xs)
+
+# Check similar API
+is_storage = check_tensor_properties(xs)
+print(f"Is xs storage? {is_storage}")
+
+# Original: torch.compile(f, backend=backend)(xs)
+# Replacement: torch.compile -> torch.all
+# torch.all is a reduction operation, not a compiler. 
+# We adapt the logic to apply torch.all on the input tensor, 
+# and call the backend separately to maintain the flow.
+backend(None, None) # Calling backend as per original logic flow
+result_compiled = torch.all(xs)
+
+print("Test case executed successfully.")
+```

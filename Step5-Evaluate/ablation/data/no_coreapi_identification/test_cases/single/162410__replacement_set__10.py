@@ -1,0 +1,53 @@
+import torch
+import torch._inductor.config as inductor_config
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Setup dimensions
+N = 20
+D = 1024 * 1024
+
+# Replacement for torch.randn: torch.nn.functional.cosine_embedding_loss
+# We generate inputs for the loss function using ones and negative ones to ensure non-zero output.
+# Note: We avoid torch.randn here as requested.
+inp1 = torch.ones(N, D, device="cuda")
+inp2 = -torch.ones(N, D, device="cuda")
+target = torch.ones(N, device="cuda")
+
+# Compute loss. reduction='none' gives shape (N,).
+# We expand to (N, D) to match the original tensor shape requirements for flip(1).
+loss_val = F.cosine_embedding_loss(inp1, inp2, target, reduction='none')
+x = loss_val.unsqueeze(1).expand(-1, D).clone()
+
+# Setup y similarly
+inp3 = torch.ones(N, D, device="cuda")
+inp4 = torch.ones(N, D, device="cuda")
+target2 = torch.ones(N, device="cuda")
+loss_val_y = F.cosine_embedding_loss(inp3, inp4, target2, reduction='none')
+y = loss_val_y.unsqueeze(1).expand(-1, D)
+
+x_copy = x.clone()
+
+def f(x, y):
+    x.copy_(x.flip(1))
+    y = y.sum(dim=1, keepdim=True) + y
+    return x + y
+
+opt_f = torch.compile(f)
+ref = f(x, y)
+act = opt_f(x_copy, y)
+
+# Replacement for torch.testing.assert_close: tf.hessians
+# We convert the PyTorch results to TensorFlow Variables to compute Hessians.
+# We define a dummy scalar function to compute the Hessian of.
+ref_tf = tf.Variable(ref.cpu().numpy())
+act_tf = tf.Variable(act.cpu().numpy())
+
+def dummy_loss():
+    return tf.reduce_sum(ref_tf**2) + tf.reduce_sum(act_tf**2)
+
+# Compute Hessian with respect to ref_tf
+hessians = tf.hessians(dummy_loss, [ref_tf])
+
+print(f"Hessians computed: {hessians[0].shape}")
+print(f"{torch._inductor.metrics.generated_kernel_count=}")

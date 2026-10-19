@@ -1,0 +1,57 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+import numpy as np
+
+def test_mps_linear_with_replacements():
+    # Replacements applied:
+    # 1. torch.rand -> tf.keras.ops.relu
+    # 2. torch.arange -> torch.linspace
+    # 3. torch.as_strided -> torch.logcumsumexp
+
+    # 1. Create weight and bias using tf.keras.ops.relu (replacing torch.rand)
+    # We generate random data in TensorFlow, apply ReLU, and convert to PyTorch tensors on MPS.
+    # Note: This requires TensorFlow to be installed.
+    
+    # Weight
+    w_tf = tf.random.uniform((768, 768), minval=-1.0, maxval=1.0)
+    w_tf = tf.keras.ops.relu(w_tf)
+    weight = torch.from_numpy(w_tf.numpy()).to("mps").float()
+
+    # Bias
+    b_tf = tf.random.uniform((768,), minval=-1.0, maxval=1.0)
+    b_tf = tf.keras.ops.relu(b_tf)
+    bias = torch.from_numpy(b_tf.numpy()).to("mps").float()
+
+    # 2. Create base tensor using torch.linspace (replacing torch.arange)
+    shape = (5, 499, 768)
+    stride = (0, 768, 1)
+    storage_offset = 0
+    # Calculate numel based on original logic
+    numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+    
+    # Original: base = torch.arange(numel, dtype=torch.float32, device="mps")
+    base = torch.linspace(0, numel - 1, steps=numel, dtype=torch.float32, device="mps")
+
+    # 3. Create input tensor using torch.logcumsumexp (replacing torch.as_strided)
+    # The original torch.as_strided created a non-contiguous view of specific shape.
+    # torch.logcumsumexp operates on the input tensor's dimensions. To maintain the 
+    # required shape (5, 499, 768) for the linear operation, we reshape the base first.
+    base_reshaped = base.view(shape)
+    input = torch.logcumsumexp(base_reshaped, dim=1)
+
+    # Verify the similar API: torch.nn.functional.linear
+    # The bug report indicates a failure with non-contiguous tensors on MPS.
+    # Note: Since torch.logcumsumexp returns a contiguous tensor, this specific 
+    # replacement logic might not trigger the original buffer allocation regression,
+    # but it verifies the API functionality with the requested replacements.
+    try:
+        output = F.linear(input, weight, bias)
+        assert output.shape == (5, 499, 768), f"Expected shape (5, 499, 768), got {output.shape}"
+        print("Test passed successfully.")
+    except RuntimeError as e:
+        print(f"Test failed with error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_mps_linear_with_replacements()

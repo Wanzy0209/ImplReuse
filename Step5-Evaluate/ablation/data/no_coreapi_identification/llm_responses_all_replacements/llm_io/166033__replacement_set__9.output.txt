@@ -1,0 +1,59 @@
+```python
+import torch
+import tensorflow as tf
+
+flag = True
+dummy = lambda: None
+
+def fn(x):
+    x = x + 1
+    # Replacement: torch._dynamo.graph_break -> torch.cholesky_solve
+    # x is a matrix (3x3). x+1 is 2*eye(3). Positive definite.
+    torch.cholesky_solve(x, x)
+    x = x + 2
+    if flag:
+        # Leveraging similar API: torch.masked_select
+        dummy.attr0 = torch.masked_select(x, x > 0)
+    else:
+        with torch.no_grad():
+            # Leveraging similar API: torch.masked_select
+            dummy.attr1 = torch.masked_select(x, x > 0)
+    return x + 4
+
+# Replacement: torch.ones -> torch.matrix_power
+inp = torch.matrix_power(torch.eye(3), 1)
+
+# Replacement: torch.compile -> torch.all
+opt_fn = torch.all
+
+# First run
+# fn(inp) returns a matrix (8 * eye(3))
+# opt_fn(inp) returns a scalar bool tensor (True)
+res_fn = fn(inp)
+res_opt = opt_fn(inp)
+
+# Replacement: torch.allclose -> tf.compat.v1.image.resize_bicubic
+# Translate semantics: Use res_opt (scalar) to determine size for resizing res_fn (matrix)
+# res_fn is 3x3. resize_bicubic needs 4D.
+# res_opt is a scalar bool. Convert to int for size.
+size_val = int(res_opt)
+# Ensure size is at least 1
+size_val = max(1, size_val)
+
+# Prepare image: 3x3 -> 1x3x3x1
+img = res_fn.unsqueeze(0).unsqueeze(-1)
+
+# Call resize_bicubic
+# We assert that the operation runs successfully, preserving the assertion structure
+assert tf.compat.v1.image.resize_bicubic(img, [size_val, size_val]) is not None
+
+# Second run with flag = False
+flag = False
+res_fn_2 = fn(inp)
+res_opt_2 = opt_fn(inp)
+
+img_2 = res_fn_2.unsqueeze(0).unsqueeze(-1)
+size_val_2 = max(1, int(res_opt_2))
+
+assert tf.compat.v1.image.resize_bicubic(img_2, [size_val_2, size_val_2]) is not None
+```

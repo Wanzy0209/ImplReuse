@@ -1,0 +1,25 @@
+import torch
+import tensorflow as tf
+
+# Replacement: torch.__version__ -> tf.errors.OperatorNotAllowedInGraphError
+print(tf.errors.OperatorNotAllowedInGraphError)
+
+# Replacement: torch.randint -> torch.amin
+# To use torch.amin, we need an input tensor. We create a dummy tensor to apply amin on.
+dummy_input = torch.tensor([0, 1, 2, 3, 4])
+# Original: tensor = torch.randint(low=0, high=10, size=(5,), dtype=torch.int64)
+# Replaced: tensor = torch.amin(...)
+tensor = torch.amin(dummy_input)
+
+# Original input structure
+input = [[tensor, 1024], {}]
+
+# Similar API: torch.nn.functional.tanh
+# We leverage the similar API as requested.
+# The original code crashed. We test if the similar API handles the input structure.
+# Note: tanh expects 1 argument, input provides 2.
+try:
+    torch.nn.functional.tanh(*input[0], **input[1])
+except TypeError as e:
+    # This is expected behavior for tanh with incorrect arguments
+    print(f"Expected TypeError caught: {e}")

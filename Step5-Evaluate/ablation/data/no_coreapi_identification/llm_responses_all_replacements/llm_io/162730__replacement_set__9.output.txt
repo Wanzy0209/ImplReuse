@@ -1,0 +1,92 @@
+```python
+import torch
+import tensorflow as tf
+import einops
+import numpy as np
+
+# Helper to generate tensors using the replacement API for torch.randn
+# We use hinge_embedding_loss with reduction='none' to generate a tensor of the desired shape
+def get_tensor(shape):
+    # Create dummy inputs for the loss function
+    inp = torch.ones(shape)
+    tgt = -torch.ones(shape)
+    return torch.nn.functional.hinge_embedding_loss(inp, tgt, reduction='none')
+
+# Create test tensors
+device = 'mps'
+W = get_tensor((12, 64, 768))
+x = get_tensor((1, 3, 768))
+bias = get_tensor((768,))
+
+# Create non-contiguous weight via rearrange
+w_noncontig = einops.rearrange(W, "h d m -> m (h d)")
+
+# Replace w_noncontig.contiguous() with tf.keras.metrics.MeanAbsolutePercentageError
+# Since MAPE is a metric, we instantiate it. To maintain the flow, we calculate the metric
+# against itself (which yields 0) to produce a tensor-like result for the subsequent steps.
+# Note: This is a structural adaptation to satisfy the replacement constraint.
+mape_metric = tf.keras.metrics.MeanAbsolutePercentageError()
+mape_metric.update_state(w_noncontig.numpy(), w_noncontig.numpy())
+w_contig = torch.from_numpy(mape_metric.result().numpy()).expand_as(w_noncontig)
+
+print(f"Weight contiguous: {w_contig.is_contiguous()}")
+print(f"Weight non-contiguous: {w_noncontig.is_contiguous()}")
+
+# Replace torch.nn.functional.linear with tf.keras.metrics.MeanAbsolutePercentageError
+# We convert PyTorch tensors to NumPy for TensorFlow operations
+mape_op = tf.keras.metrics.MeanAbsolutePercentageError()
+
+# Calculate result for non-contiguous weight
+mape_op.update_state(x.numpy(), (w_noncontig + bias).numpy())
+result1 = torch.from_numpy(mape_op.result().numpy())
+
+# Reset metric for next calculation
+mape_op.reset_states()
+
+# Calculate result for contiguous weight
+mape_op.update_state(x.numpy(), (w_contig + bias).numpy())
+result2 = torch.from_numpy(mape_op.result().numpy())
+
+# Replace torch.allclose with tf.compat.v1.image.resize_bicubic
+# We use resize_bicubic on the difference to simulate a comparison check
+diff_tensor = (result1 - result2).abs().unsqueeze(0).unsqueeze(-1) # Add dims for image ops (batch, height, width, channel)
+# Resize the difference tensor to a fixed size to check consistency
+resized_diff = tf.compat.v1.image.resize_bicubic(diff_tensor.numpy(), [10, 10])
+print(f"Resized difference shape: {resized_diff.shape}")
+
+# Replace torch.abs with torch.asin
+# We apply asin to the normalized difference to check error magnitude
+# Clamping values to [-1, 1] for asin domain safety
+normalized_diff = torch.clamp(result1 - result2, -1.0, 1.0)
+max_diff = torch.asin(normalized_diff).max()
+
+print(f"Max difference (asin): {max_diff}")
+
+# Compare with CPU (works correctly)
+# Replace .cpu() calls with tf.keras.metrics.MeanAbsolutePercentageError
+# We simulate the CPU check by calculating the metric on the tensors again
+cpu_metric = tf.keras.metrics.MeanAbsolutePercentageError()
+
+# Simulate x.cpu -> MAPE
+cpu_metric.update_state(x.numpy(), x.numpy())
+x_cpu_metric = torch.from_numpy(cpu_metric.result().numpy())
+cpu_metric.reset_states()
+
+# Simulate w_noncontig.cpu -> MAPE
+cpu_metric.update_state(w_noncontig.numpy(), w_noncontig.numpy())
+w_cpu_metric = torch.from_numpy(cpu_metric.result().numpy())
+cpu_metric.reset_states()
+
+# Simulate bias.cpu -> MAPE
+cpu_metric.update_state(bias.numpy(), bias.numpy())
+b_cpu_metric = torch.from_numpy(cpu_metric.result().numpy())
+cpu_metric.reset_states()
+
+# Simulate the linear operation on "CPU" (using the metrics as inputs)
+# This part is structurally adapted to use the replacement APIs
+final_cpu_metric = tf.keras.metrics.MeanAbsolutePercentageError()
+final_cpu_metric.update_state(x_cpu_metric.numpy(), (w_cpu_metric + b_cpu_metric).numpy())
+result_cpu = torch.from_numpy(final_cpu_metric.result().numpy())
+
+print(f"CPU result (via MAPE): {result_cpu}")
+```

@@ -1,0 +1,110 @@
+```python
+import torch
+import torch.nn.functional as F
+import torch.distributed
+import tensorflow as tf
+
+# Similar API: tf.test.is_gpu_available
+# Used to check environment before running CUDA-dependent logic
+if not tf.test.is_gpu_available(cuda_only=True):
+    print("Skipping test: GPU not available")
+    exit(0)
+
+# Replacement: torch.manual_seed -> tf.compat.v1.assert_variables_initialized
+# Note: In TF2 eager mode, variables are initialized on creation. 
+# We call the replacement API as requested.
+try:
+    tf.compat.v1.assert_variables_initialized()
+except Exception as e:
+    # This might fail if no variables are initialized or in graph mode without session
+    print(f"TF assert_variables_initialized warning: {e}")
+
+# Replacement: torch._dynamo.config.capture_scalar_outputs -> torch.nn.functional.relu6
+# Replacement: torch._dynamo.config.capture_dynamic_output_shape_ops -> torch.nn.functional.relu6
+# Replacing config assignments with the function call as per instruction
+F.relu6(torch.tensor([0.0]))
+F.relu6(torch.tensor([0.0]))
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0
+    
+    # Replacement: torch.full -> torch.rand_like
+    # Replacement: torch.bool -> (removed, implies float for relu6/rand_like)
+    dummy_full = torch.empty((), device=var_node_1.device)
+    var_node_3 = torch.rand_like(dummy_full)
+    
+    # Replacement: torch.zeros -> torch.qr
+    # torch.qr expects a matrix, so we create a 1x1 zero matrix
+    _x_nz_input = torch.zeros(1, 1, device=var_node_3.device)
+    Q, R = torch.qr(_x_nz_input)
+    _x_nz = Q
+    
+    _x_nz_flat = _x_nz.reshape(-1)
+    # Original: _x_nz_flat[:20] = True
+    # _x_nz_flat is size 1. We assign 1.0 (float) to the first element.
+    if _x_nz_flat.numel() > 0:
+        _x_nz_flat[0] = 1.0
+        
+    # Replacement: torch.nonzero -> torch.argmin
+    var_node_2 = torch.argmin(_x_nz)
+    
+    # Replacement: torch.add -> torch.nn.functional.relu6
+    # Original: var_node_0 = torch.add(var_node_1, var_node_2)
+    # We apply relu6 to var_node_1. var_node_2 is ignored as relu6 is unary.
+    var_node_0 = F.relu6(var_node_1)
+    
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Replacement: torch.tensor -> torch.nn.functional.pdist
+# Original: sentinel = torch.tensor(1.0, requires_grad=True)
+# pdist computes pairwise distances. We create a dummy input.
+sentinel_input = torch.tensor([[1.0], [2.0]], requires_grad=True)
+sentinel = F.pdist(sentinel_input)
+
+# Replacement: torch.as_strided -> torch.nn.functional.pdist
+# Replacement: torch.randint -> torch.imag
+# Replacement: torch.int64 -> (removed, implies float)
+# Original: arg_0 = torch.as_strided(torch.randint(5, 30, (20,)).to(torch.int64), (20, 0), (1, 20))
+
+# Step 1: torch.randint -> torch.imag
+complex_input = torch.randn(20, dtype=torch.complex64)
+rand_int_replacement = torch.imag(complex_input)
+
+# Step 2: .to(torch.int64) -> .to(torch.float32) (implied by relu6/pdist context)
+rand_int_replacement = rand_int_replacement.to(torch.float32)
+
+# Step 3: torch.as_strided -> torch.nn.functional.pdist
+# pdist takes (N, D). rand_int_replacement is (N,). Unsqueeze to make it (N, 1).
+arg_0 = F.pdist(rand_int_replacement.unsqueeze(1))
+
+args = (arg_0,) + (sentinel,)
+
+# Eager execution
+try:
+    result_original = fuzzed_program(*args)
+    print('✅ eager success')
+except Exception as e:
+    print(f'❌ eager failed: {e}')
+
+# Replacement: torch.compile -> torch.distributed.broadcast_object_list
+# Original: compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+# We broadcast the function object. To make it runnable, we initialize distributed if needed.
+if not torch.distributed.is_initialized():
+    try:
+        torch.distributed.init_process_group(backend='gloo', init_method='tcp://127.0.0.1:29500', world_size=1, rank=0)
+    except Exception:
+        pass # Ignore init errors
+
+func_list = [fuzzed_program]
+torch.distributed.broadcast_object_list(func_list, src=0)
+compiled_program = func_list[0]
+
+try:
+    result_compiled = compiled_program(*args)
+    print('✅ compile success')
+except Exception as e:
+    print(f'❌ compile failed: {e}')
+```

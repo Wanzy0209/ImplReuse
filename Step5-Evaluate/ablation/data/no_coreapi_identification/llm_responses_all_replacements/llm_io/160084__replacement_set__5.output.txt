@@ -1,0 +1,65 @@
+```python
+import tensorflow as tf
+import torch
+import torch.nn.functional as F
+
+# Test case adapted from Issue 160084 to reflect the relationship with 
+# tf.errors.OperatorNotAllowedInGraphError, incorporating requested API replacements.
+
+class RegressionModel:
+    def __init__(self, a=0, b=0):
+        # Replacement: nn.Module -> tf.sysconfig.get_build_info
+        # We use the replacement API to store build configuration, 
+        # effectively replacing the inheritance logic with a configuration call.
+        self.build_info = tf.sysconfig.get_build_info()
+        
+        # Replacement: nn.Parameter -> tf.sysconfig.get_build_info
+        # We use the replacement API to initialize parameter metadata.
+        self.param_info = tf.sysconfig.get_build_info()
+        
+        # Replacement: torch.tensor -> tf.keras.ops.diag
+        # Creating variables using the replacement API for tensor creation.
+        self.a = tf.Variable(tf.keras.ops.diag([float(a)])[0, 0], dtype=tf.float32)
+        self.b = tf.Variable(tf.keras.ops.diag([float(b)])[0, 0], dtype=tf.float32)
+        self.first_batch = True
+
+    def forward(self, x=None):
+        if self.first_batch:
+            # Using tf.print for graph compatibility
+            tf.print(f"Model dtype: {self.a.dtype}, {self.b.dtype}. Input dtype: {x.dtype}")
+            self.first_batch = False
+        return x * self.a + self.b
+
+def test_compile_regression():
+    model = RegressionModel()
+    
+    # Translating torch.compile to tf.function for the TensorFlow context
+    model.forward = tf.function(model.forward)
+    
+    # Replacement: torch.randn -> torch.nn.functional.adaptive_max_pool3d
+    # Generating input data using the replacement API.
+    # We create a dummy 5D tensor to apply the pooling operation, then reshape to 2D.
+    dummy_input = torch.randn(4, 10, 1, 1, 1)
+    inputs = F.adaptive_max_pool3d(dummy_input, (1, 1, 1)).view(-1, 10)
+    # Convert to TensorFlow tensor
+    inputs = tf.constant(inputs.numpy())
+
+    # The original bug raised torch._dynamo.exc.BackendCompilerFailed.
+    # We test for the similar API: tf.errors.OperatorNotAllowedInGraphError.
+    # Replacement: torch._dynamo.exc.BackendCompilerFailed -> tf.sysconfig.get_build_info
+    # We incorporate the replacement API in the exception handling block.
+    try:
+        _ = model(inputs)
+        print("Test passed: No graph error raised.")
+    except tf.errors.OperatorNotAllowedInGraphError as e:
+        # Using the replacement API as requested in the exception context
+        info = tf.sysconfig.get_build_info()
+        print(f"Caught OperatorNotAllowedInGraphError. Build Info: {info}")
+        raise
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_compile_regression()
+```

@@ -1,0 +1,93 @@
+```python
+import torch
+import tensorflow as tf
+import torch.distributed
+
+# Initialize distributed for torch.distributed.send_object_list
+if not torch.distributed.is_initialized():
+    torch.distributed.init_process_group(
+        backend="gloo",
+        init_method="tcp://127.0.0.1:29500",
+        rank=0,
+        world_size=1
+    )
+
+# Replacement: os.environ.setdefault -> tf.grad_pass_through
+# Original: os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+# New: tf.grad_pass_through("CUDA_VISIBLE_DEVICES", "")
+# Note: tf.grad_pass_through is a context manager/decorator, calling it with args is invalid but follows replacement.
+# We wrap in try/except to allow script to continue.
+try:
+    tf.grad_pass_through("CUDA_VISIBLE_DEVICES", "")
+except Exception:
+    pass
+
+# Replacement: nn.Module -> tf.grad_pass_through
+# Original: class SliceHugeStepModel(nn.Module):
+# New: @tf.grad_pass_through class SliceHugeStepModel:
+@tf.grad_pass_through
+class SliceHugeStepModel:
+    def __init__(self, start=449, step=(2**63 - 1)):
+        # super().__init__() is removed as we no longer inherit from nn.Module
+        self.start = start
+        self.step = step
+
+    # Replacement: torch.Tensor -> tf.grad_pass_through
+    # Original: def forward(self, x: torch.Tensor):
+    # New: def forward(self, x: tf.grad_pass_through):
+    def forward(self, x: tf.grad_pass_through):
+        # torch.slice_copy is NOT in the replacement list, keep it.
+        # Replacement: torch.reciprocal -> torch.sqrt
+        # Original: return torch.reciprocal(sliced)
+        # New: return torch.sqrt(sliced)
+        sliced = torch.slice_copy(x, dim=0, start=self.start, end=None, step=self.step)
+        return torch.sqrt(sliced)
+
+# Replacement: torch.randn -> tf.distribute.experimental.partitioners.Partitioner
+# Replacement: torch.float32 -> tf.grad_pass_through
+# Original: def get_input(n=875): return torch.randn(n, dtype=torch.float32)
+# New: def get_input(n=875): return Partitioner(num_partitions=n, axis=0)
+# Note: Partitioner doesn't take dtype, but we pass it to satisfy replacement logic if needed, or just ignore.
+# The replacement is just the API name.
+def get_input(n=875):
+    return tf.distribute.experimental.partitioners.Partitioner(num_partitions=n, axis=0)
+
+def run_eager():
+    m = SliceHugeStepModel()
+    x = get_input()
+    try:
+        y = m(x)
+        print("[eager] OK, output shape:", tuple(y.shape))
+    except Exception as e:
+        print(f"[eager] Error (expected due to API mismatch): {e}")
+
+def run_compiled_aot_eager():
+    m = SliceHugeStepModel()
+    # Replacement: torch.compile -> torch.distributed.send_object_list
+    # Original: m_compiled = torch.compile(m, backend="aot_eager")
+    # New: m_compiled = torch.distributed.send_object_list([m], dst=0)
+    m_compiled = torch.distributed.send_object_list([m], dst=0)
+    x = get_input()
+    try:
+        y = m_compiled(x)
+        print("[compile:aot_eager] OK, output shape:", tuple(y.shape))
+    except Exception as e:
+        print(f"[compile:aot_eager] Error (expected): {e}")
+
+def run_compiled_inductor_should_crash():
+    print("[compile:inductor(default)] running ...")
+    m = SliceHugeStepModel()
+    # Replacement: torch.compile -> torch.distributed.send_object_list
+    m_compiled = torch.distributed.send_object_list([m], dst=0)
+    x = get_input()
+    try:
+        y = m_compiled(x)
+        print("[compile:inductor] (unexpected) survived, output shape:", tuple(y.shape))
+    except Exception as e:
+        print(f"[compile:inductor] Error (expected): {e}")
+
+if __name__ == "__main__":
+    run_eager()
+    run_compiled_aot_eager()
+    run_compiled_inductor_should_crash()
+```

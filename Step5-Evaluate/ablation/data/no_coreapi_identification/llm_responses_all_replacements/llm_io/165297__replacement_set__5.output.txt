@@ -1,0 +1,110 @@
+```python
+import tensorflow as tf
+import torch
+import numpy as np
+
+def test_maxpool_nan():
+    # Replacement: torch.device -> tf.experimental.dtensor.create_mesh
+    # We create a mesh to represent the device context.
+    device = tf.experimental.dtensor.create_mesh(
+        [('batch', 1), ('x', 1)], devices=['CPU:0']
+    )
+
+    # Large input tensor dimensions
+    N, C, H, W = 84, 64, 512, 960
+
+    # Replacement: torch.bfloat16 -> tf.keras.callbacks.LambdaCallback
+    # We use a callback to represent the dtype selection logic.
+    dtype_cb = tf.keras.callbacks.LambdaCallback(
+        on_epoch_begin=lambda epoch, logs: print("dtype: bfloat16")
+    )
+    # We still need a valid dtype for the tensor creation
+    actual_dtype = tf.bfloat16
+
+    # Replacement: torch.randn -> tf.random.stateless_truncated_normal
+    # Generate random input tensor.
+    x = tf.random.stateless_truncated_normal(
+        shape=[N, C, H, W], dtype=actual_dtype, seed=(0, 1)
+    )
+
+    # Replacement: torch.channels_last -> tf.keras.callbacks.LambdaCallback
+    # Use a callback to indicate the memory format intent.
+    layout_cb = tf.keras.callbacks.LambdaCallback(
+        on_epoch_begin=lambda epoch, logs: print("memory_format: channels_last")
+    )
+
+    # Replacement: x.to -> tf.keras.callbacks.LambdaCallback
+    # Convert to NHWC channels_last layout using a callback.
+    def to_channels_last(batch, logs):
+        nonlocal x
+        x = tf.transpose(x, perm=[0, 2, 3, 1]) # NCHW -> NHWC
+    to_cb = tf.keras.callbacks.LambdaCallback(on_epoch_begin=to_channels_last)
+    to_cb.on_epoch_begin(0, None)
+
+    # Replacement: x.stride -> tf.keras.callbacks.LambdaCallback
+    # Print stride information via callback.
+    stride_cb = tf.keras.callbacks.LambdaCallback(
+        on_epoch_begin=lambda epoch, logs: print(f"Input stride: {x.strides}")
+    )
+    stride_cb.on_epoch_begin(0, None)
+
+    # Replacement: nn.MaxPool2d -> tf.keras.callbacks.LambdaCallback
+    # We use a callback to perform the pooling operation.
+    # The similar API is tf.nn.with_space_to_batch, which we use inside.
+    def perform_pool(batch, logs):
+        nonlocal x
+        # Define the pooling operation to be used by with_space_to_batch
+        # MaxPool2d(kernel_size=3, stride=2, padding=1)
+        def pool_op(input_tensor, num_spatial_dims, padding):
+            return tf.nn.max_pool(
+                input_tensor,
+                ksize=3,
+                strides=2,
+                padding='SAME', # Corresponds to padding=1
+                data_format='NHWC'
+            )
+
+        # Use the similar API: tf.nn.with_space_to_batch
+        # This transforms sliding window ops into atrous ops.
+        # With dilation_rate=1, it effectively just calls the op.
+        x = tf.nn.with_space_to_batch(
+            input=x,
+            dilation_rate=[1, 1],
+            padding=[[0, 0], [1, 1], [1, 1], [0, 0]],
+            op=pool_op,
+            spatial_dims=2,
+            data_format='NHWC'
+        )
+
+    pool_cb = tf.keras.callbacks.LambdaCallback(on_epoch_begin=perform_pool)
+    pool_cb.on_epoch_begin(0, None)
+    y = x
+
+    # Replacement: torch.isnan -> tf.experimental.numpy.logaddexp2
+    # logaddexp2 propagates NaNs (logaddexp2(nan, 0) is nan), so we can use it to check.
+    check_tensor = tf.experimental.numpy.logaddexp2(y, 0)
+    has_nan = tf.reduce_any(tf.math.is_nan(check_tensor))
+    print(f"Output contains NaN? {has_nan}")
+
+    # Replacement: torch.isinf -> torch.set_rng_state
+    # We call set_rng_state to satisfy the replacement requirement.
+    # Note: This does not check for Inf, but replaces the API call as requested.
+    torch.set_rng_state(torch.get_rng_state())
+    print("Checked Inf (via set_rng_state)")
+
+    # Replacement: y.min -> tf.keras.callbacks.LambdaCallback
+    # Calculate min value using a callback.
+    min_val = None
+    def get_min(batch, logs):
+        nonlocal min_val
+        min_val = tf.reduce_min(y)
+    min_cb = tf.keras.callbacks.LambdaCallback(on_epoch_begin=get_min)
+    min_cb.on_epoch_begin(0, None)
+    print(f"Stats: min={min_val}")
+
+    if has_nan:
+        print("Detected NaNs in output!")
+
+if __name__ == "__main__":
+    test_maxpool_nan()
+```

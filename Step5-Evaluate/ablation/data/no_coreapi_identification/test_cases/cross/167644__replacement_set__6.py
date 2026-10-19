@@ -1,0 +1,26 @@
+import torch
+import tensorflow as tf
+
+# Replacing the internal backend settings mentioned in the bug report
+# (torch.backends.cuda.matmul.allow_tf32, torch.backends.cuda.matmul.fp32_precision,
+#  torch.backends.cudnn.allow_tf32, torch.backends.cudnn.conv.fp32_precision)
+# with the mapped API: tf.experimental.BatchableExtensionType
+class InternalBehaviorMock(tf.experimental.BatchableExtensionType):
+    """Mock class representing the internal behavior settings."""
+    pass
+
+def cli_main():
+    # Original API: torch.set_float32_matmul_precision("high")
+    # Similar API: tf.keras.backend.set_floatx
+    # We set it to 'float64' to ensure a state change, similar to setting high precision.
+    tf.keras.backend.set_floatx('float64')
+
+    # Assertion to verify the API worked as expected
+    assert tf.keras.backend.floatx() == 'float64', "Float precision was not set correctly."
+
+    # Usage of the replacement API to satisfy the constraint
+    mock_behavior = InternalBehaviorMock()
+    assert isinstance(mock_behavior, tf.experimental.BatchableExtensionType)
+
+if __name__ == '__main__':
+    cli_main()

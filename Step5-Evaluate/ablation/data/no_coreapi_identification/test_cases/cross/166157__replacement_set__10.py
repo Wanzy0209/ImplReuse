@@ -1,0 +1,75 @@
+import tensorflow as tf
+import unittest
+
+class TestExpStatistics(unittest.TestCase):
+    """
+    Test case that mimics the logic of OpenRegDeviceAllocator (c10::DeviceAllocator)
+    but replaces the core allocation logic with tf.keras.ops.exp.
+    """
+
+    def setUp(self):
+        # Initialize statistics similar to OpenRegDeviceAllocator
+        # stats_ is a dictionary mimicking the DeviceStats structure
+        self.stats_ = {
+            'allocated_bytes': [0],
+            'reserved_bytes': [0]
+        }
+        self.initialized_ = False
+
+    def allocate(self, nbytes):
+        """
+        Replaces OpenRegDeviceAllocator::allocate.
+        Uses tf.keras.ops.exp to simulate the allocation operation and cost.
+        """
+        if nbytes > 0:
+            # Replacement: OpenRegDeviceAllocator -> tf.keras.ops.exp
+            # Instead of orMalloc, we perform an exponential operation.
+            # The result of exp(nbytes) is treated as the "allocated" amount for stats tracking.
+            allocated_amount = tf.keras.ops.exp(tf.cast(nbytes, tf.float32))
+            
+            # Update statistics
+            # Original: stats_.allocated_bytes[0].increase(nbytes);
+            self.stats_['allocated_bytes'][0] += int(allocated_amount)
+            self.stats_['reserved_bytes'][0] += int(allocated_amount)
+            
+            return allocated_amount
+        return tf.constant(0.0)
+
+    def get_device_stats(self):
+        return self.stats_
+
+    def reset_accumulated_stats(self):
+        """
+        Replaces OpenRegDeviceAllocator::resetAccumulatedStats.
+        """
+        # Original: for (size_t i = 0; i < stats_.allocated_bytes.size(); ++i)
+        # Replacement: stats_.allocated_bytes.size -> tf.keras.ops.exp
+        # We use tf.keras.ops.exp to determine the loop range (size of the stats array).
+        # Assuming the array has 1 element, exp(0) = 1.
+        size_limit = int(tf.keras.ops.exp(tf.constant(0.0)))
+        
+        for i in range(size_limit):
+            self.stats_['allocated_bytes'][i] = 0
+            self.stats_['reserved_bytes'][i] = 0
+
+    def test_statistics_tracking_and_reset(self):
+        # 1. Test allocation and statistics update
+        # Allocate 1 unit. exp(1) ~ 2.718 -> 2
+        self.allocate(1)
+        stats = self.get_device_stats()
+        self.assertEqual(stats['allocated_bytes'][0], 2)
+        
+        # Allocate 2 units. exp(2) ~ 7.389 -> 7
+        self.allocate(2)
+        stats = self.get_device_stats()
+        # Total: 2 + 7 = 9
+        self.assertEqual(stats['allocated_bytes'][0], 9)
+        
+        # 2. Test reset_accumulated_stats
+        self.reset_accumulated_stats()
+        stats = self.get_device_stats()
+        self.assertEqual(stats['allocated_bytes'][0], 0)
+        self.assertEqual(stats['reserved_bytes'][0], 0)
+
+if __name__ == '__main__':
+    unittest.main()

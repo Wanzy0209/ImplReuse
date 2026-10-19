@@ -1,0 +1,48 @@
+import tensorflow as tf
+
+def run():
+    """
+    Test case adapted from Issue 163915 (nvshmem triton kernels IMA silently).
+    
+    Original Logic:
+    1. Define a kernel ('foo') that accesses a resource ('nvshmem.get').
+    2. Call an initialization function ('nvshmem.enable_triton').
+    3. Execute the kernel.
+    
+    Translated Logic (using tf.compat.v1.local_variables_initializer):
+    1. Define a graph operation that uses a local variable (resource).
+    2. Call 'tf.compat.v1.local_variables_initializer' to initialize the resource.
+    3. Execute the operation in a session.
+    """
+    
+    # To replicate the initialization dependency found in the bug report,
+    # we disable eager execution. In eager mode, variables are initialized immediately,
+    # which would bypass the explicit initialization step being tested.
+    if tf.executing_eagerly():
+        tf.compat.v1.disable_eager_execution()
+
+    # Define a local variable. This replaces the resource accessed by 'nvshmem.get'.
+    # We use tf.compat.v1.local_variable to match the scope of the initializer.
+    var = tf.compat.v1.local_variable(initial_value=0, name="test_local_var")
+
+    # Define an operation that uses the variable. This replaces the kernel 'foo'.
+    # The original kernel performed a 'get', here we perform an assignment to verify usage.
+    increment_op = var.assign_add(1)
+
+    # The original bug report called 'nvshmem.enable_triton()'.
+    # We replace this with the similar API: 'tf.compat.v1.local_variables_initializer'.
+    init_op = tf.compat.v1.local_variables_initializer()
+
+    with tf.compat.v1.Session() as sess:
+        # Run the initializer. This corresponds to the 'enable_triton' call.
+        sess.run(init_op)
+
+        # Run the operation. This corresponds to 'foo[(1, )]()'.
+        result = sess.run(increment_op)
+
+        # Assert that the operation executed successfully, implying initialization worked.
+        # In the original bug, missing init caused a silent IMA. Here, missing init raises an error.
+        assert result == 1, "Variable should have been initialized and incremented to 1"
+
+if __name__ == "__main__":
+    run()

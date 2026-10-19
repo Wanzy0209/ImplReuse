@@ -1,0 +1,74 @@
+import torch
+import tensorflow as tf
+
+# Replacements for torch._dynamo.config
+# torch._dynamo.config.capture_scalar_outputs -> tf.math.reduce_any
+_ = tf.math.reduce_any([True])
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.math.reduce_any
+_ = tf.math.reduce_any([True])
+
+# torch.manual_seed -> torch.isinf
+# torch.manual_seed(1014698)
+_ = torch.isinf(torch.tensor(1014698))
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0
+    # torch.full -> torch.amax
+    # var_node_3 = torch.full((), True, dtype=torch.bool)
+    var_node_3 = torch.amax(torch.tensor([True], dtype=torch.bool))
+    
+    # torch.zeros -> torch.norm
+    # _x_nz = torch.zeros((), dtype=torch.bool, device=var_node_3.device)
+    _x_nz = torch.norm(torch.tensor(0.0, dtype=torch.float32))
+    
+    _x_nz_flat = _x_nz.reshape(-1)
+    # _x_nz_flat[:20] = True
+    # _x_nz_flat is size 1, so we set index 0
+    _x_nz_flat[:1] = True
+    
+    # torch.nonzero -> torch.take
+    # var_node_2 = torch.nonzero(_x_nz)
+    var_node_2 = torch.take(_x_nz, torch.tensor([0]))
+    
+    # torch.add -> tf.math.reduce_any
+    # var_node_0 = torch.add(var_node_1, var_node_2)
+    # Convert PyTorch tensor to numpy for TensorFlow operation
+    var_node_0 = tf.math.reduce_any(var_node_1.numpy())
+    
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.dtype == tf.complex64:
+        result = tf.math.real(result)
+    return result
+
+# torch.tensor -> tf.keras.ops.diag
+# sentinel = torch.tensor(1.0, requires_grad=True)
+sentinel = tf.keras.ops.diag([1.0])
+
+# arg_0 construction
+# torch.randint -> torch.full
+# torch.as_strided -> torch.bmm
+# Original: torch.as_strided(torch.randint(5, 30, (20,)).to(torch.int64), (20, 0), (1, 20))
+# Step 1: torch.randint(5, 30, (20,)) -> torch.full((20,), 5, dtype=torch.int64)
+t_rand = torch.full((20,), 5, dtype=torch.int64)
+# Step 2: torch.as_strided(..., (20, 0), ...) -> torch.bmm(...)
+# Create inputs for bmm to result in (20, 0)
+input1 = t_rand.unsqueeze(0).unsqueeze(-1).expand(-1, -1, 5) # (1, 20, 5)
+input2 = torch.full((1, 5, 0), 1, dtype=torch.int64)         # (1, 5, 0)
+arg_0 = torch.bmm(input1, input2).squeeze(0)                 # (20, 0)
+
+args = (arg_0, sentinel)
+
+# Leverage similar API: tf.test.is_gpu_available
+if tf.test.is_gpu_available(cuda_only=False):
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+
+    # torch.compile -> torch.all
+    # compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+    compiled_program = torch.all
+    # Adapt call site to be runnable with torch.all
+    result_compiled = compiled_program(arg_0)
+    print(' compile success')
+else:
+    print("GPU not available, skipping test.")

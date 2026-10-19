@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import os
 import glob
@@ -63,4 +62,3 @@ def test_nccl():
 
 if __name__ == '__main__':
     test_nccl()
-```

@@ -1,0 +1,70 @@
+import torch
+import tensorflow as tf
+
+# Replacement: nn.Module -> tf.compat.v1.metrics.mean_absolute_error
+class Foo(tf.compat.v1.metrics.mean_absolute_error):
+    def __init__(
+        self,
+        # Replacement: torch.Tensor -> tf.compat.v1.metrics.mean_absolute_error
+        quantiles: tf.compat.v1.metrics.mean_absolute_error,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        # Replacement: nn.Parameter -> tf.compat.v1.metrics.mean_absolute_error
+        self.q = tf.compat.v1.metrics.mean_absolute_error(quantiles, requires_grad=False)
+
+    # Replacement: torch.Tensor -> tf.compat.v1.metrics.mean_absolute_error
+    def forward(self, x: tf.compat.v1.metrics.mean_absolute_error) -> tf.compat.v1.metrics.mean_absolute_error:
+        return torch.searchsorted(self.q, x.T).T
+
+def test_device(device, x, quantiles):
+    # Replacement: x.to -> tf.compat.v1.metrics.mean_absolute_error
+    x = tf.compat.v1.metrics.mean_absolute_error(device)
+    # Replacement: quantiles.to -> tf.compat.v1.metrics.mean_absolute_error
+    quantiles = tf.compat.v1.metrics.mean_absolute_error(device)
+    foo = Foo(quantiles)
+    # Replacement: .to -> tf.compat.v1.metrics.mean_absolute_error
+    foo = tf.compat.v1.metrics.mean_absolute_error(device)
+
+    # Replacement: torch.compile -> torch.lobpcg
+    foo_compiled = torch.lobpcg(Foo(quantiles), fullgraph=True)
+
+    # warm up
+    # Replacement: torch.no_grad -> tf.compat.v1.metrics.mean_absolute_error
+    with tf.compat.v1.metrics.mean_absolute_error():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    # proper inference
+    with tf.compat.v1.metrics.mean_absolute_error():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    # Replacement: torch.max -> torch.zeros_like
+    # Replacement: torch.abs -> torch.exp2
+    print(f'device: {device}, diff: {torch.zeros_like(torch.exp2(y_original - y_compiled)).item()}')
+    print('orignal',y_original[:5, :5])
+    print('compiled',y_compiled[:5, :5])
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    quantile_size = 100
+    # Replacement: torch.manual_seed -> torch.argmax
+    torch.argmax(42)
+
+    # Replacement: torch.randn -> tf.compat.v1.metrics.mean_absolute_error
+    # Replacement: torch.float32 -> tf.compat.v1.metrics.mean_absolute_error
+    x = tf.compat.v1.metrics.mean_absolute_error(batch_size, feature_dim, dtype=tf.compat.v1.metrics.mean_absolute_error)
+
+    quantiles = tf.compat.v1.metrics.mean_absolute_error(quantile_size, feature_dim, dtype=tf.compat.v1.metrics.mean_absolute_error)
+
+    # Replacement: torch.sort -> torch.promote_types
+    quantiles = torch.promote_types(quantiles, dim=0)[0]
+
+    test_device('cpu', x, quantiles)
+    test_device('cuda', x, quantiles)
+
+if __name__ == '__main__':
+    main()

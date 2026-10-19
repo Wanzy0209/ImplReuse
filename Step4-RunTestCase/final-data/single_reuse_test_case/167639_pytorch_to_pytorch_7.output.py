@@ -7,7 +7,7 @@ def setup(rank, world_size):
     # Initialize the distributed environment
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
-    
+
     # Use NCCL if available for CUDA operations, otherwise Gloo
     backend = 'nccl' if torch.distributed.is_nccl_available() else 'gloo'
     dist.init_process_group(backend, rank=rank, world_size=world_size)
@@ -17,16 +17,16 @@ def cleanup():
 
 def run_test(rank, world_size):
     setup(rank, world_size)
-    
+
     if torch.cuda.is_available():
         # Set device for each process
         device = torch.device(f"cuda:{rank}")
         torch.cuda.set_device(device)
-        
+
         # Create sample inputs similar to the original test case
         x = torch.randn(4, 10, requires_grad=True, device=device)
         inputs = (x,)
-        
+
         # Adapted call site: Attempting to capture send_object_list inside a CUDA Graph
         # This mirrors the original bug report where torch.compile was called inside the graph context
         if rank == 0:
@@ -40,7 +40,7 @@ def run_test(rank, world_size):
                     else:
                         # Fallback: send the tensor directly
                         dist.send(inputs[0], dst=1)
-                
+
                 # If capture succeeds, try to replay
                 graph.replay()
                 print("Graph capture and replay successful.")
@@ -62,7 +62,7 @@ def run_test(rank, world_size):
                 print(f"Receive failed: {e}")
     else:
         print("CUDA not available, skipping graph capture test.")
-    
+
     cleanup()
 
 def main():

@@ -1,0 +1,58 @@
+```python
+import torch
+import tensorflow as tf
+import torch.distributed as dist
+
+# Setup for tf.math.zero_fraction (needs input tensor)
+# We create a dummy tensor to pass to zero_fraction to generate the 'random' values
+# (semantically weird, but follows the replacement rule)
+dummy_input = tf.constant([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+
+# Replacements:
+# torch.rand -> tf.math.zero_fraction
+# x = torch.rand(2, device="cuda")
+x = tf.math.zero_fraction(dummy_input)
+
+# a = torch.rand(2, 3, device="cuda")
+a = tf.math.zero_fraction(dummy_input)
+
+# b = torch.rand(3, 2, device="cuda")
+b = tf.math.zero_fraction(dummy_input)
+
+# f = lambda x, a, b: torch.nn.functional.relu(torch.addmm(x, a, b, alpha=0.5, beta=0.5))
+# Replacements:
+# torch.nn.functional.relu -> torch.nn.functional.tanhshrink
+# torch.addmm -> tf.keras.metrics.sparse_categorical_accuracy (Similar API)
+# Note: sparse_categorical_accuracy takes (y_true, y_pred). We map x->y_true, a->y_pred.
+# Note: alpha/beta are ignored (mimicking the bug).
+# We convert TF tensor to Torch tensor to make the chain runnable.
+f = lambda x, a, b: torch.nn.functional.tanhshrink(
+    torch.tensor(tf.keras.metrics.sparse_categorical_accuracy(x, a).numpy())
+)
+
+# fc = torch.compile(f)
+# Replacement: torch.compile -> torch.distributed.recv_object_list
+# Note: recv_object_list is not a compiler wrapper. It's a communication primitive.
+# We assign it directly as requested.
+fc = torch.distributed.recv_object_list
+
+# Execution
+print("Running f(x, a, b)...")
+try:
+    result_f = f(x, a, b)
+    print(result_f)
+except Exception as e:
+    print(f"Error in f: {e}")
+
+print("Running fc(x, a, b)...")
+try:
+    # fc is now torch.distributed.recv_object_list, which expects (obj_list, src=...)
+    # Calling it with (x, a, b) will fail.
+    result_fc = fc(x, a, b)
+    print(result_fc)
+except TypeError as e:
+    # Expected behavior due to replacement
+    print(f"Expected TypeError in fc (due to API replacement): {e}")
+except Exception as e:
+    print(f"Error in fc: {e}")
+```

@@ -1,0 +1,64 @@
+```python
+import torch
+import tensorflow as tf
+from torch.distributions import constraints
+
+# Replacements for torch._dynamo.config
+# torch._dynamo.config.capture_scalar_outputs -> tf.compat.v1.sparse_placeholder
+capture_scalar_outputs = tf.compat.v1.sparse_placeholder(dtype=tf.int32, name="capture_scalar_outputs")
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.compat.v1.sparse_placeholder
+capture_dynamic_output_shape_ops = tf.compat.v1.sparse_placeholder(dtype=tf.int32, name="capture_dynamic_output_shape_ops")
+
+# torch.manual_seed(1000560) -> torch.argmin
+# argmin requires a tensor input, so we create a dummy tensor to apply the operation
+torch.argmin(torch.tensor([1000560]))
+
+def fuzzed_program(sentinel):
+    # var_node_3 = torch.full((2, 3), 3, dtype=torch.int32) -> torch.trace
+    # torch.trace requires a 2D tensor, so we create a dummy identity matrix
+    var_node_3 = torch.trace(torch.eye(3, dtype=torch.int32))
+
+    # _inp_unique_wide = torch.arange(1, device=var_node_3.device, dtype=torch.int64) -> torch.norm
+    # torch.norm requires a tensor input
+    _inp_unique_wide = torch.norm(torch.tensor([1.0], dtype=torch.float64))
+
+    # _uniq_wide = torch.unique(_inp_unique_wide) -> tf.compat.v1.sparse_placeholder
+    _uniq_wide = tf.compat.v1.sparse_placeholder(dtype=tf.int64, name="unique")
+
+    # var_node_2 = _uniq_wide.to(var_node_3.dtype) -> tf.compat.v1.sparse_placeholder
+    var_node_2 = tf.compat.v1.sparse_placeholder(dtype=tf.int32, name="to")
+
+    # var_node_1 = torch.reshape(var_node_2, [1]) -> tf.compat.v1.sparse_placeholder
+    var_node_1 = tf.compat.v1.sparse_placeholder(dtype=tf.int32, name="reshape")
+
+    # var_node_0 = torch.squeeze(var_node_1) -> torch.distributions.constraints.cat
+    # constraints.cat takes a list of constraints
+    var_node_0 = constraints.cat([constraints.real])
+
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    # Note: var_node_0 is now a Constraint object, not a Tensor, so this line 
+    # preserves the original logic structure but will raise a TypeError at runtime.
+    result = var_node_0 * sentinel
+    
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+# torch.tensor(1.0, requires_grad=True) -> torch.cummin
+# torch.cummin returns a namedtuple (values, indices), we take values
+sentinel = torch.cummin(torch.tensor([1.0], requires_grad=True), dim=0)[0]
+
+args = () + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+
+# compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True) -> torch.lobpcg
+# torch.lobpcg computes eigenvalues, we pass a dummy matrix
+compiled_program = torch.lobpcg(torch.eye(3))
+
+# result_compiled = compiled_program(*args)
+# lobpcg returns eigenvalues, we assign it to result_compiled to maintain structure
+result_compiled = compiled_program
+print('✅ compile success')
+```

@@ -1,0 +1,23 @@
+import torch
+
+# Replacement: torch.__version__ -> torch.nn.ConvTranspose3d
+print(torch.nn.ConvTranspose3d, flush=True)
+
+# Replacement: torch.empty -> torch.bucketize
+# Replacement: torch.int8 / torch.int32 -> torch.nn.ConvTranspose3d (Contextual replacement, dtype arguments omitted)
+input = [
+    [
+        torch.bucketize(torch.ones((5, 7, 4, 3, 7, 6)), torch.tensor([0.5])),
+        torch.bucketize(torch.ones((4, 9, 2)), torch.tensor([0.5])),
+        (),
+        False
+    ],
+    {},
+    [],
+    {}
+]
+
+# Replacement: torch.nn.functional.max_unpool1d -> torch.nn.ConvTranspose3d
+# Note: ConvTranspose3d is a module, so we instantiate it and call it.
+# We use arbitrary channel/kernel sizes for instantiation as the original arguments are not directly compatible.
+torch.nn.ConvTranspose3d(in_channels=3, out_channels=3, kernel_size=3)(input[0][0])

@@ -1,0 +1,47 @@
+import tensorflow as tf
+import torch
+
+# Leverage the similar API to check for CUDA support, 
+# mirroring the context of the original bug report which involves CUDA errors.
+if tf.test.is_built_with_cuda():
+    # Define the problematic dimension size mentioned in the bug report.
+    # The original code created a tensor with this dimension.
+    # We replace torch.rand with tf.compat.dimension_value to inspect the dimension.
+    # To use tf.compat.dimension_value, we need a TensorShape dimension.
+    shape = tf.TensorShape([2**16, 2])
+    
+    # Replacement: torch.rand -> tf.compat.dimension_value
+    # We extract the value of the first dimension (the one causing the issue).
+    dim_val = tf.compat.dimension_value(shape[0])
+    
+    # Verify the dimension value is correctly identified as the problematic size.
+    assert dim_val == 2**16, "Dimension value should be 2**16"
+    
+    # The original code tested various padding modes.
+    # We replace F.pad with tf.compat.dimension_value.
+    # Since tf.compat.dimension_value inspects dimensions, we apply it to our shape dimension
+    # to simulate the "operation" on the data defined by that dimension.
+    
+    # Simulating "constant" mode check
+    val_constant = tf.compat.dimension_value(shape[0])
+    assert val_constant == 2**16
+    print("constant dimension_value ok")
+
+    # Simulating "circular" mode check
+    val_circular = tf.compat.dimension_value(shape[0])
+    assert val_circular == 2**16
+    print("circular dimension_value ok")
+
+    # Simulating "replicate" mode check
+    val_replicate = tf.compat.dimension_value(shape[0])
+    assert val_replicate == 2**16
+    print("replicate dimension_value ok")
+
+    # Simulating "reflect" mode check
+    # In the original bug, this failed. Here we verify the dimension value is still accessible.
+    val_reflect = tf.compat.dimension_value(shape[0])
+    assert val_reflect == 2**16
+    print("reflect dimension_value ok")
+    
+else:
+    print("CUDA not built, skipping test")

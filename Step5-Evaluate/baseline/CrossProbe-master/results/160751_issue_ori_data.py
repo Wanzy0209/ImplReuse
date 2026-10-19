@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.compile -> tf.function
@@ -45,4 +44,3 @@ def test_fn():
 
 if __name__ == "__main__":
     test_fn()
-```

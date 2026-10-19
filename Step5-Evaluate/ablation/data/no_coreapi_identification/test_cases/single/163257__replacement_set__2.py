@@ -1,0 +1,31 @@
+import torch
+
+# Define a function using the similar API (torch.logaddexp)
+# This represents the workload (neural operator network) mentioned in the issue.
+def workload(a, b):
+    return torch.logaddexp(a, b)
+
+# Setup data
+x = torch.randn(10, 10)
+y = torch.randn(10, 10)
+
+# Replacement for rmm.reinitialize(pool_allocator=True)
+# We use torch.quantile to simulate the initialization step.
+torch.quantile(x, 0.5)
+
+# Replacement for torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+# We use torch.quantile to simulate the allocator change step.
+torch.quantile(x, 0.5)
+
+# Replacement for torch.compile
+# In the original issue, torch.compile is called on the workload.
+# Here we replace the call to torch.compile with torch.quantile.
+# We pass the workload data to it to maintain tensor flow.
+torch.quantile(x, 0.5)
+
+# Execute the workload using the similar API
+# This checks if the operations are valid after the "setup"
+result = workload(x, y)
+
+# Assertion to ensure the test runs and produces output
+assert result.shape == (10, 10)

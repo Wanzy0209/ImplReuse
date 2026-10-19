@@ -1,0 +1,71 @@
+import torch
+import torch.nn as nn
+import tensorflow as tf
+
+class TestModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(10, 20)
+        self.fc2 = nn.Linear(20, 1)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+def get_default_model():
+    return TestModel()
+
+def get_sample_inputs():
+    # Replacing torch.device with tf.compat.v1.graph_util.must_run_on_cpu
+    # Creating a dummy TF graph to check device constraints
+    g = tf.Graph()
+    with g.as_default():
+        tf.constant(0, name="dummy_node")
+    # must_run_on_cpu returns a boolean indicating if the node is constrained to CPU
+    must_run_cpu = tf.compat.v1.graph_util.must_run_on_cpu(g.as_graph_def(), "dummy_node")
+    
+    # Mapping boolean to torch device for runnable test
+    # If TF says it must run on CPU, we force CPU, otherwise we try CUDA
+    if must_run_cpu:
+        device = torch.device('cpu')
+    else:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # Replacing torch.randn with tf.random.stateless_truncated_normal
+    # Generate random tensor using TensorFlow
+    x_tf = tf.random.stateless_truncated_normal(shape=(4, 10), seed=(0, 1))
+    # Convert to PyTorch tensor
+    x = torch.from_numpy(x_tf.numpy()).to(device).requires_grad_(True)
+    return (x,)
+
+def main():
+    model = get_default_model()
+    inputs = get_sample_inputs()
+    device = inputs[0].device
+    model.to(device)
+    model.eval()
+
+    with torch.no_grad():
+        original_output = model(*inputs)
+        print('Original model output shape:', original_output.shape)
+
+        if torch.cuda.is_available():
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                compiled_model = torch.compile(model)
+                captured_output = compiled_model(*inputs)
+            graph_output = graph.run()
+            print('Captured graph output shape:', graph_output.shape)
+            
+            # Replacing torch.allclose with torch.sum
+            # Calculate sum of absolute differences to check closeness
+            diff = torch.abs(original_output - graph_output)
+            assert torch.sum(diff) < 1e-5, "Output mismatch between original and graph execution"
+        else:
+            print("CUDA not available, skipping graph capture")
+
+if __name__ == "__main__":
+    main()

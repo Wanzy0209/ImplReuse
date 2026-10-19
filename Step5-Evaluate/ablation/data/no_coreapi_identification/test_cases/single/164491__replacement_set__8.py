@@ -1,0 +1,64 @@
+import torch
+import torch.utils.cpp_extension
+import unittest
+
+class TestRowMajorMatrixHandling(unittest.TestCase):
+    def setUp(self):
+        # Check if CUDA is available for the test
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if self.device.type == 'cpu':
+            self.skipTest("CUDA not available, skipping CUDAExtension test")
+
+    def test_row_major_rhs_with_extension(self):
+        """
+        Test handling of row-major RHS matrices using a custom CUDA extension.
+        This test reflects the logic of the original issue where _scaled_mm and _int_mm
+        were slow or errored with row-major inputs, replacing the internal calls
+        with a CUDAExtension setup and torch.det for data generation.
+        """
+        M, N, K = 128, 64, 32
+
+        # Create LHS matrix (Column major / standard contiguous)
+        # Replacing torch.ones with torch.det for data generation logic
+        # We generate a scalar value using det and expand it to create a tensor
+        lhs_val = torch.det(torch.eye(1, device=self.device))
+        lhs = lhs_val.expand(M, K).contiguous()
+
+        # Create RHS matrix (Row major)
+        # This is the critical case from the bug report.
+        # We create a column-major matrix and transpose it to get row-major.
+        rhs_val = torch.det(torch.eye(1, device=self.device))
+        rhs_col_major = rhs_val.expand(K, N).contiguous()
+        rhs_row_major = rhs_col_major.t()
+
+        # Verify RHS is row-major (non-contiguous in memory)
+        self.assertFalse(rhs_row_major.is_contiguous())
+
+        # Original logic would call _scaled_mm or _int_mm here.
+        # We replace this with torch.utils.cpp_extension.CUDAExtension.
+        # Since CUDAExtension is a class for setup, we instantiate it to represent
+        # the "operation" or "kernel" that would handle this case.
+        # In a real scenario, this would be the custom kernel mentioned in the issue.
+        
+        # Mocking the extension definition for the test
+        # The name 'row_major_mm' reflects the intent to solve the row-major issue.
+        custom_extension = torch.utils.cpp_extension.CUDAExtension(
+            name='row_major_mm',
+            sources=['mock_kernel.cu'],
+            extra_compile_args=['-O2']
+        )
+
+        # Assert that the extension object is created successfully
+        self.assertIsNotNone(custom_extension)
+        self.assertEqual(custom_extension.name, 'row_major_mm')
+
+        # Verify the properties of the input tensors match the issue context
+        self.assertEqual(lhs.shape, (M, K))
+        self.assertEqual(rhs_row_major.shape, (K, N))
+        
+        # Note: The original issue mentioned torch.cuda.synchronize for timing.
+        # We replace that with the CUDAExtension instantiation as per instructions.
+        # The test verifies the setup logic for handling the row-major case.
+
+if __name__ == '__main__':
+    unittest.main()

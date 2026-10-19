@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # torch.tensor([], device='cuda:0')
@@ -10,4 +9,3 @@ with tf.device('/device:GPU:0'):
 # tf.where returns the indices of non-zero elements.
 # The 'size=1' argument in the source likely refers to the output shape dimension (1 column for 1D input).
 result = tf.where(empty_tensor)
-```

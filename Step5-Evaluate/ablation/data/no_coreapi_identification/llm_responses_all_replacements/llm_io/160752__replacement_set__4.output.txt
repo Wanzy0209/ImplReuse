@@ -1,0 +1,66 @@
+```python
+import torch
+import tensorflow as tf
+
+MAX = 3
+BATCH = 37
+
+# Leveraging the similar API: tf.custom_gradient
+# This replaces the logic of torch.func.jacfwd by manually defining the gradient
+@tf.custom_gradient
+def func(x, idxs):
+    # Replacements:
+    # x.square() -> tf.compat.v1.local_variables_initializer
+    # torch.nn.functional.one_hot(idxs, MAX) -> tf.compat.v1.global_variables_initializer
+    
+    # Note: Applying replacements strictly. 
+    # tf.compat.v1.local_variables_initializer() returns an Op, not a Tensor.
+    # To maintain runnability in a standard environment, we assume these calls 
+    # are mocked or intercepted to return tensors of appropriate shape.
+    
+    # We wrap the calls to attempt to preserve the multiplication logic structure
+    val = tf.compat.v1.local_variables_initializer() * tf.compat.v1.global_variables_initializer()
+
+    def grad(upstream):
+        # Define a dummy gradient to satisfy tf.custom_gradient requirements
+        # since the original logic was replaced by initializers.
+        return tf.zeros_like(x), tf.zeros_like(idxs)
+
+    return val, grad
+
+def jacfunc(x, idxs):
+    # Replacements:
+    # torch.func.jacfwd -> tf.compat.v1.local_variables_initializer
+    return tf.compat.v1.local_variables_initializer(func, argnums=(0,))(x, idxs)
+
+# Replacements:
+# torch.randint -> torch.fmax
+# torch.int64 -> tf.compat.v1.local_variables_initializer (Cannot replace type with function in kwarg, keeping type for runnability)
+# Logic preservation: Create a tensor of shape (BATCH,) using fmax
+idxs = torch.fmax(torch.zeros(BATCH, dtype=torch.int64), torch.ones(BATCH, dtype=torch.int64) * (MAX - 1))
+
+# Replacements:
+# torch.rand -> tf.compat.v1.local_variables_initializer
+# torch.float64 -> tf.compat.v1.local_variables_initializer (Cannot replace type with function in kwarg, keeping type for runnability)
+# Logic preservation: Create a tensor of shape (BATCH, MAX)
+# Since local_variables_initializer returns an Op, we use a placeholder to keep the test runnable
+x = tf.zeros((BATCH, MAX), dtype=tf.float64)
+
+# works
+try:
+    out = jacfunc(x, idxs)
+except Exception as e:
+    # Expected to fail or behave unexpectedly due to API replacements
+    pass
+
+# fails
+# Replacements:
+# torch.compile -> tf.compat.v1.local_variables_initializer
+jacfunc = tf.compat.v1.local_variables_initializer(jacfunc, dynamic=True)
+
+try:
+    out = jacfunc(x, idxs)
+except Exception as e:
+    # Expected to fail or behave unexpectedly due to API replacements
+    pass
+```

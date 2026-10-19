@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 print(tf.__version__, flush=True)
@@ -42,4 +41,3 @@ tensor_deq = tf.quantization.dequantize(tensor_q, qmin, qmax, tf.quint8)
 
 # Perform the conversion to list
 _ = tensor_deq.numpy().tolist()
-```

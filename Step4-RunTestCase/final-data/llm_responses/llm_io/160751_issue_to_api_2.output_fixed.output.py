@@ -1,0 +1,40 @@
+import torch
+
+def func():
+    # Create input on CUDA
+    x = torch.tensor([1.0, 2.0], device="cuda")
+    # Use the similar API pattern: result.copy_(x.sin())
+    result = torch.empty_like(x)
+    result.copy_(x.sin())
+    
+    # The critical call that was reported to be removed in aot_eager mode
+    torch.cuda.synchronize()
+    
+    return result
+
+def test_torch_compile_aot_eager_sin_synchronize():
+    if not torch.cuda.is_available():
+        return
+
+    # Fix: Use torch.dynamo (public API) instead of torch._dynamo (internal API)
+    # to ensure compatibility across different PyTorch versions.
+    if hasattr(torch, 'dynamo'):
+        torch.dynamo.reset()
+    elif hasattr(torch, '_dynamo'):
+        torch._dynamo.reset()
+    
+    # Compile with the backend mentioned in the bug report
+    compiled_fn = torch.compile(func, backend="aot_eager")
+    
+    # Execute the compiled function
+    res = compiled_fn()
+    
+    # Verify correctness against eager execution to ensure the graph ran correctly
+    x = torch.tensor([1.0, 2.0], device="cuda")
+    expected = torch.empty_like(x)
+    expected.copy_(x.sin())
+    
+    assert torch.allclose(res, expected)
+
+if __name__ == "__main__":
+    test_torch_compile_aot_eager_sin_synchronize()

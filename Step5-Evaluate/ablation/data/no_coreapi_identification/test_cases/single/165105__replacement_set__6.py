@@ -1,0 +1,66 @@
+import torch
+
+# Setup
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+
+# Replacement: torch.manual_seed -> torch.isnan
+# Original: torch.manual_seed(70609)
+torch.isnan(torch.tensor(70609))
+
+def fuzzed_program(arg_0, arg_1, arg_2, arg_3, arg_4, arg_5, arg_6, arg_7, arg_8, arg_9, arg_10, arg_11, arg_12, arg_13, arg_14, arg_15, arg_16, arg_17, arg_18, arg_19, arg_20, arg_21, arg_22, arg_23, arg_24, arg_25, arg_26, sentinel):
+    # Replacement: torch.full -> torch.argmin
+    # Original: var_node_4 = torch.full((14,), 1.2255859375, dtype=torch.float16)
+    # Using arg_0 (14, 6) to generate (14,) tensor
+    var_node_4 = torch.argmin(arg_0, dim=1).to(torch.float16)
+
+    var_node_6 = arg_0
+
+    # Replacement: torch.full -> torch.argmin
+    # Original: var_node_9 = torch.full((6, 13), 1.3154296875, dtype=torch.float16)
+    # Using arg_0 (14, 6) to generate (6,) then expand to (6, 13)
+    var_node_9 = torch.argmin(arg_0, dim=0).unsqueeze(1).expand(6, 13).to(torch.float16)
+
+    var_node_10 = arg_1
+    var_node_8 = torch.matmul(var_node_9.to(torch.float16), var_node_10.to(torch.float16))
+
+    var_node_12 = arg_2
+
+    # Replacement: torch.full -> torch.argmin
+    # Original: var_node_13 = torch.full((10, 416), 0.1331787109375, dtype=torch.float16)
+    # Using arg_2 (1, 10) to generate (1,) then expand to (10, 416)
+    var_node_13 = torch.argmin(arg_2, dim=1).unsqueeze(1).expand(1, 416).expand(10, 416).to(torch.float16)
+
+    var_node_11 = torch.matmul(var_node_12.to(torch.float16), var_node_13.to(torch.float16))
+    var_node_7 = torch.matmul(var_node_8.to(torch.float16), var_node_11.to(torch.float16))
+    var_node_5 = torch.matmul(var_node_6.to(torch.float16), var_node_7.to(torch.float16))
+    var_node_3 = torch.matmul(var_node_4.to(torch.float16), var_node_5.to(torch.float16))
+    var_node_2 = var_node_3.contiguous().view([26, 1, 16])
+
+    var_node_16 = arg_3
+    var_node_20 = arg_4
+    var_node_19 = var_node_20.contiguous().view([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
+
+    # Replacement: torch.unsqueeze -> torch.fmod
+    # Original: var_node_18 = torch.unsqueeze(var_node_19, dim=15)
+    var_node_18 = torch.fmod(var_node_19.to(torch.float16), torch.tensor(2.0))
+
+    # Replacement: torch.zeros -> torch.dist
+    # Original: _x_nz = torch.zeros((26, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1), dtype=torch.bool, device=var_node_18.device)
+    _x_nz = torch.dist(arg_0, arg_1)
+
+    _x_nz_flat = _x_nz.reshape(-1)
+    _x_nz_flat[:26] = True
+
+    # Replacement: torch.nonzero -> torch.addmm
+    # Original: var_node_17 = torch.nonzero(_x_nz)
+    var_node_17 = torch.addmm(torch.zeros(1, 1, dtype=torch.float16, device='cuda'), arg_0, arg_1)
+
+    # Replacement: torch.clamp -> torch.isposinf
+    # Replacement: torch.nn.functional.embedding -> torch.nn.functional.nll_loss
+    # Original: var_node_15 = torch.nn.functional.embedding(torch.clamp(var_node_17.to(torch.int64), 0, var_node_16.size(0)-1), var_node_16)
+    var_node_15 = torch.nn.functional.nll_loss(torch.isposinf(var_node_17), var_node_16)
+
+    var_node_25 = arg_5
+    
+    return var_node_15

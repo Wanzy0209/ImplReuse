@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 class Foo:
@@ -22,4 +21,3 @@ def fn(x, obj):
     return x + 1
 
 fn(tf.ones(3), Foo())
-```

@@ -1,4 +1,3 @@
-```python
 import time
 import tensorflow as tf
 
@@ -97,4 +96,3 @@ print(f"Average: {total_time/num_tensors*1000:.1f} ms per tensor")
 print("="*80)
 
 print(f"Total overhead: {total_time:.1f}s = {total_time/60:.1f} minutes")
-```

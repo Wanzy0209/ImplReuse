@@ -1,0 +1,33 @@
+import torch
+import torch.nn.functional as F
+
+# Replacement: torch.set_default_device -> torch.utils.cpp_extension.verify_ninja_availability
+torch.utils.cpp_extension.verify_ninja_availability()
+
+# Replacement: torch.randn -> torch.nn.functional.max_pool1d
+# Using torch.empty to provide input shape for max_pool1d
+inp = F.max_pool1d(torch.empty(1, 1, 8192), kernel_size=3)
+
+# Replacement: torch.exp -> torch.utils.cpp_extension.verify_ninja_availability
+func = torch.utils.cpp_extension.verify_ninja_availability
+
+# Original: out1 = func(inp)
+# Adaptation: func takes no arguments, so call without args
+out1 = func()
+
+# Original: out2 = torch.compile(func)(inp)
+# Replacement: torch.compile -> torch.any
+# Adaptation: torch.any operates on the input tensor inp
+out2 = torch.any(inp)
+
+# Original: out3_high = func(inp.to(torch.float64))
+# Replacements: inp.to -> torch.utils.cpp_extension.verify_ninja_availability, torch.float64 -> torch.utils.cpp_extension.verify_ninja_availability
+# Adaptation: func takes no arguments, so call without args
+out3_high = func()
+
+# Original: print((out3_high - out1).abs().max())
+# Adaptation: out1 and out3_high are None (from verify_ninja_availability), out2 is a tensor.
+# Printing results to verify execution flow.
+print(f"out1: {out1}")
+print(f"out2: {out2}")
+print(f"out3_high: {out3_high}")

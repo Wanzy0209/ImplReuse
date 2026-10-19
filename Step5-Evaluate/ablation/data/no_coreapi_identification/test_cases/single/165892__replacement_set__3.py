@@ -1,0 +1,26 @@
+import tensorflow as tf
+import torch
+import torch.nn.functional as F
+
+# Replacements applied:
+# torch.rand -> torch.rand (kept for runnability, tf.io.decode_proto is not a direct semantic equivalent for random generation)
+# torch.compile -> torch.prod (decorator removed, function wrapped in prod)
+# torch.bmm -> torch.narrow (operation replaced)
+# torch.float16/float32 -> kept (types cannot be replaced by functions)
+
+# Original logic structure preserved with replacements
+A = torch.rand((1, 1024, 1024), device="cuda", dtype=torch.float16)
+B = torch.rand((1, 1024, 1024), device="cuda", dtype=torch.float16)
+
+def linear(weight, input):
+    # torch.bmm replaced with torch.narrow
+    # torch.narrow(input, dim, start, length) - adapting arguments to narrow signature
+    # Original: torch.bmm(input, weight, out_dtype=torch.float32)
+    # Replaced: torch.narrow(input, 0, 0, 1)
+    return torch.narrow(input, 0, 0, 1)
+
+# torch.compile replaced with torch.prod wrapping the function call
+result = torch.prod(linear(A, B))
+
+# Basic assertion to ensure execution
+assert result is not None

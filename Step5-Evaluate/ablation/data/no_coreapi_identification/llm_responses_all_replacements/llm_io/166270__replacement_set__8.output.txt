@@ -1,0 +1,108 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+import os
+
+# Helper to setup distributed environment for torch.distributed.send_object_list
+# Note: This is a basic setup. In a real scenario, this requires multiple processes.
+def setup_distributed():
+    if not dist.is_initialized():
+        try:
+            # Using a simple TCP init for single-node testing if possible
+            os.environ['MASTER_ADDR'] = '127.0.0.1'
+            os.environ['MASTER_PORT'] = '29500'
+            # Initialize with world_size=1 for the sake of a runnable script, 
+            # though send_object_list typically implies multi-process.
+            dist.init_process_group(backend="gloo", rank=0, world_size=1)
+        except Exception as e:
+            print(f"⚠️ Distributed init skipped (expected if not in multi-proc env): {e}")
+
+def cleanup_distributed():
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+# Replacement: torch.manual_seed -> torch.argmin
+# Original: torch.manual_seed(1061983224)
+# New: Call torch.argmin on a tensor containing the seed value (semantic translation: use the value)
+torch.argmin(torch.tensor([1061983224]))
+
+def fuzzed_program(arg_0, sentinel):
+    # var_node_4 is arg_0
+    
+    # Replacement: torch.chunk -> torch.nn.ModuleDict
+    # Original: var_node_3 = torch.chunk(var_node_4, 4, dim=0)[0]
+    # New: Create a ModuleDict to hold the tensor, simulating a selection/processing step.
+    # We extract the tensor to pass to the next operation.
+    md = torch.nn.ModuleDict({'layer': nn.Linear(1, 1)})
+    # To maintain data flow, we use the input tensor in a way that allows extraction
+    # (This is a structural adaptation to keep the test runnable)
+    md.register_parameter('data', nn.Parameter(arg_0))
+    var_node_3 = md['data']
+
+    # Original API Under Test: torch.squeeze
+    var_node_2 = torch.squeeze(var_node_3)
+    
+    # Replacement: torch.stack -> torch.cholesky_solve
+    # Original: var_node_1 = torch.stack([var_node_2], dim=0)
+    # New: Use cholesky_solve. We need to construct valid inputs (A and B) for the solve.
+    # We unsqueeze var_node_2 to make it a matrix-like structure.
+    input_matrix = var_node_2.unsqueeze(0).unsqueeze(0) # Shape (1, 1)
+    # Create a dummy coefficient matrix (Upper triangular)
+    coeff_matrix = torch.eye(1).unsqueeze(0) # Shape (1, 1, 1)
+    var_node_1 = torch.cholesky_solve(input_matrix, coeff_matrix.squeeze(0))
+    
+    # Replacement: torch.reshape -> torch.logspace
+    # Original: var_node_0 = torch.reshape(var_node_1, [1])
+    # New: Use logspace. We use the value from var_node_1 to determine the size.
+    # We ensure the output is a tensor.
+    steps = max(1, int(var_node_1.sum().item()))
+    var_node_0 = torch.logspace(0, 1, steps=steps)
+    
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Replacement: torch.tensor -> torch.cummin
+# Original: sentinel = torch.tensor(1.0, requires_grad=True)
+# New: Create a tensor, apply cummin, and use the values.
+src_tensor = torch.tensor([1.0, 2.0], requires_grad=True)
+sentinel_tuple = torch.cummin(src_tensor, dim=0)
+sentinel = sentinel_tuple.values
+
+# Replacement: torch.as_strided -> torch.bucketize
+# Replacement: torch.randint -> torch.argmax
+# Original: arg_0 = torch.as_strided(torch.randint(0, 2, (4,), dtype=torch.int8).bool(), (4,), (1,))
+# New: Generate input using argmax, then bucketize it.
+rand_input = torch.randn(4, 2)
+int_like_input = torch.argmax(rand_input, dim=1).to(torch.int8)
+boundaries = torch.tensor([0, 1])
+arg_0 = torch.bucketize(int_like_input, boundaries).bool()
+
+args = (arg_0,) + (sentinel,)
+
+# Run eager
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+
+# Replacement: torch.compile -> torch.distributed.send_object_list
+# Original: compiled_program = torch.compile(...); result_compiled = compiled_program(*args)
+# New: Initialize distributed and send the result.
+setup_distributed()
+try:
+    if dist.is_initialized():
+        # Note: send_object_list usually sends to another rank. 
+        # Sending to self (rank 0) might block or error depending on backend implementation details in single-process.
+        # We wrap it to ensure the script completes.
+        try:
+            dist.send_object_list([result_original], dst=0)
+            print('✅ send success')
+        except RuntimeError as e:
+            print(f'⚠️ send_object_list skipped (single-process limitation): {e}')
+    else:
+        print('⚠️ distributed not initialized, skipping send')
+finally:
+    cleanup_distributed()
+```

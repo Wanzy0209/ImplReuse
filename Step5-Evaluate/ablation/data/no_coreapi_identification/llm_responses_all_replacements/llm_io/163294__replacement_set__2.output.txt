@@ -1,0 +1,63 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Replacements:
+# nn.Module -> torch.nn.functional.elu_
+# torch.no_grad() -> torch.nn.functional.elu_ (from group replacement)
+# torch.ops.aten.mul.Tensor -> torch.nn.functional.elu_
+def elu_case(x):
+    # Original logic: with torch.no_grad(): y = x * 4
+    # Replaced logic: Apply elu_ (replacing both no_grad context and mul operation)
+    return torch.nn.functional.elu_(x)
+
+# Replacements:
+# torch.randn -> tf.random.stateless_truncated_normal
+seed = (1, 2)
+shape = [6]
+tf_input = tf.random.stateless_truncated_normal(shape, seed)
+
+# Cross-library translation: Convert TF tensor to Torch tensor for processing
+torch_input = torch.from_numpy(tf_input.numpy())
+
+# Apply the "Module" logic
+# Original: ep = torch.export.export(SetGradCase(), (torch.randn(6),), strict=False)
+# Here we execute the logic defined by the replacement for nn.Module
+processed_tensor = elu_case(torch_input)
+
+# Cross-library translation: Convert Torch tensor back to TF tensor
+tf_processed = tf.convert_to_tensor(processed_tensor.numpy())
+
+# Setup for tf.experimental.dtensor.relayout
+# Replacements: torch.export.export -> tf.experimental.dtensor.relayout
+try:
+    # Create a minimal mesh for DTensor operations
+    mesh = tf.experimental.dtensor.create_mesh([("x", 1)], devices=["CPU:0"])
+    layout = tf.experimental.dtensor.Layout([tf.experimental.dtensor.UNSHARDED], mesh)
+
+    # Create DTensor from the processed data
+    dt_input = tf.experimental.dtensor.DTensor(tf_processed, layout)
+
+    # First "Export"
+    # Original: ep = torch.export.export(...)
+    ep = tf.experimental.dtensor.relayout(dt_input, layout)
+    print("First relayout result:", ep)
+
+    # Second "Export"
+    # Original: ep2 = torch.export.export(ep.module(), (torch.randn(6),))
+    # Here we relayout the result of the first relayout
+    ep2 = tf.experimental.dtensor.relayout(ep, layout)
+    print("Second relayout result:", ep2)
+
+    # Assertions to check validity (mimicking the bug check for empty submod)
+    # The original bug was that ep2 contained an empty submod.
+    # We check that ep2 is a valid, non-empty tensor.
+    assert ep2 is not None
+    assert ep2.shape == shape
+    print("Test passed: Double relayout successful and result is valid.")
+
+except Exception as e:
+    # DTensor might not be fully available or configured in all environments
+    print(f"DTensor execution skipped or failed: {e}")
+```

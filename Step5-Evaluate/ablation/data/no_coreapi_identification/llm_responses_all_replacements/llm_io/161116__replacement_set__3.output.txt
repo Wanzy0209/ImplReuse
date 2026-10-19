@@ -1,0 +1,44 @@
+```python
+import torch
+import torch.distributed as dist
+import os
+
+def main():
+    gpu_id = int(os.environ["LOCAL_RANK"])
+    
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+    
+    # Initialize the process group. 
+    # Note: The bug report indicates this step might segfault on large NVL72 clusters (>10 trays).
+    # We keep this initialization because torch.distributed.send_object_list requires an 
+    # active process group to function.
+    dist.init_process_group(backend='nccl',
+                            device_id=gpu_id,
+                            )
+    
+    # Test the replacement API: torch.distributed.send_object_list
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+
+    if world_size >= 2:
+        if rank == 0:
+            # Send a list of picklable objects to rank 1
+            obj_list = [1, "test", 3.14, torch.tensor([1, 2, 3])]
+            dist.send_object_list(obj_list, dst=1, device=torch.device(device))
+        elif rank == 1:
+            # Receive the list of objects from rank 0
+            obj_list = [None] * 4
+            dist.recv_object_list(obj_list, src=0, device=torch.device(device))
+            
+            # Assertions to verify the data was received correctly
+            assert obj_list[0] == 1
+            assert obj_list[1] == "test"
+            assert obj_list[2] == 3.14
+            assert torch.equal(obj_list[3], torch.tensor([1, 2, 3]))
+    
+    dist.barrier()
+    
+if __name__ == "__main__":
+    main()
+```

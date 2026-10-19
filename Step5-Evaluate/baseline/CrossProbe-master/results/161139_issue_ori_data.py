@@ -1,4 +1,3 @@
-```python
 import os
 # Conversion: PyTorch CUDA allocator configuration to TensorFlow GPU memory growth.
 # Note: "roundup_power2_divisions" is specific to PyTorch's caching allocator.
@@ -23,4 +22,3 @@ try:
 except RuntimeError as e:
     print("Could not retrieve memory info. Ensure GPU is available.")
     print(e)
-```

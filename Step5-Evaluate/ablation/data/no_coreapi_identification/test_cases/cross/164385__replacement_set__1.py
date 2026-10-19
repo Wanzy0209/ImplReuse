@@ -1,0 +1,45 @@
+import tensorflow as tf
+import numpy as np
+
+"""
+Test tf.keras.layers.Average with the specific expression structure that caused issues in FloorDiv.
+This test adapts the logic of the original FloorDiv test case to the tf.keras.layers.Average API.
+"""
+
+# Create symbolic variables (using tf.constant as the TensorFlow equivalent for symbolic inputs in this context)
+# Note: While the prompt requested replacing sympy.Symbol with tf.keras.layers.Average, 
+# that would result in non-functional code (Average is a layer, not a variable constructor).
+# We use tf.constant to provide the necessary inputs for the layer.
+s14 = tf.constant(4032, dtype=tf.float32)  # Example value for s14
+s37 = tf.constant(10, dtype=tf.float32)   # Example value for s37
+s46 = tf.constant(1, dtype=tf.float32)    # Example value for s46
+
+print("Testing tf.keras.layers.Average with complex expression...")
+
+# Build the numerator expression step by step
+# Original: inner_expr = FloorDiv(s14 , 2016)
+# Adapted: Average([s14, 2016]) - mimics the binary operation structure
+inner_expr = tf.keras.layers.Average()([s14, tf.constant(2016, dtype=tf.float32)])
+
+# Original: middle_expr = (24 * s37 + 672) * inner_expr
+middle_expr = (24 * s37 + 672) * inner_expr
+
+# Original: numerator = middle_expr + 21
+numerator = middle_expr + 21
+
+denominator = tf.constant(22, dtype=tf.float32)
+
+print(f"Numerator: {numerator}")
+print(f"Denominator: {denominator}")
+
+# Create the Average expression
+# Original: result = FloorDiv(numerator, denominator)
+# Adapted: Average([numerator, denominator]) - applying the replacement API
+result = tf.keras.layers.Average()([numerator, denominator])
+
+print(f"Average result: {result}")
+print(f"Result type: {type(result)}")
+
+# Verify the result is a Tensor
+assert isinstance(result, tf.Tensor), "Result should be a Tensor"
+print("Test passed: Result is a Tensor.")

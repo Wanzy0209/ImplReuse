@@ -1,0 +1,73 @@
+```python
+import torch
+import torch.distributed as dist
+from torch.utils._python_dispatch import TorchDispatchMode
+# Fixed import: FakeProcessGroup is located in torch.testing._internal.distributed.fake_pg
+from torch.testing._internal.distributed.fake_pg import FakeProcessGroup, FakeStore
+
+
+class SimpleTensorMode(TorchDispatchMode):
+    """
+    A dispatch mode that records the function calls made during its context.
+    Used to verify if c10d ops are being dispatched correctly.
+    """
+    def __init__(self):
+        self.dispatched_ops = []
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        if kwargs is None:
+            kwargs = {}
+        self.dispatched_ops.append(func)
+        return func(*args, **kwargs)
+
+
+def test_fake_process_group_dispatch():
+    """
+    Test case to reproduce the bug where direct construction of FakeProcessGroup
+    fails to dispatch c10d ops (silent incorrectness), compared to proper initialization.
+    """
+    # 1. Reproduce the bug: Direct construction of FakeProcessGroup
+    # Expected behavior (Bug): c10d.allreduce_ is NOT dispatched.
+    fake_pg = FakeProcessGroup(rank=0, world_size=3)
+    
+    mode = SimpleTensorMode()
+    with mode:
+        tensor = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        dist.all_reduce(tensor, group=fake_pg)
+
+    # Check dispatched operations
+    dispatched_funcs = [str(op) for op in mode.dispatched_ops]
+    print(f"Direct construction dispatched ops: {dispatched_funcs}")
+    
+    # In the buggy state, we expect 'c10d.allreduce_' to be missing.
+    # We assert this to confirm the reproduction of the issue.
+    has_c10d_allreduce = any('c10d' in func and 'allreduce' in func for func in dispatched_funcs)
+    assert not has_c10d_allreduce, \
+        "Bug reproduction failed: c10d.allreduce_ was dispatched for direct construction (expected silent failure)."
+
+    # 2. Verify correct behavior: Using init_process_group
+    # Expected behavior: c10d.allreduce_ IS dispatched.
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+    fake_store = FakeStore()
+    dist.init_process_group(
+        "fake", store=fake_store, rank=0, world_size=3
+    )
+
+    mode_good = SimpleTensorMode()
+    with mode_good:
+        tensor = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        dist.all_reduce(tensor) # Uses the default group initialized above
+
+    dispatched_funcs_good = [str(op) for op in mode_good.dispatched_ops]
+    print(f"Init process group dispatched ops: {dispatched_funcs_good}")
+
+    has_c10d_allreduce_good = any('c10d' in func and 'allreduce' in func for func in dispatched_funcs_good)
+    assert has_c10d_allreduce_good, \
+        "Correctness check failed: c10d.allreduce_ was NOT dispatched for properly initialized group."
+
+
+if __name__ == "__main__":
+    test_fake_process_group_dispatch()
+```

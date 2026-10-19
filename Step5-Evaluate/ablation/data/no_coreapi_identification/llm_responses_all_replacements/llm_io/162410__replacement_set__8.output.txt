@@ -1,0 +1,51 @@
+```python
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+import numpy as np
+
+# Disable TensorFlow v2 behavior to use v1 metrics
+tf.compat.v1.disable_eager_execution()
+
+def f(x, y):
+    x.copy_(x.flip(1))
+    y = y.sum(dim=1, keepdim=True) + y
+    return x + y
+
+# Replacing torch.randn with torch.nn.functional.max_pool3d
+# We create a base tensor to apply pooling on. Using ones for deterministic behavior.
+# Shape needs to be 5D for max_pool3d: (Batch, Channel, Depth, Height, Width)
+base_x = torch.ones(20, 1, 10, 32, 32, device="cuda")
+base_y = torch.ones(20, 1, 10, 32, 32, device="cuda")
+
+x = F.max_pool3d(base_x, kernel_size=2)
+x_copy = x.clone()
+y = F.max_pool3d(base_y, kernel_size=2)
+
+opt_f = torch.compile(f)
+ref = f(x, y)
+act = opt_f(x_copy, y)
+
+# Replacing torch.testing.assert_close with tf.compat.v1.metrics.true_positives
+# We need to convert PyTorch tensors to NumPy to feed into TensorFlow
+ref_np = ref.cpu().numpy()
+act_np = act.cpu().numpy()
+
+with tf.compat.v1.Session() as sess:
+    # Define placeholders for labels and predictions
+    labels = tf.compat.v1.placeholder(tf.float32, shape=ref_np.shape)
+    predictions = tf.compat.v1.placeholder(tf.float32, shape=act_np.shape)
+
+    # Calculate true positives
+    tp, update_op = tf.compat.v1.metrics.true_positives(labels, predictions)
+
+    # Initialize local variables required for metrics
+    sess.run(tf.compat.v1.local_variables_initializer())
+
+    # Run the operation
+    tp_val, _ = sess.run([tp, update_op], feed_dict={labels: ref_np, predictions: act_np})
+    print(f"True Positives (TensorFlow): {tp_val}")
+
+if hasattr(torch._inductor, "metrics"):
+    print(f"{torch._inductor.metrics.generated_kernel_count=}")
+```

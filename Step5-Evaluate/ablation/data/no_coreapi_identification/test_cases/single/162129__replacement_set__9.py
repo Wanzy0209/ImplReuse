@@ -1,0 +1,69 @@
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+def test_issue_162129_replaced():
+    """
+    Test case based on Issue 162129: Direct construction of FakeProcessGroup 
+    doesn't raise errors but has silent incorrectness.
+    
+    This test case applies the following API replacements as requested:
+    - FakeProcessGroup -> tf.quantization.quantize_and_dequantize_v2
+    - dist.all_reduce -> tf.quantization.quantize_and_dequantize_v2
+    - torch.distributed -> tf.quantization.quantize_and_dequantize_v2
+    - torch.distributed.init_process_group -> torch.nn.functional.cross_entropy
+    - torch.tensor -> torch.empty_strided
+    - torch.testing._internal.distributed.fake_pg -> tf.quantization.quantize_and_dequantize_v2
+    - torch.utils._python_dispatch -> tf.quantization.quantize_and_dequantize_v2
+    """
+
+    # Replacing FakeProcessGroup(rank=0, world_size=3)
+    # Original: fake_pg = FakeProcessGroup(rank=0, world_size=3)
+    # Replacement: tf.quantization.quantize_and_dequantize_v2
+    # We simulate the creation of a "group" object by calling the replacement function.
+    dummy_pg_input = tf.constant([0.0, 1.0, 2.0])
+    fake_pg = tf.quantization.quantize_and_dequantize_v2(
+        dummy_pg_input, input_min=0.0, input_max=2.0
+    )
+
+    # Replacing torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    # Original: tensor = torch.tensor(...)
+    # Replacement: torch.empty_strided
+    # Note: empty_strided creates an uninitialized tensor, which aligns with the 
+    # "silent incorrectness" theme of the bug (garbage data).
+    tensor = torch.empty_strided((2, 3), (3, 1))
+
+    # Replacing torch.utils._python_dispatch.TorchDispatchMode context
+    # Original: with SimpleTensorMode(): ...
+    # Replacement: tf.quantization.quantize_and_dequantize_v2
+    # Since the replacement is a function and not a context manager, we execute 
+    # the logic directly. The "interception" logic is effectively replaced by 
+    # the function call itself.
+
+    # Replacing dist.all_reduce(tensor, group=fake_pg)
+    # Original: dist.all_reduce(tensor, group=fake_pg)
+    # Replacement: tf.quantization.quantize_and_dequantize_v2
+    # We convert the torch tensor to a tf tensor to apply the operation.
+    # The 'fake_pg' variable (result of the previous replacement) is available 
+    # but not strictly used as an argument in the same way, as the replacement 
+    # function signature differs from the original API.
+    tf_tensor = tf.constant(tensor.numpy())
+    result = tf.quantization.quantize_and_dequantize_v2(
+        tf_tensor, input_min=0.0, input_max=6.0
+    )
+
+    # Replacing torch.distributed.init_process_group
+    # Original: torch.distributed.init_process_group("fake", store=fake_store, rank=0, world_size=3)
+    # Replacement: torch.nn.functional.cross_entropy
+    # This represents the "proper initialization" path in the bug report.
+    # We simulate this by calling cross_entropy on the tensor.
+    target = torch.tensor([0, 1])
+    # Using the uninitialized tensor 'tensor' here to calculate loss
+    loss = F.cross_entropy(tensor, target)
+
+    # Assertions to verify the test runs and produces outputs of expected shape/type
+    assert result.shape == (2, 3), "Result shape should match input shape"
+    assert loss.item() >= 0, "Cross entropy loss should be non-negative"
+
+if __name__ == "__main__":
+    test_issue_162129_replaced()

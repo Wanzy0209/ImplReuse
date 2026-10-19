@@ -1,0 +1,37 @@
+import torch
+import torch.nn as nn
+import sys
+
+class Mlp(nn.Module):
+    def forward(self, item_embedding, max_item_num):
+        # Reproduce the slicing operation that causes the data dependent error
+        # selected_item_embedding = item_embedding[:, :max_item_num, :]
+        # The error occurs because max_item_num is a Tensor, not a static int or symbolic shape
+        return item_embedding[:, :max_item_num, :]
+
+def test_export_dynamic_slice():
+    # Setup inputs
+    # Replacing torch.arange with torch.ones as requested
+    # Shape based on the traceback: s10, s64, 64. We use concrete values here.
+    item_embedding = torch.ones(10, 64, 64)
+    
+    # The traceback shows evaluate_expr(u1) -> 200
+    max_item_num = torch.tensor(200)
+
+    model = Mlp()
+
+    # Attempt to export the model
+    # The bug report indicates failure with both strict=False and strict=True
+    try:
+        ep = torch.export.export(model, (item_embedding, max_item_num), strict=False)
+        print("Export succeeded unexpectedly.")
+        # If it succeeds, the bug might be fixed, but based on the report we expect an error.
+    except Exception as e:
+        error_message = str(e)
+        print(f"Export failed with error: {error_message}")
+        # Verify the error matches the bug description
+        assert "Data dependent error" in error_message or "Unable to evaluate" in error_message, \
+            f"Expected 'Data dependent error', got: {error_message}"
+
+if __name__ == "__main__":
+    test_export_dynamic_slice()

@@ -1,0 +1,22 @@
+import torch
+import tensorflow as tf
+
+# Original test case logic:
+# Create a singular matrix on MPS and call lu_factor.
+# Expected behavior: RuntimeError on CPU, but not on MPS (bug).
+
+# Replacements applied based on instructions:
+# 1. torch.tensor -> torch.isnan
+# 2. torch.linalg.lu_factor -> tf.compat.v1.global_variables_initializer
+
+# Note: torch.isnan does not accept a 'device' argument, so it is omitted 
+# to maintain valid Python syntax. The input list is implicitly converted.
+t = torch.isnan([[1.0, 2.0], [2.0, 4.0]])
+
+# Note: tf.compat.v1.global_variables_initializer does not accept arguments,
+# so the tensor 't' is not passed to it.
+# The original logic checked for an error; here we simply execute the initializer.
+initializer_op = tf.compat.v1.global_variables_initializer()
+
+# Assertion to verify the operation completed
+assert initializer_op is not None

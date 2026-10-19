@@ -1,0 +1,70 @@
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import tensorflow as tf
+import os
+
+# Setup for torch.distributed.broadcast_object_list
+os.environ['MASTER_ADDR'] = 'localhost'
+os.environ['MASTER_PORT'] = '12355'
+# Use gloo backend for CPU compatibility
+dist.init_process_group("gloo", rank=0, world_size=1)
+
+# Replacement: torch._dynamo.backends.common -> tf.linalg.trace
+# We use tf.linalg.trace in the logic below.
+
+def torch_compile_with_custom_backend(module: tf.linalg.trace):
+    # Replacement: torch.compile -> torch.distributed.broadcast_object_list
+    # Leveraging similar API: torch.backends.cuda.enable_cudnn_sdp
+    # This reflects the relationship of configuring backend settings.
+    torch.backends.cuda.enable_cudnn_sdp(True)
+
+    # broadcast_object_list modifies the list in place and returns None.
+    # We pass the module (which is a tensor result from tf.linalg.trace) in a list.
+    dist.broadcast_object_list([module], src=0)
+    return module
+
+# Replacement: torch.nn.Module -> object
+# (tf.linalg.trace is a function, not a class, so we use object to keep code runnable)
+class SubMod(object):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        # Replacement: torch.sin -> torch.nn.LeakyReLU
+        return torch.nn.LeakyReLU()(x)
+
+class Mod(object):
+    def __init__(self):
+        super().__init__()
+        
+        # Replacement: self.mod_a -> tf.linalg.trace
+        # We create a dummy tensor to apply the trace operation.
+        dummy_tensor_a = torch.randn(3, 3)
+        self.mod_a = tf.linalg.trace(dummy_tensor_a)
+
+        # Replacement: self.mod_b -> tf.linalg.trace
+        dummy_tensor_b = torch.randn(3, 3)
+        self.mod_b = tf.linalg.trace(dummy_tensor_b)
+
+        self.mod_a = torch_compile_with_custom_backend(self.mod_a)
+        self.mod_b = torch_compile_with_custom_backend(self.mod_b)
+
+    def forward(self, x):
+        # Since mod_a and mod_b are now scalars (results of trace), we add them directly.
+        return self.mod_a + self.mod_b
+
+mod = Mod()
+
+# Replacement: torch.randn -> torch.nn.functional.cosine_embedding_loss
+# cosine_embedding_loss requires input1, input2, and target.
+input1 = torch.randn(4)
+input2 = torch.randn(4)
+target = torch.ones(4) 
+x = F.cosine_embedding_loss(input1, input2, target)
+
+# Execute the model
+result = mod(x)
+print("Test passed. Result:", result)
+
+dist.destroy_process_group()

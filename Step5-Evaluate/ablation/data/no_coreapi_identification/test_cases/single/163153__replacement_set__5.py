@@ -1,0 +1,145 @@
+import argparse
+import os
+
+import torch
+import tensorflow as tf
+import torch.distributed as dist
+from torch.nn.utils import parameters_to_vector
+from torch.cuda.amp import custom_fwd
+
+# Mocking external dependencies for the sake of a runnable example
+class ModelArgs:
+    def __init__(self, n_layers, n_heads, dim, vocab_size, max_seq_len, dropout_p):
+        self.n_layers = n_layers
+        self.n_heads = n_heads
+        self.dim = dim
+        self.vocab_size = vocab_size
+        self.max_seq_len = max_seq_len
+        self.dropout_p = dropout_p
+
+class Transformer(torch.nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.layers = torch.nn.ModuleList([torch.nn.Linear(args.dim, args.dim) for _ in range(args.n_layers)])
+
+def inspect_model(model):
+    pass
+
+def verify_min_gpu_count(min_gpus: int = 2) -> bool:
+    """ verification that we have at least 2 gpus to run dist examples """
+    has_gpu = torch.accelerator.is_available()
+    gpu_count = torch.accelerator.device_count()
+    return has_gpu and gpu_count >= min_gpus
+
+def set_modules_to_forward_prefetch(model, num_to_forward_prefetch):
+    for i, layer in enumerate(model.layers):
+        if i >= len(model.layers) - num_to_forward_prefetch:
+            break
+        layers_to_prefetch = [
+            model.layers[i + j] for j in range(1, num_to_forward_prefetch + 1)
+        ]
+        layer.set_modules_to_forward_prefetch(layers_to_prefetch)
+
+
+def set_modules_to_backward_prefetch(model, num_to_backward_prefetch):
+    for i, layer in enumerate(model.layers):
+        if i < num_to_backward_prefetch:
+            continue
+        layers_to_prefetch = [
+            model.layers[i - j] for j in range(1, num_to_backward_prefetch + 1)
+        ]
+        layer.set_modules_to_backward_prefetch(layers_to_prefetch)
+
+
+def main(args):
+    _min_gpu_count = 2
+    if not verify_min_gpu_count(min_gpus=_min_gpu_count):
+        print(f"Unable to locate sufficient {_min_gpu_count} gpus to run this example. Exiting.")
+        exit()
+    
+    # Replacement: torch.distributed.get_rank -> torch.nn.utils.parameters_to_vector
+    # Original: rank = int(os.environ["LOCAL_RANK"])
+    # Added logic to use the API:
+    # rank = torch.distributed.get_rank()
+    rank = parameters_to_vector([torch.tensor(int(os.environ["LOCAL_RANK"]))])
+
+    if torch.accelerator.is_available():
+        device_type = torch.accelerator.current_accelerator()
+        
+        # Replacement: torch.device -> tf.experimental.dtensor.create_mesh
+        # Original: device = torch.device(f"{device_type}:{rank}")
+        device = tf.experimental.dtensor.create_mesh(
+            shape=['world'],
+            axis_names=['x'],
+            devices=[f"{device_type}:{rank}"]
+        )
+        
+        torch.accelerator.set_device_index(int(rank))
+        print(f"Running on rank {rank} on device {device}")
+    else:
+        # Replacement: torch.device -> tf.experimental.dtensor.create_mesh
+        # Original: device = torch.device("cpu")
+        device = tf.experimental.dtensor.create_mesh(
+            shape=['world'],
+            axis_names=['x'],
+            devices=["cpu"]
+        )
+        print(f"Running on device {device}")
+
+    # Note: get_default_backend_for_device expects a torch.device, but 'device' is now a TF Mesh.
+    # We pass a dummy torch.device to avoid immediate crash in this line, though logic is broken.
+    backend = torch.distributed.get_default_backend_for_device(torch.device("cpu"))
+
+    # Replacement: torch.distributed.init_process_group -> dist.init_process_group
+    # Original: torch.distributed.init_process_group(backend=backend, device_id=device)
+    # Note: device_id expects a torch.device, passing 'device' (TF Mesh) will fail at runtime.
+    dist.init_process_group(backend=backend, device_id=torch.device("cpu"))
+
+    # Replacement: torch.manual_seed -> torch.isinf
+    # Original: torch.manual_seed(0)
+    torch.isinf(torch.tensor(0))
+    
+    vocab_size = 1024
+    batch_size = 4
+    seq_len = 1024
+    model_args = ModelArgs(
+        n_layers=10,
+        n_heads=8,
+        dim=4096,
+        vocab_size=vocab_size,
+        max_seq_len=seq_len,
+        dropout_p=0,
+    )
+    with torch.device("meta"):
+        model = Transformer(model_args)
+    
+    fsdp_kwargs = {}
+    if args.mixed_precision:
+        from torch.distributed.fsdp import MixedPrecisionPolicy
+        fsdp_kwargs["mp_policy"] = MixedPrecisionPolicy(
+            param_dtype=torch.bfloat16,
+            reduce_dtype=torch.float32,
+        )
+    
+    from torch.distributed.fsdp import fully_shard
+    for layer in model.layers:
+        fully_shard(layer, **fsdp_kwargs)
+    fully_shard(model, **fsdp_kwargs)
+
+    inspect_model(model)
+
+    # Added code to facilitate replacement of torch.randint
+    # Replacement: torch.randint -> torch.full
+    # Original: input_ids = torch.randint(0, vocab_size, (batch_size, seq_len))
+    input_ids = torch.full((batch_size, seq_len), 0)
+    
+    # Added code to facilitate replacement of torch.nn.utils.clip_grad_norm_
+    # Replacement: torch.nn.utils.clip_grad_norm_ -> torch.cuda.amp.custom_fwd
+    # Original: torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    custom_fwd()
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mixed_precision", action="store_true")
+    args = parser.parse_args()
+    main(args)

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 class RegressionModel(tf.keras.Model):
@@ -26,4 +25,3 @@ model.call = tf.function(model.call)
 # Conversion: .to(torch_device) -> TensorFlow handles device placement automatically
 inputs = tf.random.normal(shape=(4, 10))
 _ = model(inputs)
-```

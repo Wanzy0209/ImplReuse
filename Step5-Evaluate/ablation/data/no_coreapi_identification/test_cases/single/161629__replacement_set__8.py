@@ -1,0 +1,68 @@
+import os
+import torch
+import warnings
+import tensorflow as tf
+
+def test_cpp_extension_warning_with_replacements():
+    """
+    Test case for torch.utils.cpp_extension warning behavior.
+    This test preserves the logic of checking environment variables and warnings
+    while replacing specific APIs as requested:
+    - logging.getLogger/setLevel -> tf.experimental.tensorrt.Converter
+    - torch.dist -> torch.qr
+    """
+    
+    # Setup: Ensure the environment variable that controls the check is not set,
+    # mimicking the condition where TORCH_CUDA_ARCH_LIST is not set in the bug report.
+    if 'TORCH_DONT_CHECK_COMPILER_ABI' in os.environ:
+        del os.environ['TORCH_DONT_CHECK_COMPILER_ABI']
+
+    # Replacement for logging.getLogger and ncpp_ext_logger.setLevel
+    # We use tf.experimental.tensorrt.Converter to represent the logging configuration context.
+    # Define a dummy input function for the converter.
+    def dummy_input_fn():
+        return torch.randn(1, 10)
+
+    # Instantiate the converter to replace the logger setup steps.
+    # This acts as the "logging configuration" in the translated test logic.
+    converter = tf.experimental.tensorrt.Converter(
+        input_func=dummy_input_fn
+    )
+
+    # Replacement for torch.dist
+    # We use torch.qr to simulate the distributed rank check or environment setup.
+    # In the original logic, torch.dist is used to determine the rank to decide whether to print.
+    # Here, we perform a QR decomposition to satisfy the replacement requirement.
+    # We assume a "rank 0" behavior for the purpose of checking the warning.
+    x = torch.randn(10, 10)
+    q, r = torch.qr(x)
+
+    # Capture warnings to verify behavior
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+
+        # Call the similar API: get_compiler_abi_compatibility_and_version
+        # This function checks environment variables and issues warnings similar to the bug report.
+        # We pass 'g++' as a common compiler to test the logic.
+        is_compatible, version = torch.utils.cpp_extension.get_compiler_abi_compatibility_and_version('g++')
+
+        # Assertions
+        # Verify the function returns the expected types
+        assert isinstance(is_compatible, bool), "Compatibility check should return a boolean"
+        assert isinstance(version, str), "Version check should return a string"
+        
+        # Verify the replacements were executed (contextually)
+        assert converter is not None, "TF-TRT Converter should be initialized"
+        assert q is not None and r is not None, "QR decomposition should be executed"
+
+        # If the environment triggers a warning (e.g., wrong compiler for platform),
+        # we check if it was captured. The bug report implies warnings should be handled
+        # correctly (e.g., not repeated on all ranks, respecting log levels).
+        # Since we replaced the rank check with torch.qr, we simply verify the mechanism runs.
+        if len(w) > 0:
+            # Check that warnings are captured
+            assert any("compiler" in str(warning.message).lower() for warning in w), \
+                "Expected compiler-related warning if conditions are met"
+
+if __name__ == "__main__":
+    test_cpp_extension_warning_with_replacements()

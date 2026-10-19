@@ -1,0 +1,49 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_he_uniform_with_tanh():
+    """
+    Test case adapted from the original bug report regarding torch.compile and DebugMode.
+    The original issue was that torch.compile would silently skip compilation when 
+    DebugMode was active, instead of raising an error or working correctly.
+    
+    This test replaces torch.compile and DebugMode with tf.keras.initializers.HeUniform.
+    It verifies that the initializer works correctly (does not fail silently) when used
+    to generate weights, which are then processed by a tanh activation function
+    (leveraging the similar API pattern).
+    """
+    # Replacing torch.compile,DebugMode with tf.keras.initializers.HeUniform
+    initializer = tf.keras.initializers.HeUniform(seed=42)
+    
+    # Define a shape for the weights
+    shape = (2, 2)
+    
+    # Initialize values
+    # In the original bug, the operation was skipped. Here we ensure the initializer
+    # actually produces valid output.
+    values = initializer(shape)
+    
+    # Leverage similar API: tanh
+    # The original bug report context involved operations like tanh. 
+    # We apply tanh to the initialized weights to ensure the pipeline works.
+    result = tf.math.tanh(values)
+    
+    # Assertions to ensure it didn't "silently disable" (i.e., produce garbage or fail)
+    # Check shape
+    assert result.shape == shape, f"Expected shape {shape}, got {result.shape}"
+    
+    # Check for NaNs (silent failure might produce garbage)
+    assert not tf.reduce_any(tf.math.is_nan(result)), "Output contains NaN values"
+    
+    # Check for Infs
+    assert not tf.reduce_any(tf.math.is_inf(result)), "Output contains Inf values"
+    
+    # The original bug mentioned "At minimum we should error when this occurs".
+    # We verify that the initializer handles standard inputs correctly without erroring.
+    # If it were to fail silently (e.g., return zeros or None), the checks above would catch it.
+    
+    print("Test passed: HeUniform initialized correctly and tanh applied successfully.")
+
+if __name__ == "__main__":
+    test_he_uniform_with_tanh()

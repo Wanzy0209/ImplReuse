@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import sys
 
@@ -88,4 +87,3 @@ if rel_diff > 5 and diff > 1:
     print('Absolute diff:', diff)
     print('Relative diff (%):', rel_diff)
     sys.exit(1)
-```

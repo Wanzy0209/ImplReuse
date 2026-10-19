@@ -1,4 +1,3 @@
-```python
 import os
 
 # Set TensorFlow environment variables
@@ -108,4 +107,3 @@ if __name__ == "__main__":
         )
         
         # print(result) # Optional: print output to verify
-```

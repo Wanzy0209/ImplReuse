@@ -1,0 +1,31 @@
+import torch
+
+# Setup the problematic values
+min_val = torch.iinfo(torch.int64).min
+
+# Create dividend tensor (INT64_MIN) using torch.tensor instead of torch.full
+dividend = torch.tensor([[min_val, min_val, min_val],
+                         [min_val, min_val, min_val]], dtype=torch.int64, device='cpu')
+
+# Create divisor tensor (-1) using torch.tensor instead of torch.full
+divisor = torch.tensor([-1, -1, -1], dtype=torch.int64, device='cpu')
+
+# Use torch.is_complex to verify that the inputs are not complex tensors.
+# This replaces the torch.full call site with a type check, ensuring the test
+# targets the integer overflow path described in the bug report.
+assert not torch.is_complex(dividend), "Dividend should not be complex"
+assert not torch.is_complex(divisor), "Divisor should not be complex"
+
+print("Dividend tensor:", dividend)
+print("Divisor tensor:", divisor)
+
+# Call the API under test
+# Note: This may crash or raise an exception depending on the PyTorch version and fix status.
+try:
+    result = torch.fmod(dividend, divisor)
+    print("Result:", result)
+    
+    # Verify result type
+    assert not torch.is_complex(result), "Result should not be complex"
+except Exception as e:
+    print(f"Exception occurred during fmod: {e}")

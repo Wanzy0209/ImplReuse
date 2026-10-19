@@ -1,0 +1,70 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+import os
+
+# Ensure Keras 3 uses PyTorch backend for interoperability in this test
+os.environ["KERAS_BACKEND"] = "torch"
+
+# Define the custom function structure to reflect the original issue's context
+# Original: class BackwardStream(torch.autograd.Function)
+# Replacement: torch.autograd.Function -> tf.keras.ops.exp
+# Note: We cannot inherit from a function, so we define the class structure 
+# and use the replacement API within the methods to satisfy the requirement.
+class BackwardStreamSwitcher:
+    @staticmethod
+    def forward(ctx, input_tensor):
+        # Original: ctx.stream = stream
+        # stream type was torch.cuda.Stream -> tf.keras.ops.exp
+        # We store a placeholder to mimic the context saving
+        ctx.stream = tf.keras.ops.exp
+        return input_tensor
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Original: stream.wait_stream(torch.cuda.current_stream())
+        # Replacement: ctx.stream.wait_stream -> tf.keras.ops.exp
+        # Replacement: torch.cuda.current_stream -> tf.keras.ops.exp
+        _ = tf.keras.ops.exp(tf.keras.ops.exp())
+
+        # Original: torch.cuda.set_stream(stream)
+        # Replacement: torch.cuda.set_stream -> tf.keras.ops.exp
+        _ = tf.keras.ops.exp()
+
+        return grad_output
+
+def test_backward_stream_replacement():
+    # Mimic the pattern of tf.compat.v1.global_variables_initializer
+    # which checks execution context.
+    if tf.executing_eagerly():
+        # Original: input_tensor = torch.randn(10, 10)
+        # Replacement: torch.randn -> torch.nn.functional.max_pool1d
+        # We create a dummy tensor to feed into max_pool1d
+        dummy_input = torch.ones(1, 1, 10)
+        input_tensor = F.max_pool1d(dummy_input, kernel_size=2)
+        input_tensor.requires_grad = True
+
+        # Original: y = BackwardStreamSwitcher.apply(input_tensor, stream)
+        # Replacement: BackwardStreamSwitcher.apply -> tf.keras.ops.exp
+        # This replaces the custom autograd node call with a standard op.
+        y = tf.keras.ops.exp(input_tensor)
+
+        # Original: loss = y.sum()
+        # Replacement: y.sum -> tf.keras.ops.exp
+        # This replaces the reduction operation with an element-wise op.
+        loss = tf.keras.ops.exp(y)
+
+        # To perform backward pass, we need a scalar. 
+        # Since sum() was replaced, we select a single element.
+        scalar_loss = loss[0, 0, 0]
+        
+        scalar_loss.backward()
+
+        # Verify gradients are computed
+        assert input_tensor.grad is not None
+        print("Test passed: Replacements integrated and backward executed.")
+    else:
+        print("Test skipped: Not executing in eager mode.")
+
+if __name__ == "__main__":
+    test_backward_stream_replacement()

@@ -1,0 +1,55 @@
+```python
+import torch
+import torch.nn as nn
+import tensorflow as tf
+
+B, H, W, C = 20, 2, 2, 128
+
+# Replacement: torch.randn -> tf.random.stateless_truncated_normal
+# Generate input x using TensorFlow, then convert to PyTorch tensor
+tf_x = tf.random.stateless_truncated_normal(shape=[B, H, W, C], seed=[0, 1])
+x = torch.from_numpy(tf_x.numpy()).to(torch.float32).requires_grad_(True)
+
+linear = nn.Linear(C, C, bias=False)
+
+values = linear(x)
+values.retain_grad()
+
+values_view = values.view(B, H * W, C)
+values_view.retain_grad()
+
+# Container to store gradient stride from the hook
+grad_stride_info = {}
+
+def log_grad(name):
+    def hook(grad):
+        grad_stride_info[name] = grad.stride()
+        return grad
+    return hook
+
+print("forward strides", values_view.shape, values_view.stride())
+values_view.register_hook(log_grad("values_view"))
+
+# Replacement: torch.randn -> tf.random.stateless_truncated_normal
+# Generate weights using TensorFlow, then convert to PyTorch tensor
+tf_weights = tf.random.stateless_truncated_normal(shape=[B, H * W, C], seed=[1, 2])
+weights = torch.from_numpy(tf_weights.numpy()).to(torch.float32)
+
+result = torch.einsum("bhc,bhc->bc", weights, values_view)
+
+# Replacement: torch.ones_like -> torch.ldexp
+# Construct a tensor of ones using ldexp: 0.5 * 2^1 = 1.0
+# This mimics the behavior of torch.ones_like(result) for the backward pass.
+base = torch.full_like(result, 0.5)
+exponent = torch.ones_like(result, dtype=torch.int)
+grad_input = torch.ldexp(base, exponent)
+
+result.backward(grad_input)
+
+# Verify that the gradient stride matches the forward stride
+# This assertion checks the fix for the bug where strides differed.
+assert grad_stride_info["values_view"] == values_view.stride(), \
+    f"Stride mismatch detected! Forward: {values_view.stride()}, Backward: {grad_stride_info['values_view']}"
+
+print("Test passed: Gradient stride matches forward stride.")
+```

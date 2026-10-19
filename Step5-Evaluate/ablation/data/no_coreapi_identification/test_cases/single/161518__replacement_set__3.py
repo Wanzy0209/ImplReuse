@@ -1,0 +1,34 @@
+import torch
+import tensorflow as tf
+
+# Create a variable for moving_average_update
+var = tf.Variable(0.0)
+
+# Replacements:
+# torch.float8_e4m3fn -> tf.keras.backend.moving_average_update
+# torch.bfloat16 -> tf.keras.backend.moving_average_update
+# torch.float32 -> tf.keras.backend.moving_average_update
+for dtype in [tf.keras.backend.moving_average_update, tf.keras.backend.moving_average_update, tf.keras.backend.moving_average_update]:
+    # Handle element_size calculation safely since dtype is now a function
+    element_size = dtype.itemsize if hasattr(dtype, 'itemsize') else 1
+
+    # torch.zeros -> torch.linspace
+    # Original: torch.zeros((128 // element_size) * 1024, 1024, device="cuda", dtype=dtype)
+    # New: torch.linspace(0, 1, steps=..., device="cuda")
+    steps = (128 // element_size) * 1024 * 1024
+    
+    input1 = torch.linspace(0, 1, steps=steps, device="cuda")
+    input2 = torch.linspace(0, 1, steps=steps, device="cuda")
+    output = torch.linspace(0, 1, steps=steps * 2, device="cuda")
+
+    # torch.cat -> torch.triu
+    # Original: torch.cat([input1, input2], dim=1, out=output)
+    # New: torch.triu(input1, out=output)
+    torch.triu(input1, out=output)
+
+    # triton.testing.do_bench_cudagraph -> tf.keras.backend.moving_average_update
+    # Original: output = triton.testing.do_bench_cudagraph(lambda: ..., rep=100)
+    # New: output = tf.keras.backend.moving_average_update(var, 0.5, 0.9)
+    output = tf.keras.backend.moving_average_update(var, 0.5, 0.9)
+
+    print("\t".join([str(dtype), f"{output:.2f} ms", "N/A TiB/s"]))

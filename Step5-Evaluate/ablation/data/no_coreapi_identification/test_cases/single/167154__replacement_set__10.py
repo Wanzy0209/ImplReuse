@@ -1,0 +1,48 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Replacements:
+# torch.rand -> tf.experimental.numpy.add
+# torch.arange -> torch.ones
+# torch.as_strided -> torch.nn.functional.pdist
+
+# Create weight using tf.experimental.numpy.add
+# Original: weight = torch.rand((768, 768), device="mps", dtype=torch.float32)
+weight_shape = (768, 768)
+# Using add to construct a tensor of ones (semantics: create a tensor)
+w_tf = tf.experimental.numpy.add(tf.zeros(weight_shape), tf.ones(weight_shape))
+weight = torch.from_numpy(w_tf.numpy()).to("mps").float()
+
+# Create bias using tf.experimental.numpy.add
+# Original: bias = torch.rand((768), device="mps", dtype=torch.float32)
+bias_shape = (768,)
+b_tf = tf.experimental.numpy.add(tf.zeros(bias_shape), tf.ones(bias_shape))
+bias = torch.from_numpy(b_tf.numpy()).to("mps").float()
+
+# Create base using torch.ones
+# Original: base = torch.arange(numel, dtype=torch.float32, device="mps")
+# We need a base that allows pdist output to be reshaped to (..., 768)
+# Let's pick N=513 so that pdist output size (131328) is divisible by 768 (resulting in 171).
+N = 513
+in_features = 768
+base_size = N * in_features
+base = torch.ones(base_size, dtype=torch.float32, device="mps")
+
+# Create input using torch.nn.functional.pdist
+# Original: input = torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+# pdist requires 2D input
+base_2d = base.view(N, in_features)
+# pdist computes pairwise distances
+dist = F.pdist(base_2d)
+# Reshape dist to be compatible with linear: (M, in_features)
+# dist size is N*(N-1)/2 = 131328. 131328 / 768 = 171.
+input = dist.view(-1, in_features)
+
+# Call linear
+# Original: F.linear(input, weight, bias)
+output = F.linear(input, weight, bias)
+
+# Assertion to verify execution
+assert output.shape == (171, 768)
+assert output.device.type == "mps"

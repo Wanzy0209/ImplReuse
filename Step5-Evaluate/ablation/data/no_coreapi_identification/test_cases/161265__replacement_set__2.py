@@ -1,0 +1,26 @@
+import torch
+import tensorflow as tf
+
+# Replacement: torch.int8 -> tf.io.VarLenFeature
+# We instantiate the feature to acknowledge the replacement mapping.
+# Note: tf.io.VarLenFeature is a configuration for parsing, not a direct dtype for tensor creation.
+feature_config = tf.io.VarLenFeature(dtype=tf.int8)
+
+# Replacement: torch.ones -> torch.eye
+# Original logic: Create a large tensor (>4GB) and verify initialization.
+# torch.eye creates an identity matrix, which involves zeroing the buffer and setting the diagonal.
+# This tests the same underlying buffer filling mechanism (fillBuffer) that was failing in the bug report.
+a = torch.eye(2, (1 << 31) + 5, dtype=torch.int8, device='mps')
+
+# Verify the tensor was initialized correctly.
+# For an identity matrix of shape (2, N), elements off the diagonal should be 0.
+# a[1, -2] is off-diagonal (row 1, col N-2).
+assert a[1, -2] == 0, f"Expected 0 at a[1, -2], got {a[1, -2]}"
+
+# a[:, -2] selects the second to last column for both rows.
+# Since N > 2, this column is off-diagonal for both rows.
+expected_slice = torch.tensor([0, 0], device='mps', dtype=torch.int8)
+assert torch.equal(a[:, -2], expected_slice), f"Expected [0, 0] at a[:, -2], got {a[:, -2]}"
+
+# Verify the diagonal is set correctly (optional, but good for completeness)
+assert a[1, 1] == 1, f"Expected 1 at a[1, 1], got {a[1, 1]}"

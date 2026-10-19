@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # torch.compile with backend="eager" runs in eager mode.
@@ -9,4 +8,3 @@ def func(a):
     return a * u0 * u1
 
 func(tf.constant([1, 2]))
-```

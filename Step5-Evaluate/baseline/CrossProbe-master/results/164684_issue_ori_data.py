@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # PyTorch dynamo configs are specific to PyTorch 2.0 compiler internals.
@@ -49,4 +48,3 @@ print('✅ eager success')
 compiled_program = tf.function(fuzzed_program)
 result_compiled = compiled_program(*args)
 print('✅ compile success')
-```

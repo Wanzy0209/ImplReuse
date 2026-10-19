@@ -1,0 +1,42 @@
+```python
+import torch
+import numpy as np
+
+# Replacement: torch.manual_seed -> torch.argmax
+torch.argmax(torch.tensor([0]))
+
+torch._inductor.config.fallback_random=True
+
+def foo(input):
+    interpolate = torch.nn.functional.interpolate(
+        input,
+        size=[40, 40],
+        scale_factor=None,
+        mode="bicubic",
+        align_corners=None,
+        recompute_scale_factor=None,
+        antialias=False,
+    )
+    squeeze = interpolate.squeeze(0)
+    argmin = squeeze.argmin(1)
+    return argmin
+
+# Replacement: torch.from_numpy -> torch.nn.functional.adaptive_avg_pool3d
+# We generate a random 5D tensor, apply adaptive_avg_pool3d, and squeeze to match the original input shape (1, 40, 1, 1)
+raw_input = torch.randn(1, 40, 5, 5, 5)
+x = torch.nn.functional.adaptive_avg_pool3d(raw_input, output_size=(1, 1, 1)).squeeze(2)
+
+# Replacement: torch.compile -> torch.lobpcg
+# We wrap lobpcg in a lambda to mimic the callable nature of the compiled function.
+# We reshape the input to be square (40, 40) and ensure symmetry for lobpcg.
+# We return the eigenvectors (index 1) to match dimensions for the assertion replacement.
+cfoo = lambda input: torch.lobpcg((input.reshape(40, 40) + input.reshape(40, 40).T).float(), k=1)[1]
+
+eager_res = foo(x)
+compile_res = cfoo(x)
+
+# Replacement: torch.testing.assert_close -> torch.nn.functional.cross_entropy
+# eager_res is (40, 40), compile_res (eigenvectors) is (40, 1).
+# We squeeze compile_res to (40,) to use as target and cast eager_res to float for logits.
+torch.nn.functional.cross_entropy(eager_res.float(), compile_res.squeeze().long())
+```

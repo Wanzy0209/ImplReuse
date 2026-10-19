@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import time
 
@@ -44,4 +43,3 @@ if __name__ == "__main__":
     for a_shape, b_shape in shapes:
         t = benchmark_matmul(a_shape, b_shape)
         print(f"{a_shape} x {b_shape}  ->  {t:.3f} us")
-```

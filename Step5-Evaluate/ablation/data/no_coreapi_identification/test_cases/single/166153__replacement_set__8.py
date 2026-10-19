@@ -1,0 +1,96 @@
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+from torch.nn.attention import flex_attention, create_block_mask
+import os
+
+# Initialize distributed environment for torch.distributed.send_object_list
+# Note: This is a minimal setup for a single-process test to satisfy the replacement requirement.
+# In a real scenario, this would require multiple processes.
+def setup_distributed():
+    if not dist.is_initialized():
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '29500'
+        try:
+            # Use file:// init_method for single node multi-process or tcp for multi-node
+            # Here we try to init a single process group which might fail without a launcher,
+            # but we wrap it to ensure the code structure is valid.
+            dist.init_process_group(backend='gloo', rank=0, world_size=1)
+        except Exception as e:
+            print(f"Distributed init skipped or failed (expected in single proc test): {e}")
+
+def test_flex_attention_recompile_limit():
+    setup_distributed()
+    
+    # Use the Similar API: tf.compat.v1.io.TFRecordCompressionType
+    # to define configuration constants, mimicking the pattern of defining limits/modes.
+    compression_type = tf.compat.v1.io.TFRecordCompressionType
+    
+    # Replacements:
+    # torch._dynamo -> tf.keras.ops.roll
+    # config.recompile_limit -> tf.keras.ops.roll
+    # We simulate the recompile limit logic using tf.keras.ops.roll.
+    # Original logic: torch._dynamo.config.recompile_limit = 8
+    # New logic: Use a tensor and roll it to represent the limit check.
+    limit_tensor = tf.constant([1, 2, 3, 4, 5, 6, 7, 8], dtype=tf.int32)
+    # We use roll to "access" the limit value (simulating the config access)
+    recompile_limit = tf.keras.ops.roll(limit_tensor, shift=0, axis=0).numpy().size
+
+    # Define inputs
+    batch_size, seq_len, num_heads, head_dim = 1, 128, 8, 64
+    q = torch.randn(batch_size, seq_len, num_heads, head_dim, dtype=torch.float32)
+    k = torch.randn(batch_size, seq_len, num_heads, head_dim, dtype=torch.float32)
+    v = torch.randn(batch_size, seq_len, num_heads, head_dim, dtype=torch.float32)
+
+    # Create a block mask
+    def mask_mod(b, h, q_idx, kv_idx):
+        return q_idx >= kv_idx
+    
+    block_mask = create_block_mask(mask_mod, 1, 1, seq_len, seq_len)
+
+    # Replacements:
+    # torch.compile -> torch.distributed.send_object_list
+    # Original: compiled_model = torch.compile(flex_attention)
+    # New: We replace the compilation step with a distributed send operation.
+    # To preserve the logic of "preparing" the function, we send it in a list.
+    # Note: This is a structural replacement as requested.
+    model_list = [flex_attention]
+    if dist.is_initialized():
+        torch.distributed.send_object_list(model_list, dst=0)
+    
+    # Since send_object_list doesn't return a compiled function, we use the original function
+    # to execute the logic, simulating the "run" phase.
+    # The bug involves hitting the recompile limit due to dtype changes.
+    
+    recompiles = 0
+    # Run loop to trigger recompilation logic (simulated)
+    for i in range(10):
+        # Vary dtype to trigger recompilation (the root cause in the issue)
+        current_dtype = torch.float16 if i % 2 == 0 else torch.float32
+        
+        q_curr = q.to(current_dtype)
+        k_curr = k.to(current_dtype)
+        v_curr = v.to(current_dtype)
+        
+        # Execute flex_attention
+        # In the original bug, this would trigger torch._dynamo recompilation.
+        # Here we just run it to ensure the test is runnable.
+        try:
+            with torch.no_grad():
+                out = flex_attention(q_curr, k_curr, v_curr, block_mask=block_mask)
+            
+            # Simulate the recompile counter increment
+            # Original: torch._dynamo hit config.recompile_limit
+            # New: We check against our rolled limit
+            if i < recompile_limit:
+                recompiles += 1
+        except Exception as e:
+            print(f"Error during execution: {e}")
+            break
+
+    # Assertion to verify the logic ran
+    assert recompiles > 0, "Test did not run any iterations"
+    print(f"Test completed. Simulated recompiles: {recompiles}, Limit: {recompile_limit}")
+
+if __name__ == "__main__":
+    test_flex_attention_recompile_limit()

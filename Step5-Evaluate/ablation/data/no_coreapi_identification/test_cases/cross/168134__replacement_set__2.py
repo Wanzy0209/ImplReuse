@@ -1,0 +1,47 @@
+import torch
+import tensorflow as tf
+import collections
+import tempfile
+import os
+
+def test_strided_shard_bug_tf():
+    # Setup mesh (equivalent to device_mesh)
+    mesh = tf.experimental.dtensor.create_mesh(['batch'], [('x', 2)])
+
+    # Original data
+    data = [0, 1, 2, 3, 4]
+    ds = tf.data.Dataset.from_tensor_slices(data)
+
+    # Replacement for distribute_tensor, redistribute, _StridedShard
+    # The bug involves uneven sharding. The replacement handles padding.
+    # We pad to 6 (next multiple of mesh size 2) to handle the uneven data.
+    padded_ds = tf.data.experimental.pad_to_cardinality(ds, 6)
+
+    # Replacement for time.sleep
+    # Replaced with pad_to_cardinality as requested.
+    # We use the dataset and target cardinality to make it valid.
+    _ = tf.data.experimental.pad_to_cardinality(ds, 6)
+
+    # Replacement for torch.distributed.get_rank
+    # Replaced with fetch_layout as requested.
+    # We need a DTensor to fetch layout.
+    t = tf.constant(data)
+    layout = tf.experimental.dtensor.Layout([tf.experimental.dtensor.Sharding.SPLIT], mesh)
+    dt = tf.experimental.dtensor.DTensor(t, layout, mesh)
+    layout_info = tf.experimental.dtensor.fetch_layout(dt)
+
+    # Debug print (mimicking original print)
+    print(f"{layout_info=} {padded_ds=}")
+
+    # Leverage similar API: tf.experimental.dtensor.name_based_save
+    # We save the DTensor we created.
+    name_tensor_dict = collections.OrderedDict([('tensor', dt)])
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prefix = os.path.join(tmpdir, "ckpt")
+        tf.experimental.dtensor.name_based_save(mesh, prefix, name_tensor_dict)
+
+    # Assertion to verify the padding logic (the fix for the bug)
+    assert padded_ds.cardinality().numpy() == 6
+
+if __name__ == "__main__":
+    test_strided_shard_bug_tf()

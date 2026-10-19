@@ -1,1 +1,0 @@
-import platform; print(f'Current platform: {platform.machine()}')

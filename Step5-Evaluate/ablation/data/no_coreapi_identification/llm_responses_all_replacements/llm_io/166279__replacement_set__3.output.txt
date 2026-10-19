@@ -1,0 +1,99 @@
+```python
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+# torch._dynamo.config.capture_scalar_outputs = True -> torch.nn.functional.tanh
+F.tanh(torch.tensor(0.0))
+
+# torch.manual_seed -> tf.compat.v1.assign_sub
+var_seed = tf.Variable(1166094474)
+tf.compat.v1.assign_sub(var_seed, 0)
+
+def fuzzed_program(arg_0, arg_1, arg_2, arg_3, sentinel):
+    # var_node_3 = torch.full((12,), False, dtype=torch.bool)
+    # torch.full -> torch.randint, torch.bool -> (omit)
+    var_node_3 = torch.randint(0, 1, (12,))
+
+    # var_node_2 = torch.chunk(var_node_3, 4, dim=0)[0]
+    # torch.chunk -> torch.nn.functional.tanh
+    var_node_2 = F.tanh(var_node_3)
+
+    var_node_6 = arg_0
+    var_node_7 = arg_1
+
+    _input_size_var_node_5 = var_node_6.size(0)
+
+    # _index_var_node_5 = torch.randint(0, _input_size_var_node_5, (10,), device=var_node_6.device)
+    # torch.randint -> torch.fmin
+    _index_var_node_5 = torch.fmin(torch.zeros(10, device=var_node_6.device), torch.ones(10, device=var_node_6.device))
+
+    # var_node_5 = torch.gather(var_node_6, 0, _index_var_node_5)
+    # torch.gather -> torch.cholesky_inverse
+    # Reshape to 4x4 to satisfy cholesky_inverse requirements (square matrix)
+    var_node_5 = torch.cholesky_inverse(var_node_6.float().view(4, 4))
+
+    # var_node_4 = torch.chunk(var_node_5, 2, dim=0)[0]
+    # torch.chunk -> torch.nn.functional.tanh
+    var_node_4 = F.tanh(var_node_5)
+
+    var_node_10 = arg_2
+
+    # var_node_9 = torch.chunk(var_node_10, 4, dim=1)[0]
+    # torch.chunk -> torch.nn.functional.tanh
+    var_node_9 = F.tanh(var_node_10)
+
+    # var_node_8 = torch.squeeze(var_node_9)
+    # torch.squeeze -> torch.index_select
+    var_node_8 = torch.index_select(var_node_9, 0, torch.tensor([0], device=var_node_9.device))
+
+    # var_node_1 = torch.cat([var_node_2, var_node_4, var_node_8], dim=0)
+    # torch.cat -> torch.triu
+    # Applying triu to the first tensor as a representative operation
+    var_node_1 = torch.triu(var_node_2)
+
+    var_node_11 = arg_3
+
+    # var_node_0 = torch.cat([var_node_1, var_node_11], dim=0)
+    # torch.cat -> torch.triu
+    var_node_0 = torch.triu(var_node_1)
+
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+# torch.tensor -> tf.compat.v1.linalg.diag
+tf_sentinel = tf.compat.v1.linalg.diag([1.0])
+sentinel = torch.tensor(tf_sentinel.numpy(), requires_grad=True)
+
+# arg_0 = torch.as_strided(...)
+# torch.as_strided -> torch.empty_strided
+# torch.bool -> (omit)
+# torch.int8 -> (omit)
+# Adjusted size to 16 to allow 4x4 reshape for cholesky_inverse
+arg_0 = torch.empty_strided((16,), (1,))
+
+# arg_1 = torch.as_strided(...)
+# torch.int64 -> (omit)
+arg_1 = torch.empty_strided((10,), (1,))
+
+# arg_2 = torch.as_strided(...)
+arg_2 = torch.empty_strided((6, 4), (4, 1))
+
+# arg_3 = torch.as_strided(...)
+arg_3 = torch.empty_strided((2,), (1,))
+
+args = (arg_0, arg_1, arg_2, arg_3) + (sentinel,)
+result_original = fuzzed_program(*args)
+print('✅ eager success')
+
+# compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+# result_compiled = compiled_program(*args)
+# torch.compile -> torch.prod
+# Replacing the compilation step with a prod operation on the result
+result_compiled = torch.prod(result_original)
+print('✅ compile success (replaced with prod)')
+```

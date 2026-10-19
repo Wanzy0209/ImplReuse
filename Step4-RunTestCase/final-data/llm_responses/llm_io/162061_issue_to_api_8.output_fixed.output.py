@@ -1,0 +1,71 @@
+import torch
+import torch.nn as nn
+import io
+import sys
+
+# Handle missing onnx dependency
+try:
+    import onnx
+except ImportError:
+    print("Skipping test: 'onnx' module is not installed.")
+    sys.exit(0)
+
+# Define the model structure from the bug report
+class Model(nn.Module):
+    def __init__(self, kernel_size=3, upscale_factor=2):
+        super(Model, self).__init__()
+        self.conv = nn.Conv2d(1, 4, kernel_size=kernel_size, padding="same")
+        self.pixel_shuffle = nn.PixelShuffle(upscale_factor)
+
+    def forward(self, input):
+        x = self.conv(input)
+        x = self.pixel_shuffle(x)
+        return x
+
+def test_dynamo_onnx_export_with_zeros_input():
+    """
+    Reproduces the issue where Dynamo-based ONNX exporter adds unnecessary 
+    operations around PixelShuffle. 
+    
+    This test leverages the 'tf.zeros' pattern by using 'torch.zeros' 
+    to generate the input tensor, mirroring the semantic usage of creating 
+    a zero-filled tensor of a specific shape.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = Model().to(device)
+    model.eval()
+
+    # Leverage the similar API pattern (tf.zeros) translated to PyTorch
+    # Pattern: Creating a tensor filled with zeros of a specific shape
+    input_shape = (1, 1, 128, 128)
+    x = torch.zeros(input_shape, dtype=torch.float32, device=device)
+
+    # Export to ONNX using Dynamo
+    onnx_bytes = io.BytesIO()
+    torch.onnx.export(
+        model,
+        x,
+        onnx_bytes,
+        dynamo=True,
+        opset_version=20,
+        input_names=["input"],
+        output_names=["output"],
+    )
+
+    # Load and validate the ONNX model
+    onnx_bytes.seek(0)
+    onnx_model = onnx.load(onnx_bytes)
+    onnx.checker.check_model(onnx_model)
+
+    # Extract graph nodes to inspect for unnecessary operations
+    graph_nodes = [node.op_type for node in onnx_model.graph.node]
+    
+    # PixelShuffle in PyTorch maps to DepthToSpace in ONNX
+    assert "DepthToSpace" in graph_nodes, "DepthToSpace operation missing from graph"
+    
+    # The bug report mentions "unnecessary operations". 
+    # We print the nodes here to visualize the graph structure for verification.
+    print(f"ONNX Graph Nodes: {graph_nodes}")
+
+if __name__ == "__main__":
+    test_dynamo_onnx_export_with_zeros_input()

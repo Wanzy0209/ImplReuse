@@ -1,0 +1,61 @@
+```python
+import torch
+import torch.nn.functional as F
+import numpy as np
+
+# Check for CUDA availability to match the original test context
+if not torch.cuda.is_available():
+    print("CUDA is not available. This test requires CUDA.")
+    exit()
+
+torch.set_default_device("cuda")
+
+batch, in_dim, out_dim = 128, 1024, 4096
+
+# Replacement: torch.randn -> torch.nn.functional.max_pool3d
+# We use max_pool3d to generate the input tensors x and w.
+# To achieve the target shapes (batch, in_dim) and (out_dim, in_dim),
+# we create 5D inputs, apply max_pool3d (with kernel 1 to preserve size),
+# and reshape them.
+
+# Generate x: target shape (128, 1024)
+# Input shape (128, 1, 32, 32, 1) -> pooled -> view(128, 1024)
+x_pool_in = torch.ones(batch, 1, 32, 32, 1, dtype=torch.float)
+x = F.max_pool3d(x_pool_in, kernel_size=1).view(batch, in_dim)
+
+# Generate w: target shape (4096, 1024)
+# Input shape (4096, 1, 32, 32, 1) -> pooled -> view(4096, 1024)
+w_pool_in = torch.ones(out_dim, 1, 32, 32, 1, dtype=torch.float)
+w = F.max_pool3d(w_pool_in, kernel_size=1).view(out_dim, in_dim)
+
+def linear(x, w):
+    return F.linear(x, w)
+
+# Calculate outputs
+out_linear = linear(x, w)
+out_einsum = torch.einsum("fd,bd->bf", w, x)
+out_np = np.einsum("fd,bd->bf", w.cpu().numpy(), x.cpu().numpy())
+
+# Verify shapes
+assert out_linear.shape == torch.Size([128, 4096])
+assert out_einsum.shape == torch.Size([128, 4096])
+assert out_np.shape == (128, 4096)
+
+# Verify strides/contiguity
+# The bug report indicates that linear and numpy produce contiguous output,
+# while einsum produces transposed (non-contiguous) output.
+# We assert that einsum should behave like linear (contiguous).
+
+print(f"Linear shape: {out_linear.shape}, stride: {out_linear.stride()}")
+print(f"Einsum shape: {out_einsum.shape}, stride: {out_einsum.stride()}")
+print(f"Numpy shape: {out_np.shape}, strides: {out_np.strides}")
+
+assert out_linear.is_contiguous(), "Linear output should be contiguous"
+assert out_np.flags['C_CONTIGUOUS'], "Numpy output should be contiguous"
+
+# This assertion checks if the bug is fixed.
+# If the bug exists, out_einsum will be non-contiguous with stride (1, 128).
+# Expected behavior is stride (4096, 1).
+assert out_einsum.is_contiguous(), "Einsum output should be contiguous (Bug 161729)"
+assert out_einsum.stride() == out_linear.stride(), "Einsum stride should match Linear stride"
+```

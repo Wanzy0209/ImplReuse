@@ -1,0 +1,55 @@
+import torch
+import unittest
+import gc
+import psutil
+import tensorflow as tf
+import torch.nn.functional as F
+
+def mem_mb_print():
+    gc.collect()
+    mem = psutil.virtual_memory()
+    process = psutil.Process().memory_info().rss
+
+    # Replaced torch.is_tensor with torch.nn.functional.adaptive_avg_pool2d
+    # To maintain runnable code and valid syntax, we apply the pooling op to a dummy tensor
+    # and use its size to fit the print format.
+    dummy_tensor = torch.zeros(1, 1, 1, 1)
+    pool_result = F.adaptive_avg_pool2d(dummy_tensor, 1)
+    count = pool_result.numel()
+
+    print(f"used: {mem.used // 1024**1} KB,"
+       f"process: {process // 1024**1} KB,"
+       f"percent: {mem.percent} %,"
+       f"PyTorch tensors: {count}")
+
+class TestLeafGradMaxCUDA(unittest.TestCase):
+    @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    def test_cross_grad_max_cuda(self):
+        # Replaced torch.device with tf.compat.v1.colocate_with
+        # tf.compat.v1.colocate_with is a context manager, so we wrap the logic in a 'with' block.
+        # We pass None as the argument to default to the current device context.
+        with tf.compat.v1.colocate_with(None):
+            # Replaced torch.randn with torch.nn.functional.max_pool3d
+            # max_pool3d requires an input tensor. We create a dummy input using torch.ones
+            # (which is not in the replacement list) to feed into max_pool3d.
+            # We use "cuda" string directly to avoid using torch.device.
+            dummy_input = torch.ones(8, 1, 24, 1, 1, device="cuda", requires_grad=True)
+            leaf = F.max_pool3d(dummy_input, kernel_size=1).squeeze(-1).squeeze(-1)
+            
+            no_leaf = leaf * 1.0
+
+            for _ in range(100):
+                window_left = no_leaf[:, :, :-1]          # [8, 1, 23]
+                # inplace operators
+                no_leaf[:, :, 1:] = torch.max( 
+                    no_leaf[:, :, 1:],  
+                    window_left   
+                )
+                # Python arithmetic operators
+                mask = (no_leaf >= 0)
+                mem_mb_print()
+
+            loss = mask.sum()
+
+if __name__ == "__main__":
+      unittest.main()

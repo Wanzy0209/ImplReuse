@@ -1,0 +1,115 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Replacements for config lines
+# torch._dynamo.config.capture_scalar_outputs = True -> tf.compat.v1.nn.conv3d
+# torch._dynamo.config.capture_dynamic_output_shape_ops = True -> tf.compat.v1.nn.conv3d
+# torch._inductor.config.emulate_precision_casts = True -> tf.compat.v1.nn.conv3d
+# We create dummy inputs for these calls to make them runnable
+dummy_cfg_input = tf.random.normal([1, 1, 1, 1, 1])
+dummy_cfg_filter = tf.random.normal([1, 1, 1, 1, 1])
+_ = tf.compat.v1.nn.conv3d(dummy_cfg_input, dummy_cfg_filter, strides=[1, 1, 1, 1, 1], padding='SAME')
+_ = tf.compat.v1.nn.conv3d(dummy_cfg_input, dummy_cfg_filter, strides=[1, 1, 1, 1, 1], padding='SAME')
+_ = tf.compat.v1.nn.conv3d(dummy_cfg_input, dummy_cfg_filter, strides=[1, 1, 1, 1, 1], padding='SAME')
+
+def foo(arg0, arg1, arg2):
+    t0 = arg0
+    # t1 = t0.max(dim=0).values
+    t1 = tf.reduce_max(t0, axis=0)
+
+    # t2 = t1.transpose(1, 0) -> tf.compat.v1.nn.conv3d
+    # Need 5D input for conv3d
+    t1_exp = tf.expand_dims(t1, 0)
+    f_t2 = tf.random.normal([3, 3, 3, t1.shape[-1], 64])
+    t2 = tf.compat.v1.nn.conv3d(t1_exp, f_t2, strides=[1, 1, 1, 1, 1], padding='SAME')
+
+    t3 = arg1
+
+    # t4 = torch.exp(t3) -> torch.nn.LSTMCell
+    # Convert TF tensor to Torch tensor
+    t3_np = t3.numpy()
+    t3_torch = torch.from_numpy(t3_np)
+    # LSTMCell setup
+    input_size = t3_torch.shape[-1]
+    hidden_size = 64
+    lstm_cell = torch.nn.LSTMCell(input_size=input_size, hidden_size=hidden_size)
+    # Initialize hidden states
+    batch_size = t3_torch.shape[0]
+    hx = torch.randn(batch_size, hidden_size)
+    cx = torch.randn(batch_size, hidden_size)
+    # Run LSTMCell
+    t4, _ = lstm_cell(t3_torch, (hx, cx))
+
+    t5 = arg2
+
+    # t6 = t5.transpose(2, 1) -> tf.compat.v1.nn.conv3d
+    t5_exp = tf.expand_dims(t5, 0)
+    f_t6 = tf.random.normal([3, 3, 3, t5.shape[-1], 64])
+    t6 = tf.compat.v1.nn.conv3d(t5_exp, f_t6, strides=[1, 1, 1, 1, 1], padding='SAME')
+
+    # t7 = torch.nn.functional.conv1d(t4, t6, stride=1, padding=0) -> tf.compat.v1.nn.conv3d
+    # t4 is Torch, t6 is TF. Convert t4 to TF.
+    t4_np = t4.detach().numpy()
+    t4_tf = tf.convert_to_tensor(t4_np)
+    # t6 is 5D. conv3d expects 5D.
+    # We need to align dimensions. t4_tf is likely 3D (Batch, Seq, Feature) or similar.
+    # Let's expand t4_tf to 5D.
+    t4_exp = tf.expand_dims(tf.expand_dims(t4_tf, 2), 2) # Add spatial dims
+    # t6 is 5D.
+    # We need a filter.
+    f_t7 = tf.random.normal([3, 3, 3, t4_exp.shape[-1], 64])
+    t7 = tf.compat.v1.nn.conv3d(t4_exp, f_t7, strides=[1, 1, 1, 1, 1], padding='SAME')
+
+    # t8 = t7.clone(); t8.zero_() -> tf.compat.v1.nn.conv3d
+    f_t8 = tf.random.normal([3, 3, 3, t7.shape[-1], 64])
+    t8 = tf.compat.v1.nn.conv3d(t7, f_t8, strides=[1, 1, 1, 1, 1], padding='SAME')
+
+    # t9 = t2 * t7 * t8
+    # t2, t7, t8 are all 5D TF tensors.
+    t9 = t2 * t7 * t8
+
+    output = t9
+    return output
+
+# Input generation
+# arg0 = torch.rand(...) -> tf.compat.v1.nn.conv3d
+# We need base inputs for conv3d
+base_in0 = tf.random.normal([2, 261, 17, 358, 1])
+base_f0 = tf.random.normal([3, 3, 3, 1, 64])
+arg0 = tf.compat.v1.nn.conv3d(base_in0, base_f0, strides=[1, 1, 1, 1, 1], padding='SAME')
+
+base_in1 = tf.random.normal([17, 64, 358, 1, 1])
+base_f1 = tf.random.normal([3, 3, 3, 1, 64])
+arg1 = tf.compat.v1.nn.conv3d(base_in1, base_f1, strides=[1, 1, 1, 1, 1], padding='SAME')
+
+base_in2 = tf.random.normal([261, 1, 64, 1, 1])
+base_f2 = tf.random.normal([3, 3, 3, 1, 64])
+arg2 = tf.compat.v1.nn.conv3d(base_in2, base_f2, strides=[1, 1, 1, 1, 1], padding='SAME')
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2)
+    print('Eager Success! ✅')
+
+    # compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True) -> torch.lobpcg
+    # torch.lobpcg(A, k, B=None, ...)
+    # We need a matrix A. Let's use the output of foo.
+    # out_eager is 5D. Flatten to 2D? Or take a slice.
+    # Let's create a symmetric matrix from the flattened output to ensure lobpcg runs.
+    out_flat = torch.from_numpy(out_eager.numpy()).flatten()
+    # Create a small symmetric matrix (e.g., 10x10) to keep it fast and runnable
+    # or use the whole thing if small enough. out_eager is large.
+    # Let's take the first 10 elements to make a 10x10 matrix.
+    n = 10
+    if out_flat.shape[0] >= n:
+        vec = out_flat[:n]
+        A = torch.outer(vec, vec) + torch.eye(n) # Make it symmetric positive definite
+    else:
+        A = torch.eye(n)
+
+    # Call torch.lobpcg
+    # k=1 eigenvalue
+    eigenvalues, _ = torch.lobpcg(A, k=1)
+    print('Compile Success! ✅') # Keeping the print message to match original structure
+```

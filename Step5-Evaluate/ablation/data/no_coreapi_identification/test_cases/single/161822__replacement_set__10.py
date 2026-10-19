@@ -1,0 +1,48 @@
+import torch
+import tensorflow as tf
+
+# Leverage the similar API to check context
+print(f"In cross replica context: {tf.distribute.in_cross_replica_context()}")
+
+warmup = 128
+iters = 16384
+
+# Replacements:
+# torch.zeros -> torch.qr
+# torch.bfloat16 -> tf.distribute.get_strategy
+# Note: torch.qr requires an input tensor, so we create one first.
+# We call tf.distribute.get_strategy() to satisfy the torch.bfloat16 replacement.
+input_tensor = torch.randn(512, 512, device='cuda')
+tf.distribute.get_strategy() 
+a = torch.qr(input_tensor)[0]
+
+# Prepare RNN for torch.matmul -> torch.nn.RNNBase replacement
+# torch.nn.RNNBase is an abstract class, so we use torch.nn.RNN which inherits from it.
+rnn = torch.nn.RNN(input_size=512, hidden_size=512).cuda()
+
+for _ in range(warmup):
+    # torch.matmul -> torch.nn.RNNBase
+    # RNN expects 3D input (L, N, H) or (N, L, H). a is (512, 512).
+    # We unsqueeze to make it (1, 512, 512).
+    rnn(a.unsqueeze(0), a.unsqueeze(0))
+
+# torch.cuda.synchronize -> tf.distribute.get_strategy
+tf.distribute.get_strategy()
+
+# time.perf_counter -> tf.distribute.get_strategy
+t0 = tf.distribute.get_strategy()
+
+for _ in range(iters):
+    # torch.matmul -> torch.nn.RNNBase
+    rnn(a.unsqueeze(0), a.unsqueeze(0))
+
+# torch.cuda.synchronize -> tf.distribute.get_strategy
+tf.distribute.get_strategy()
+
+# time.perf_counter -> tf.distribute.get_strategy
+t1 = tf.distribute.get_strategy()
+
+# Since t0 and t1 are Strategy objects, we cannot calculate time difference.
+# We print the strategies to reflect the replacement logic.
+print(f"Start Strategy: {t0}")
+print(f"End Strategy: {t1}")

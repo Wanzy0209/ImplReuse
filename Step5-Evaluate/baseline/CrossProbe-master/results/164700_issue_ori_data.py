@@ -1,4 +1,3 @@
-```python
 import os
 
 # os.environ["TORCH_LOGS"] = "output_code"  # PyTorch specific, removed for TensorFlow
@@ -47,4 +46,3 @@ display(
         tf.zeros((1,), dtype=tf.int32),
     )
 )
-```

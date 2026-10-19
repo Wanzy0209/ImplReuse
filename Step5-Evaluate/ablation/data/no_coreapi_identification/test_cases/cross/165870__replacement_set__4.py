@@ -1,0 +1,25 @@
+import torch
+import tensorflow as tf
+
+def test_singular_matrix_replacement():
+    # Original logic: Create a singular matrix [[1.0, 2.0], [2.0, 4.0]].
+    # Replacement: torch.tensor -> tf.experimental.numpy.diag
+    # To preserve the singular nature of the matrix using diag, we use [1.0, 0.0]
+    # which results in [[1, 0], [0, 0]].
+    t = tf.experimental.numpy.diag([1.0, 0.0])
+
+    # Original logic: Perform LU factorization.
+    # Replacement: torch.linalg.lu_factor -> tf.compat.v1.math.exp
+    # Note: math.exp is an element-wise operation and does not error on singular matrices
+    # unlike lu_factor. This test verifies the translated code structure.
+    result = tf.compat.v1.math.exp(t)
+
+    # Verify the result of the exponential operation.
+    # exp(1.0) = e, exp(0.0) = 1.0
+    expected = tf.constant([[tf.math.exp(1.0), 1.0], [1.0, 1.0]])
+    
+    # Assert that the operation completed and produced the expected output
+    assert tf.reduce_all(tf.equal(result, expected)).numpy(), "Result does not match expected output"
+
+if __name__ == "__main__":
+    test_singular_matrix_replacement()

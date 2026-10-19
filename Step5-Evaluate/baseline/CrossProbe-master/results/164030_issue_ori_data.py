@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.no_grad is implicit in TF (gradients only tracked inside tf.GradientTape)
@@ -18,4 +17,3 @@ updates = tf.ones_like(flat_topk_ids, dtype=expert_counts.dtype)
 expert_counts = tf.tensor_scatter_nd_add(expert_counts, indices, updates)
 
 tokens_per_expert = tf.reduce_sum(expert_counts, axis=0)
-```

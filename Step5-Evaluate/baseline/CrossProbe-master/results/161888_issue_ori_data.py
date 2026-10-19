@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 print(tf.__version__)
@@ -51,4 +50,3 @@ class MaxUnpool2d:
 
 r1 = MaxUnpool2d(*input[0],**input[1])
 r2 = r1(*input[2],**input[3])
-```

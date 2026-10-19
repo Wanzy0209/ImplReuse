@@ -1,0 +1,50 @@
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+import os
+
+# Setup for torch.distributed.reduce (replaces torch.compile context)
+# Leveraging os.environ similar to tf.experimental.dtensor.jobs
+if not dist.is_initialized():
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
+    dist.init_process_group(backend='gloo', rank=0, world_size=1)
+
+# Replacements:
+# torch.manual_seed -> tf.compat.v1.assign
+seed_var = tf.Variable(0)
+tf.compat.v1.assign(seed_var, 777)
+
+# torch.randint -> torch.amin
+# We use constant tensors to represent the range bounds for amin
+# Original: x = torch.randint(-50, 50, (1,), dtype=torch.int64, device=device)
+# Replacement: x = torch.amin(...)
+# Note: torch.int64 replacement is tf.experimental.numpy.diagonal (omitted for syntax validity)
+input_x = torch.tensor([[-50, 50]], dtype=torch.int64)
+x = torch.amin(input_x, dim=1)
+
+# Original: y = torch.randint(-50, 50, (), dtype=torch.int64, device=device)
+# Replacement: y = torch.amin(...)
+input_y = torch.tensor([[-50, 50]], dtype=torch.int64)
+y = torch.amin(input_y, dim=[0, 1])
+
+# torch.nn.Module -> tf.experimental.numpy.diagonal
+# The class structure is replaced by the function call logic
+# Original: out = torch.isin(self.x, self.y, assume_unique=False, invert=False)
+# Replacement: out = tf.experimental.numpy.diagonal(...)
+# We pass x to diagonal as the primary input
+out = tnp.diagonal(x)
+
+print("Eager:", out)
+
+# torch.compile -> torch.distributed.reduce
+# Original: compiled_model = torch.compile(model, backend='inductor')
+# Original: print("Inductor:", compiled_model.forward())
+# Replacement: print("Reduce:", torch.distributed.reduce(...))
+# We perform the reduction on x to simulate the "compiled" execution path
+x_reduce = x.clone()
+torch.distributed.reduce(x_reduce, dst=0, op=dist.ReduceOp.SUM)
+print("Reduce:", x_reduce)
+
+dist.destroy_process_group()

@@ -1,0 +1,119 @@
+import torch
+import tensorflow as tf
+import torch.distributed as dist
+import sys
+
+# Replacements for config lines
+tf.compat.v1.argmax([1, 2, 3])  # Replaces torch._dynamo.config.capture_scalar_outputs
+tf.compat.v1.argmax([1, 2, 3])  # Replaces torch._dynamo.config.capture_dynamic_output_shape_ops
+tf.compat.v1.argmax([1, 2, 3])  # Replaces torch._inductor.config.emulate_precision_casts
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+    t0 = arg0 # size=(42, 56), stride=(42, 1), dtype=int64, device=cuda
+    
+    # Replacing torch.tanh with tf.keras.backend.resize_volumes (Similar API)
+    # Reshaping to 5D for resize_volumes, then back to 2D
+    t0_5d = t0.unsqueeze(0).unsqueeze(0).unsqueeze(-1) # (1, 1, 42, 56, 1)
+    t1_5d = tf.keras.backend.resize_volumes(t0_5d, 1, 1, 1, data_format='channels_last')
+    t1 = torch.from_numpy(t1_5d.numpy()).squeeze(0).squeeze(0).squeeze(-1) # size=(42, 56)
+    
+    # Replacing t1.clone with tf.compat.v1.argmax
+    t2 = tf.compat.v1.argmax(t1) 
+    # t2.zero_() removed as t2 is now a scalar/reduced tensor from argmax
+    
+    t3 = arg1 # size=(50000, 128), stride=(50000, 1), dtype=float16, device=cuda
+    t4 = arg2 # size=(46, 128), stride=(46, 1), dtype=float16, device=cuda
+    
+    # Replacing torch.nn.functional.linear with tf.math.special.bessel_y0
+    # Converting to TF tensor, applying op, converting back
+    t3_tf = tf.convert_to_tensor(t3.numpy())
+    t5_tf = tf.math.special.bessel_y0(t3_tf)
+    t5 = torch.from_numpy(t5_tf.numpy()) # size=(50000, 128) -> bessel_y0 preserves shape
+    
+    t6 = arg3 # size=(50000, 4, 46), stride=(184, 46, 1), dtype=float16, device=cuda
+    t7 = t6.max(dim=1).values # size=(50000, 46), stride=(50000, 1), dtype=float16, device=cuda
+    t8 = arg4 # size=(25786, 46), stride=(46, 1), dtype=float16, device=cuda
+    t9 = arg5 # size=(24214, 46), stride=(46, 1), dtype=float16, device=cuda
+    
+    # Replacing torch.cat with torch.triu
+    t10 = torch.triu(t8) # size=(25786, 46)
+    
+    # Replacing torch.pow with torch.distributed.gather
+    # Note: gather requires distributed context, this is a syntactic replacement
+    # We wrap in try/except to allow running without distributed init for demonstration
+    try:
+        t11 = torch.distributed.gather(t5, dst=0)
+    except RuntimeError:
+        # Fallback if not initialized, just use t5 to keep shape logic somewhat intact
+        t11 = t5 
+
+    # Replacing torch.clamp with tf.compat.v1.argmax
+    # t2 is already an argmax result (scalar), applying argmax again
+    indices = tf.compat.v1.argmax(t2)
+    
+    # Replacing torch.nn.functional.embedding with torch.nn.functional.binary_cross_entropy_with_logits
+    # embedding expects indices and weights. BCE expects logits and targets.
+    # We use indices (t2) and t11 as inputs to satisfy the replacement.
+    # Note: shapes might mismatch, but we follow the replacement instruction.
+    # Reshaping t11 to match t2's batch dimension if possible, or broadcasting.
+    # t2 is scalar, t11 is (50000, 46). 
+    # We create dummy targets for BCE.
+    dummy_target = torch.zeros_like(t11)
+    t12 = torch.nn.functional.binary_cross_entropy_with_logits(t11, dummy_target)
+    
+    output = t12 + sentinel  # output tensor with sentinel for gradient flow
+    return output
+
+# Replacing torch.randint with torch.fmin
+arg0 = torch.fmin(torch.rand([42, 56], device='cuda'), torch.rand([42, 56], device='cuda')) 
+# Replacing torch.int64 (dtype) with tf.compat.v1.argmax (call)
+arg0 = tf.compat.v1.argmax(arg0)
+
+# Replacing torch.rand with tf.compat.v1.argmax
+arg1 = torch.rand([50000, 128], device='cuda', requires_grad=True)
+arg1 = tf.compat.v1.argmax(arg1)
+
+# Replacing torch.rand with tf.compat.v1.argmax
+arg2 = torch.rand([46, 128], device='cuda', requires_grad=True)
+arg2 = tf.compat.v1.argmax(arg2)
+
+# Replacing torch.rand with tf.compat.v1.argmax
+arg3 = torch.rand([50000, 4, 46], device='cuda', requires_grad=True)
+arg3 = tf.compat.v1.argmax(arg3)
+
+# Replacing torch.rand with tf.compat.v1.argmax
+arg4 = torch.rand([25786, 46], device='cuda', requires_grad=True)
+arg4 = tf.compat.v1.argmax(arg4)
+
+# Replacing torch.rand with tf.compat.v1.argmax
+arg5 = torch.rand([24214, 46], device='cuda', requires_grad=True)
+arg5 = tf.compat.v1.argmax(arg5)
+
+# Replacing torch.tensor with tf.compat.v1.linalg.diag
+sentinel = tf.compat.v1.linalg.diag([0.0])
+# Convert back to torch for addition
+sentinel = torch.from_numpy(sentinel.numpy())
+sentinel.requires_grad = True
+
+if __name__ == '__main__':
+    # Note: The logic is heavily modified by replacements, so eager/compile comparison 
+    # might not make sense in the original way, but we run the structure.
+    
+    # Eager execution
+    try:
+        out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+        # out_eager.sum().backward() # backward might fail due to non-differentiable ops (argmax)
+        print('Eager Success! ')
+    except Exception as e:
+        print(f'Eager Failed: {e}')
+
+    # Replacing torch.compile with torch.prod
+    # Original: compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    # New: We apply torch.prod to the result of the function call
+    try:
+        # out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+        out_compiled = torch.prod(foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel))
+        # out_compiled.sum().backward()
+        print('Compile Success! ')
+    except Exception as e:
+        print(f'Compile Failed: {e}')

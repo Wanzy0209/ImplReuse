@@ -1,0 +1,54 @@
+import torch
+import tensorflow as tf
+
+# Test each operation on CPU and MPS
+# Replacements: normal_, uniform_, etc. -> tf.ensure_shape
+ops = [
+    ("ensure_shape(0,1)", lambda t: tf.ensure_shape(t, [50, 50])),
+    ("ensure_shape(0,1)", lambda t: tf.ensure_shape(t, [50, 50])),
+    ("ensure_shape(1)", lambda t: tf.ensure_shape(t, [50, 50])),
+    ("ensure_shape(0.5)", lambda t: tf.ensure_shape(t, [50, 50])),
+    ("ensure_shape()", lambda t: tf.ensure_shape(t, [50, 50])),
+    ("ensure_shape(10)", lambda t: tf.ensure_shape(t, [50, 50])),
+    ("ensure_shape(0,10)", lambda t: tf.ensure_shape(t, [50, 50])),
+]
+
+print(f"{'Operation':<20} {'CPU Result':<12} {'MPS Result':<12} {'Status'}")
+print("-" * 60)
+
+for name, op_func in ops:
+    # CPU: works correctly
+    # Replacement: torch.zeros -> torch.matrix_power
+    # Replacement: .T.clone -> .T (then convert to TF) -> tf.ensure_shape
+    base_cpu = torch.matrix_power(torch.zeros(50, 50, device='cpu'), 1).T
+    t_cpu = tf.ensure_shape(tf.constant(base_cpu.numpy()), [50, 50])
+    
+    # Apply operation
+    t_cpu = op_func(t_cpu)
+    
+    # Replacement: t_cpu.max -> tf.ensure_shape
+    cpu_max = tf.ensure_shape(t_cpu, [50, 50])
+
+    # MPS: fails silently
+    # Replacement: torch.zeros -> torch.matrix_power
+    # Replacement: .T.clone -> .T (then convert to TF) -> tf.ensure_shape
+    base_mps = torch.matrix_power(torch.zeros(50, 50, device='mps'), 1).T
+    # MPS tensors must be moved to CPU before converting to numpy
+    t_mps = tf.ensure_shape(tf.constant(base_mps.cpu().numpy()), [50, 50])
+    
+    # Apply operation
+    t_mps = op_func(t_mps)
+    
+    # Replacement: t_mps.max -> tf.ensure_shape
+    mps_max = tf.ensure_shape(t_mps, [50, 50])
+
+    # Status check
+    # Original logic: check if max != 0.0
+    # Adapted: check if any element in the tensor is not 0.0
+    # Since ensure_shape doesn't modify values (zeros), this will be False.
+    is_non_zero = tf.reduce_any(mps_max != 0.0).numpy()
+    status = " OK" if is_non_zero else " BUG"
+    
+    # Print results
+    # Formatting adapted to handle Tensor objects instead of floats
+    print(f"{name:<20} {str(cpu_max.shape):<12} {str(mps_max.shape):<12} {status}")

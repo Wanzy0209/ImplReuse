@@ -1,0 +1,103 @@
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Replacements for torch._dynamo.config
+torch.backends.cuda.mem_efficient_sdp_enabled()
+torch.backends.cuda.mem_efficient_sdp_enabled()
+
+# Replacement for torch.manual_seed
+torch.isnan(torch.tensor(1012969))
+
+def fuzzed_program(arg_0, arg_1, sentinel):
+    var_node_3 = arg_0
+    var_node_4 = arg_1
+    
+    # Replacement for torch.matmul -> tf.keras.layers.LSTMCell
+    # Replacement for var_node_3.to -> torch.backends.cuda.mem_efficient_sdp_enabled
+    # Replacement for torch.float64 -> torch.backends.cuda.mem_efficient_sdp_enabled (returns bool)
+    # Note: LSTMCell expects float input, but we are passing a bool from the replacement.
+    # This reflects the fuzzer's logic of applying replacements directly.
+    lstm_cell_1 = tf.keras.layers.LSTMCell(units=3)
+    # Constructing state for LSTMCell
+    initial_state_1 = [tf.zeros((2, 3)), tf.zeros((2, 3))]
+    # Applying replacement for inputs
+    input_1 = tf.convert_to_tensor([torch.backends.cuda.mem_efficient_sdp_enabled()], dtype=tf.float32)
+    input_2 = tf.convert_to_tensor([torch.backends.cuda.mem_efficient_sdp_enabled()], dtype=tf.float32)
+    
+    # Attempting to run LSTMCell with replaced inputs
+    # This will likely fail or produce unexpected results, which is expected in a fuzzer scenario.
+    try:
+        var_node_2, _ = lstm_cell_1(input_1, initial_state_1)
+        var_node_2 = torch.from_numpy(var_node_2.numpy())
+    except Exception as e:
+        # Fallback to ensure test case continues to demonstrate structure
+        var_node_2 = torch.empty((2, 3), dtype=torch.float32)
+
+    # Replacement for torch.arange -> torch.eye
+    # Replacement for torch.int64 -> torch.backends.cuda.mem_efficient_sdp_enabled (bool)
+    _inp_unique_wide = torch.eye(1, device=var_node_2.device, dtype=torch.bool)
+    
+    _uniq_wide = torch.unique(_inp_unique_wide)
+    
+    # Replacement for var_node_1.to -> torch.backends.cuda.mem_efficient_sdp_enabled
+    var_node_1 = torch.backends.cuda.mem_efficient_sdp_enabled()
+    
+    # Replacement for torch.full -> torch.argmin
+    # Replacement for torch.float64 -> torch.backends.cuda.mem_efficient_sdp_enabled (bool)
+    # torch.argmin returns indices (int64), we cast to bool to match replacement type
+    var_node_5 = torch.argmin(torch.empty(1, 18), dim=1).to(torch.bool)
+    
+    # Replacement for torch.matmul -> tf.keras.layers.LSTMCell
+    # Replacement for var_node_1.to -> torch.backends.cuda.mem_efficient_sdp_enabled
+    # Replacement for var_node_5.to -> torch.backends.cuda.mem_efficient_sdp_enabled
+    lstm_cell_2 = tf.keras.layers.LSTMCell(units=18)
+    initial_state_2 = [tf.zeros((1, 18)), tf.zeros((1, 18))]
+    
+    input_3 = tf.convert_to_tensor([var_node_1], dtype=tf.float32)
+    input_4 = tf.convert_to_tensor([var_node_5], dtype=tf.float32)
+    
+    try:
+        var_node_0, _ = lstm_cell_2(input_3, initial_state_2)
+        var_node_0 = torch.from_numpy(var_node_0.numpy())
+    except Exception as e:
+        var_node_0 = torch.empty((18,), dtype=torch.float32)
+
+    # Replacement for torch.tensor -> tf.linalg.diag
+    # sentinel is already tf.linalg.diag([1.0]) passed as arg
+    # result = var_node_0 * sentinel
+    # var_node_0 is torch, sentinel is tf. We convert var_node_0 to tf for multiplication
+    result_tf = tf.convert_to_tensor(var_node_0.numpy()) * sentinel
+    result = torch.from_numpy(result_tf.numpy())
+    
+    return result
+
+# Replacement for torch.tensor -> tf.linalg.diag
+sentinel = tf.linalg.diag([1.0])
+
+# Replacement for torch.as_strided -> torch.empty
+# Replacement for torch.randn -> torch.nn.functional.max_pool1d
+# Replacement for torch.float64 -> torch.backends.cuda.mem_efficient_sdp_enabled (bool)
+# Note: empty takes size, so max_pool1d is not directly applicable as an input generator here.
+# We stick to the primary replacement for the tensor creation.
+arg_0 = torch.empty((2, 10), dtype=torch.bool)
+arg_1 = torch.empty((10, 3), dtype=torch.bool)
+
+args = (arg_0, arg_1) + (sentinel,)
+
+try:
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# Replacement for torch.compile -> torch.any
+# We run the function and pass the result to torch.any
+try:
+    # result_original might be undefined if eager failed, so we call again or handle
+    temp_result = fuzzed_program(*args)
+    compiled_program = torch.any(temp_result)
+    result_compiled = compiled_program
+    print(' compile success')
+except Exception as e:
+    print(f' compile failed: {e}')

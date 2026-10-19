@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.experimental import dtensor
 
@@ -43,4 +42,3 @@ if __name__ == '__main__':
 
     # PyTorch: print(rank, mean, full)
     print(rank, mean, full)
-```

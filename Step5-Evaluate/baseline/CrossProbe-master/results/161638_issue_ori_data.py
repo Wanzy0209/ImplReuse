@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.tensor -> tf.constant
@@ -33,4 +32,3 @@ with tf.GradientTape() as tape:
 
 t_grad = tape.gradient(z2, t)
 print(f"{t_grad=}")
-```

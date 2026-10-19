@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion Note: PyTorch's empty_strided creates a tensor with a specific memory layout (strides).
@@ -15,4 +14,3 @@ output_tensor = tf.random.uniform(input_tensor.shape, dtype=input_tensor.dtype)
 # memory layout details to the Python API. This assertion is commented out as it is
 # not applicable in TensorFlow.
 # assert input_tensor.stride() == output_tensor.stride()
-```

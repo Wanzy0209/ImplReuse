@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # PyTorch's flex_attention is a specific optimized kernel for attention with block masks.
@@ -70,4 +69,3 @@ graph_model = tf.function(flex_model)
 # To mimic the specific capture call with inputs:
 # get_concrete_function forces tracing and returns the graph (ConcreteFunction)
 gm = graph_model.get_concrete_function(*flex_inputs, **flex_kwargs)
-```

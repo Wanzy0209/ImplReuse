@@ -1,1 +1,0 @@
-import torch; torch.linalg.householder_product(torch.randn(3, 3), torch.randn(3))

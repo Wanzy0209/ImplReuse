@@ -1,0 +1,76 @@
+import torch
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+
+# Replacements applied based on the provided mapping:
+# nn.Module -> tf.experimental.numpy.diagonal
+# nn.Parameter -> tf.experimental.numpy.diagonal
+# torch.Tensor -> tf.experimental.numpy.diagonal
+# torch.abs -> torch.sign
+# torch.compile -> tf.compat.v1.tpu.rewrite
+# torch.float32 -> tf.experimental.numpy.diagonal
+# torch.manual_seed -> torch.set_rng_state
+# torch.max -> torch.min
+# torch.no_grad -> tf.experimental.numpy.diagonal
+# torch.randn -> tf.experimental.numpy.diagonal
+# torch.sort -> tf.random.stateless_truncated_normal
+# .to -> tf.experimental.numpy.diagonal
+
+class Foo(tf.experimental.numpy.diagonal):
+    def __init__(
+        self,
+        quantiles: tf.experimental.numpy.diagonal,
+    ) -> None:
+        super().__init__()
+        assert quantiles.shape[0] > 0
+        quantiles = quantiles.T
+        self.q = tf.experimental.numpy.diagonal(quantiles, requires_grad=False)
+
+    def forward(self, x: tf.experimental.numpy.diagonal) -> tf.experimental.numpy.diagonal:
+        return torch.searchsorted(self.q, x.T).T
+
+def test_device(device, x, quantiles):
+    x = tf.experimental.numpy.diagonal(x, device)
+    quantiles = tf.experimental.numpy.diagonal(quantiles, device)
+    foo = Foo(quantiles)
+    foo = tf.experimental.numpy.diagonal(foo, device)
+    
+    # Note: tf.compat.v1.tpu.rewrite is used for TPU compilation, 
+    # replacing torch.compile here as requested.
+    foo_compiled = tf.compat.v1.tpu.rewrite(Foo(quantiles), fullgraph=True)
+
+    # Replacing torch.no_grad context manager
+    with tf.experimental.numpy.diagonal():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    with tf.experimental.numpy.diagonal():
+        y_original = foo(x)
+        y_compiled = foo_compiled(x)
+
+    # Replacing torch.max with torch.min and torch.abs with torch.sign
+    print(f'device: {device}, diff: {torch.min(torch.sign(y_original - y_compiled)).item()}')
+    print('orignal', y_original[:5, :5])
+    print('compiled', y_compiled[:5, :5])
+
+def main():
+    batch_size = 32
+    feature_dim = 10
+    quantile_size = 100
+    
+    # Replacing torch.manual_seed with torch.set_rng_state
+    torch.set_rng_state(42)
+
+    # Replacing torch.randn with tf.experimental.numpy.diagonal
+    # Replacing torch.float32 with tf.experimental.numpy.diagonal
+    x = tf.experimental.numpy.diagonal(batch_size, feature_dim, dtype=tf.experimental.numpy.diagonal)
+    quantiles = tf.experimental.numpy.diagonal(quantile_size, feature_dim, dtype=tf.experimental.numpy.diagonal)
+    
+    # Replacing torch.sort with tf.random.stateless_truncated_normal
+    quantiles = tf.random.stateless_truncated_normal(quantiles, dim=0)[0]
+
+    test_device('cpu', x, quantiles)
+    test_device('cuda', x, quantiles)
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,103 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.distributions.constraints as constraints
+import torch.nn.functional as F
+import tensorflow as tf
+import os
+
+# Setup for distributed replacements
+os.environ['MASTER_ADDR'] = 'localhost'
+os.environ['MASTER_PORT'] = '12355'
+dist.init_process_group("gloo", rank=0, world_size=1)
+
+BATCH_SIZE = 64
+CHANNELS, IMG_SIZE = 3, 224
+GRID_SIZE = 13
+
+# Replacement: nn.Module -> tf.experimental.numpy.logspace
+# Note: Cannot inherit from function, so we use it in init to satisfy replacement.
+class MyModel:
+    def __init__(self):
+        # Replacement: nn.Parameter -> tf.experimental.numpy.logspace
+        self.grid = tf.experimental.numpy.logspace(0, 1, num=5000*GRID_SIZE*GRID_SIZE*2)
+        self.grid = tf.reshape(self.grid, (5000, GRID_SIZE, GRID_SIZE, 2))
+
+        # Replacement: torch.nn.Linear -> torch.isnan
+        # Linear creates a layer, isnan returns a tensor. We store the tensor.
+        dummy = torch.randn(1, GRID_SIZE*GRID_SIZE*CHANNELS)
+        self.fc = torch.isnan(dummy)
+
+    def forward(self, x):
+        per_channel = []
+        for i in range(CHANNELS):
+            # Replacement: torch.expand -> tf.experimental.numpy.logspace
+            # Expand creates a view, logspace creates new data.
+            # We generate data matching the expanded shape.
+            channel = tf.experimental.numpy.logspace(0, 1, num=5000 * x.shape[2] * x.shape[3])
+            channel = tf.reshape(channel, (5000, x.shape[2], x.shape[3]))
+
+            # Replacement: torch.nn.functional.grid_sample -> tf.compat.v1.nn.conv2d_backprop_filter
+            # grid_sample samples, conv2d_backprop_filter computes gradient.
+            # We call the replacement with compatible dummy args to avoid crash.
+            patch = tf.compat.v1.nn.conv2d_backprop_filter(
+                input=tf.ones([1, 1, 10, 10]),
+                filter_sizes=[3, 3, 1, 1],
+                out_backprop=tf.ones([1, 1, 5, 5]),
+                strides=[1, 1, 1, 1],
+                padding='SAME'
+            )
+
+            # Original logic: patch.transpose(0,1).flatten(start_dim=2)
+            # Adapted for TF tensor
+            patch = tf.transpose(patch, [0, 1, 2, 3])
+            patch = tf.reshape(patch, [1, -1])
+            per_channel.append(patch)
+
+        # Replacement: torch.cat -> torch.distributed.gather
+        # cat concatenates, gather collects from ranks.
+        # We convert TF tensors to Torch for gather.
+        if per_channel:
+            t = torch.from_numpy(per_channel[0].numpy())
+            gather_list = [torch.zeros_like(t)]
+            if dist.is_initialized():
+                dist.gather(t, gather_list, dst=0)
+            x = gather_list[0]
+        else:
+            x = torch.tensor([])
+
+        # Original: x = self.fc(x)
+        # self.fc is a tensor (isnan result), not a layer.
+        # We just return the stored tensor or use it.
+        x = self.fc
+        return x
+
+def main():
+    model = MyModel()
+
+    # Replacement: torch.compile -> torch.distributed.broadcast_object_list
+    if dist.is_initialized():
+        dist.broadcast_object_list([model], src=0)
+
+    for _ in range(10):
+        # Replacement: torch.randn -> torch.nn.functional.max_pool3d
+        # randn creates input, max_pool3d processes input.
+        # We create dummy input and pool it.
+        dummy_input = torch.randn(1, 1, 10, 224, 224)
+        x = F.max_pool3d(dummy_input, kernel_size=2)
+        # Reshape to match model input expectation
+        x = x.view(64, 3, 224, 224)
+
+        x = model(x)
+
+        # Replacement: torch.sum -> torch.distributions.constraints.stack
+        # sum reduces, stack creates a constraint.
+        x = constraints.stack([constraints.real])
+
+        # Replacement: x.backward -> tf.experimental.numpy.logspace
+        tf.experimental.numpy.logspace(0, 1, num=10)
+
+if __name__ == "__main__":
+    main()
+    dist.destroy_process_group()
+```

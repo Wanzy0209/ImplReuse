@@ -1,4 +1,3 @@
-```python
 import numpy as np
 import tensorflow as tf
 # Conversion: torchvision.models is not directly used in the snippet, but diffusers/transformers are.
@@ -69,4 +68,3 @@ with tf.device('/GPU:0'):
     # We assign ep to after_decomp to preserve structure.
     after_decomp = ep
     print("Success")
-```

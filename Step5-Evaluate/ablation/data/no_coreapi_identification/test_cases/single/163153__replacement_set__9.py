@@ -1,0 +1,167 @@
+import os
+import sys
+import torch
+import torch.distributed as dist
+import tensorflow as tf
+from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
+from unittest.mock import MagicMock
+
+# --- Mocks to make the example runnable without external dependencies ---
+
+# Mock torch.accelerator if not available
+if not hasattr(torch, 'accelerator'):
+    class MockAccelerator:
+        @staticmethod
+        def is_available(): return False
+        @staticmethod
+        def device_count(): return 0
+        @staticmethod
+        def current_accelerator(): return 'cpu'
+        @staticmethod
+        def set_device_index(idx): pass
+    torch.accelerator = MockAccelerator()
+
+# Mock ModelArgs and Transformer
+class ModelArgs:
+    def __init__(self, n_layers, n_heads, dim, vocab_size, max_seq_len, dropout_p):
+        self.n_layers = n_layers
+        self.n_heads = n_heads
+        self.dim = dim
+        self.vocab_size = vocab_size
+        self.max_seq_len = max_seq_len
+        self.dropout_p = dropout_p
+
+class Transformer(torch.nn.Module):
+    def __init__(self, args: ModelArgs):
+        super().__init__()
+        self.layers = torch.nn.ModuleList([torch.nn.Linear(args.dim, args.dim) for _ in range(args.n_layers)])
+
+def inspect_model(model):
+    print("Model inspected.")
+
+# Mock get_default_backend_for_device
+def mock_get_default_backend(device):
+    return "gloo"
+
+torch.distributed.get_default_backend_for_device = mock_get_default_backend
+
+# --- Test Case ---
+
+def main():
+    # Setup environment for single-process run
+    os.environ["LOCAL_RANK"] = "0"
+    os.environ["RANK"] = "0"
+    os.environ["WORLD_SIZE"] = "1"
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+
+    _min_gpu_count = 2
+    # Simplified verification
+    has_gpu = torch.accelerator.is_available()
+    gpu_count = torch.accelerator.device_count()
+    
+    rank = int(os.environ["LOCAL_RANK"])
+    
+    if has_gpu and gpu_count >= _min_gpu_count:
+        device_type = torch.accelerator.current_accelerator()
+        # Replacement: torch.device -> tf.compat.v1.image.resize_bicubic
+        # Original: device = torch.device(f"{device_type}:{rank}")
+        # New:
+        dummy_img = tf.zeros((1, 10, 10, 1), dtype=tf.float32)
+        device = tf.compat.v1.image.resize_bicubic(dummy_img, size=(5, 5))
+        
+        torch.accelerator.set_device_index(rank)
+        print(f"Running on rank {rank} on device {device}")
+    else:
+        # Replacement: torch.device -> tf.compat.v1.image.resize_bicubic
+        # Original: device = torch.device("cpu")
+        # New:
+        dummy_img = tf.zeros((1, 10, 10, 1), dtype=tf.float32)
+        device = tf.compat.v1.image.resize_bicubic(dummy_img, size=(5, 5))
+        print(f"Running on device {device}")
+
+    backend = torch.distributed.get_default_backend_for_device(device)
+
+    # Replacement: torch.distributed.init_process_group -> dist.init_process_group
+    # Original: torch.distributed.init_process_group(backend=backend, device_id=device)
+    # Note: 'device' is now a TF Tensor due to the replacement above. 
+    # We wrap this in a try-except to ensure the script remains runnable despite the type mismatch.
+    try:
+        dist.init_process_group(backend=backend, device_id=device)
+        print("Process group initialized successfully.")
+    except TypeError as e:
+        print(f"Expected TypeError during init_process_group due to API replacement (TF tensor passed to PT function): {e}")
+        # Fallback to valid init to allow rest of script to run if needed, 
+        # but strictly we replaced the call site.
+        # For the purpose of a "runnable" test case that demonstrates the replacement, 
+        # we catch the error.
+        dist.init_process_group(backend=backend)
+
+    # Replacement: torch.manual_seed -> torch.rand_like
+    # Original: torch.manual_seed(0)
+    # New:
+    _ = torch.rand_like(torch.tensor(0.0))
+    print("Replaced torch.manual_seed with torch.rand_like")
+
+    vocab_size = 1024
+    batch_size = 4
+    seq_len = 1024
+    model_args = ModelArgs(
+        n_layers=10,
+        n_heads=8,
+        dim=4096,
+        vocab_size=vocab_size,
+        max_seq_len=seq_len,
+        dropout_p=0,
+    )
+    
+    with torch.device("meta"):
+        model = Transformer(model_args)
+    
+    fsdp_kwargs = {}
+    # Assuming args.mixed_precision is False for this minimal test
+    if False: 
+        fsdp_kwargs["mp_policy"] = MixedPrecisionPolicy(
+            param_dtype=torch.bfloat16,
+            reduce_dtype=torch.float32,
+        )
+    
+    for layer in model.layers:
+        fully_shard(layer, **fsdp_kwargs)
+    fully_shard(model, **fsdp_kwargs)
+
+    inspect_model(model)
+
+    # Replacement: torch.distributed.get_rank -> tf.experimental.dtensor.client_id
+    # Added usage to demonstrate replacement
+    # Original: rank_check = torch.distributed.get_rank()
+    # New:
+    try:
+        rank_check = tf.experimental.dtensor.client_id()
+        print(f"Replaced torch.distributed.get_rank with tf.experimental.dtensor.client_id: {rank_check}")
+    except Exception as e:
+        print(f"tf.experimental.dtensor.client_id failed (expected if not in DTensor context): {e}")
+
+    # Replacement: torch.nn.utils.clip_grad_norm_ -> tf.keras.backend.ctc_decode
+    # Added usage to demonstrate replacement
+    # Original: torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    # New:
+    try:
+        # Create dummy inputs for ctc_decode
+        dummy_y_pred = tf.random.uniform((batch_size, seq_len, vocab_size))
+        dummy_input_length = tf.constant([seq_len] * batch_size)
+        _ = tf.keras.backend.ctc_decode(dummy_y_pred, dummy_input_length)
+        print("Replaced torch.nn.utils.clip_grad_norm_ with tf.keras.backend.ctc_decode")
+    except Exception as e:
+        print(f"tf.keras.backend.ctc_decode failed: {e}")
+
+    # Replacement: torch.randint -> torch.bernoulli
+    # Added usage to demonstrate replacement
+    # Original: input_ids = torch.randint(0, vocab_size, (batch_size, seq_len))
+    # New:
+    probs = torch.rand((batch_size, seq_len))
+    input_ids = torch.bernoulli(probs)
+    print(f"Replaced torch.randint with torch.bernoulli. Shape: {input_ids.shape}")
+
+if __name__ == "__main__":
+    main()

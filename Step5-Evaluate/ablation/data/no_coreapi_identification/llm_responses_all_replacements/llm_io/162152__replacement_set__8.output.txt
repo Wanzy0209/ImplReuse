@@ -1,0 +1,75 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import tensorflow as tf
+import numpy as np
+
+# Define the model configuration for deserialization
+# This replaces the class definition: class SimpleModel(nn.Module)
+# and internal layers: nn.Linear, nn.ReLU, self.linear2
+model_config = {
+    'class_name': 'Sequential',
+    'config': {
+        'name': 'simple_model',
+        'layers': [
+            # Replaces: self.linear1 = nn.Linear(input_size, hidden_size)
+            {'class_name': 'Dense', 'config': {'units': 20, 'input_shape': (10,), 'activation': 'linear'}},
+            # Replaces: self.relu = nn.ReLU()
+            {'class_name': 'Activation', 'config': {'activation': 'relu'}},
+            # Replaces: self.linear2 = nn.Linear(hidden_size, output_size)
+            {'class_name': 'Dense', 'config': {'units': 5}}
+        ]
+    }
+}
+
+# Replaces: model = SimpleModel()
+model = tf.keras.layers.deserialize(model_config)
+
+# Replaces: if torch.<mybackend>.is_available() ...
+# Leverage similar API: torch.distributed.get_group_rank
+# We use get_group_rank to check if the current process is part of the group,
+# mimicking the availability check in the original bug report.
+try:
+    if dist.is_initialized():
+        group = dist.group.WORLD
+        global_rank = dist.get_rank()
+        # Check group membership using the similar API
+        group_rank = dist.get_group_rank(group, global_rank)
+        print(f"Process is in group with rank: {group_rank}")
+    else:
+        print("Distributed not initialized, assuming single process availability.")
+except RuntimeError as e:
+    print(f"Environment check failed: {e}")
+
+# Replaces: model = DataParallel(model, device_ids=[0,1,2,3])
+# We replace the DataParallel wrapper with a deserialization step
+# representing the parallel model structure.
+parallel_config = {
+    'class_name': 'Sequential',
+    'config': {
+        'name': 'parallel_wrapper',
+        'layers': [model_config]
+    }
+}
+model = tf.keras.layers.deserialize(parallel_config)
+
+# Replaces: input_data = torch.randn(batch_size, 10).<mybackend>()
+# Replacement: torch.nn.functional.max_pool1d
+# We generate input data by applying max_pool1d to a dummy tensor.
+batch_size = 20
+# Create a dummy tensor with shape (N, C, L) suitable for max_pool1d
+# We want the final input to the model to be (batch_size, 10)
+dummy_tensor = torch.ones(batch_size, 10, 1)
+input_data = F.max_pool1d(dummy_tensor, kernel_size=1)
+
+# Convert the torch tensor to a tensorflow tensor for the model
+# input_data shape is (20, 10, 1), we squeeze to (20, 10)
+np_input = input_data.squeeze().numpy()
+tf_input = tf.constant(np_input, dtype=tf.float32)
+
+# Run the model
+output = model(tf_input)
+print("success")
+assert output.shape == (20, 5)
+```

@@ -1,0 +1,71 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+
+# Ensure TensorFlow is in eager mode for compatibility
+if tf.__version__.startswith('1.'):
+    tf.compat.v1.enable_eager_execution()
+
+# Similar API: tf.custom_gradient
+# We leverage this to define the operation, mimicking the structure of the original bug report
+# where a specific operation (index_put_) was being tested.
+@tf.custom_gradient
+def custom_index_put_op(image, indices, values):
+    # Replacement: image.index_put_ -> tf.experimental.numpy.exp
+    # We perform the exponential operation on the image.
+    # Note: The original operation was in-place modification, here we return a new tensor.
+    
+    def grad(dy):
+        # Define a gradient that passes through (simplified)
+        return dy, tf.zeros_like(indices), tf.zeros_like(values)
+    
+    # Call the replacement API
+    # We ignore the specific kwargs of index_put_ (indices, values, accumulate)
+    # because tf.experimental.numpy.exp does not support them.
+    # To keep it runnable, we just pass the image.
+    result = tf.experimental.numpy.exp(image)
+    return result, grad
+
+# Replacement: torch.device -> tf.compat.v1.metrics.sparse_precision_at_k
+# We create a dummy metric to represent the 'device' context.
+# This function returns (metric, update_op). We assign it to 'device'.
+labels = tf.constant([0, 1, 2, 3, 4])
+predictions = tf.constant([[0.1, 0.9], [0.9, 0.1], [0.8, 0.2], [0.2, 0.8], [0.5, 0.5]])
+device = tf.compat.v1.metrics.sparse_precision_at_k(labels=labels, predictions=predictions, k=1)
+
+# Replacement: torch.zeros -> torch.normal
+# Replacement: torch.complex64 -> tf.experimental.numpy.exp
+# We create the image tensor.
+# torch.normal does not support 'dtype' or 'device' in the functional call signature in the same way.
+# We omit them to ensure the code is runnable.
+# The 'torch.complex64' replacement is omitted here as it is not a valid argument for torch.normal.
+image = torch.normal(mean=0.0, std=1.0, size=(10,))
+
+# Replacement: torch.ones -> torch.normal
+# Replacement: torch.complex64 -> tf.experimental.numpy.exp
+# We create the data tensor.
+data = torch.normal(mean=0.0, std=1.0, size=(3,))
+
+# Replacement: torch.tensor -> tf.experimental.numpy.diag
+# We create the indices tensor.
+# tf.experimental.numpy.diag creates a diagonal matrix from the input list.
+indices = tf.experimental.numpy.diag([1, 3, 5])
+
+# Convert torch tensors to tensorflow tensors for the custom_op
+# This is necessary to bridge the two libraries used in the replacements.
+image_tf = tf.convert_to_tensor(image.numpy())
+data_tf = tf.convert_to_tensor(data.numpy())
+
+# Execute the operation
+# This replaces the line: image.index_put_(indices=(indices,), values=data, accumulate=True)
+# We call our custom_op which uses tf.experimental.numpy.exp internally.
+try:
+    output = custom_index_put_op(image_tf, indices, data_tf)
+    print("Test case executed successfully.")
+    # Basic assertion to check output shape
+    assert output.shape == image_tf.shape
+except Exception as e:
+    print(f"Test case failed with error: {e}")
+    raise
+```

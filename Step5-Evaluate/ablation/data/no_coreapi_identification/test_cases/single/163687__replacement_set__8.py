@@ -1,0 +1,73 @@
+import torch
+import tensorflow as tf
+from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+
+# Configuration from the original bug report
+torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+torch._inductor.config.emulate_precision_casts = True
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10):
+    t0 = arg0
+    t1 = arg1
+    t2 = arg2
+    t3 = flex_attention(t0, t1, t2)
+    t4 = arg3
+    t5 = arg4
+    t6 = arg5
+    t7 = flex_attention(t4, t5, t6)
+    t8 = flex_attention(t3, t7, t7)
+    t9 = arg6
+    t10 = arg7
+    t11 = flex_attention(t9, t7, t10)
+    t12 = flex_attention(t11, t8, t3)
+    t13 = arg8
+    t14 = arg9
+    t15 = flex_attention(t13, t2, t14)
+    t16 = arg10
+    t17 = t16.clone(); t17.zero_()
+    t18 = flex_attention(t17, t8, t3)
+    t19 = flex_attention(t15, t17, t18)
+    t20 = flex_attention(t8, t12, t19)
+    output = t20
+    return output
+
+# Helper to replace torch.rand with tf.nn.relu
+# We generate a tensor in TensorFlow, apply ReLU, and convert it to a PyTorch tensor.
+def create_tensor(shape):
+    # Create a tensor in TensorFlow. 
+    # Using uniform distribution to mimic torch.rand, but with negative values 
+    # to demonstrate the effect of ReLU (though torch.rand is [0,1)).
+    t = tf.random.uniform(shape, minval=-0.5, maxval=1.0, dtype=tf.float32)
+    # Apply the replacement API: tf.nn.relu
+    t = tf.nn.relu(t)
+    # Convert to PyTorch tensor on CUDA
+    return torch.from_numpy(t.numpy()).to(device='cuda').requires_grad_(True)
+
+# Generate arguments using the replacement API
+arg0 = create_tensor([27, 26, 62, 122])
+arg1 = create_tensor([27, 26, 124, 122])
+arg2 = create_tensor([27, 26, 124, 122])
+arg3 = create_tensor([27, 26, 124, 122])
+arg4 = create_tensor([27, 26, 248, 122])
+arg5 = create_tensor([27, 26, 248, 122])
+arg6 = create_tensor([27, 26, 31, 122])
+arg7 = create_tensor([27, 26, 124, 122])
+arg8 = create_tensor([27, 26, 31, 122])
+arg9 = create_tensor([27, 26, 124, 122])
+arg10 = create_tensor([27, 26, 124, 122])
+
+# Compile the function to test for the OOM bug
+compiled_foo = torch.compile(foo)
+
+# Run the test
+try:
+    output = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+    assert output is not None
+    assert output.shape == (27, 26, 62, 122)
+    print("Test passed.")
+except RuntimeError as e:
+    if "out of memory" in str(e):
+        print(f"Test failed with OOM: {e}")
+    else:
+        raise

@@ -1,0 +1,55 @@
+import sys
+
+# Handle environment dependency issues (e.g., GLIBC version mismatch)
+try:
+    import tensorflow as tf
+except ImportError as e:
+    print(f"Skipping test due to environment error: {e}")
+    sys.exit(0)
+
+import torch
+
+# Initialize the similar API: tf.keras.initializers.LecunNormal
+initializer = tf.keras.initializers.LecunNormal()
+
+def eager_fn():
+    # Mimic x = torch.randn(1, dtype=torch.complex64)
+    # Using LecunNormal to generate the real and imaginary parts
+    real_x = initializer(shape=(1,))
+    imag_x = initializer(shape=(1,))
+    x = tf.complex(real_x, imag_x)
+
+    # Mimic y = torch.empty((), dtype=torch.complex64)
+    # Using LecunNormal to generate a scalar complex tensor
+    real_y = initializer(shape=())
+    imag_y = initializer(shape=())
+    y = tf.complex(real_y, imag_y)
+
+    return x + y
+
+@tf.function
+def compiled_fn():
+    # Replicate the logic inside the compiled (graph) function
+    real_x = initializer(shape=(1,))
+    imag_x = initializer(shape=(1,))
+    x = tf.complex(real_x, imag_x)
+
+    real_y = initializer(shape=())
+    imag_y = initializer(shape=())
+    y = tf.complex(real_y, imag_y)
+
+    return x + y
+
+# Test Eager execution
+try:
+    result_eager = eager_fn()
+    print("eager success")
+except Exception as e:
+    print(f"eager failed: {e}")
+
+# Test Compiled execution (equivalent to torch.compile)
+try:
+    result_compiled = compiled_fn()
+    print("compiler success")
+except Exception as e:
+    print(f"compiler failed: {e}")

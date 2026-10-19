@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 class Isin(tf.Module):
@@ -35,4 +34,3 @@ print("Eager:", model.forward())
 # tf.function compiles the Python function into a static graph, analogous to torch.compile
 compiled_forward = tf.function(model.forward)
 print("Inductor:", compiled_forward())
-```

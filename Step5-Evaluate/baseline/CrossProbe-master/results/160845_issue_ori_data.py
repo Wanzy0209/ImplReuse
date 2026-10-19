@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.manual_seed(0)
@@ -55,4 +54,3 @@ with tf.device("/CPU:0"):
 print("MPS imag sum:", tf.reduce_sum(tf.abs(tf.math.imag(t_mps))).numpy())
 print("CPU imag sum:", tf.reduce_sum(tf.abs(tf.math.imag(t_cpu))).numpy())
 print("max abs diff:", tf.reduce_max(tf.abs(t_mps - t_cpu)).numpy())
-```

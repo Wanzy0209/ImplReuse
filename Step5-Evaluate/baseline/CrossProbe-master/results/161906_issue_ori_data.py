@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 class M(tf.Module):
@@ -65,4 +64,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```

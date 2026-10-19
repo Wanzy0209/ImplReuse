@@ -1,0 +1,61 @@
+```python
+import torch
+import tensorflow as tf
+
+# Constants
+MAX = 3
+BATCH = 37
+
+# Replacement: torch.nn.functional.one_hot -> tf.vectorized_map
+# Replacement: torch.func.jacfwd -> tf.custom_gradient (Similar API)
+@tf.custom_gradient
+def func(x, idxs):
+    # Implement one_hot logic using tf.vectorized_map as requested
+    # We wrap tf.one_hot inside the map
+    one_hot_vals = tf.vectorized_map(lambda i: tf.one_hot(i, MAX), idxs)
+    
+    # Original logic: x.square() * one_hot
+    # Note: x.square replacement (tf.compat.v1.train.global_step) is ignored to maintain logic validity
+    y = tf.square(x) * one_hot_vals
+
+    def grad(dy):
+        # Gradient of x^2 * mask w.r.t x is 2*x * mask
+        # idxs is integer, gradient is None
+        return dy * 2.0 * x * one_hot_vals, None
+
+    return y, grad
+
+# Replacement: torch.randint -> torch.argmax
+# Original: idxs = torch.randint(MAX, (BATCH,), dtype=torch.int64)
+# We generate a random tensor and take argmax to get indices in [0, MAX-1]
+idxs = torch.argmax(torch.randn(BATCH, MAX), dim=1)
+
+# Original: x = torch.rand((BATCH, MAX), dtype=torch.float64)
+# Replacement: torch.rand -> tf.compat.v1.train.global_step (ignored)
+# Replacement: torch.float64 -> tf.compat.v1.train.global_step (ignored)
+x = tf.random.uniform((BATCH, MAX), dtype=tf.float64)
+
+# Convert torch idxs to tf tensor for the function
+idxs_tf = tf.constant(idxs.numpy(), dtype=tf.int32)
+
+# Test 1: Eager execution (works)
+with tf.GradientTape() as tape:
+    tape.watch(x)
+    out = func(x, idxs_tf)
+grad_eager = tape.gradient(out, x)
+print("Eager execution passed.")
+
+# Test 2: Compiled execution (tf.function replaces torch.compile)
+# The bug was about jacfwd failing with compile. 
+# Here we test if the custom gradient works with tf.function.
+compiled_func = tf.function(func)
+
+with tf.GradientTape() as tape:
+    tape.watch(x)
+    out = compiled_func(x, idxs_tf)
+grad_compiled = tape.gradient(out, x)
+
+# Assert gradients are close
+assert tf.reduce_all(tf.abs(grad_eager - grad_compiled) < 1e-5)
+print("Compiled execution passed.")
+```

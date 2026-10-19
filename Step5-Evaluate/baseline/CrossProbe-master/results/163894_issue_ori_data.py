@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.python.ops import stateful_random_ops
 
@@ -81,4 +80,3 @@ print(f'Compiled result: {result_compiled}')
 if hasattr(result_original, 'shape') and hasattr(result_compiled, 'shape'):
     print(f'Eager shape: {result_original.shape}')
     print(f'Compiled shape: {result_compiled.shape}')
-```

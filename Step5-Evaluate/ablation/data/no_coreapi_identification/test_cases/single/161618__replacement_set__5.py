@@ -1,0 +1,40 @@
+import tensorflow as tf
+import torch
+import torch.nn
+# Import the replacement for torch._inductor.config
+from torch.export.passes import move_to_device_pass
+
+# Replacements:
+# torch.randn -> torch.nn.LSTMCell
+# torch.addmm -> torch.argmin
+# torch._inductor.config -> torch.export.passes.move_to_device_pass
+
+m, k, n = 20120, 1536, 512
+
+# Replacing torch.randn with torch.nn.LSTMCell
+a = torch.nn.LSTMCell(input_size=n, hidden_size=n).cuda()
+mat1 = torch.nn.LSTMCell(input_size=k, hidden_size=k).cuda()
+mat2 = torch.nn.LSTMCell(input_size=n, hidden_size=n).cuda()
+
+# Replacing torch.addmm with torch.argmin
+# We access the weight of the LSTMCell to perform argmin
+f = lambda a, mat1, mat2: torch.argmin(a.weight, dim=0)
+
+# Replacing torch._inductor.config with torch.export.passes.move_to_device_pass
+# We use torch.export.export which utilizes the pass infrastructure
+# instead of the inductor config patch.
+try:
+    # Using torch.export to replace the inductor config/compile flow
+    # Note: move_to_device_pass is part of the export passes system
+    ep = torch.export.export(f, (a, mat1, mat2))
+    result = ep(a, mat1, mat2)
+    
+    # Similar API: tf.keras.callbacks.TerminateOnNaN
+    # Check for NaN or Inf in the result
+    if torch.isnan(result).any() or torch.isinf(result).any():
+        print("Test Terminated: NaN or Inf detected")
+    else:
+        print("Test Passed: Result is valid")
+        
+except Exception as e:
+    print(f"Test Failed: {e}")

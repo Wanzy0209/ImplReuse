@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import math
 
@@ -14,4 +13,3 @@ xavier_stddev = math.sqrt(2.0 / (in_dim + out_dim))
 W = tf.random.normal(shape=(in_dim, out_dim), mean=0.0, stddev=xavier_stddev, dtype=tf.float32)
 
 print(W.device)
-```

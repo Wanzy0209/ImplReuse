@@ -1,0 +1,42 @@
+import torch
+from torch.backends.cuda import allow_fp16_bf16_reduction_math_sdp
+
+def test_duplicate_execution_merge_mistake():
+    """
+    Test case to reproduce the logic of the merge mistake where a pass
+    (or configuration) is applied twice due to duplicate code blocks.
+    Here, we replace 'joint_custom_pre_pass' with
+    'torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp'.
+    """
+    # Simulating the configuration value
+    # In the original bug, this is config.joint_custom_pre_pass
+    # We use a boolean to represent the state for the replacement API
+    config_val = True
+
+    count = 0
+
+    # First block (from the original code)
+    if config_val is not None:
+        # Original: GraphTransformObserver(...).apply_graph_pass(config.joint_custom_pre_pass)
+        # Replacement: allow_fp16_bf16_reduction_math_sdp(config_val)
+        allow_fp16_bf16_reduction_math_sdp(config_val)
+        count += 1
+
+    # Intermediate block (from the original code)
+    # Original: GraphTransformObserver(...).apply_graph_pass(remove_noop_ops)
+    # We simulate this with a pass statement or a dummy operation
+    pass
+
+    # Second block (The duplicate from the merge mistake)
+    if config_val is not None:
+        # Original: GraphTransformObserver(...).apply_graph_pass(config.joint_custom_pre_pass)
+        # Replacement: allow_fp16_bf16_reduction_math_sdp(config_val)
+        allow_fp16_bf16_reduction_math_sdp(config_val)
+        count += 1
+
+    # Assertion to verify the bug reproduction logic
+    # The count should be 2 because the block is duplicated
+    assert count == 2, "Expected count to be 2 due to duplicate execution block"
+
+if __name__ == "__main__":
+    test_duplicate_execution_merge_mistake()

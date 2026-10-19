@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # PyTorch: torch.set_default_dtype(torch.float64)
@@ -17,4 +16,3 @@ with tf.device('/GPU:0'):
     z = x @ y
 
 print(z[0, 0])
-```

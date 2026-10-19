@@ -1,0 +1,13 @@
+import torch as th
+
+# Test case adapted from Issue 161812 using torch.logdet
+# Replacements applied based on similarity score:
+# th.nested.nested_tensor -> torch.logdet
+# th.ones -> torch.logdet
+# th.cat -> torch.logdet
+
+# Original: x = th.nested.nested_tensor([th.ones(3, 2, 3), th.ones(4, 2, 3)], layout=th.jagged)
+x = th.logdet([th.logdet(3, 2, 3), th.logdet(4, 2, 3)], layout=th.jagged)
+
+# Original: th.cat([x, x])
+th.logdet([x, x])

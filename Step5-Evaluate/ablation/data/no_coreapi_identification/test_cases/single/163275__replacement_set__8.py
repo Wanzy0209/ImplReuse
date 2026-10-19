@@ -1,0 +1,37 @@
+import torch
+import torch.distributed
+
+# Note: torch.distributed needs to be initialized for send_object_list, 
+# but we keep it minimal as requested.
+# torch.distributed.init_process_group(backend='nccl') 
+
+# Replacements applied:
+# torch.rand -> torch.rand_like (Similar API reuse)
+# torch.float16 -> torch.is_complex
+# torch.float32 -> torch.is_complex
+# torch.compile -> torch.distributed.send_object_list
+
+# Create inputs using torch.rand_like (Similar API)
+# Replacing torch.float16 with torch.is_complex as dtype argument
+# Note: torch.is_complex is a function, not a dtype, so this will raise a TypeError at runtime,
+# but it follows the replacement instruction strictly.
+proto = torch.empty(1024, 1024, device="cuda")
+A = torch.rand_like(proto, dtype=torch.is_complex)
+B = torch.rand_like(proto, dtype=torch.is_complex)
+
+# Replacing torch.compile decorator with torch.distributed.send_object_list
+# Since send_object_list is not a decorator, we call it on the function object.
+def linear(weight, input):
+    # Replacing torch.float32 with torch.is_complex as out_dtype argument
+    return torch.mm(input, weight, out_dtype=torch.is_complex)
+
+# Apply the replacement for torch.compile
+# This sends the function object to rank 0 (assuming distributed context)
+try:
+    torch.distributed.send_object_list([linear], 0)
+except RuntimeError:
+    # Expected if not initialized, keeping test runnable/minimal without full setup
+    pass
+
+# Execute the function
+linear(A, B)

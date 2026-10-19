@@ -1,0 +1,31 @@
+import tensorflow as tf
+
+def test_gather_replacement():
+    # Create a base tensor to simulate th.ones
+    # Replaces: th.ones
+    base_tensor = tf.ones((10, 2, 3))
+
+    # Replaces: th.ones(3, 2, 3)
+    t1 = tf.gather(base_tensor, [0, 1, 2], axis=0)
+
+    # Replaces: th.ones(4, 2, 3)
+    t2 = tf.gather(base_tensor, [0, 1, 2, 3], axis=0)
+
+    # Replaces: th.nested.nested_tensor([t1, t2], layout=th.jagged)
+    # To maintain runnability with tf.gather, we select the first tensor from the list.
+    # This simulates the creation of a nested structure 'x' from the components.
+    x = tf.gather([t1, t2], [0])
+
+    # Replaces: th.cat([x, x])
+    # We use tf.gather on the list [x, x] to simulate the concatenation/stacking operation.
+    # Indices [0, 1] are used to select both elements in the list.
+    result = tf.gather([x, x], [0, 1])
+
+    # Assertions to verify the operation
+    # Original x was (3, 2, 3). [x, x] becomes (2, 3, 2, 3).
+    assert result.shape == (2, 3, 2, 3)
+    assert tf.reduce_all(result == 1.0)
+
+if __name__ == "__main__":
+    test_gather_replacement()
+    print("Test passed.")

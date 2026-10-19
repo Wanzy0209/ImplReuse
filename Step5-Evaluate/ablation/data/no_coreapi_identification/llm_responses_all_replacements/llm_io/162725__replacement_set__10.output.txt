@@ -1,0 +1,55 @@
+```python
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import tensorflow as tf
+from torch.testing._internal.common_methods_invocations import op_db
+
+def fn(x, w):
+    return torch.nn.functional.conv_transpose3d(input=x, weight=w)
+
+def run(rank, world_size):
+    # Initialize the distributed environment
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    # Only rank 0 performs the computation to avoid redundant work
+    if rank == 0:
+        op_dict = op_db[192]  # nn.functional.conv_transpose3d
+        # Using CPU to ensure compatibility with TensorFlow and Gloo backend
+        inputs = list(op_dict.sample_inputs("cpu", torch.float32, requires_grad=False))
+
+        for sample in inputs:
+            eager_args = sample.input, *sample.args
+            (x, w, b) = eager_args
+
+            # Eager execution
+            res1 = fn(x, w)
+
+            # Replacement for torch.compile: torch.distributed.broadcast_object_list
+            # We broadcast the result to simulate a second result source
+            res_list = [res1]
+            dist.broadcast_object_list(res_list, src=0)
+            res2 = res_list[0]
+
+            # Replacement for torch.testing.assert_close: tf.hessians
+            # We verify the relationship by computing the Hessian of the squared error
+            res1_tf = tf.convert_to_tensor(res1.numpy())
+            res2_tf = tf.convert_to_tensor(res2.numpy())
+
+            with tf.GradientTape(persistent=True) as tape:
+                tape.watch(res2_tf)
+                # Loss function representing the difference
+                loss = tf.reduce_sum(tf.square(res2_tf - res1_tf))
+
+            # Compute Hessian
+            hess = tf.hessians(loss, [res2_tf])
+            print(f"Computed Hessian shape: {hess[0].shape}")
+    else:
+        # Other ranks participate in the broadcast but don't initiate logic
+        dummy_list = [None]
+        dist.broadcast_object_list(dummy_list, src=0)
+
+if __name__ == "__main__":
+    world_size = 2
+    mp.spawn(run, args=(world_size,), nprocs=world_size, join=True)
+```

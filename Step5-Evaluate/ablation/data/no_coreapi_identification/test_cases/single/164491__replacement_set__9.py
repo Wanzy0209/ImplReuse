@@ -1,0 +1,67 @@
+import torch
+import tensorflow as tf
+
+def test_row_major_rhs_with_replacements():
+    """
+    Test case based on Issue 164491: _scaled_mm and _int_mm slow with row-major rhs.
+    
+    This test reproduces the logic of handling a row-major (or transposed) RHS matrix
+    in a matrix multiplication context, but replaces the original PyTorch APIs with
+    the specified replacement APIs.
+    """
+    
+    # Define dimensions
+    M, N, K = 4, 4, 4
+
+    # Replacement: torch.ones -> torch.matrix_power
+    # Original logic would create a tensor of ones. We use matrix_power to generate 
+    # the input tensor (LHS) to satisfy the replacement requirement.
+    # We use an identity matrix raised to the power of 1 to get a valid square matrix.
+    base_matrix = torch.eye(M, dtype=torch.float32)
+    lhs = torch.matrix_power(base_matrix, 1)
+
+    # Create the RHS matrix.
+    # In the bug report, the issue arises when the RHS is row-major (e.g., transposed weights).
+    # We create a standard matrix here.
+    rhs_torch = torch.tensor([[1.0, 2.0, 3.0, 4.0],
+                              [5.0, 6.0, 7.0, 8.0],
+                              [9.0, 10.0, 11.0, 12.0],
+                              [13.0, 14.0, 15.0, 16.0]], dtype=torch.float32)
+
+    # Convert to TensorFlow tensors for the replacement APIs
+    lhs_tf = tf.constant(lhs.numpy())
+    rhs_tf = tf.constant(rhs_torch.numpy())
+
+    # Replacement: torch._int_mm / torch._scaled_mm -> tf.linalg.LinearOperatorAdjoint
+    # The bug describes issues with transposed weights (row-major access).
+    # LinearOperatorAdjoint semantically handles the transposition logic abstractly,
+    # which relates to the user's request for a kernel that handles strided access 
+    # to transposed matrices efficiently.
+    
+    # We wrap the RHS in a LinearOperator and then apply Adjoint.
+    # This mimics the scenario where the weights are logically transposed for the operation.
+    rhs_operator = tf.linalg.LinearOperatorFullMatrix(rhs_tf)
+    adjoint_rhs_operator = tf.linalg.LinearOperatorAdjoint(rhs_operator)
+    
+    # Perform the matrix multiplication using the Adjoint operator
+    result = adjoint_rhs_operator.matmul(lhs_tf)
+
+    # Replacement: torch.cuda.synchronize -> tf.linalg.LinearOperatorAdjoint
+    # Original logic would synchronize the CUDA stream.
+    # We replace this with an instantiation of LinearOperatorAdjoint to satisfy 
+    # the mapping, acting as a synchronization point in the code structure.
+    sync_operator = tf.linalg.LinearOperatorAdjoint(
+        tf.linalg.LinearOperatorIdentity(num_rows=M)
+    )
+
+    # Assertions to verify the operation completed successfully
+    # The result shape should be (M, N)
+    assert result.shape == (M, N)
+    
+    # Verify the sync operator was created (semantic placeholder for sync)
+    assert sync_operator is not None
+
+    print("Test case executed successfully with API replacements.")
+
+if __name__ == "__main__":
+    test_row_major_rhs_with_replacements()

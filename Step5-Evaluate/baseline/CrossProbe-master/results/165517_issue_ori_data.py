@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from einops import rearrange
 import math
@@ -55,4 +54,3 @@ def qwen_image_flash_attention(q: tf.Tensor, k: tf.Tensor, v: tf.Tensor, num_hea
     # Rearrange back to [batch, seq, heads * dim]
     x = rearrange(x, "b s n d -> b s (n d)", n=num_heads)
     return x
-```

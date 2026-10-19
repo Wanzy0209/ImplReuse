@@ -1,0 +1,72 @@
+import torch
+from typing import List
+
+def view_decomposition(x: torch.Tensor, size: List) -> torch.Tensor:
+    """
+    Decomposition function using torch.ops.aten._reshape_copy.
+    This is the core of the bug report where unbacked semantics were undefined.
+    """
+    return torch.ops.aten._reshape_copy.default(x, size)
+
+class SimpleModel(torch.nn.Module):
+    """
+    Minimal model to reproduce the view operation with dynamic shapes.
+    Replaces the heavy Qwen3MoeModel from the original bug report.
+    """
+    def forward(self, x):
+        return x.view(x.size(0), -1)
+
+def test_reshape_copy_dynamic_shapes():
+    """
+    Test case for Issue ID: 162110.
+    Verifies that torch.ops.aten._reshape_copy handles unbacked semantics (SymInts)
+    correctly when used as a decomposition for view in torch.export.
+    
+    Leverages the list iteration pattern from tf.keras.backend.batch_get_value
+    to test multiple input configurations.
+    """
+    # Define dynamic dimension
+    batch_dim = torch.export.Dim("batch", min=1, max=128)
+    
+    model = SimpleModel()
+    model.eval()
+    
+    # Prepare a list of inputs, similar to how batch_get_value handles a list of tensors
+    inputs = [
+        torch.randn(1, 12),
+        torch.randn(4, 12),
+        torch.randn(8, 12)
+    ]
+    
+    # Setup decomposition table
+    decomp_table = torch.export.default_decompositions()
+    decomp_table[torch.ops.aten.view.default] = view_decomposition
+    
+    # Iterate over inputs (pattern reuse from batch_get_value)
+    for x in inputs:
+        with torch.no_grad():
+            # Export the model with dynamic shapes
+            ep = torch.export.export(
+                model,
+                args=(x,),
+                kwargs={},
+                dynamic_shapes=({0: batch_dim},),
+                strict=False,
+            )
+            
+            # Apply decompositions
+            # This is where the bug "unbacked semantics for _reshape_copy not defined" would occur
+            after_decomp = ep.run_decompositions(decomp_table=decomp_table)
+            
+            # Verify the decomposed graph produces the same output
+            result = after_decomp.module()(x)
+            expected = model(x)
+            
+            # Check correctness
+            assert torch.allclose(result, expected), \
+                f"Output mismatch for input shape {x.shape}. Decomposition failed."
+            
+    print("Test Passed: _reshape_copy handles unbacked semantics correctly.")
+
+if __name__ == "__main__":
+    test_reshape_copy_dynamic_shapes()

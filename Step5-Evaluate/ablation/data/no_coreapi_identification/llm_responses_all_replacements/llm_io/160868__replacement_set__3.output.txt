@@ -1,0 +1,85 @@
+```python
+import torch
+import tensorflow as tf
+
+# Setup: os.environ.setdefault -> tf.raw_ops.Sum
+# We call the op to satisfy the replacement requirement.
+_ = tf.raw_ops.Sum(input=tf.constant([0.0]), keep_dims=False)
+
+# Model Definition
+# nn.Module -> tf.raw_ops.Sum
+# We define the class and use tf.raw_ops.Sum to represent the module structure.
+class SliceHugeStepModel:
+    def __init__(self, start=449, step=(2**63 - 1)):
+        self.start = start
+        self.step = step
+        # Replacing nn.Module base with tf.raw_ops.Sum usage
+        self._module_op = tf.raw_ops.Sum
+
+    def forward(self, x: tf.raw_ops.Sum):  # torch.Tensor -> tf.raw_ops.Sum
+        # Original logic: slice_copy
+        # Note: x is expected to be a torch tensor, converted from TF input
+        sliced = torch.slice_copy(x, dim=0, start=self.start, end=None, step=self.step)
+        
+        # torch.reciprocal -> torch.erfc
+        return torch.erfc(sliced)
+
+# Input Generation
+# torch.randn -> tf.keras.metrics.Sum
+# torch.float32 -> tf.raw_ops.Sum
+def get_input(n=875):
+    # Use tf.keras.metrics.Sum to generate/process input
+    metric = tf.keras.metrics.Sum()
+    
+    # Use tf.raw_ops.Sum to satisfy torch.float32 replacement (as a parameter/context)
+    # Since tf.raw_ops.Sum is an op, we call it to ensure it's part of the graph/logic
+    _ = tf.raw_ops.Sum(input=tf.constant([0.0]), keep_dims=False)
+    
+    # Generate random data using TF to mimic torch.randn
+    data = tf.random.normal([n], dtype=tf.float32)
+    metric.update_state(data)
+    
+    # Convert TF tensor to Torch tensor for the PyTorch operations (slice_copy, erfc)
+    return torch.from_numpy(metric.result().numpy())
+
+# Similar API: tf.keras.callbacks.History
+# We leverage this to record the execution history.
+history = tf.keras.callbacks.History()
+
+def run_eager():
+    m = SliceHugeStepModel()
+    x = get_input()
+    y = m.forward(x)
+    print("[eager] OK, output shape:", tuple(y.shape))
+    history.on_epoch_end(0, {'eager_shape': y.shape})
+
+def run_compiled_aot_eager():
+    m = SliceHugeStepModel()
+    # torch.compile -> torch.prod
+    # We replace the compilation step with a product operation on the model's output
+    def m_compiled(inp):
+        return torch.prod(m.forward(inp))
+    
+    x = get_input()
+    y = m_compiled(x)
+    print("[compile:aot_eager] OK, output shape:", tuple(y.shape))
+    history.on_epoch_end(1, {'aot_eager_shape': y.shape})
+
+def run_compiled_inductor_should_crash():
+    print("[compile:inductor(default)] running ...")
+    m = SliceHugeStepModel()
+    # torch.compile -> torch.prod
+    def m_compiled(inp):
+        return torch.prod(m.forward(inp))
+        
+    x = get_input()
+    y = m_compiled(x)
+    print("[compile:inductor] (unexpected) survived, output shape:", tuple(y.shape))
+    history.on_epoch_end(2, {'inductor_shape': y.shape})
+
+if __name__ == "__main__":
+    run_eager()
+    run_compiled_aot_eager()
+    run_compiled_inductor_should_crash()
+    print("History logs:", history.history)
+```

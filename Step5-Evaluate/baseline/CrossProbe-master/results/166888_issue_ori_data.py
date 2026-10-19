@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 def f(x, max_val):
@@ -18,4 +17,3 @@ x = tf.random.normal((10, 20, 30))
 max_val = tf.constant(5.0)
 
 compiled_func(x, max_val)
-```

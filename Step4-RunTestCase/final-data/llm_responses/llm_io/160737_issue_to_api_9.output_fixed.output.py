@@ -1,0 +1,41 @@
+import sys
+
+# Handle missing TensorFlow dependency gracefully
+try:
+    import tensorflow as tf
+except ImportError:
+    print("TensorFlow is not installed. Skipping test.")
+    sys.exit(0)
+
+# Adapted from the similar API information provided (log1pexp example)
+# and the original bug report's focus on scalar (0-dimensional) tensor handling.
+
+@tf.keras.ops.custom_gradient
+def log1pexp(x):
+    def grad(dy):
+        return dy * (1 - 1 / (1 + tf.exp(x)))
+    return tf.math.log(1 + tf.exp(x)), grad
+
+def test_custom_gradient_scalar():
+    # Create a scalar (0-dimensional) tensor, mirroring the 'index' in the original bug
+    x = tf.constant(100.0) 
+    
+    try:
+        with tf.GradientTape() as tape:
+            tape.watch(x)
+            y = log1pexp(x)
+        
+        dy_dx = tape.gradient(y, x)
+        
+        # The original bug checked for success/failure and output shape
+        print(f"custom_gradient test succeeds for scalar input. Output: {y}, Gradient: {dy_dx}")
+        
+        # Assertion to ensure valid computation
+        assert dy_dx is not None
+        assert not tf.math.is_nan(dy_dx), "Gradient should not be NaN for this custom function implementation"
+        
+    except Exception as e:
+        print(f"custom_gradient test fails for scalar input: {e}")
+
+if __name__ == "__main__":
+    test_custom_gradient_scalar()

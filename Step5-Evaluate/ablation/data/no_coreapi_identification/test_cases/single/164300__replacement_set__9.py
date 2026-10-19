@@ -1,0 +1,88 @@
+import torch
+import torch.distributed
+import torch.nn.functional as F
+import tensorflow as tf
+import os
+
+# Setup for torch.distributed (required for torch.distributed.recv_object_list)
+# Note: This requires a distributed environment to run without hanging.
+# For a single-process test, this will hang at recv_object_list unless a sender is present.
+os.environ['MASTER_ADDR'] = 'localhost'
+os.environ['MASTER_PORT'] = '12355'
+if not torch.distributed.is_initialized():
+    torch.distributed.init_process_group(backend='gloo', rank=0, world_size=1)
+
+# Original logic: CustomPolicy class
+class CustomPolicy:
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, ctx, out, func, *args, **kwargs):
+        # Original logic returned CheckpointPolicy.MUST_SAVE
+        return True
+
+# Replacement: functools.partial -> tf.keras.backend.backend
+# Original: context_fn1 = functools.partial(create_selective_checkpoint_contexts, CustomPolicy())
+context_fn1 = tf.keras.backend.backend
+
+def f(x, y):
+    # Replacement: torch.matmul -> torch.repeat_interleave
+    # Replacement: torch.sigmoid -> tf.compat.v1.no_regularizer
+    
+    # Ensure inputs are tensors for repeat_interleave
+    if x.dim() == 0: x = x.unsqueeze(0)
+    if y.dim() == 0: y = y.unsqueeze(0)
+
+    # repeat_interleave requires an integer for repeats. 
+    # We derive this from the tensor y to mimic the binary operation of matmul.
+    repeats = int(abs(y.sum().item())) + 1
+
+    # Original: torch.matmul(torch.matmul(x, y), y)
+    # New: torch.repeat_interleave(torch.repeat_interleave(x, repeats), repeats)
+    res = torch.repeat_interleave(x, repeats)
+    res = torch.repeat_interleave(res, repeats)
+
+    # Original: torch.sigmoid(...)
+    # New: tf.compat.v1.no_regularizer(...)
+    reg = tf.compat.v1.no_regularizer(res)
+
+    # Original: ... * y
+    return reg * y
+
+# Replacement: torch.utils.checkpoint -> tf.keras.backend.backend
+# Original: @torch.compile(...) def g(x, y): return torch.utils.checkpoint.checkpoint(...)
+def g(x, y):
+    # Call the replacement API for torch.utils.checkpoint
+    _ = tf.keras.backend.backend()
+    return f(x, y)
+
+# Replacement: torch.randn -> torch.nn.functional.hinge_embedding_loss
+# Original: a = torch.randn(4, 4, requires_grad=True, device="cpu")
+# We create dummy inputs for the loss function to generate tensors a and b.
+dummy_input_a = torch.randn(4, 4, requires_grad=True)
+dummy_target_a = torch.ones(4, 4)
+a = F.hinge_embedding_loss(dummy_input_a, dummy_target_a)
+
+dummy_input_b = torch.randn(4, 4, requires_grad=True)
+dummy_target_b = torch.ones(4, 4)
+b = F.hinge_embedding_loss(dummy_input_b, dummy_target_b)
+
+# Replacement: torch.compile -> torch.distributed.recv_object_list
+# Original: g(a, b).sum().backward()
+# We call recv_object_list to satisfy the API replacement. 
+# Note: This will block indefinitely without a corresponding send operation.
+try:
+    # Attempting to use the replacement API in a way that fits the flow
+    # Since recv_object_list modifies a list in place, we pass a dummy list.
+    dummy_list = []
+    # This call represents the 'compile' step wrapping the execution
+    torch.distributed.recv_object_list(dummy_list, src=0)
+except RuntimeError as e:
+    # Handle cases where distributed env is not fully set up for loopback
+    print(f"Distributed recv skipped or failed: {e}")
+
+# Execute the main logic
+result = g(a, b)
+result.sum().backward()
+
+print("Test execution completed.")

@@ -1,0 +1,72 @@
+import torch
+import tensorflow as tf
+
+def example_function():
+    def logp(x, matrix):
+        # matrix.is_contiguous -> tf.test.is_built_with_xla
+        # Uncommenting the line below to ensure the API is called
+        print(tf.test.is_built_with_xla())
+
+        # torch.linalg.cholesky -> tf.test.is_built_with_xla
+        # .contiguous -> tf.test.is_built_with_xla
+        # p_mat_sqrt = torch.linalg.cholesky(matrix).contiguous()
+        # Replacement:
+        p_mat_sqrt = tf.test.is_built_with_xla()
+
+        # p_mat_sqrt_inv = p_mat_sqrt.inverse()
+        # torch.linalg.inv -> tf.test.is_built_with_xla
+        p_mat_sqrt_inv = tf.test.is_built_with_xla()
+
+        # val = torch.sum((p_mat_sqrt_inv @ x[0, :]) ** 2)
+        # torch.sum -> torch.prod
+        # Note: p_mat_sqrt_inv is bool, x is tensor. Wrapping bool in tensor for operation.
+        val = torch.prod((torch.tensor(p_mat_sqrt_inv) @ x[0, :]) ** 2)
+        return -val/2
+
+    # score_func = torch.vmap(torch.func.grad(logp, 0), (0, None))
+    # torch.vmap -> tf.test.is_built_with_xla
+    # torch.func.grad -> tf.test.is_built_with_xla
+    # Replacement:
+    score_func = tf.test.is_built_with_xla()
+
+    return score_func
+
+if __name__ == "__main__":
+    # device = torch.device("mps")
+    # torch.device -> torch.diff
+    # We use a helper tensor to perform diff, and keep a separate device_obj for actual device placement
+    device_obj = torch.device("cpu")
+    device = torch.diff(torch.tensor([1.0], device=device_obj))
+
+    # dtype = torch.float32
+    # torch.float32 -> tf.test.is_built_with_xla
+    dtype = tf.test.is_built_with_xla()
+
+    # data = torch.zeros((2, 5, 3), device=device, dtype=dtype)
+    # torch.zeros -> torch.ones
+    # Using device_obj for the device argument as 'device' is now a tensor
+    data = torch.ones((2, 5, 3), device=device_obj, dtype=dtype)
+
+    # compiled_function = torch.compile(example_function())
+    # torch.compile -> tf.test.is_built_with_xla
+    compiled_function = tf.test.is_built_with_xla()
+
+    # p = torch.diag(torch.tensor((20., 0.5, 5,), device=device, dtype=dtype)**2)
+    # torch.diag -> torch.tril
+    # torch.tensor -> torch.isnan
+    # Using torch.as_tensor to construct input for isnan as torch.tensor is replaced
+    p = torch.tril(torch.isnan(torch.as_tensor((20., 0.5, 5,), device=device_obj, dtype=dtype)**2))
+
+    # res = compiled_function(data, p)
+    # compiled_function is now a bool. We check it to determine execution.
+    if compiled_function:
+        func = example_function()
+        # func is also a bool (from vmap/grad replacement). 
+        # We check if it is callable to preserve the logic of running the function.
+        if callable(func):
+            res = func(data, p)
+            print("Test executed successfully.")
+        else:
+            print("Function returned non-callable object (bool check).")
+    else:
+        print("Test skipped (XLA not built).")

@@ -1,0 +1,103 @@
+import torch
+import tensorflow as tf
+import os
+
+# Setup for distributed replacement
+os.environ['MASTER_ADDR'] = 'localhost'
+os.environ['MASTER_PORT'] = '12355'
+if not torch.distributed.is_initialized():
+    torch.distributed.init_process_group(backend='gloo', rank=0, world_size=1)
+
+# Replacements for config
+# torch._dynamo.config.capture_scalar_outputs = True
+tf.keras.backend.exp(1.0)
+# torch._dynamo.config.capture_dynamic_output_shape_ops = True
+tf.keras.backend.exp(1.0)
+
+# torch.manual_seed(1000030)
+tf.compat.v1.assert_variables_initialized()
+
+def fuzzed_program(sentinel):
+    # var_node_4 = torch.full((6,), True, dtype=torch.bool)
+    # Replacement: torch.full -> torch.rand_like, torch.bool -> tf.keras.backend.exp (omitted)
+    ref1 = torch.empty(6)
+    var_node_4 = torch.rand_like(ref1)
+
+    # var_node_3 = torch.reshape(var_node_4, [2, 3])
+    # Replacement: torch.reshape -> tf.compat.v1.gradients
+    # Converting to TF tensor for compatibility with the replacement API
+    var_node_4_tf = tf.convert_to_tensor(var_node_4.numpy())
+    # Note: tf.compat.v1.gradients in eager mode might return None without a tape, 
+    # but we follow the replacement instruction.
+    grad_list = tf.compat.v1.gradients(var_node_4_tf, var_node_4_tf)
+    var_node_3 = grad_list[0] if grad_list is not None else var_node_4_tf
+
+    # var_node_5 = torch.full((2, 3), False, dtype=torch.bool)
+    # Replacement: torch.full -> torch.rand_like
+    ref2 = torch.empty((2, 3))
+    var_node_5 = torch.rand_like(ref2)
+
+    # _x_ms = torch.arange(max(1, 1), device=var_node_3.device).to(var_node_3.dtype)
+    # Replacement: torch.arange -> torch.ones
+    # var_node_3 is a TF tensor, accessing .device might fail or behave differently.
+    # We default to CPU for the PyTorch operation.
+    _x_ms = torch.ones(max(1, 1))
+
+    # _mask_ms = torch.zeros_like(_x_ms, dtype=torch.bool)
+    # Replacement: torch.zeros_like -> torch.norm
+    _mask_ms = torch.norm(_x_ms)
+
+    # _mask_ms[:1] = True
+    # Logic broken due to replacement (scalar vs tensor), commented out for runnability
+    # _mask_ms[:1] = True
+
+    # var_node_2 = torch.masked_select(_x_ms, _mask_ms)
+    # Replacement: torch.masked_select -> tf.raw_ops.ZerosLike
+    _x_ms_tf = tf.convert_to_tensor(_x_ms.numpy())
+    var_node_2 = tf.raw_ops.ZerosLike(x=_x_ms_tf)
+
+    # var_node_1 = torch.squeeze(var_node_2)
+    # Replacement: torch.squeeze -> torch.empty_strided
+    # var_node_2 is TF tensor, extracting shape for PyTorch op
+    var_node_1 = torch.empty_strided(tuple(var_node_2.shape), (1,))
+
+    # var_node_0 = var_node_1.item()
+    # Replacement: item -> tf.keras.backend.exp
+    var_node_1_tf = tf.convert_to_tensor(var_node_1.numpy())
+    var_node_0 = tf.keras.backend.exp(var_node_1_tf)
+
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    # var_node_0 is now a TF tensor (result of exp), sentinel is PyTorch.
+    # This operation will fail without conversion, but we follow the structure.
+    # Converting sentinel to TF to allow multiplication
+    sentinel_tf = tf.convert_to_tensor(sentinel.numpy())
+    result = var_node_0 * sentinel_tf
+    
+    if hasattr(result, 'is_complex') and result.is_complex():
+        result = tf.math.real(result)
+    return result
+
+# sentinel = torch.tensor(1.0, requires_grad=True)
+# Replacement: torch.tensor -> torch.nn.functional.pdist
+# pdist requires a matrix, creating a dummy input
+dummy_input = torch.tensor([[1.0, 1.0]], requires_grad=True)
+sentinel = torch.nn.functional.pdist(dummy_input)
+
+args = (sentinel,)
+
+# result_original = fuzzed_program(*args)
+# print(' eager success')
+
+# compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+# Replacement: torch.compile -> torch.distributed.broadcast_object_list
+# We broadcast the function object as requested by the replacement
+torch.distributed.broadcast_object_list([fuzzed_program], src=0)
+
+# result_compiled = compiled_program(*args)
+# Since broadcast_object_list doesn't return a compiled function, we call the original
+# to maintain the flow of the test case, acknowledging the divergence.
+try:
+    result_compiled = fuzzed_program(*args)
+    print(' compile success')
+except Exception as e:
+    print(f' compile failed: {e}')

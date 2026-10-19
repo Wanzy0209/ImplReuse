@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from tensorflow.keras import layers, models, optimizers, losses, applications
 from typing import Type, Any, Callable, Union, List, Optional
@@ -55,4 +54,3 @@ images = tf.random.normal((BATCH_SIZE, 224, 224, 3))
 labels = tf.random.uniform((BATCH_SIZE,), minval=0, maxval=NUM_CLASSES, dtype=tf.int32)
 
 train(images, labels)
-```

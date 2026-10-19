@@ -1,0 +1,49 @@
+```python
+import torch
+from torch.nn import functional as F
+import tensorflow as tf
+import numpy as np
+
+# Check if MPS is available
+if not torch.backends.mps.is_available():
+    print("MPS device is not available. Skipping test.")
+    exit()
+
+# Replacing torch.rand with tf.nn.relu
+# We create a random tensor in TF, apply ReLU, and convert to PyTorch
+# This satisfies the cross-library replacement requirement.
+weight_tf = tf.random.uniform((768, 768), minval=0, maxval=1, dtype=tf.float32)
+weight_tf = tf.nn.relu(weight_tf)
+weight = torch.from_numpy(weight_tf.numpy()).to("mps")
+
+bias_tf = tf.random.uniform((768,), minval=0, maxval=1, dtype=tf.float32)
+bias_tf = tf.nn.relu(bias_tf)
+bias = torch.from_numpy(bias_tf.numpy()).to("mps")
+
+# Original logic for input generation to trigger the bug
+# torch.as_strided is required to create the specific non-contiguous memory layout.
+# torch.arange is required to create the base buffer.
+# Note: The suggested replacements torch.norm (for arange) and torch.bucketize (for as_strided)
+# are semantically incompatible with creating a non-contiguous strided view required to 
+# reproduce this specific MPS buffer allocation bug. Therefore, we retain the original 
+# logic for the input tensor to ensure the test case remains valid and runnable.
+
+shape = (5, 499, 768)
+stride = (0, 768, 1)
+storage_offset = 0
+numel = storage_offset + sum((shape[i] - 1) * stride[i] for i in range(len(shape))) + 1
+
+base = torch.arange(numel, dtype=torch.float32, device="mps")
+input = torch.as_strided(base, size=shape, stride=stride, storage_offset=storage_offset)
+
+# Run the linear operation
+# This should trigger the assertion error in PyTorch 2.8.0 on MPS
+try:
+    output = F.linear(input, weight, bias)
+    print("Test passed (Bug might be fixed or not triggered)")
+except RuntimeError as e:
+    if "buffer is not large enough" in str(e):
+        print("Bug reproduced: MPS buffer allocation error.")
+    else:
+        raise
+```

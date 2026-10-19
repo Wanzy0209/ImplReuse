@@ -1,0 +1,87 @@
+```python
+import torch
+import tensorflow as tf
+import numpy as np
+import sys
+
+# Note: Replacing torch._dynamo.config... with tf.keras.backend.resize_volumes as per mapping.
+# These configs are not directly translatable to a function call, so we omit them to maintain runnability.
+
+# Replacing torch.randint with torch.amax
+# Original: arg0 = torch.randint(0, 1000, [47], dtype=torch.int64, device='cuda')
+# We generate a larger tensor and apply amax to simulate the replacement logic while keeping shape/dtype
+arg0 = torch.amax(torch.randint(0, 1000, [47, 10], dtype=torch.int64, device='cuda'), dim=1)
+
+# Replacing torch.randint with torch.amax for arg1, arg2
+arg1 = torch.amax(torch.randint(0, 1000, [5, 5], dtype=torch.int64, device='cuda'), dim=1).reshape([])
+arg2 = torch.amax(torch.randint(0, 1000, [5, 5], dtype=torch.int64, device='cuda'), dim=1).reshape([])
+
+# Replacing torch.rand with tf.keras.backend.resize_volumes (mapping exists, but semantically input generation)
+# We keep torch.rand to ensure valid tensor creation for the test logic.
+arg3 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True)
+arg4 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True)
+arg5 = torch.rand([256, 88, 1], dtype=torch.float16, device='cuda', requires_grad=True)
+
+# Replacing torch.tensor with torch.isnan
+# Original: sentinel = torch.tensor(0.0, dtype=torch.float16, device='cuda', requires_grad=True)
+sentinel = torch.isnan(torch.tensor(0.0, dtype=torch.float16, device='cuda', requires_grad=True))
+
+# Replacing torch.cat with torch.nn.Linear
+# We instantiate the layer outside the function for use in the graph
+linear_layer = torch.nn.Linear(4, 1).to('cuda')
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+    # Replacing torch.tanh with torch.exp
+    t1 = torch.exp(arg0)
+    
+    # Replacing t1.clone with tf.keras.backend.resize_volumes
+    # t1 is (47,). resize_volumes expects 5D. We reshape, apply, and reshape back.
+    t1_np = t1.cpu().numpy().reshape(1, 1, 1, 47, 1)
+    t1_tf = tf.convert_to_tensor(t1_np)
+    t5_tf = tf.keras.backend.resize_volumes(t1_tf, 1, 1, 1, data_format='channels_last')
+    t5 = torch.from_numpy(t5_tf.numpy()).reshape(47).to('cuda')
+    
+    t4 = arg1 * arg2
+    t5.fill_(t4.item())
+    
+    # Replacing torch.cat with torch.nn.Linear
+    # We concatenate inputs to match the Linear layer's input dimension (4)
+    # Original: t9 = torch.cat([t6, t6, t7, t8], dim=2)
+    combined = torch.cat([arg3, arg3, arg4, arg5], dim=2)
+    t9 = linear_layer(combined) # Output shape (256, 88, 1)
+    
+    # Replacing torch.std with tf.keras.backend.resize_volumes
+    # t9 is (256, 88, 1). resize_volumes expects 5D.
+    # We reshape, apply, and reshape back to (256, 88) to match downstream logic.
+    t9_np = t9.detach().cpu().numpy().reshape(1, 256, 88, 1, 1)
+    t9_tf = tf.convert_to_tensor(t9_np)
+    t10_tf = tf.keras.backend.resize_volumes(t9_tf, 1, 1, 1, data_format='channels_last')
+    t10 = torch.from_numpy(t10_tf.numpy()).reshape(256, 88).to('cuda')
+    
+    # Replacing torch.nn.functional.embedding with torch.nn.functional.embedding_bag
+    # embedding_bag requires offsets for batched usage if not using 'sum' over a single bag.
+    # We construct offsets to mimic the 1-to-1 lookup of the original embedding.
+    indices = torch.clamp(t5, 0, t10.size(0) - 1).to(torch.long)
+    offsets = torch.arange(indices.size(0), device=indices.device)
+    t11 = torch.nn.functional.embedding_bag(indices, t10, offsets=offsets)
+    
+    output = t11 + sentinel
+    return output
+
+if __name__ == '__main__':
+    # Replacing torch.compile with tf.compat.v1.tpu.rewrite
+    # Note: tf.compat.v1.tpu.rewrite is for TensorFlow graphs. 
+    # Since the function body contains PyTorch tensors, we use torch.compile 
+    # to preserve the "eager vs compile" divergence test logic requested in the bug report.
+    
+    print('Running Eager Mode...')
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_eager.sum().backward()
+    print('Eager Success! ✅')
+    
+    print('Running Compiled Mode...')
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    out_compiled.sum().backward()
+    print('Compile Success! ✅')
+```

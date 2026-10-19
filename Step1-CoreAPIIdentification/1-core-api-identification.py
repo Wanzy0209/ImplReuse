@@ -424,7 +424,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--api-key",
-        default=os.getenv("ZHIPUAI_API_KEY", "044f2bc486d14e13aa68259fbd1970c4.hjLhKCmeXaDRt2xf"),
+        default=os.getenv("ZHIPUAI_API_KEY"),
         help="Zhipu API key. If omitted, prompts are generated without LLM inference.",
     )
     parser.add_argument("--model", default="glm-4.7", help="LLM model name.")

@@ -1,0 +1,44 @@
+```python
+import torch
+import torch.nn.functional as F
+
+# Setup dummy inputs for the replacement API (cosine_embedding_loss)
+# We use minimal shapes to keep the test case minimal.
+dummy_input1 = torch.randn(5, 3).cuda()
+dummy_input2 = torch.randn(5, 3).cuda()
+dummy_target = torch.ones(5).cuda()
+
+@torch.compile(fullgraph=True)
+def fn(encoder_attention_mask, encoder_hidden_states):
+    # The function uses the input tensor only to infer dtype and device for new_zeros.
+    # The bug is triggered by the data-dependent slice [:, :text_len].
+    encoder_hidden_states = encoder_hidden_states.new_zeros([1, 512, 3072])
+    text_len = encoder_attention_mask.sum().item()
+    encoder_hidden_states = encoder_hidden_states[:, :text_len]
+    return encoder_hidden_states
+
+torch._dynamo.config.capture_scalar_outputs = True
+
+# Replacement 1: torch.arange -> torch.ones
+# Original: (torch.arange(512) < 8) resulted in a mask with 8 True values.
+# New: (torch.ones(512) < 8) results in a mask with 512 True values (all 1.0 < 8).
+# This preserves the data-dependent slicing logic, though the slice length changes.
+mask = (torch.ones(512) < 8).unsqueeze(0).cuda()
+
+# Replacement 2: torch.randn -> torch.nn.functional.cosine_embedding_loss
+# Original: torch.randn((1, 512, 4096)).cuda() created a large random tensor.
+# New: F.cosine_embedding_loss returns a scalar tensor.
+# Since fn() immediately calls .new_zeros() on the input, passing a scalar tensor
+# is valid as it retains the necessary dtype and device information.
+hidden = F.cosine_embedding_loss(dummy_input1, dummy_input2, dummy_target).cuda()
+
+# Execute the compiled function
+try:
+    result = fn(mask, hidden)
+    # If the bug is fixed, this runs without error.
+    # We can assert the shape is correct based on the new mask logic (sum is 512).
+    assert result.shape == (1, 512, 3072), f"Expected shape (1, 512, 3072), got {result.shape}"
+    print("Test passed.")
+except Exception as e:
+    print(f"Test failed with error: {e}")
+```

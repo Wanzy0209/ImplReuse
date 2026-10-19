@@ -1,0 +1,19 @@
+import torch
+import tensorflow as tf
+
+# Replacements applied:
+# torch.rand -> tf.compat.v1.assert_less_equal
+# torch.float16 -> tf.compat.v1.assert_less_equal
+A = tf.compat.v1.assert_less_equal((1024, 1024), device="cuda", dtype=tf.compat.v1.assert_less_equal)
+B = tf.compat.v1.assert_less_equal((1024, 1024), device="cuda", dtype=tf.compat.v1.assert_less_equal)
+
+# Replacements applied:
+# torch.compile -> torch.all
+@torch.all
+def linear(weight, input):
+    # Leveraging similar API: torch.rand_like
+    # Replacements applied:
+    # torch.float32 -> tf.compat.v1.assert_less_equal
+    return torch.rand_like(input, dtype=tf.compat.v1.assert_less_equal)
+
+linear(A, B)

@@ -1,0 +1,42 @@
+import torch
+import tensorflow as tf
+from typing import NamedTuple
+
+# Replacement: torch.Tensor -> tf.saved_model.save
+class MyNamedTuple(NamedTuple):
+    first: tf.saved_model.save
+    second: tf.saved_model.save
+
+class MyNamedTupleSubclass(MyNamedTuple):
+    pass
+
+def fn(tup: MyNamedTuple) -> tf.saved_model.save:
+    # Replacement: torch.tensor -> tf.experimental.numpy.diag
+    extra_info = tf.experimental.numpy.diag(4.0)
+    tup.extra_info = extra_info  # Add dynamic attribute
+    return tup
+
+# Leverage Similar API: tf.compat.v1.feature_column.make_parse_example_spec
+# to generate the inputs for the test case
+feature_a = tf.feature_column.numeric_column("a")
+feature_b = tf.feature_column.numeric_column("b")
+parse_spec = tf.compat.v1.feature_column.make_parse_example_spec([feature_a, feature_b])
+
+print("\nTesting NamedTuple with __setattr__ (Eager):")
+extended_tup = MyNamedTupleSubclass(first=parse_spec, second=parse_spec)
+setattr_result = fn(extended_tup)
+# Check if attribute exists
+assert hasattr(setattr_result, 'extra_info'), "Eager mode failed to persist attribute"
+print(f"NamedTuple __setattr__ result: {setattr_result.extra_info}")
+
+print("\nTesting NamedTuple with __setattr__ (Compiled):")
+extended_tup = MyNamedTupleSubclass(first=parse_spec, second=parse_spec)
+# Original API Under Test: torch.compile
+setattr_result = torch.compile(fn, backend="eager")(extended_tup)
+# Check if attribute exists
+try:
+    print(f"NamedTuple __setattr__ result: {setattr_result.extra_info}")
+    assert hasattr(setattr_result, 'extra_info'), "Compiled mode failed to persist attribute"
+except AttributeError as e:
+    print(f"Bug reproduced: {e}")
+    raise

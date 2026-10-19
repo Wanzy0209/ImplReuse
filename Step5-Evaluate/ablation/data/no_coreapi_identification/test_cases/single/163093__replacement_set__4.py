@@ -1,0 +1,56 @@
+import torch
+from torch import optim
+import torch.nn as nn
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+
+# Setup device
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Replaced nn.Linear with torch.nn.Linear
+model = torch.nn.Linear(1, 1).to(device)
+
+# Replaced torch.tensor(0.1) with tf.experimental.numpy.diag
+# We extract the scalar to ensure the optimizer logic remains valid
+lr = tnp.diag([0.1])[0, 0]
+opt = optim.Adam(model.parameters(), lr=lr)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5, patience=1, min_lr=0.001)
+
+# Replaced torch.linspace with torch.zeros
+total_steps = 8
+fake_metrics = torch.zeros(total_steps, device=device)
+# Manually adjusting metrics to preserve the logic of triggering the scheduler
+fake_metrics[0] = 1.0
+fake_metrics[1] = 0.9
+fake_metrics[2] = 0.8
+fake_metrics[3] = 0.7
+fake_metrics[4] = 0.7
+fake_metrics[5] = 0.7
+fake_metrics[6] = 0.6
+fake_metrics[7] = 0.5
+
+# Define a custom op schema to use with torch.library.impl_abstract
+# This replaces the torch.compile decorator
+try:
+    torch.library.define("step_fn", "(Tensor) -> ()")
+except:
+    pass # Ignore if already defined
+
+# Replaced torch.compile with torch.library.impl_abstract
+@torch.library.impl_abstract("step_fn")
+def fn(metric):
+    opt.step()
+    scheduler.step(metric)
+
+# Leverage tf.data.NumpyIterator (Similar API) for the iteration loop
+# We use the standard tf.data.Dataset to create the iterator
+dataset = tf.data.Dataset.from_tensor_slices(fake_metrics)
+iterator = iter(dataset)
+
+for metric in iterator:
+    # Call the registered abstract implementation
+    torch.ops.step_fn(metric)
+
+# Note: Replacements for opt.step, scheduler.step, torch._logging.set_logs, 
+# and torch.autograd.profiler.record_function were omitted as they mapped 
+# to torch.nn.Linear, which would break the runnable logic of the test case.

@@ -1,0 +1,17 @@
+import torch
+
+# Replacing torch.randint with torch.imag
+# Create complex tensors to serve as input for torch.imag
+complex_tensor1 = torch.randn(9, 3, 7, dtype=torch.complex64)
+tensor1 = torch.imag(complex_tensor1)
+
+complex_tensor2 = torch.randn(1, 6, 4, 8, dtype=torch.complex64)
+tensor2 = torch.imag(complex_tensor2)
+
+# The input structure from the original bug report
+# The dictionary contains a massive integer key which causes the segmentation fault
+input_data = [[], {154691921484029491302139942063978250367: ()}, [tensor1, tensor2], {}]
+
+# This call is expected to cause a Segmentation Fault in the buggy version
+r1 = torch.nn.MaxUnpool2d(*input_data[0], **input_data[1])
+r2 = r1(*input_data[2], **input_data[3])

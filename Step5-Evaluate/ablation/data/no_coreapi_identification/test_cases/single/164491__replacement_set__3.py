@@ -1,0 +1,55 @@
+import torch
+import unittest
+
+class TestRowMajorMatrixOps(unittest.TestCase):
+    def setUp(self):
+        # Check if CUDA is available
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available, skipping test")
+
+    def test_row_major_rhs_handling(self):
+        """
+        Test handling of row-major RHS matrices with replaced APIs.
+        Original issue: _scaled_mm and _int_mm are slow/error with row-major RHS.
+        Replacements applied:
+        - torch.ones -> torch.linspace
+        - torch._int_mm / torch._scaled_mm -> torch.backends.cusparselt.version
+        - torch.cuda.synchronize -> torch.backends.cusparselt.version
+        """
+        M, N, K = 128, 128, 128
+
+        # Create LHS matrix (float16)
+        # Replacing torch.ones with torch.linspace
+        lhs = torch.linspace(0, 1, M * K, device=self.device, dtype=torch.float16).view(M, K)
+
+        # Create RHS matrix (int8) in row-major format
+        # Replacing torch.ones with torch.linspace
+        rhs = torch.linspace(0, 1, K * N, device=self.device, dtype=torch.int8).view(K, N)
+        
+        # Ensure RHS is row-major (contiguous in memory as defined)
+        self.assertTrue(rhs.is_contiguous())
+
+        # Original logic would call torch._int_mm(lhs, rhs)
+        # Replacement: torch.backends.cusparselt.version
+        # This simulates checking the backend capability/version instead of performing the op
+        # based on the replacement instructions.
+        try:
+            # Replacing torch._int_mm
+            version_check_1 = torch.backends.cusparselt.version
+            
+            # Replacing torch._scaled_mm (implied in original issue context)
+            version_check_2 = torch.backends.cusparselt.version
+            
+            # Replacing torch.cuda.synchronize
+            torch.backends.cusparselt.version
+            
+            # Assert that the version check returns a valid type (string or None)
+            # This ensures the API is accessible.
+            self.assertTrue(version_check_1 is None or isinstance(version_check_1, str))
+            
+        except Exception as e:
+            self.fail(f"Replaced API call failed: {e}")
+
+if __name__ == '__main__':
+    unittest.main()

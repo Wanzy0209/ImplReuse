@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.autograd.Function is replaced by tf.custom_gradient
@@ -31,4 +30,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-```

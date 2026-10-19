@@ -1,0 +1,84 @@
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import torch.nn.functional as F
+import os
+
+class MyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        # The API under test: torch.unique
+        # Replicating the logic from the bug report
+        _x, _i = torch.unique(x, sorted=True, return_inverse=True)
+        _x = _x.clone().detach()
+        return self.relu(_x), _i
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Use gloo backend for CPU compatibility
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def run_test(rank, world_size):
+    setup(rank, world_size)
+
+    model = MyModel()
+
+    if rank == 0:
+        # Sender process
+        # Original code: model = torch.compile(model, fullgraph=True)
+        # Replacement: torch.distributed.recv_object_list (conceptually receiving the model)
+        # Here we act as the sender to enable the receiver's logic.
+        dist.send_object_list([model], dst=1)
+    elif rank == 1:
+        # Receiver process
+        # Replacement for torch.compile
+        # Instead of compiling, we receive the model object list
+        model_list = [None]
+        dist.recv_object_list(model_list, src=0)
+        model = model_list[0]
+
+        # Original code: x = torch.randn(8)
+        # Replacement: torch.nn.functional.hinge_embedding_loss
+        # We use the loss function to generate the input tensor x.
+        # reduction='none' ensures we get a tensor of shape (8) instead of a scalar.
+        input_data = torch.tensor([0.2, 0.2, 0.2, 0.2, 0.8, 0.8, 0.8, 0.8])
+        target_data = torch.ones(8)
+        x = F.hinge_embedding_loss(input_data, target_data, reduction='none')
+
+        model.eval()
+        with torch.no_grad():
+            y = model(x)
+
+        # Verify output
+        assert isinstance(y, tuple), "Output should be a tuple"
+        unique_vals, inverse_indices = y
+        
+        # Basic sanity checks for torch.unique behavior
+        assert unique_vals.dim() == 1, "Unique values should be 1D"
+        assert inverse_indices.shape[0] == x.shape[0], "Inverse indices should match input length"
+        
+        # Check values based on input_data [0.2, 0.2, 0.2, 0.2, 0.8, 0.8, 0.8, 0.8]
+        # Unique sorted: [0.2, 0.8]
+        # Inverse: [0, 0, 0, 0, 1, 1, 1, 1]
+        expected_unique = torch.tensor([0.2, 0.8])
+        expected_inverse = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1])
+        
+        assert torch.allclose(unique_vals, expected_unique), f"Unique values mismatch: {unique_vals}"
+        assert torch.equal(inverse_indices, expected_inverse), f"Inverse indices mismatch: {inverse_indices}"
+        
+        print(f"Test passed on rank {rank}. Unique values: {unique_vals}")
+
+    cleanup()
+
+if __name__ == "__main__":
+    world_size = 2
+    # Use spawn to run distributed logic in a single script
+    mp.spawn(run_test, args=(world_size,), nprocs=world_size, join=True)

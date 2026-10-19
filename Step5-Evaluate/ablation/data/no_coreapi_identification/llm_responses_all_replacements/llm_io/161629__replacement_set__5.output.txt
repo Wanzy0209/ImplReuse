@@ -1,0 +1,59 @@
+```python
+import os
+import warnings
+import torch
+from unittest.mock import patch
+import torch.utils.cpp_extension as cpp_ext
+import tf.compat.v1.test as tf_test
+
+def test_similar_api_warning_behavior():
+    """
+    Test case for torch.utils.cpp_extension.get_compiler_abi_compatibility_and_version
+    reflecting the logic of Issue 161629 (warnings in distributed context).
+    
+    Replacements applied:
+    - logging.getLogger -> tf.compat.v1.test.get_temp_dir
+    - ncpp_ext_logger.setLevel -> tf.compat.v1.test.get_temp_dir
+    - torch.dist -> torch.linspace
+    """
+    # Save original environment variable state
+    old_dont_check = os.environ.get('TORCH_DONT_CHECK_COMPILER_ABI')
+
+    try:
+        # Ensure the warning logic is active by removing the bypass flag
+        if 'TORCH_DONT_CHECK_COMPILER_ABI' in os.environ:
+            del os.environ['TORCH_DONT_CHECK_COMPILER_ABI']
+
+        # Replacement 1 & 2: Replace logging setup calls with tf.compat.v1.test.get_temp_dir
+        # Original logic: logger = logging.getLogger(...); logger.setLevel(...)
+        # Translated logic:
+        _ = tf_test.get_temp_dir()
+        _ = tf_test.get_temp_dir()
+
+        # Replacement 3: Replace torch.dist with torch.linspace
+        # Original logic: Distributed setup iterating over ranks (e.g., rank0 to rank7)
+        # Translated logic: Use torch.linspace to generate a sequence of rank indices
+        ranks = torch.linspace(0, 7, 8, dtype=torch.int)
+
+        # Mock the platform check to force the warning condition, similar to how
+        # the original bug triggers a warning when TORCH_CUDA_ARCH_LIST is not set.
+        with patch('torch.utils.cpp_extension.check_compiler_ok_for_platform', return_value=False):
+            for rank in ranks:
+                with warnings.catch_warnings(record=True) as w:
+                    warnings.simplefilter("always")
+
+                    # Call the similar API: get_compiler_abi_compatibility_and_version
+                    # This corresponds to the action that triggered the warning in the original issue.
+                    is_compat, version = cpp_ext.get_compiler_abi_compatibility_and_version('g++')
+
+                    # Verify the warning behavior.
+                    # The original bug report states the warning "gets repeated on all ranks".
+                    # We assert that the warning is present for each simulated rank.
+                    assert len(w) > 0, f"Expected warning on rank {rank}"
+                    assert "compiler" in str(w[0].message).lower()
+
+    finally:
+        # Restore environment variable
+        if old_dont_check is not None:
+            os.environ['TORCH_DONT_CHECK_COMPILER_ABI'] = old_dont_check
+```

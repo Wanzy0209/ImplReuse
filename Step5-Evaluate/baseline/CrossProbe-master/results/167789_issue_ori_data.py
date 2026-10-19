@@ -1,4 +1,3 @@
-```python
 import sys
 import tensorflow as tf
 
@@ -16,4 +15,3 @@ def outer(x):
 
 sys.setrecursionlimit(10000000)
 outer(tf.ones(3))
-```

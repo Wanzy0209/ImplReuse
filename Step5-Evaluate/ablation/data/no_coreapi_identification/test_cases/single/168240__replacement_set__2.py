@@ -1,0 +1,22 @@
+import torch
+import torchvision
+import torch.nn.functional as F
+
+model = torchvision.models.mobilenet_v2(weights=None)
+
+# Replacement: torch.rand -> torch.fliplr
+# torch.fliplr flips the tensor in the left/right direction. We generate a random tensor to flip.
+x = torch.fliplr(torch.rand((1, 3, 224, 224)))
+
+ep = torch.export.export(model, (x,))
+
+# Replacement: torch.testing.assert_close -> torch.nn.functional.binary_cross_entropy
+# MobileNetV2 outputs logits, so we apply sigmoid to convert them to probabilities for BCE.
+out_model = torch.sigmoid(model(x))
+out_ep = torch.sigmoid(ep.module()(x))
+
+# Calculate the binary cross entropy loss between the two outputs
+loss = F.binary_cross_entropy(out_model, out_ep)
+
+# Assert that the loss is small, translating the semantics of assert_close
+assert loss < 1e-5, f"Model outputs differ significantly. Loss: {loss}"

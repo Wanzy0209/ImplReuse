@@ -1,0 +1,71 @@
+import torch
+import tensorflow as tf
+import pytest
+
+def test_shape_mismatch_with_replaced_apis():
+    """
+    Test case generated based on Issue 165873 (Shape mismatch in load_state_dict)
+    using the specified API replacements.
+    
+    Original Logic:
+    1. Initialize a module with a scalar parameter.
+    2. Attempt to load a state dict with a 1D tensor.
+    3. Assert the result (which in the original bug was a silent failure).
+    
+    Replacements Applied:
+    - nn.Module -> tf.compat.v1.linalg.trace
+    - nn.Parameter -> tf.compat.v1.linalg.trace
+    - torch.tensor -> torch.isinf
+    - torch.randn -> tf.autograph.trace
+    - module.load_state_dict -> tf.compat.v1.linalg.trace
+    - module.threshold.item -> tf.compat.v1.linalg.trace
+    """
+    
+    # Define the module structure using the replacements
+    # Original: class SimpleModule(nn.Module):
+    # Replacement: nn.Module -> tf.compat.v1.linalg.trace
+    # Since tf.linalg.trace is a function, we adapt the structure to use it.
+    class SimpleModule:
+        def __init__(self, threshold_value):
+            # Original: self.threshold = nn.Parameter(torch.tensor(threshold_value))
+            # Replacement: nn.Parameter -> tf.compat.v1.linalg.trace
+            # Replacement: torch.tensor -> torch.isinf
+            # Logic: torch.isinf(0.0) returns a scalar boolean False.
+            # tf.linalg.trace expects rank >= 2, so passing a scalar raises an error.
+            # This tests the shape mismatch handling (strict vs silent).
+            with pytest.raises(tf.errors.InvalidArgumentError):
+                self.threshold = tf.compat.v1.linalg.trace(torch.isinf(threshold_value))
+    
+    # Original: large_tensor = torch.randn(32000)
+    # Replacement: torch.randn -> tf.autograph.trace
+    # tf.autograph.trace is a void function used for debugging. 
+    # Calling it with an integer prints it and returns None.
+    # This tests behavior with None input.
+    large_tensor = tf.autograph.trace(32000)
+    assert large_tensor is None
+
+    state_dict = {"threshold": large_tensor}
+
+    # Original: module = SimpleModule(0.0)
+    # We expect initialization to fail due to shape mismatch (scalar vs rank>=2 requirement of trace)
+    with pytest.raises(tf.errors.InvalidArgumentError):
+        module = SimpleModule(0.0)
+        
+        # If we were to mock the module to bypass init errors:
+        # Original: module.load_state_dict(state_dict)
+        # Replacement: module.load_state_dict -> tf.compat.v1.linalg.trace
+        # state_dict["threshold"] is None. tf.linalg.trace(None) raises an error.
+        with pytest.raises(tf.errors.InvalidArgumentError):
+            tf.compat.v1.linalg.trace(state_dict)
+
+        # Original: assert module.threshold.item() == state_dict['threshold'][0].item()
+        # Replacement: module.threshold.item -> tf.compat.v1.linalg.trace
+        # Assuming module.threshold was a scalar (from a successful init with a matrix),
+        # tf.linalg.trace(scalar) raises an error.
+        # This verifies the strictness of the replacement API.
+        with pytest.raises(tf.errors.InvalidArgumentError):
+            tf.compat.v1.linalg.trace(module.threshold)
+
+if __name__ == "__main__":
+    test_shape_mismatch_with_replaced_apis()
+    print("Test passed: Errors were raised as expected for shape mismatches.")

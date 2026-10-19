@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import onnx
 from tf2onnx import convert
@@ -30,4 +29,3 @@ convert.from_keras(
 onnx_model = onnx.load("onnx.pb")
 print(onnx_model.graph.input)
 print(onnx_model.graph.output)
-```

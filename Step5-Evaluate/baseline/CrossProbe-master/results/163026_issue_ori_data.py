@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import math
 
@@ -57,4 +56,3 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     attn_weight = tf.nn.dropout(attn_weight, rate=dropout_p)
     
     return tf.matmul(attn_weight, value)
-```

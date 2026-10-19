@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.__version__ -> tf.__version__
@@ -25,4 +24,3 @@ def max_unpool1d(input, indices, kernel_size, stride=None, padding=0, output_siz
     pass
 
 max_unpool1d(*input[0], **input[1])
-```

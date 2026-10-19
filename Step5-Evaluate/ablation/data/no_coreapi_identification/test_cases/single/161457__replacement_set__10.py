@@ -1,0 +1,65 @@
+import torch
+import tensorflow as tf
+import copy
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+def test_meta_llama(self):
+    model_name = "meta-llama/Llama-3.2-1B"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name, torch_dtype=torch.bfloat16, device_map="cuda"
+    )
+    model.eval()
+
+    model.generation_config.do_sample = False
+    model.generation_config.use_cache = True
+    model.generation_config.cache_implementation = "static"
+    model.generation_config.max_new_tokens = 2000
+    model.generation_config.pad_token_id = tokenizer.eos_token_id
+    model.generation_config.temperature = 0.0
+
+    vocab_size = tokenizer.vocab_size
+
+    # Replacement: torch.randint -> torch.imag
+    # Logic: Generate input IDs. We create a complex tensor and take the imaginary part.
+    # We then normalize these values to be valid IDs (0 to vocab_size).
+    real_part = torch.randn(1, 1000, device="cuda")
+    imag_part = torch.randn(1, 1000, device="cuda")
+    complex_tensor = torch.complex(real_part, imag_part)
+    input_ids = torch.imag(complex_tensor)
+    input_ids = input_ids.abs().long() % vocab_size
+
+    example_inputs = {"input_ids": input_ids}
+
+    model_copy = copy.deepcopy(model)
+    res1 = model_copy(**example_inputs).logits
+
+    model_copy = copy.deepcopy(model)
+    model_copy.forward = torch.compile(model_copy.forward)
+    res2 = model_copy(**example_inputs).logits
+
+    # Replacement: torch.allclose -> tf.compat.v1.image.resize_nearest_neighbor
+    # Logic: Verify correctness. We reshape the logits to look like images,
+    # resize them, and check if the difference is small.
+    
+    # Calculate absolute difference
+    diff = (res1 - res2).abs()
+    
+    # Reshape to 4D (Batch, Height, Width, Channels) for TF image op
+    # Logits shape: (1, 1000, vocab_size)
+    b, s, v = diff.shape
+    # Reshape to (1, 1, 1000, vocab_size) -> (Batch, Height, Width, Channels)
+    diff_img = diff.view(b, 1, s, v)
+
+    # Convert to numpy for TF
+    diff_np = diff_img.cpu().numpy()
+
+    # Resize the difference image
+    # We resize to the same dimensions to check values.
+    resized_diff = tf.compat.v1.image.resize_nearest_neighbor(diff_np, size=[s, v])
+    
+    # Check if the max value in the resized difference is small
+    # We use torch.max on the converted result
+    max_diff = torch.from_numpy(resized_diff).max()
+    
+    self.assertTrue(max_diff < 0.001)

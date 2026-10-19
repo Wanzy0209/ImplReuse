@@ -1,0 +1,33 @@
+import torch
+from torch import nn
+from torch.nn.utils.parametrizations import weight_norm
+from torch.optim import SGD
+import torch.nn.functional as F
+
+if __name__ == "__main__":
+    d = 65
+    
+    # Original: x = torch.randn((1, 2, 32, 32)).cuda()
+    # Replacement: torch.nn.functional.adaptive_max_pool1d
+    # We use adaptive_max_pool1d to generate the input tensor x.
+    # Since adaptive_max_pool1d operates on 3D tensors (N, C, L) and Conv2d requires 4D (N, C, H, W),
+    # we generate a 3D tensor using the pool operation and then reshape it to fit Conv2d's requirements.
+    # We use torch.ones as the source tensor for the pool operation to ensure data is available.
+    dummy_input = torch.ones(1, 2, 1024).cuda()
+    x = F.adaptive_max_pool1d(dummy_input, 1024).view(1, 2, 32, 32)
+    
+    model = torch.compile(weight_norm(nn.Conv2d(2, d, 2)).train().cuda())
+    opt = SGD(model.parameters())
+    
+    # Run the training loop to check for the backward pass failure
+    try:
+        for _ in range(10):
+            model(x).mean().backward()
+            opt.step()
+            opt.zero_grad()
+        print("Test Passed: No error occurred during backward pass.")
+    except RuntimeError as e:
+        if "saved_v must be contiguous" in str(e):
+            print(f"Test Failed: Bug reproduced - {e}")
+        else:
+            raise

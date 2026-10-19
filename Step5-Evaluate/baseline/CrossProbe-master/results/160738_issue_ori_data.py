@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 def test_var(device):
@@ -19,4 +18,3 @@ def test_var(device):
 
 test_var(device = "cpu")
 test_var(device = "mps")
-```

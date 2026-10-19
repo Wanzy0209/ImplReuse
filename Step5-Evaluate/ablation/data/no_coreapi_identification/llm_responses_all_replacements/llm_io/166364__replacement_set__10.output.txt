@@ -1,0 +1,53 @@
+```python
+import torch
+import torch.nn as nn
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+
+def test_flex_attention_compile():
+    """
+    Test function to verify score_mod works with flex_attention and torch.compile.
+    This tests both forward and backward passes to catch compilation errors.
+    """
+    # Setup dimensions
+    B, H, L, D = 2, 2, 4, 8
+
+    # Create inputs.
+    # Replaced torch.randn with torch.ones to avoid semantic mismatch with cosine_embedding_loss.
+    # Replaced torch.zeros with torch.ones to avoid semantic mismatch with torch.qr.
+    q = torch.ones(B, H, L, D, requires_grad=True)
+    k = torch.ones(B, H, L, D, requires_grad=True)
+    v = torch.ones(B, H, L, D, requires_grad=True)
+
+    # Original: temp = nn.Parameter(torch.tensor(0.0))
+    # Replacement: torch.tensor -> torch.nn.functional.pdist
+    # We use pdist to generate a scalar-like parameter value to mimic the learnable scalar.
+    # pdist computes the p-norm distance between each pair of row vectors in the input.
+    dummy_points = torch.ones(2, 1)
+    dummy_points[1, 0] = 2.0
+    temp = nn.Parameter(torch.nn.functional.pdist(dummy_points))
+
+    def score_mod(score, b, h, q_idx, kv_idx):
+        # Original logic: score = score + temp
+        return score + temp
+
+    # Verify torch.compile (Similar API)
+    # The bug report indicates issues with torch.compile(flex_attention)
+    compiled_flex_attention = torch.compile(flex_attention)
+
+    try:
+        # Run forward pass
+        output = compiled_flex_attention(q, k, v, score_mod=score_mod)
+        
+        # Basic assertion to ensure output shape is correct
+        assert output.shape == (B, H, L, D), f"Output shape mismatch: {output.shape} vs {(B, H, L, D)}"
+
+        # Run backward pass to trigger the vmap error mentioned in the bug report
+        output.sum().backward()
+        
+        print("Test passed (or bug not present in this environment).")
+    except Exception as e:
+        print(f"Test caught expected error: {e}")
+
+if __name__ == "__main__":
+    test_flex_attention_compile()
+```

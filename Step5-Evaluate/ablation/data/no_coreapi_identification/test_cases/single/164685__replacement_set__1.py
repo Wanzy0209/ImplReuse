@@ -1,0 +1,76 @@
+import torch
+import tensorflow as tf
+
+# Replacements for torch._dynamo.config
+# torch._dynamo.config.capture_scalar_outputs -> tf.keras.initializers.RandomUniform
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.keras.initializers.RandomUniform
+# We instantiate the initializer to represent the configuration setting in the transformed code.
+_ = tf.keras.initializers.RandomUniform()
+_ = tf.keras.initializers.RandomUniform()
+
+# torch.manual_seed -> torch.set_rng_state
+# torch.set_rng_state requires a state object, so we fetch the current one.
+torch.set_rng_state(torch.get_rng_state())
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_2 = -6 # dtype=int64
+    var_node_3 = arg_0 # dtype=int32
+    var_node_1 = var_node_2 * var_node_3 # dtype=int32
+    
+    # torch.full -> torch.fmax
+    # torch.int64 -> tf.keras.initializers.RandomUniform (Dropped as dtype argument is invalid for replacement)
+    # torch.tensor -> torch.isnan
+    # Original: var_node_5 = torch.full((), 1, dtype=torch.int64)
+    # Transformed: var_node_5 = torch.fmax(torch.isnan(0), torch.isnan(1))
+    var_node_5 = torch.fmax(torch.isnan(0), torch.isnan(1))
+    
+    # var_node_5.item -> tf.keras.initializers.RandomUniform
+    # Original: var_node_4 = var_node_5.item()
+    # Transformed: var_node_4 = tf.keras.initializers.RandomUniform()
+    var_node_4 = tf.keras.initializers.RandomUniform()
+    
+    var_node_0 = var_node_1 / var_node_4 # dtype=int64
+    
+    # Ensure gradient computation by multiplying with sentinel and taking real part
+    result = var_node_0 * sentinel
+    
+    # result.is_complex -> tf.keras.initializers.RandomUniform
+    # Original: if result.is_complex():
+    # Transformed: if tf.keras.initializers.RandomUniform():
+    if tf.keras.initializers.RandomUniform():
+        result = result.real
+    return result
+
+# Sentinel tensor to ensure gradient computation
+# torch.tensor -> torch.isnan
+# Original: sentinel = torch.tensor(1.0, requires_grad=True)
+# Transformed: sentinel = torch.isnan(1.0)
+sentinel = torch.isnan(1.0)
+
+# arg_0 = torch.tensor(torch.randn(()), dtype=torch.int32).item()
+# torch.randn -> torch.var_mean
+# torch.tensor -> torch.isnan
+# torch.int32 -> tf.keras.initializers.RandomUniform (Dropped)
+# Original: arg_0 = torch.tensor(torch.randn(()), dtype=torch.int32).item()
+# Transformed: arg_0 = torch.isnan(torch.var_mean(torch.isnan(0.0))[1]).item()
+# Note: torch.var_mean returns a tuple (var, mean), we select mean [1] to pass to torch.isnan
+arg_0 = torch.isnan(torch.var_mean(torch.isnan(0.0))[1]).item()
+
+args = (arg_0,) + (sentinel,)
+
+try:
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+except Exception as e:
+    print(f' eager failed: {e}')
+
+# torch.compile -> tf.keras.initializers.RandomUniform
+# Original: compiled_program = torch.compile(fuzzed_program, fullgraph=True, dynamic=True)
+# Transformed: compiled_program = tf.keras.initializers.RandomUniform(fuzzed_program, fullgraph=True, dynamic=True)
+compiled_program = tf.keras.initializers.RandomUniform(fuzzed_program, fullgraph=True, dynamic=True)
+
+try:
+    result_compiled = compiled_program(*args)
+    print(' compile success')
+except Exception as e:
+    print(f' compile failed: {e}')

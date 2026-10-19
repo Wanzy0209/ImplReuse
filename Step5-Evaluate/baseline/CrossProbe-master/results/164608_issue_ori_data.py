@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from functools import partial
 import numpy as np
@@ -149,4 +148,3 @@ def test_parametrization_issue():
 if __name__ == "__main__":
     print("Block Mask Batch Size Issue Repro")
     test_parametrization_issue()
-```

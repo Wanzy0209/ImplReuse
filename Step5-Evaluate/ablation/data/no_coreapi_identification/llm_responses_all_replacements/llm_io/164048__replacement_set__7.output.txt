@@ -1,0 +1,51 @@
+```python
+import torch
+import tensorflow as tf
+import tf.experimental.numpy as tnp
+
+# Check for CUDA availability
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if device == "cpu":
+    print("Warning: CUDA not available. Running on CPU.")
+
+# 1. Replace torch.randint with torch.argmin
+# Original logic: Create a large tensor.
+# Replacement: Create a large tensor and apply argmin to generate the data.
+# We maintain the large dimensions to preserve the context of the bug.
+input_data = torch.randn(4, 87, 1056, 736, device=device)
+# argmin reduces the first dimension, resulting in shape (87, 1056, 736)
+mask = torch.argmin(input_data, dim=0)
+
+# 2. Replace torch.tensor with torch.cummax
+# Original logic: Create a boolean mask [True, False, False, True].
+# Replacement: Generate a boolean mask using cummax.
+# Since mask is now shape (87, ...), we generate a mask of size 87.
+# We create a tensor, apply cummax, and derive a boolean condition.
+t = torch.zeros(87, device=device)
+t[0] = 1.0
+t[86] = 1.0
+# cummax returns a namedtuple (values, indices)
+cummax_result = torch.cummax(t, dim=0)
+# Convert values to boolean mask
+to_apply = cummax_result.values > 0.5
+
+# 3. Replace Tensor indexing with tf.experimental.numpy.exp
+# Original logic: mask[to_apply] (Indexing/Filtering)
+# Replacement: Apply exponential function.
+# To preserve the filtering logic without using indexing, we multiply the result by the mask.
+# We need to convert PyTorch tensors to numpy arrays for TensorFlow interop.
+mask_np = mask.cpu().numpy()
+to_apply_np = to_apply.cpu().numpy()
+
+# Apply the replacement API
+result_exp = tnp.exp(mask_np)
+
+# Apply the boolean mask logic (multiplication instead of indexing)
+# Reshape to_apply to broadcast correctly across the tensor dimensions
+to_apply_reshaped = to_apply_np.reshape(to_apply_np.shape[0], 1, 1, 1)
+final_result = result_exp * to_apply_reshaped
+
+# Assertion to verify the test case runs and produces output
+assert final_result is not None
+assert final_result.shape == (87, 1056, 736)
+```

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 def example_function():
@@ -52,4 +51,3 @@ if __name__ == "__main__":
     p = tf.linalg.diag(tf.square(vals))
     
     res = compiled_function(data, p)
-```

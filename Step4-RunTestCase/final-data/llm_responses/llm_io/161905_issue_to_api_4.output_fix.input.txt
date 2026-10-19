@@ -1,0 +1,115 @@
+Please fix the following Python test case based on the error message.
+
+## Original Test Case:
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision.models.resnet import resnet18
+import unittest
+
+class TestTorchCompileMPSBackward(unittest.TestCase):
+    def test_backward_pass_in_compiled_mps_context(self):
+        """
+        Test that loss.backward() works correctly inside a torch.compile
+        function on the MPS backend.
+        
+        This test leverages the semantic pattern of tf.distribute.get_replica_context:
+        verifying the execution context (device/backend) before performing 
+        sensitive operations like the backward pass.
+        """
+        # Setup parameters
+        BATCH_SIZE = 4
+        NUM_CLASSES = 10
+        LEARNING_RATE = 0.01
+        device = 'mps'
+
+        # Check for MPS availability
+        if not torch.backends.mps.is_available():
+            self.skipTest("MPS backend is not available on this system.")
+
+        # Initialize model, loss, and optimizer
+        model = resnet18(num_classes=NUM_CLASSES)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+
+        # Move model to device and set to training mode
+        model = model.to(device)
+        model.train()
+
+        # Define the compiled execution context
+        @torch.compile
+        def train_step(images, labels):
+            # Move data to the target device
+            images = images.to(device)
+            labels = labels.to(device)
+            
+            optimizer.zero_grad()
+
+            # Forward pass
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+
+            # Semantic Translation of tf.distribute.get_replica_context:
+            # In TensorFlow, one checks the replica context to ensure operations
+            # are valid in the current scope. Here, we explicitly verify that
+            # the loss tensor resides on the expected 'mps' device context
+            # before attempting the backward pass.
+            self.assertEqual(loss.device.type, device, 
+                             "Loss tensor is not on the expected MPS device context.")
+
+            # Backward pass (The operation failing in the original bug)
+            loss.backward()
+            
+            # Verify gradients were computed
+            for name, param in model.named_parameters():
+                if param.requires_grad:
+                    self.assertIsNotNone(param.grad, 
+                                         f"Gradient for {name} was not computed during backward pass.")
+
+            optimizer.step()
+
+        # Create dummy data
+        images = torch.randn(BATCH_SIZE, 3, 224, 224)
+        labels = torch.randint(0, NUM_CLASSES, (BATCH_SIZE,))
+
+        # Execute the training step
+        # If the bug exists, this will raise a RuntimeError during loss.backward()
+        try:
+            train_step(images, labels)
+        except RuntimeError as e:
+            self.fail(f"Runtime error occurred during backward pass on MPS: {e}")
+
+if __name__ == '__main__':
+    unittest.main()
+```
+
+## Error Message:
+```
+Traceback (most recent call last):
+  File "/home/ubuntu/SYAN/GRADUATE/TeRL/Step3-ReuseTestCase/data-final/cross_reuse_test_case/161905_issue_to_api_4.output.py", line 4, in <module>
+    from torchvision.models.resnet import resnet18
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/torchvision/__init__.py", line 5, in <module>
+    from torchvision import datasets, io, models, ops, transforms, utils
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/torchvision/datasets/__init__.py", line 1, in <module>
+    from ._optical_flow import FlyingChairs, FlyingThings3D, HD1K, KittiFlow, Sintel
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/torchvision/datasets/_optical_flow.py", line 12, in <module>
+    from .utils import _read_pfm, verify_str_arg
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/torchvision/datasets/utils.py", line 22, in <module>
+    import requests
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/requests/__init__.py", line 43, in <module>
+    import urllib3
+  File "/home/ubuntu/miniconda3/envs/TeRL-Running/lib/python3.7/site-packages/urllib3/__init__.py", line 42, in <module>
+    "urllib3 v2.0 only supports OpenSSL 1.1.1+, currently "
+ImportError: urllib3 v2.0 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'OpenSSL 1.0.2u  20 Dec 2019'. See: https://github.com/urllib3/urllib3/issues/2168
+
+```
+
+## Requirements:
+1. Analyze the error message carefully
+2. Fix the test case to resolve the error
+3. Keep the test logic intact - do not change the core test functionality
+4. If the error is due to missing dependencies or environment issues, try to add mock or skip conditions
+5. Output only the fixed Python code, wrapped in ```python ... ``` blocks
+
+## Fixed Test Case:

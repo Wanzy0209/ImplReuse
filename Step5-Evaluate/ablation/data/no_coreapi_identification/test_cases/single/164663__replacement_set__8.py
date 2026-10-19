@@ -1,0 +1,93 @@
+import os
+import torch
+import tensorflow as tf
+
+# Replacements based on the provided mapping
+# torch.distributed -> torch.distributions.constraints.independent
+import torch.distributions.constraints.independent as dist
+
+# torch.nn -> torch.distributions.constraints.independent
+import torch.distributions.constraints.independent as nn
+
+# torch.distributed.device_mesh -> torch.distributions.constraints.independent
+import torch.distributions.constraints.independent as device_mesh
+
+# torch.distributed._composable.fsdp -> torch.distributions.constraints.independent
+import torch.distributions.constraints.independent as fsdp
+
+# torch.distributed.tensor.experimental -> torch.distributions.constraints.independent
+import torch.distributions.constraints.independent as tensor_experimental
+
+# torch.distributed._tools.fsdp2_mem_tracker -> torch.distributions.constraints.independent
+import torch.distributions.constraints.independent as fsdp2_mem_tracker
+
+
+class TestModule(nn.independent):
+
+    def __init__(self, d_model: int):
+        # nn.Module -> torch.distributions.constraints.independent
+        # Calling super with dummy arguments for the constraint
+        super(nn.independent, self).__init__(None, 1)
+        
+        # nn.RMSNorm -> torch.distributions.constraints.independent
+        self.norm = nn.independent(None, d_model)
+        
+        # nn.Linear -> torch.distributions.constraints.independent
+        self.output = nn.independent(None, d_model)
+
+    def forward(self, x):
+        # torch.Tensor -> torch.distributions.constraints.independent
+        # We simply return the input to maintain structure, 
+        # as independent is a constraint and not a tensor operator.
+        return x
+
+
+def main():
+    # torch.cuda.set_device -> torch.distributions.constraints.independent
+    nn.independent(None, int(os.environ.get("LOCAL_RANK", 0)))
+
+    # dist.init_process_group -> torch.distributions.constraints.independent
+    # Replacing the method call with an instantiation to keep it runnable
+    dist(None, 1)
+
+    d_model = 128
+
+    model = TestModule(d_model)
+    # model.to('cuda:0') is not applicable to the constraint class, skipping to keep runnable
+    
+    # init_device_mesh -> torch.distributions.constraints.independent
+    mesh = device_mesh(None, 1)
+
+    # fully_shard -> torch.distributions.constraints.independent
+    # Replacing the function call with an instantiation
+    fsdp(None, 1)
+    fsdp(None, 1)
+
+    print(model)
+
+    # FSDPMemTracker -> torch.distributions.constraints.independent
+    tracker = fsdp2_mem_tracker(None, 1)
+
+    # implicit_replication -> torch.distributions.constraints.independent
+    # Replacing context manager usage with instantiation to keep runnable
+    # (independent is not a context manager)
+    replication_context = tensor_experimental(None, 1)
+    
+    # torch.randn -> tf.data.experimental.copy_to_device
+    # We create a dummy dataset to use with copy_to_device
+    dummy_data = torch.randn(16, d_model)
+    # Converting to numpy for tf.data compatibility
+    dataset = tf.data.Dataset.from_tensor_slices(dummy_data.numpy())
+    x = tf.data.experimental.copy_to_device(dataset, "/cpu:0")
+
+    y = model(x)
+    
+    # y.sum -> torch.distributions.constraints.independent
+    loss = nn.independent(None, 1)
+
+    # loss.backward -> torch.distributions.constraints.independent
+    nn.independent(None, 1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # torch._dynamo.config.capture_scalar_outputs = True
@@ -17,4 +16,3 @@ def f(x):
 # tf.random.normal is the equivalent.
 out = f(tf.random.normal((3, 4)))
 print(out)
-```

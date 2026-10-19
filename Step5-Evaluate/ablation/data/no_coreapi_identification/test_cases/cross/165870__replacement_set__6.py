@@ -1,0 +1,27 @@
+import torch
+import tensorflow as tf
+import numpy as np
+
+def test_singular_matrix_replacement():
+    # Original logic: Create a singular matrix [[1.0, 2.0], [2.0, 4.0]].
+    # Replacement: torch.tensor -> tf.linalg.diag
+    # To maintain the singular matrix property using tf.linalg.diag, we use [1.0, 0.0]
+    # which results in [[1.0, 0.0], [0.0, 0.0]].
+    t = tf.linalg.diag([1.0, 0.0])
+
+    # Original logic: Perform lu_factor which should error on singular matrices.
+    # Replacement: torch.linalg.lu_factor -> tf.keras.backend.exp
+    # Note: tf.keras.backend.exp computes the element-wise exponential.
+    # Unlike lu_factor, exp does not fail on singular matrices.
+    result = tf.keras.backend.exp(t)
+
+    # Verify the result of the replacement operation.
+    # exp([[1, 0], [0, 0]]) should be [[e, 1], [1, 1]]
+    expected = tf.constant([[np.e, 1.0], [1.0, 1.0]], dtype=tf.float32)
+    
+    # Assert that the operation completed successfully and produced the correct output
+    # for the replacement API.
+    assert tf.reduce_all(tf.abs(result - expected) < 1e-6).numpy()
+
+if __name__ == "__main__":
+    test_singular_matrix_replacement()

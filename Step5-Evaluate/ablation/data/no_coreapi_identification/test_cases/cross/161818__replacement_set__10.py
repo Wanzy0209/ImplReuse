@@ -1,0 +1,42 @@
+import torch
+import tensorflow as tf
+
+def test_nested_tensor_replacement():
+    # Replacements based on the provided mapping:
+    # nn.Linear -> tf.math.log1p
+    module = tf.math.log1p
+
+    # torch.rand -> tf.math.log1p
+    # Note: tf.math.log1p is a function, not a tensor generator like rand.
+    # We assign the function to the variable to satisfy the replacement instruction.
+    padded = tf.math.log1p
+
+    # torch.as_tensor -> torch.fmod
+    # torch.fmod requires tensor-like inputs. We pass the list directly.
+    lengths = torch.fmod([5, 4], 1)
+
+    # torch.autograd.set_detect_anomaly -> tf.math.log1p
+    # The original was a context manager. The replacement is a function.
+    # We call the function directly to satisfy the replacement.
+    tf.math.log1p(True)
+
+    # out = module(padded)
+    # module is tf.math.log1p, padded is tf.math.log1p.
+    # This results in calling the function with the function as an argument.
+    out = tf.math.log1p(tf.math.log1p)
+
+    # torch.nested.narrow(...).contiguous().values() -> tf.math.log1p
+    # The chain is replaced by tf.math.log1p. We pass 'out' to maintain syntax validity.
+    nopad = tf.math.log1p(out)
+
+    # nopad.sum().backward() -> nopad.sum().tf.math.log1p()
+    # .backward() is replaced by .tf.math.log1p()
+    # Note: Tensors do not have a .tf.math.log1p() method, but we follow the replacement instruction.
+    try:
+        nopad.sum().tf.math.log1p()
+    except AttributeError as e:
+        # Expected due to API mismatch, but code structure follows requirements.
+        print(f"Expected error during replacement execution: {e}")
+
+if __name__ == "__main__":
+    test_nested_tensor_replacement()

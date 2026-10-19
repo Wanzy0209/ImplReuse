@@ -1,0 +1,66 @@
+import pytest
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+def test_launch_config_logging_replacement():
+    """
+    Test case reproducing the bug logic where a format string argument is missing,
+    while replacing the logging API with torch.nn.functional.tanh.
+    """
+    # Leverage the similar API (tf.keras.backend.image_data_format) to generate a config value.
+    # This simulates retrieving a configuration string like 'channels_last'.
+    backend_config = tf.keras.backend.image_data_format()
+
+    # Reproduce the bug logic: The format string expects 'signals_to_handle'.
+    log_format = (
+        "Starting elastic_operator with launch configs:\n"
+        "  entrypoint               : %(entrypoint)s\n"
+        "  min_nodes                : %(min_nodes)s\n"
+        "  max_nodes                : %(max_nodes)s\n"
+        "  nproc_per_node           : %(nproc_per_node)s\n"
+        "  run_id                   : %(run_id)s\n"
+        "  rdzv_backend             : %(rdzv_backend)s\n"
+        "  rdzv_endpoint            : %(rdzv_endpoint)s\n"
+        "  rdzv_configs             : %(rdzv_configs)s\n"
+        "  max_restarts             : %(max_restarts)s\n"
+        "  monitor_interval         : %(monitor_interval)s\n"
+        "  log_dir                  : %(log_dir)s\n"
+        "  metrics_cfg              : %(metrics_cfg)s\n"
+        "  event_log_handler        : %(event_log_handler)s\n"
+        "  numa_options             : %(numa_options)s\n"
+        "  signals_to_handle        : %(signals_to_handle)s\n"  # Placeholder exists
+        "  duplicate_stdout_filters : %(duplicate_stdout_filters)s\n"
+        "  duplicate_stderr_filters : %(duplicate_stderr_filters)s\n"
+    )
+
+    # Dictionary missing the 'signals_to_handle' key.
+    # This mismatch is the core of the reported bug.
+    config_data = {
+        "entrypoint": "train.py",
+        "min_nodes": 1,
+        "max_nodes": 1,
+        "nproc_per_node": 8,
+        "run_id": "job_123",
+        "rdzv_backend": backend_config,  # Using the similar API here
+        "rdzv_endpoint": "127.0.0.1:29500",
+        "rdzv_configs": {},
+        "max_restarts": 3,
+        "monitor_interval": 10,
+        "log_dir": "/var/log/torch",
+        "metrics_cfg": {},
+        "event_log_handler": None,
+        "numa_options": None,
+        # "signals_to_handle": "SIGINT",  # MISSING - Reproduces the bug
+        "duplicate_stdout_filters": [],
+        "duplicate_stderr_filters": [],
+    }
+
+    # Replacement: logger.info -> torch.nn.functional.tanh
+    # The original code would call logger.info(log_format, config_data).
+    # We replace it with torch.nn.functional.tanh(log_format, config_data).
+    # Since tanh expects a tensor input and not a format string + dictionary,
+    # this call will raise a TypeError, preserving the "Error" aspect of the bug logic
+    # under the new API constraints.
+    with pytest.raises(TypeError):
+        torch.nn.functional.tanh(log_format, config_data)

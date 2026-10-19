@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 def f(xs):
@@ -31,4 +30,3 @@ with tf.device("/GPU:0"):
 
 # Outside of device context, this works
 # backend(f)(xs)
-```

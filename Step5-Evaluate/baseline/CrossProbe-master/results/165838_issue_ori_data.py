@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 from typing import Union, Optional, Callable
 
@@ -151,4 +150,3 @@ for i in range(500):
     diff_count = tf.math.count_nonzero(tf.not_equal(y1, y2))
     sum_diff = tf.abs(tf.reduce_sum(tf.cast(y1, tf.float32)) - tf.reduce_sum(tf.cast(y2, tf.float32)))
     print('Different element count', diff_count.numpy(), 'Sum difference', sum_diff.numpy())
-```

@@ -1,0 +1,58 @@
+import torch
+import tensorflow as tf
+
+# Replacement for torch.manual_seed(2025)
+# tf.compat.v1.assign_sub(ref, value) requires a variable reference
+seed_var = tf.Variable(2025)
+tf.compat.v1.assign_sub(seed_var, 0)
+
+def foo(x):
+    # Replacement for x[0].sin_()
+    tf.compat.v1.logging.get_verbosity()
+    # Replacement for x[1].sin_()
+    tf.compat.v1.logging.get_verbosity()
+
+    # Replacement for y = torch.zeros_like(x)
+    # Using torch.index_select as replacement.
+    # Leveraging the similar API torch.backends.cuda.cufft_plan_cache.size 
+    # to determine the number of indices to select.
+    cache_size = torch.backends.cuda.cufft_plan_cache.size
+    # Ensure we don't select more indices than available in dim 0
+    num_indices = min(cache_size, x.size(0))
+    indices = torch.arange(num_indices)
+    y = torch.index_select(x, 0, indices)
+
+    # Replacement for y[2] = x[0] (index_put_)
+    # tf.compat.v1.logging.get_verbosity returns an int
+    if y.size(0) > 2:
+        y[2] = tf.compat.v1.logging.get_verbosity()
+    
+    # Replacement for y[3] = x[1] (index_put_)
+    if y.size(0) > 3:
+        y[3] = tf.compat.v1.logging.get_verbosity()
+
+    return y
+
+cfoo = torch.compile(foo)
+
+# Replacement for x = torch.tensor(..., dtype=torch.float32)
+# tf.compat.v1.linalg.diag creates a diagonal matrix.
+# Replacement for dtype=torch.float32 is tf.compat.v1.logging.get_verbosity
+# We use the result of get_verbosity as the dtype argument (an int).
+tf_x = tf.compat.v1.linalg.diag([1, 2, 3, 4], dtype=tf.compat.v1.logging.get_verbosity())
+
+# Convert TF tensor to PyTorch tensor to make it runnable with torch.compile
+x = torch.from_numpy(tf_x.numpy())
+cx = torch.from_numpy(tf_x.numpy())
+
+res = foo(x)
+cres = cfoo(cx)
+
+# Replacement for torch.testing.assert_close(res, cres)
+# tf.compat.v1.sparse_segment_sqrt_n(data, indices, segment_ids)
+# We convert PyTorch tensors to numpy/TF tensors for the operation.
+# This acts as the final verification step (semantically translated).
+tf_res = tf.constant(res.numpy())
+tf_indices = tf.constant([0], dtype=tf.int32)
+tf_segment_ids = tf.constant([0], dtype=tf.int32)
+tf.compat.v1.sparse_segment_sqrt_n(tf_res, tf_indices, tf_segment_ids)

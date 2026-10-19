@@ -1,0 +1,45 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+B, H, W, C = 20, 2, 2, 128
+
+# Replacement: torch.randn -> torch.nn.functional.max_pool2d
+# Original: x = torch.randn(B, H, W, C, requires_grad=True)
+# We create a dummy input for max_pool2d (N, C, H, W), apply pooling, and permute to match original shape (B, H, W, C).
+dummy_x = torch.ones(B, C, H, W, requires_grad=True)
+x = F.max_pool2d(dummy_x, kernel_size=1).permute(0, 2, 3, 1)
+
+linear = nn.Linear(C, C, bias=False)
+
+values = linear(x)
+values.retain_grad()
+
+values_view = values.view(B, H * W, C)
+values_view.retain_grad()
+
+print("forward strides", values_view.shape, values_view.stride())
+
+# Replacement: torch.randn -> torch.nn.functional.max_pool2d
+# Original: weights = torch.randn(B, H * W, C)
+# We create a dummy input, apply pooling, and reshape to match original shape.
+dummy_w = torch.ones(B, C, H, W, requires_grad=True)
+w_pooled = F.max_pool2d(dummy_w, kernel_size=1)
+weights = w_pooled.permute(0, 2, 3, 1).reshape(B, H * W, C)
+
+result = torch.einsum("bhc,bhc->bc", weights, values_view)
+
+# Replacement: torch.ones_like -> torch.maximum
+# Original: result.backward(torch.ones_like(result))
+# We construct a tensor of ones using torch.maximum.
+ones = torch.full(result.shape, 1.0)
+zeros = torch.full(result.shape, 0.0)
+grad_input = torch.maximum(ones, zeros)
+
+result.backward(grad_input)
+
+# Assertion to verify the bug/fix
+# The bug report indicates that strides differ, while the documentation suggests they should be the same.
+print("backward strides", values_view.shape, values_view.grad.stride())
+assert values_view.stride() == values_view.grad.stride(), \
+    f"Stride mismatch: forward {values_view.stride()}, backward {values_view.grad.stride()}"

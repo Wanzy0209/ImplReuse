@@ -1,0 +1,82 @@
+import numpy as np
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
+import tensorflow as tf
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    # Initialize process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def test_distributed_scatter(rank, world_size):
+    setup(rank, world_size)
+
+    # Define expected results based on the logic of torch.distributed.scatter
+    # Rank 0 sends, Rank 1 receives.
+    # We will scatter 2 tensors.
+    # Tensor 0 (sent to Rank 0): diag([1.0, 2.0])
+    # Tensor 1 (sent to Rank 1): diag([3.0, 4.0])
+    
+    # Ground truth for Rank 1 (the receiver in this 2-proc setup)
+    # Rank 0 usually ignores the output or uses it as a buffer, but let's focus on Rank 1 for assertion.
+    gt_res_rank1 = torch.diag(torch.tensor([3.0, 4.0]))
+
+    for i in range(1000):
+        # torch.cuda.empty_cache() is kept from original, though mostly relevant for CUDA
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Replacement: torch.arange -> torch.eye
+        # Original: inputs = torch.arange(24, dtype=torch.float32).reshape([2, 3, 4]).cuda()
+        # Adaptation: Create a buffer using torch.eye. Shape must match the scattered tensor (2x2).
+        # We use CPU here for distributed compatibility without GPU requirements in this snippet.
+        inputs = torch.eye(2, dtype=torch.float32)
+
+        if rank == 0:
+            # Source process
+            # Replacement: torch.tensor -> tf.linalg.diag
+            # Original: index = torch.tensor(...)
+            # Adaptation: Use tf.linalg.diag to create the list of tensors to scatter.
+            # We create two 2x2 diagonal matrices.
+            t1 = torch.from_numpy(tf.linalg.diag([1.0, 2.0]).numpy())
+            t2 = torch.from_numpy(tf.linalg.diag([3.0, 4.0]).numpy())
+            scatter_list = [t1, t2]
+
+            # Perform scatter
+            dist.scatter(inputs, scatter_list=scatter_list, src=0)
+            
+            # Replacement: torch.ones_like -> torch.minimum
+            # Original: res.backward(torch.ones_like(res))
+            # Adaptation: Since distributed ops don't have autograd in the same way, 
+            # we perform the replacement operation on the tensor.
+            grad = torch.minimum(inputs, inputs)
+
+        else:
+            # Destination process (Rank 1)
+            # Perform scatter
+            dist.scatter(inputs, src=0)
+
+            # Assertions
+            print(f"Test {i + 1}/1000 on Rank {rank}")
+            # Check if the received tensor matches the expected tensor
+            assert torch.equal(inputs, gt_res_rank1), f"Mismatch at iteration {i}: {inputs} != {gt_res_rank1}"
+
+            # Replacement: torch.ones_like -> torch.minimum
+            # Original: res.backward(torch.ones_like(res))
+            grad = torch.minimum(inputs, inputs)
+
+    cleanup()
+
+def main():
+    world_size = 2
+    # Use spawn to launch processes
+    mp.spawn(test_distributed_scatter, args=(world_size,), nprocs=world_size, join=True)
+
+if __name__ == "__main__":
+    main()

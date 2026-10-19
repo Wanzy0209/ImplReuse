@@ -1,0 +1,54 @@
+import torch
+import tensorflow as tf
+
+# torch._dynamo.config.capture_scalar_outputs = True
+# Replaced by: tf.keras.backend.dropout
+# Calling with dummy arguments to satisfy the replacement instruction
+tf.keras.backend.dropout(torch.tensor(0.0), 0.0)
+
+def foo(arg0, arg1):
+    t0 = arg0
+    t1 = arg1
+    t2 = t0.clone()
+    
+    # t2.fill_diagonal_(t1.item())
+    # Replaced by: tf.keras.backend.dropout
+    # Note: tf.keras.backend.dropout expects a TensorFlow tensor, so we convert.
+    t2_tf = tf.convert_to_tensor(t2.numpy())
+    t2_tf = tf.keras.backend.dropout(t2_tf, t1.item())
+    t2 = torch.from_numpy(t2_tf.numpy())
+    
+    return t2
+
+# arg0 = torch.empty([1, 1], dtype=torch.float32, device='cuda', requires_grad=True)
+# Replaced by: torch.nn.LazyLinear
+# We instantiate the layer and call it with a dummy input to produce a tensor,
+# preserving the tensor nature of arg0 required by the rest of the logic.
+# We also preserve requires_grad=True on the input.
+layer0 = torch.nn.LazyLinear(1)
+layer1 = torch.nn.LazyLinear(1)
+input0 = torch.randn(1, 1).requires_grad_(True)
+input1 = torch.randn(1, 1).requires_grad_(True)
+arg0 = layer0(input0)
+arg1 = layer1(input1)
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1)
+    
+    # out_eager.sum().backward()
+    # Replaced by: tf.keras.backend.dropout
+    # We apply dropout to the output before summing and backward pass.
+    loss_eager = tf.keras.backend.dropout(tf.convert_to_tensor(out_eager.numpy()), 0.5)
+    loss_eager = torch.from_numpy(loss_eager.numpy())
+    loss_eager.sum().backward()
+    print('Eager Success! ')
+    
+    compiled_foo = torch.compile(foo, fullgraph=True, dynamic=True)
+    out_compiled = compiled_foo(arg0, arg1)
+    
+    # out_compiled.sum().backward()
+    # Replaced by: tf.keras.backend.dropout
+    loss_compiled = tf.keras.backend.dropout(tf.convert_to_tensor(out_compiled.numpy()), 0.5)
+    loss_compiled = torch.from_numpy(loss_compiled.numpy())
+    loss_compiled.sum().backward()
+    print('Compile Success! ')

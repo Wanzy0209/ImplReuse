@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Note: TensorFlow does not have direct equivalents for torch._dynamo or torch._inductor configs.
@@ -62,4 +61,3 @@ if __name__ == '__main__':
         loss = tf.reduce_sum(out_compiled)
     grads = tape.gradient(loss, [arg3, arg4, arg5, sentinel])
     print('Compile Success! ✅')
-```

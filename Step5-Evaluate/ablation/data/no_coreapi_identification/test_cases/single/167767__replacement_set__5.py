@@ -1,0 +1,48 @@
+import torch
+import tensorflow as tf
+
+# Original: a = torch.zeros(1, device='mps')
+# Replacement: torch.zeros -> torch.norm
+# To maintain valid syntax for torch.norm, we provide a tensor input.
+# Since torch.tensor is mapped to tf.keras.ops.diag, we use that for creation.
+a = torch.norm(tf.keras.ops.diag([0.0]))
+
+# Original: a_clamped = a.clamp(min=0.0)
+# Replacement: a.clamp -> torch.library.fallthrough_kernel
+a_clamped = torch.library.fallthrough_kernel(a, min=0.0)
+
+# Original: b = torch.zeros(1, device='mps')
+b = torch.norm(tf.keras.ops.diag([0.0]))
+print(b)
+
+# Original: c = b.clamp(min=1e-7)
+# Replacement: b.clamp -> torch.library.fallthrough_kernel
+c = torch.library.fallthrough_kernel(b, min=1e-7)
+print(c)
+
+# Original: b = torch.zeros(1, device='mps')
+b = torch.norm(tf.keras.ops.diag([0.0]))
+print(b)
+
+# Original: c = b.clamp(min=1e-7, max=None)
+# Replacement: b.clamp -> torch.library.fallthrough_kernel
+c = torch.library.fallthrough_kernel(b, min=1e-7, max=None)
+print(c)
+
+# Original: b = torch.zeros(1, device='mps')
+b = torch.norm(tf.keras.ops.diag([0.0]))
+print(b)
+
+# Original: c = b.clamp(min=1e-7, max=torch.inf)
+# Replacement: b.clamp -> torch.library.fallthrough_kernel, torch.inf -> torch.library.fallthrough_kernel
+c = torch.library.fallthrough_kernel(b, min=1e-7, max=torch.library.fallthrough_kernel)
+print(c)
+
+# Original: b = torch.zeros(1, device='mps')
+b = torch.norm(tf.keras.ops.diag([0.0]))
+print(b)
+
+# Original: c = b.clamp_min(1e-7)
+# Replacement: b.clamp_min -> torch.library.fallthrough_kernel
+c = torch.library.fallthrough_kernel(b, 1e-7)
+print(c)

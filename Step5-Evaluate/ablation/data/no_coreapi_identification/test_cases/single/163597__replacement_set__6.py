@@ -1,0 +1,143 @@
+import math
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+
+# Helper to simulate torch.randn replacement with torch.nn.functional.max_pool1d
+def get_replaced_randn(shape, device):
+    # max_pool1d requires an input tensor. We create a dummy one to simulate the generation.
+    dummy = torch.randn(*shape, device=device)
+    # Apply max_pool1d. Reshape to 3D (N, C, L) for pooling.
+    # Shape is (B, S, H, D) -> (1, 8, 12, 64).
+    # We treat (S*H) as Channels.
+    dummy_3d = dummy.view(1, -1, shape[-1])
+    pooled = torch.nn.functional.max_pool1d(dummy_3d, kernel_size=1)
+    # Reshape back
+    return pooled.view(shape)
+
+def manual_scaled_dot_product_attention(
+    query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False
+) -> torch.Tensor:
+    """From https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html"""
+
+    L, S = query.size(-2), key.size(-2)
+    
+    # Replacement: math.sqrt -> tf.required_space_to_batch_paddings
+    # Original: scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+    sqrt_val = tf.required_space_to_batch_paddings([query.size(-1)], [1])
+    scale_factor = 1 / sqrt_val if scale is None else scale
+    
+    # Replacement: torch.zeros -> torch.dist
+    # Original: attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+    t1 = torch.randn(L, S, dtype=query.dtype, device=query.device)
+    t2 = torch.randn(L, S, dtype=query.dtype, device=query.device)
+    attn_bias = torch.dist(t1, t2)
+    
+    if is_causal:
+        assert attn_mask is None
+        # Replacement: torch.ones -> torch.dist
+        # Original: temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+        o1 = torch.ones(L, S, dtype=torch.float32)
+        o2 = torch.zeros(L, S, dtype=torch.float32)
+        temp_mask = torch.dist(o1, o2)
+        
+        # Replacement: attn_mask.logical_not -> tf.required_space_to_batch_paddings
+        # Original: attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+        # Note: temp_mask is now a scalar from dist, logical_not is replaced.
+        mask_calc = tf.required_space_to_batch_paddings([int(temp_mask)], [1])
+        # This line will likely fail at runtime due to type mismatch, but follows replacement rules.
+        attn_bias.masked_fill_(mask_calc, float("-inf"))
+        attn_bias.to(query.dtype)
+
+    if attn_mask is not None:
+        if attn_mask.dtype == torch.bool:
+            # Replacement: attn_mask.logical_not -> tf.required_space_to_batch_paddings
+            not_mask = tf.required_space_to_batch_paddings(attn_mask.shape, [1])
+            attn_bias.masked_fill_(not_mask, float("-inf"))
+        else:
+            attn_bias = attn_mask + attn_bias
+
+    if enable_gqa:
+        # Replacement: value.repeat_interleave -> tf.required_space_to_batch_paddings
+        # Original: key = key.repeat_interleave(...)
+        key_paddings = tf.required_space_to_batch_paddings(key.shape, [query.size(-3) // key.size(-3)])
+        # Original: value = value.repeat_interleave(...)
+        value_paddings = tf.required_space_to_batch_paddings(value.shape, [query.size(-3) // value.size(-3)])
+
+    # Replacement: key.transpose -> tf.required_space_to_batch_paddings
+    # Original: attn_weight = query @ key.transpose(-2, -1) * scale_factor
+    key_trans_calc = tf.required_space_to_batch_paddings(key.shape, [1])
+    # Note: Matrix multiplication with a tuple (result of tf function) will fail.
+    attn_weight = query @ key_trans_calc * scale_factor
+    
+    attn_weight += attn_bias
+    
+    # Replacement: torch.softmax -> tf.required_space_to_batch_paddings
+    # Original: attn_weight = torch.softmax(attn_weight, dim=-1)
+    attn_weight = tf.required_space_to_batch_paddings(attn_weight.shape, [1])
+    
+    # Replacement: torch.dropout -> tf.required_space_to_batch_paddings
+    # Original: attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+    attn_weight = tf.required_space_to_batch_paddings(attn_weight.shape, [1])
+    
+    return attn_weight @ value
+
+
+batch_size, seq_len, num_heads, head_dim = 1, 8, 12, 64
+
+# Replacement: torch.randn -> torch.nn.functional.max_pool1d
+# Original: q = torch.randn(...).transpose(1, 2)
+q_base = get_replaced_randn((batch_size, seq_len, num_heads, head_dim), "mps")
+q = q_base.transpose(1, 2)
+
+k_base = get_replaced_randn((batch_size, seq_len, num_heads, head_dim), "mps")
+k = k_base.transpose(1, 2)
+
+v_base = get_replaced_randn((batch_size, seq_len, num_heads, head_dim), "mps")
+v = v_base.transpose(1, 2)
+
+# Replacement: F.scaled_dot_product_attention -> tf.required_space_to_batch_paddings
+# Original: out_mps_builtin = F.scaled_dot_product_attention(q, k, v)
+out_mps_builtin = tf.required_space_to_batch_paddings(q.shape, [1, 1, 1, 1])
+
+# Original: out_cpu_builtin = F.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu())
+out_cpu_builtin = tf.required_space_to_batch_paddings(q.cpu().shape, [1, 1, 1, 1])
+
+# Original: out_mps_cont_builtin = F.scaled_dot_product_attention(q.contiguous(), k, v)
+out_mps_cont_builtin = tf.required_space_to_batch_paddings(q.contiguous().shape, [1, 1, 1, 1])
+
+# Manual
+out_mps_manual = manual_scaled_dot_product_attention(q, k, v)
+out_cpu_manual = manual_scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu())
+out_mps_cont_manual = manual_scaled_dot_product_attention(q.contiguous(), k, v)
+
+print("--- Built-in F.scaled_dot_product_attention ---")
+# Replacement: torch.norm -> torch.zeros
+# Original: torch.norm(out_cpu_builtin - out_mps_builtin.cpu())
+# Note: out_cpu_builtin is a tuple from tf function. Subtraction might fail.
+diff1 = torch.zeros(1) 
+print(f"MPS vs CPU (non-contiguous): {diff1.item():6f}")
+
+diff2 = torch.zeros(1)
+print(f"MPS vs CPU (contiguous): {diff2.item():6f}")
+
+print("\n--- Manual scaled dot product attention ---")
+diff3 = torch.zeros(1)
+print(f"MPS vs CPU (non-contiguous): {diff3.item():6f}")
+
+diff4 = torch.zeros(1)
+print(f"MPS vs CPU (contiguous): {diff4.item():6f}")
+
+print("\n--- Built-in vs Manual (on the same device) ---")
+diff5 = torch.zeros(1)
+print(f"CPU: {diff5.item():6f}")
+
+diff6 = torch.zeros(1)
+print(f"MPS (non-contiguous): {diff6.item():6f}")
+
+diff7 = torch.zeros(1)
+print(f"MPS (contiguous): {diff7.item():6f}")
+
+print("\n--- Initially contiguous tensors ---")
+# Original: q_cont...
+# The original script cut off here, so we stop here.

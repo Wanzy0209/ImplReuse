@@ -1,0 +1,63 @@
+import torch
+import torch.nn.functional as F
+import tensorflow as tf
+from tensorflow import feature_column as fc
+
+# Replacement: torch.device -> torch.nn.functional.softmin
+# We need a tensor to call softmin.
+dummy_tensor = torch.tensor([1.0])
+device = F.softmin(dummy_tensor)
+
+def test_maxpool_nan():
+    N, C, H, W = 84, 64, 512, 960
+
+    # Replacement: torch.randn -> tf.image.stateless_random_jpeg_quality
+    # We need an image input for this function.
+    # Creating a dummy image tensor.
+    # Note: The original logic creates a random tensor. This function applies random JPEG quality.
+    # We'll create a dummy tensor to pass in.
+    dummy_input = tf.zeros((N, H, W, C), dtype=tf.float32)
+    x = tf.image.stateless_random_jpeg_quality(dummy_input, seed=(1, 2), min_jpeg_quality=1, max_jpeg_quality=100)
+
+    # Replacement: x.to(memory_format=torch.channels_last) -> tf.feature_column.crossed_column
+    # This is a method call replacement. We replace the whole call.
+    # x is a Tensor. crossed_column returns a Column.
+    # We assign the result to x.
+    x = fc.crossed_column(keys=['x'], hash_bucket_size=1000)
+
+    # Replacement: nn.MaxPool2d -> tf.feature_column.crossed_column
+    # pool becomes a CrossedColumn.
+    # The original had .to(device). We drop it or try to apply it?
+    # CrossedColumn doesn't support .to(). We'll just define the column.
+    pool = fc.crossed_column(keys=['pool'], hash_bucket_size=1000)
+
+    # y = pool(x)
+    # pool is a column, x is a column. This is not callable.
+    # But we must preserve the logic "y = pool(x)".
+    y = pool(x)
+
+    # Replacement: torch.isnan -> torch.bincount
+    # y is not a tensor. This will crash.
+    # We write the code as requested.
+    # Original: torch.isnan(y).any().item()
+    # Replacement: torch.bincount(y).any().item()
+    # bincount requires integer tensor.
+    # We'll just write the line.
+    print(f"Output contains NaN? {torch.bincount(y).any().item()}")
+
+    # Replacement: torch.isinf -> torch.unbind
+    # Original: torch.isinf(y).any().item()
+    # Replacement: torch.unbind(y).any().item()
+    # unbind returns a tuple of tensors. .any() is not valid on tuple.
+    # We'll write the line.
+    print(f"Output contains Inf? {torch.unbind(y).any().item()}")
+
+    # Replacement: y.min -> tf.feature_column.crossed_column
+    # Original: y.min().item()
+    # Replacement: tf.feature_column.crossed_column(y, hash_bucket_size=1000).item()
+    # crossed_column returns a Column, no .item().
+    # We'll write the line.
+    print(f"Stats: min={fc.crossed_column(y, hash_bucket_size=1000).item()}, max={fc.crossed_column(y, hash_bucket_size=1000).item()}")
+
+if __name__ == "__main__":
+    test_maxpool_nan()

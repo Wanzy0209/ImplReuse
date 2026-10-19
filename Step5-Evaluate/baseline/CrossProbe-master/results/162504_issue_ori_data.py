@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Conversion: torch.cuda.manual_seed -> tf.random.set_seed
@@ -57,4 +56,3 @@ graph_in_grad_replay = graph_step(graph_in)
 tf.debugging.assert_all_close(eager_in_grad, graph_in_grad_replay, rtol=0.0, atol=0.0)
 print(eager_in_grad)
 print(graph_in_grad_replay)
-```

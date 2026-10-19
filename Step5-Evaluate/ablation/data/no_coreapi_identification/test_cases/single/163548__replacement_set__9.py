@@ -1,0 +1,83 @@
+import torch
+import torch.nn.functional as F
+import torch.special
+import time
+
+# Replacement: torch.distributed.init_process_group -> torch.nn.functional.cross_entropy
+# Simulating the process group initialization with a cross_entropy call
+input_tensor = torch.randn(1024, 10)
+target_tensor = torch.randint(0, 10, (1024,))
+pg = F.cross_entropy(input_tensor, target_tensor)
+
+# Setup variables (simulating dist.get_world_size and dist.get_rank)
+world_size = 1024
+rank = 0
+
+# Replacement: torch.distributed.device_mesh -> torch.solve
+# Original: device_mesh = init_device_mesh("cpu", (world_size,))
+# Replacement: device_mesh = torch.solve(...)
+A_mesh = torch.eye(world_size)
+b_mesh = torch.randn(world_size, 1)
+device_mesh = torch.solve(A_mesh, b_mesh)
+
+# Replacement: torch.ones -> torch.matrix_power
+# Original: fully_tensor = [torch.ones(1024, 1) for _ in range(1024)]
+# Replacement: fully_tensor = [torch.matrix_power(...) for _ in range(1024)]
+# Note: torch.ones creates a tensor, torch.matrix_power operates on one.
+# We create a base tensor and apply matrix_power to generate the list.
+base_tensor = torch.eye(1024)
+fully_tensor = [torch.matrix_power(base_tensor, 1) for _ in range(1024)]
+
+# Replacement: torch.distributed.tensor -> torch.solve
+# Original: sharded_tensor = [distribute_tensor(...) for t in fully_tensor]
+# Replacement: sharded_tensor = [torch.solve(...) for t in fully_tensor]
+b_shard = torch.randn(1024, 1)
+sharded_tensor = [torch.solve(t, b_shard) for t in fully_tensor]
+
+state_dict = {str(key): value for key, value in enumerate(sharded_tensor)}
+
+# Replacement: DefaultSavePlanner -> torch.solve
+# Original: planner = DefaultSavePlanner()
+planner = torch.solve
+
+# Original: local_plan = planner.create_local_plan()
+# create_local_plan is not in the replacement list, but DefaultSavePlanner is.
+# We skip this specific method call as it doesn't map directly to torch.solve methods
+# and would cause a runtime error, preserving the logic flow where possible.
+
+gather_objs = [None] * world_size
+
+# Replacement: torch.distributed -> torch.solve
+# Original: dist.gather_object(...)
+# dist is mapped to torch.solve. gather_object is not a method of torch.solve.
+# We skip the gather operation to maintain runnability.
+
+if rank == 0:
+    start = time.time()
+
+    # Original: all_local_plans, global_metadata = planner.create_global_plan(gather_objs)
+    # Replacement: planner -> torch.solve
+    # We perform a solve operation to represent the global planning step.
+    # We also leverage the similar API: torch.special.logsumexp.
+    
+    # Prepare inputs for the "global plan" solve
+    A_plan = torch.randn(1024, 1024)
+    b_plan = torch.randn(1024, 1)
+
+    # The "planner" operation
+    solution, _ = planner(A_plan, b_plan)
+
+    # Leveraging the similar API (torch.special.logsumexp) for validation/reduction
+    # This replaces the validation logic that was slow in the original bug.
+    validation_result = torch.special.logsumexp(solution, dim=0)
+
+    end = time.time()
+    print(f"Create global planner cost {end - start}s")
+
+    # Assertion to ensure the test case logic holds
+    assert validation_result.numel() > 0
+
+# Replacement: ndist.barrier -> torch.solve
+# Original: dist.barrier()
+# Replacement: torch.solve(...)
+torch.solve(torch.eye(2), torch.randn(2, 1))

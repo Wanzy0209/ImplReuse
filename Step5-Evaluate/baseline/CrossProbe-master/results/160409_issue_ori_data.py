@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import numpy as np
 
@@ -160,4 +159,3 @@ class TestFlexAttention(tf.test.TestCase):
 
 if __name__ == '__main__':
     tf.test.main()
-```

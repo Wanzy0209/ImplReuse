@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 # Conversion: torch.nn.Linear -> tf.keras.layers.Dense
 # Conversion: torch.nn.attention.flex_attention -> tf.keras.layers.MultiHeadAttention
@@ -69,4 +68,3 @@ compiled_model = tf.function(model)
 
 # Execute
 result = compiled_model(tf.random.normal((2, 128, 64)))
-```

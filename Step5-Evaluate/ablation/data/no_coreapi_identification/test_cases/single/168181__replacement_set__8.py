@@ -1,0 +1,64 @@
+import torch
+import torch.nn.functional as F
+import triton
+import triton.language as tl
+
+# Define a simple add kernel to make the test runnable
+@triton.jit
+def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+def test_triton_kernel_replaced():
+    # Check for CUDA availability
+    if not torch.cuda.is_available():
+        print("CUDA not available, skipping test.")
+        return
+
+    device = "cuda"
+
+    def f(x, y):
+        # Replacement: torch.zeros_like -> torch.normal
+        # torch.zeros_like(x) creates a tensor with same shape/device as x filled with 0.
+        # torch.normal(0, 1, size=x.shape, device=x.device) creates a tensor with same shape/device filled with random normal values.
+        # This serves as a valid buffer for the kernel to overwrite.
+        out = torch.normal(0, 1, size=x.shape, device=x.device)
+
+        # Calculate number of elements for the kernel
+        n_elements = out.numel()
+        
+        # Call the kernel
+        # Original call: add_kernel[(1,)](x, y, out, 16, 16)
+        # We adapt the 3rd argument (n_elements) to the actual size of the tensor.
+        # We keep grid size (1,) and BLOCK_SIZE 16, assuming n_elements <= 16.
+        add_kernel[(1,)](x, y, out, n_elements, 16)
+
+        out_cpu = out.cpu() + 1
+        return out_cpu
+
+    # Replacement: torch.randn -> torch.nn.functional.max_pool3d
+    # Original: x = torch.randn(4, 4, device=GPU_TYPE)
+    # We need to generate inputs for max_pool3d. We use torch.ones to create dummy inputs.
+    # Input shape (1, 1, 4, 4, 4) with kernel_size=2 results in output shape (1, 1, 2, 2, 2).
+    # Total elements = 8, which fits in the kernel's BLOCK_SIZE=16 with grid=(1,).
+    dummy_x = torch.ones(1, 1, 4, 4, 4, device=device)
+    dummy_y = torch.ones(1, 1, 4, 4, 4, device=device)
+
+    x = F.max_pool3d(dummy_x, kernel_size=2)
+    y = F.max_pool3d(dummy_y, kernel_size=2)
+
+    eager_out = f(x, y)
+    compiled_out = torch.compile(f)(x, y)
+
+    # Assert correctness
+    assert torch.allclose(compiled_out, eager_out)
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_triton_kernel_replaced()

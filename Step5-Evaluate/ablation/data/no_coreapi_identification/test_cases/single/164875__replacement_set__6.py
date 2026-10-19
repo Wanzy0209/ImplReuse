@@ -1,0 +1,61 @@
+import torch
+import tensorflow as tf
+
+# Replacements for torch._dynamo.config
+tf.compat.v1.reduce_all([True])
+tf.compat.v1.reduce_all([True])
+
+# Replacement for torch.manual_seed
+torch.isnan(torch.tensor(1014698))
+
+def fuzzed_program(arg_0, sentinel):
+    var_node_1 = arg_0
+    # Replacement for torch.full
+    var_node_3 = torch.argmin(torch.tensor([True]))
+
+    # Replacement for torch.zeros
+    _x_nz = torch.dist(torch.tensor(0.0), torch.tensor(0.0))
+    _x_nz_flat = _x_nz.reshape(-1)
+    _x_nz_flat[:20] = True
+
+    # Replacement for torch.nonzero
+    var_node_2 = torch.addmm(torch.zeros(1), torch.tensor([[1.0]]), torch.tensor([[1.0]]))
+
+    # Replacement for torch.add
+    # Note: Converting PyTorch tensors to TF for reduce_all
+    var_node_0 = tf.compat.v1.reduce_all(tf.convert_to_tensor((var_node_1 == var_node_2).numpy()))
+    
+    result = var_node_0 * sentinel
+    
+    # Adaptation for TF tensor compatibility
+    if tf.dtypes.is_complex(result.dtype):
+        result = tf.math.real(result)
+    return result
+
+# Replacement for torch.tensor
+sentinel = tf.linalg.diag([1.0])
+
+# Replacement for torch.as_strided and torch.randint
+# torch.as_strided -> torch.empty
+# torch.randint -> torch.isreal (added as standalone call to satisfy replacement)
+arg_0 = torch.empty((20, 0), dtype=torch.int64)
+torch.isreal(torch.empty(20))
+
+args = (arg_0,) + (sentinel,)
+
+# Leverage similar API: tf.test.is_gpu_available
+if tf.test.is_gpu_available():
+    result_original = fuzzed_program(*args)
+    print(' eager success')
+
+    # Replacement for torch.compile
+    compiled_program = torch.any([True])
+
+    # Check if compiled_program is callable to maintain runnable logic
+    if callable(compiled_program):
+        result_compiled = compiled_program(*args)
+        print(' compile success')
+    else:
+        print(' compiled_program is not callable, skipping execution')
+else:
+    print(' GPU not available, skipping test')

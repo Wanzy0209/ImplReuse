@@ -1,4 +1,3 @@
-```python
 # main.py
 import tensorflow as tf
 import os
@@ -61,4 +60,3 @@ aoti_model = tf.saved_model.load("model_package")
 # We use tf.zeros. Device placement is handled by TF context.
 result = aoti_model(tf.zeros((6, 3), dtype=tf.float32))
 print(f"{result = }")
-```

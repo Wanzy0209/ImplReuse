@@ -1,0 +1,48 @@
+import torch
+import tensorflow as tf
+
+# Note: This test case assumes a custom 'privateuse1' backend is registered
+# and implements the minimal set of ops with cpu_fallback as described in the bug report.
+
+def get_test_tensor():
+    # Replacement for torch.randn(4, 4, device='privateuse1')
+    # Using tf.random.stateless_truncated_normal
+    shape = (4, 4)
+    seed = [1, 2]
+    tf_tensor = tf.random.stateless_truncated_normal(shape=shape, seed=seed)
+    # Convert to PyTorch tensor
+    t = torch.from_numpy(tf_tensor.numpy())
+    # Move to custom device
+    return t.to('privateuse1')
+
+try:
+    t = get_test_tensor()
+
+    # Test Case 1: torch.abs (The failing case in the bug report)
+    # Bug: returns tensor with shape [0]
+    result = torch.abs(t)
+    assert result.shape == torch.Size([4, 4]), f"Bug reproduced: torch.abs returned shape {result.shape} instead of [4, 4]"
+
+    # Test Case 2: In-place variant (should work)
+    t_inplace = t.clone()
+    t_inplace.abs_()
+    assert t_inplace.shape == torch.Size([4, 4]), "In-place abs failed"
+
+    # Test Case 3: Out variant (should work)
+    out_tensor = torch.empty(4, 4, device='privateuse1')
+    torch.abs(t, out=out_tensor)
+    assert out_tensor.shape == torch.Size([4, 4]), "Out-variant abs failed"
+
+    # Test Case 4: Replacement for torch.neg -> torch.tan
+    # Original: torch.neg(t) # Works (uses structured_delegate)
+    # We expect torch.tan to also work correctly (return correct shape)
+    result_tan = torch.tan(t)
+    assert result_tan.shape == torch.Size([4, 4]), "torch.tan failed"
+
+    print("All tests passed.")
+
+except RuntimeError as e:
+    if "privateuse1" in str(e):
+        print("Skipped: 'privateuse1' backend not registered.")
+    else:
+        raise

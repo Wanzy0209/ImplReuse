@@ -1,0 +1,42 @@
+import torch
+import torch.distributed as dist
+# Replacement: torch.distributed._tensor -> tf.keras.initializers.HeNormal
+from tensorflow.keras.initializers import HeNormal
+
+if __name__ == '__main__':
+    # Replacement: dist.init_process_group -> torch.distributed.scatter_object_list
+    # We use dummy arguments to ensure it runs (or at least is valid syntax)
+    # and wrap in check to avoid crash if not distributed.
+    if dist.is_available() and dist.is_initialized():
+        dist.scatter_object_list([], [], src=0)
+
+    # Replacement: torch.cuda.set_device -> tf.keras.initializers.HeNormal
+    # Original: torch.cuda.set_device(rank)
+    # We just instantiate HeNormal here.
+    HeNormal()
+
+    # Replacement: torch.arange -> torch.norm
+    # Original: tensor = torch.arange(12).reshape(-1, 4).float().cuda()
+    # We create a tensor to norm.
+    # To keep it runnable, we norm a random tensor.
+    # Note: torch.norm returns a scalar, so we drop the reshape.
+    input_data = torch.randn(12, 4).float().cuda()
+    tensor = torch.norm(input_data)
+
+    print("Truth=", tensor.mean())
+
+    # Original: mesh = init_device_mesh('cuda', (2,))
+    # Original: dt = distribute_tensor(tensor, device_mesh=mesh, placements=[Shard(0)])
+    # Since Shard and distribute_tensor are unavailable (module replaced),
+    # we skip the distribution logic and proceed to the result calculation.
+
+    # Replacement: dt.mean -> tf.keras.initializers.HeNormal
+    # Original: mean = dt.mean()
+    mean = HeNormal()
+
+    # Original: full = mean.full_tensor()
+    # HeNormal does not have full_tensor. We skip this.
+
+    # Original: print(rank, mean, full)
+    # We print the mean (HeNormal instance).
+    print("Result:", mean)

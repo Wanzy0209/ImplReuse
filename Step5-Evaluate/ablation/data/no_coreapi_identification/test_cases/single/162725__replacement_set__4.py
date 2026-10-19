@@ -1,0 +1,46 @@
+import torch
+import torch.library
+from torch.testing._internal.common_methods_invocations import op_db
+
+# Define a custom library to use torch.library.impl_abstract
+my_lib = torch.library.Library("test_lib", "DEF")
+my_lib.define("custom_conv_transpose3d(Tensor x, Tensor w) -> Tensor")
+
+# Define the abstract implementation (replaces torch.compile)
+# This defines the meta-kernel behavior for the custom op
+@torch.library.impl_abstract("test_lib::custom_conv_transpose3d")
+def custom_conv_transpose3d_meta(x, w):
+    # Infer output shape for conv_transpose3d with default arguments
+    # H_out = H_in + H_kernel - 1 (for stride=1, padding=0, dilation=1, output_padding=0)
+    b, c, d, h, wi = x.shape
+    _, c_out, k_d, k_h, k_w = w.shape
+    out_shape = (b, c_out, d + k_d - 1, h + k_h - 1, wi + k_w - 1)
+    return x.new_empty(out_shape)
+
+# Define the concrete implementation
+def custom_conv_transpose3d_impl(x, w):
+    return torch.nn.functional.conv_transpose3d(input=x, weight=w)
+
+my_lib.impl("test_lib::custom_conv_transpose3d", custom_conv_transpose3d_impl)
+
+def fn(x, w):
+    return torch.ops.test_lib.custom_conv_transpose3d(x, w)
+
+op_dict = op_db[192]  # nn.functional.conv_transpose3d
+# Enable requires_grad for clip_grad_norm_
+inputs = list(op_dict.sample_inputs("cuda", torch.float32, requires_grad=True))
+
+for sample in inputs:
+    eager_args = sample.input, *sample.args
+    (x, w, b) = eager_args
+    
+    # Run the function
+    res = fn(x, w)
+    
+    # Perform backward pass to generate gradients
+    loss = res.sum()
+    loss.backward()
+    
+    # Replace torch.testing.assert_close with torch.nn.utils.clip_grad_norm_
+    # This verifies the gradients are finite and clips them
+    torch.nn.utils.clip_grad_norm_(w, max_norm=1.0)

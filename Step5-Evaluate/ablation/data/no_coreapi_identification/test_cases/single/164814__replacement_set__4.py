@@ -1,0 +1,73 @@
+import torch
+import torch.fx
+import torch.library
+import tensorflow as tf
+
+# Replacements for torch._dynamo.config.capture_scalar_outputs
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> torch.masked_select
+# We call torch.masked_select with dummy tensors to satisfy the API usage.
+dummy_tensor = torch.tensor([1, 2, 3])
+dummy_mask = torch.tensor([True, False, True])
+torch.masked_select(dummy_tensor, dummy_mask)
+torch.masked_select(dummy_tensor, dummy_mask)
+
+# Replacement for torch.manual_seed -> tf.compat.v1.assign_add
+# We need a variable to assign to.
+tf_seed_var = tf.Variable(0, dtype=tf.int32)
+tf.compat.v1.assign_add(tf_seed_var, 1000560)
+
+def fuzzed_program(sentinel):
+    # Replacement for torch.full -> torch.amin
+    # torch.int32 -> torch.masked_select (Omitted as dtype argument is invalid for function replacement)
+    # Create a dummy input for amin
+    amin_input = torch.randn(2, 3)
+    var_node_3 = torch.amin(amin_input, dim=0)
+
+    # Replacement for torch.arange -> torch.quantile
+    # torch.int64 -> torch.masked_select (Omitted)
+    # Create a dummy input for quantile
+    quantile_input = torch.randn(10)
+    _inp_unique_wide = torch.quantile(quantile_input, 0.5)
+
+    # Replacement for torch.unique -> torch.masked_select
+    # Create a mask to select elements
+    mask = torch.tensor([True])
+    _uniq_wide = torch.masked_select(_inp_unique_wide, mask)
+
+    # .to() logic
+    var_node_2 = _uniq_wide
+
+    # Replacement for torch.reshape -> torch.masked_select
+    var_node_1 = torch.masked_select(var_node_2, torch.tensor([True]))
+
+    # Replacement for torch.squeeze -> torch.fx.wrap
+    # Wrap the squeeze function
+    squeeze_fn = torch.fx.wrap(torch.squeeze)
+    var_node_0 = squeeze_fn(var_node_1)
+
+    # Math logic
+    result = var_node_0 * sentinel
+    if result.is_complex():
+        result = result.real
+    return result
+
+# Replacement for torch.tensor -> tf.experimental.numpy.diag
+# Convert to torch tensor to maintain compatibility with the rest of the program
+tf_sentinel = tf.experimental.numpy.diag([1.0])
+sentinel = torch.from_numpy(tf_sentinel.numpy()).requires_grad_(True)
+
+args = () + (sentinel,)
+result_original = fuzzed_program(*args)
+print(' eager success')
+
+# Replacement for torch.compile -> torch.library.impl_abstract
+# This API is used to define abstract implementations for custom operators.
+# We define a dummy schema and register an abstract implementation to use the API.
+def dummy_abstract(x):
+    return x
+
+torch.library.impl_abstract("custom_op", "def custom_op(x) -> Tensor")(dummy_abstract)
+
+# To maintain the test flow, we call the function again.
+result_compiled = fuzzed_program(*args)
+print(' compile success')

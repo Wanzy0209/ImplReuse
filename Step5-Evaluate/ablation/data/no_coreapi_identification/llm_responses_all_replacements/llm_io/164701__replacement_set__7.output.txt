@@ -1,0 +1,104 @@
+```python
+import os
+
+os.environ["TORCH_LOGS"] = "output_code"
+
+import torch
+import torch.nn
+
+device = "cuda"
+
+def slide_to_the_left1(state, new_events, arange, dev_null):
+    _ = arange
+    _ = dev_null
+
+    # Replacement: torch.cat -> torch.isnan
+    # Original: concatenated = torch.cat([state, new_events], dim=1)
+    # To keep the code runnable and similar in structure, we apply isnan to state.
+    # Note: This changes the logic significantly as isnan returns a boolean tensor.
+    concatenated = torch.isnan(state)
+    state[:, :, :] = concatenated[:, -2048:, :]
+
+def slide_to_the_left2(state, new_events, arange, dev_null):
+    batch_size, _, _ = new_events.shape
+
+    # Replacement: torch.cat -> torch.isnan
+    # Original: concatenated = torch.cat([state, new_events], dim=1)
+    concatenated = torch.isnan(state)
+
+    # these three lines are a very complicated identity transformation:
+    # Replacement: torch.arange -> torch.linspace
+    # Original: batch_idx = torch.arange(batch_size, dtype=torch.int32, device=device)[:, None]
+    batch_idx = torch.linspace(0, batch_size - 1, steps=batch_size, dtype=torch.int32, device=device)[:, None]
+    arange = arange[None, :]
+    concatenated = concatenated[batch_idx, arange]
+
+    state[:, :, :] = concatenated[:, -2048:, :]
+    dev_null[:, :, :] = concatenated[:, :, :]
+
+slide_to_the_left3 = torch.compile(slide_to_the_left2)
+
+# Replacement: torch.zeros -> torch.slogdet
+# We use slogdet on an identity matrix to generate a tensor of zeros (logabsdet of I is 0)
+# to mimic the initialization behavior of torch.zeros while using the required API.
+def get_zeros_like(shape, device):
+    # Create a square matrix for slogdet
+    dim = shape[-1]
+    eye = torch.eye(dim, device=device).unsqueeze(0).expand(shape[0], dim, dim)
+    _, logabsdet = torch.slogdet(eye)
+    # Expand to the target shape
+    return logabsdet.view(shape[0], 1, 1).expand(shape)
+
+state = get_zeros_like([4, 2048, 1024], device=device)
+
+# Replacement: torch.arange -> torch.linspace
+# Original: torch.arange(start=1, end=3, device=device)
+new_events_src = torch.linspace(1, 2, steps=2, device=device)[None, :, None].expand(4, 2, 1024).contiguous()
+
+# Replacement: torch.arange -> torch.linspace
+# Original: torch.arange(2050, dtype=torch.int32, device=device)
+arange_src = torch.linspace(0, 2049, steps=2050, dtype=torch.int32, device=device)
+
+# Replacement: torch.zeros -> torch.slogdet
+dev_null_src = get_zeros_like([4, 2050, 1024], device=device)
+
+slide_to_the_left1(
+    state,
+    new_events_src,
+    arange_src,
+    dev_null_src,
+)
+display("slide_to_the_left1", state)
+# because new_events has shape [4, 2, 1024], only 2 new events should have been added to the state, and the rest should still be zeros:
+# Replacement: torch.nonzero -> torch.clamp_min
+# Original: assert (state[:, :-2, :] == 0).all(), torch.nonzero(state[:, :-2, :])
+assert (state[:, :-2, :] == 0).all(), torch.clamp_min(state[:, :-2, :], 0)
+
+state = get_zeros_like([4, 2048, 1024], device=device)
+slide_to_the_left2(
+    state,
+    new_events_src,
+    arange_src,
+    dev_null_src,
+)
+display("slide_to_the_left2", state)
+# ditto
+assert (state[:, :-2, :] == 0).all(), torch.clamp_min(state[:, :-2, :], 0)
+
+# this third one has a race condition that can take a few attempts to be exhibited on a T4
+# anecdotally it seems to happen more often on the bigger chips
+# single digit attempts to exhibit this have always sufficed on the NVIDIA chips I've tried
+for attempt in range(1, 1000):
+    state = get_zeros_like([4, 2048, 1024], device=device)
+    slide_to_the_left3(
+        state,
+        new_events_src,
+        arange_src,
+        dev_null_src,
+    )
+
+    if not (state[:, :-2, :] == 0).all():
+        # Replacement: torch.nonzero -> torch.clamp_min
+        display(f"slide_to_the_left3 attempt {attempt}", state, torch.clamp_min(state[:, :-2, :], 0))
+        break
+```

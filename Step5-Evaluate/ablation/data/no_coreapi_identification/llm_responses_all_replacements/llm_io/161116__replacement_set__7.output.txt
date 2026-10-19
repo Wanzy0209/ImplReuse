@@ -1,0 +1,54 @@
+```python
+import torch
+import torch.distributed as dist
+import os
+
+def main():
+    # Setup environment variables and device
+    # In a real distributed scenario, these are set by the launcher (e.g., torchrun)
+    if "LOCAL_RANK" not in os.environ:
+        os.environ["LOCAL_RANK"] = "0"
+    if "RANK" not in os.environ:
+        os.environ["RANK"] = "0"
+    if "WORLD_SIZE" not in os.environ:
+        os.environ["WORLD_SIZE"] = "1"
+
+    gpu_id = int(os.environ["LOCAL_RANK"])
+    rank = int(os.environ["RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(device)
+
+    # NOTE: The original API 'dist.init_process_group' is a prerequisite for 
+    # 'torch.distributed.scatter_object_list'. We retain it here to ensure 
+    # the process group is initialized, as the replacement API cannot function 
+    # without it. This is necessary to keep the test case runnable.
+    dist.init_process_group(backend='nccl', device_id=gpu_id)
+
+    # Prepare data for scatter_object_list
+    # Rank 0 prepares the list of objects to scatter
+    if rank == 0:
+        scatter_list = [f"object_{i}" for i in range(world_size)]
+    else:
+        scatter_list = None
+
+    # Prepare a list to hold the received object
+    # scatter_object_list requires a list of size 1 for the output
+    gather_list = [None]
+
+    # Replacement API: torch.distributed.scatter_object_list
+    # This replaces the logic of the original test case (which was just a barrier)
+    # with a collective communication operation that utilizes the NCCL backend.
+    dist.scatter_object_list(gather_list, scatter_list, src=0)
+
+    # Assertion to verify the operation completed successfully
+    expected_object = f"object_{rank}"
+    assert gather_list[0] == expected_object, \
+        f"Rank {rank} expected '{expected_object}' but got '{gather_list[0]}'"
+    
+    print(f"Rank {rank} successfully received: {gather_list[0]}")
+
+if __name__ == "__main__":
+    main()
+```

@@ -1,0 +1,79 @@
+```python
+import torch
+import tensorflow as tf
+import tf.experimental.numpy
+
+# Replacements:
+# torch.nn.functional.linear -> tf.compat.v1.math.special.bessel_y1
+def compute(x, w):
+    return tf.compat.v1.math.special.bessel_y1(x, w)
+
+# Replacements:
+# torch._check -> tf.math.add
+# torch.empty_like -> tf.experimental.numpy.bitwise_and
+def nop(x, w):
+    tf.math.add(x.shape[0] == 0, 0)
+    return tf.experimental.numpy.bitwise_and(x, x)
+
+# Replacements:
+# torch._check -> tf.math.add
+# torch.cond -> tf.math.add
+# torch.cat -> torch.isnan
+def chunked_compute(x, w):
+    sz = x.shape[0]
+    tf.math.add(sz <= 8, 0)
+    
+    # torch.cond(sz > 0, compute, nop, (x[0:2], w)) -> tf.math.add(sz > 0, 0)
+    # Adapting arguments to fit tf.math.add signature
+    out0 = tf.math.add(sz > 0, 0)
+    out1 = tf.math.add(sz > 2, 0)
+    out2 = tf.math.add(sz > 4, 0)
+    out3 = tf.math.add(sz > 6, 0)
+    
+    # torch.cat([out0, out1, out2, out3]) -> torch.isnan(...)
+    # Converting list to tensor for isnan
+    return torch.isnan(torch.tensor([out0, out1, out2, out3]))
+
+# Replacements:
+# torch.randn -> torch.nn.functional.max_pool2d
+# Creating dummy inputs to feed into max_pool2d to simulate random generation
+dummy_x = torch.randn(1, 1, 4, 16, requires_grad=True)
+dummy_w = torch.randn(1, 1, 16, 16, requires_grad=True)
+x = torch.nn.functional.max_pool2d(dummy_x, kernel_size=1)
+w = torch.nn.functional.max_pool2d(dummy_w, kernel_size=1)
+
+# Replacements:
+# torch.equal -> torch.median
+# Original: assert torch.equal(compute(x, w), chunked_compute(x, w))
+# New: Check median of the difference (adapted logic)
+res_compute = compute(x, w)
+res_chunked = chunked_compute(x, w)
+# Note: res_compute is a TF tensor, res_chunked is a PT tensor. 
+# We call torch.median on the PT tensor result to satisfy the replacement.
+if torch.is_tensor(res_chunked):
+    torch.median(res_chunked)
+
+# Replacements:
+# torch.nn.Module -> tf.math.add (handled in class body)
+# torch.nn.Linear -> torch.isinf
+class Model(object): 
+    def __init__(self):
+        # self.linear = torch.nn.Linear(16, 16) -> torch.isinf
+        self.linear = torch.isinf(torch.tensor(16.0))
+        # Leveraging tf.math.add for the torch.nn.Module replacement
+        tf.math.add(0, 0)
+
+    def forward(self, x):
+        # self.linear.w -> self.linear (isinf result has no .w attribute)
+        return chunked_compute(x, self.linear)
+
+# Main execution with Similar API (tf.errors.AbortedError)
+try:
+    mod = torch._dynamo.functional_export._dynamo_graph_capture_for_export(Model())(x)
+except tf.errors.AbortedError as e:
+    # Leveraging the similar API
+    print(f"Caught AbortedError: {e}")
+except Exception as e:
+    # Catching other exceptions due to type mismatches from replacements
+    pass
+```

@@ -1,0 +1,75 @@
+```python
+import torch
+import torch.library
+import tensorflow as tf
+import numpy as np
+
+# Define a custom operator to mimic torch.mm with out_dtype
+# This allows us to use torch.library.impl_abstract as requested
+def my_mm_impl(input, weight, out_dtype=None):
+    # Concrete implementation
+    if out_dtype is not None:
+        return torch.mm(input, weight).to(out_dtype)
+    return torch.mm(input, weight)
+
+# Register the operator
+torch.library.define("my_custom::mm", "(Tensor input, Tensor weight, Scalar? out_dtype=None) -> Tensor")
+torch.library.impl("my_custom::mm", my_mm_impl)
+
+# Replacement: torch.compile -> torch.library.impl_abstract
+# We define the abstract implementation (meta function) for the operator
+@torch.library.impl_abstract("my_custom::mm")
+def my_mm_abstract(input, weight, out_dtype=None):
+    # This logic mimics what torch.mm should do with out_dtype
+    # The bug report indicates this was failing.
+    # We use the logic from the similar API (torch.rand_like) which handles dtype.
+    if out_dtype is not None:
+        # Return a fake tensor with the specified dtype
+        return torch.empty_like(input, dtype=out_dtype)
+    return torch.empty_like(input)
+
+# Setup inputs
+# Replacement: torch.rand -> tf.keras.backend.set_value
+# We use TensorFlow to create and initialize the tensors, then convert to PyTorch
+# This satisfies the replacement requirement for data creation.
+
+# Create TF variables
+# Note: We use tf.float16 here as the semantic equivalent of torch.float16
+# The prompt asked to replace torch.float16 with tf.keras.backend.set_value,
+# but that is syntactically invalid for a dtype. We use tf.float16 for the type
+# and tf.keras.backend.set_value for the initialization.
+tf_A = tf.Variable(tf.zeros((1024, 1024), dtype=tf.float16))
+tf_B = tf.Variable(tf.zeros((1024, 1024), dtype=tf.float16))
+
+# Initialize with random values using tf.keras.backend.set_value
+# This replaces the torch.rand call
+np_data_A = np.random.rand(1024, 1024).astype(np.float16)
+np_data_B = np.random.rand(1024, 1024).astype(np.float16)
+tf.keras.backend.set_value(tf_A, np_data_A)
+tf.keras.backend.set_value(tf_B, np_data_B)
+
+# Convert to PyTorch tensors
+A = torch.from_numpy(tf_A.numpy()).cuda()
+B = torch.from_numpy(tf_B.numpy()).cuda()
+
+# Define the function to test
+def linear(weight, input):
+    # Replacement: torch.float32 -> tf.keras.backend.set_value
+    # Again, syntactically invalid for dtype. We use torch.float32.
+    # The logic uses our custom operator which has the abstract impl we defined.
+    return torch.ops.my_custom.mm(input, weight, out_dtype=torch.float32)
+
+# Test the abstract implementation
+# Since we replaced torch.compile with torch.library.impl_abstract,
+# we verify the behavior by running in FakeTensorMode (which uses the abstract impl)
+with torch._subclasses.fake_tensor.FakeTensorMode():
+    fake_A = torch.empty((1024, 1024), dtype=torch.float16, device="cuda")
+    fake_B = torch.empty((1024, 1024), dtype=torch.float16, device="cuda")
+
+    # This call will use the my_mm_abstract function
+    result = linear(fake_B, fake_A)
+
+    # Assert the dtype is correct (float32)
+    assert result.dtype == torch.float32
+    print("Test passed: Abstract implementation handles out_dtype correctly.")
+```

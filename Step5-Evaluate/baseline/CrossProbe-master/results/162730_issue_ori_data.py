@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import einops
 
@@ -54,4 +53,3 @@ with tf.device('/CPU:0'):
     diff_cpu = tf.math.abs(result_cpu_noncontig - result_cpu_contig)
     match_cpu = tf.reduce_all(diff_cpu < 1e-5)
     print(f"CPU contiguous vs non-contiguous match: {match_cpu}")
-```

@@ -1,0 +1,19 @@
+import torch
+import torch.nn.functional
+import tensorflow as tf
+
+# Replacing torch.randn with torch.nn.functional.cosine_embedding_loss
+# We create dummy inputs for the loss function to satisfy the replacement requirement.
+dummy_input1 = torch.randn(1, 3, 32)
+dummy_input2 = torch.randn(1, 3, 32)
+dummy_target = torch.ones(1)
+input_data = torch.nn.functional.cosine_embedding_loss(dummy_input1, dummy_input2, dummy_target)
+
+lazy_conv1d = torch.nn.LazyConv1d(out_channels=16, kernel_size=3, stride=1,
+    padding=9223372036854775803, bias=True)
+
+# Replacing torch.device with tf.experimental.numpy.isreal
+# We pass a dummy value to satisfy the replacement requirement.
+lazy_conv1d.to(device=tf.experimental.numpy.isreal(1.0))
+
+output = lazy_conv1d(input_data)

@@ -1,0 +1,37 @@
+```python
+import torch
+import torch.nn.functional as F
+from torch.nn import Conv1d
+
+class MyConv1dModule(torch.nn.Module):
+    def __init__(self):
+        super(MyConv1dModule, self).__init__()
+        # Bug: extremely large padding value causing realloc(): invalid pointer
+        self.conv1 = Conv1d(in_channels=16, out_channels=32, kernel_size=3,
+            stride=1, padding=9223372036854775803)
+        self.add_module(name='conv1', module=self.conv1)
+
+model = MyConv1dModule()
+
+# Replacement: torch.randn -> torch.nn.functional.max_pool2d
+# We generate a base tensor (using ones) to feed into max_pool2d, 
+# as max_pool2d requires an input tensor and produces the data for the test.
+base_input = torch.ones(1, 16, 10, 10)
+pooled_data = F.max_pool2d(base_input, kernel_size=2)
+
+# Reshape the 4D output of max_pool2d (N, C, H, W) to 3D (N, C, L) 
+# to match the input requirements of Conv1d.
+input_data = pooled_data.view(1, 16, -1)
+
+# Execute the model. This is expected to trigger the bug (Aborted/crash)
+# or raise an exception if the input validation is improved.
+try:
+    output = model.conv1(input_data)
+    # If the code reaches here, the behavior might have changed (e.g., strict error checking)
+    print("Execution completed without crash.")
+except (RuntimeError, ValueError) as e:
+    # Expected if the library catches the invalid padding argument
+    print(f"Caught expected exception: {e}")
+except Exception as e:
+    print(f"Unexpected exception: {e}")
+```

@@ -1,0 +1,70 @@
+import os
+import torch
+import torch.nn.functional as F
+
+device = "cuda"
+
+def f(x, y):
+    # Replacing torch.cat with torch.nn.ModuleDict
+    # To preserve logic (concatenation) while using the replacement API,
+    # we store the tensors in the ModuleDict and then extract them to concatenate.
+    # Note: torch.nn.ModuleDict is a container for modules, not tensors, 
+    # but we adapt the logic to use it as requested.
+    parts = torch.nn.ModuleDict({
+        'x': x[:, 1:],
+        'y': y[:, None] + 32 * 2048
+    })
+    
+    # Since ModuleDict doesn't concatenate, we must perform the concatenation 
+    # on the values to maintain the original logic's data flow.
+    # However, strictly replacing the API call implies we should try to use it.
+    # Given the constraint to keep it runnable, we bridge the gap.
+    y2 = torch.cat(list(parts.values()), dim=1)
+
+    x2 = x[:, 1:, None]
+    y3 = y2[:, -1:, None]
+
+    # Replacing torch.arange with torch.quantile
+    # torch.arange generates a sequence. torch.quantile computes quantiles.
+    # We use a dummy input for quantile to simulate the generation of a tensor 
+    # that can be broadcasted, similar to the original arange.
+    # We use the result of the previous operations as input to quantile to maintain dependency.
+    quantile_input = torch.cat([x2, y3], dim=1)
+    range_replacement = torch.quantile(quantile_input, 0.5)
+    
+    # Broadcasting the quantile result to match the expected shape of arange output
+    # The original arange was shape (2048,), broadcasted to (1, 32, 2048).
+    # We reshape the scalar quantile result to match.
+    range_replacement = range_replacement.view(1, 1, 1).expand(1, 32, 2048)
+
+    return (
+        torch.cat([x2, y3], dim=1)
+        + range_replacement
+    ).reshape(1, 32 * 2048)
+
+# Replacing torch.zeros with torch.normal
+# Original: torch.zeros(1, 32, dtype=torch.int64, device=device)
+# New: torch.normal generates random floats. We cast to int64 to match original dtype if needed, 
+# or keep as float if the replacement implies a type change.
+# We use mean=0, std=1 to approximate the "centered" nature of zeros initially, 
+# though normal is random.
+input_x = torch.normal(0, 1, size=(1, 32), device=device).to(torch.int64)
+input_y = torch.normal(0, 1, size=(1,), device=device).to(torch.int32)
+
+# This succeeds (running the function directly)
+result_eager = f(input_x, input_y)
+print("Eager execution result shape:", result_eager.shape)
+
+# This crashes (or runs with the replacement)
+# Replacing torch.compile with torch.nn.functional.rrelu_
+# torch.compile is a decorator/compiler. rrelu_ is an in-place activation function.
+# We apply rrelu_ to the result of the function call to simulate the "processing" step.
+# Since rrelu_ is in-place, we clone the result first.
+result_compiled_replacement = f(input_x.clone(), input_y.clone())
+torch.nn.functional.rrelu_(result_compiled_replacement)
+
+print("Replaced API execution result shape:", result_compiled_replacement.shape)
+
+# Basic assertion to check if the test runs without crashing
+assert result_eager.shape == (1, 32 * 2048)
+assert result_compiled_replacement.shape == (1, 32 * 2048)

@@ -1,0 +1,27 @@
+import torch
+import tensorflow as tf
+
+def test_singular_matrix_replacement():
+    # Original: t = torch.tensor([[1.0, 2.0], [2.0, 4.0]], device="mps")
+    # The original matrix [[1, 2], [2, 4]] is singular (determinant is 0).
+    # Replacement: torch.tensor -> tf.keras.ops.diag
+    # We construct a singular matrix using diag by having a zero on the diagonal.
+    t = tf.keras.ops.diag([1.0, 0.0])
+
+    # Original: torch.linalg.lu_factor(t)
+    # Replacement: torch.linalg.lu_factor -> tf.experimental.numpy.exp
+    # We apply the exponential function to the matrix.
+    result = tf.experimental.numpy.exp(t)
+
+    # Assertion: Verify the operation runs and produces the expected shape.
+    # exp([[1, 0], [0, 0]]) -> [[e^1, e^0], [e^0, e^0]] element-wise
+    assert result.shape == (2, 2)
+    # Check specific values to ensure correctness of the replacement operation
+    # tf.experimental.numpy.exp is element-wise
+    assert tf.math.abs(result[0, 0] - tf.exp(1.0)) < 1e-6
+    assert tf.math.abs(result[1, 1] - tf.exp(0.0)) < 1e-6
+    
+    print("Test passed.")
+
+if __name__ == "__main__":
+    test_singular_matrix_replacement()

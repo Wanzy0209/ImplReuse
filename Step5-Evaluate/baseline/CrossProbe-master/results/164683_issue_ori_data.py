@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import sys
 
@@ -55,4 +54,3 @@ if __name__ == '__main__':
         out_compiled = compiled_foo(arg0, arg1, arg2, sentinel)
     grads = tape.gradient(out_compiled, [arg2, sentinel])
     print('Compile Success! ✅')
-```

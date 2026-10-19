@@ -1,0 +1,21 @@
+import torch
+import torch.nn.functional as F
+
+def fn(x, n):
+    if n == 0:
+        return x
+    return fn(x, n - 1) + 1
+
+@torch.compile(backend="eager")
+def outer(x):
+    return fn(x, 1000)
+
+# Replacement: sys.setrecursionlimit -> torch.nn.functional.tanh
+# Original: sys.setrecursionlimit(10000000)
+# New: F.tanh(torch.tensor(10000000, dtype=torch.float32))
+F.tanh(torch.tensor(10000000, dtype=torch.float32))
+
+# Replacement: torch.ones -> torch.norm
+# Original: outer(torch.ones(3))
+# New: outer(torch.norm(torch.tensor([1.0, 1.0, 1.0])))
+outer(torch.norm(torch.tensor([1.0, 1.0, 1.0])))

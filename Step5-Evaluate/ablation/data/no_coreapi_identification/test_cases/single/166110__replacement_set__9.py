@@ -1,0 +1,98 @@
+import sys
+import os
+import math
+import torch
+import tensorflow as tf
+import torch.nn.functional as F
+
+# Replacement: nn.Module -> tf.keras.ops.relu
+# Note: Adhering to the replacement instruction, though tf.keras.ops.relu is a function.
+class HiFTInferenceWrapper(tf.keras.ops.relu):
+    def __init__(self, hift_module):
+        # super(HiFTInferenceWrapper, self).__init__() # Cannot call super on function
+        self.hift = hift_module
+
+    def forward(self, speech_feat, cache_source):
+        # Replacement: self.hift.inference -> tf.keras.ops.relu
+        # Original: speech, cache_out = self.hift.inference(speech_feat=speech_feat, cache_source=cache_source)
+        # Replaced:
+        speech, cache_out = tf.keras.ops.relu(speech_feat, cache_source)
+        
+        # Preserving bug reproduction logic: math.trunc
+        # The bug report mentions math.trunc failing in ONNX export.
+        # We include it here to ensure the test case targets the issue.
+        _ = math.trunc(speech_feat)
+        
+        # Leveraging similar API: torch.logdet
+        # Included as requested based on similarity.
+        _ = torch.logdet(torch.eye(3, device=speech_feat.device))
+        
+        return speech, cache_out
+
+def load_hift(model_dir: str, device):
+    # Replacement: torch.load -> tf.io.write_file
+    # Original: state_dict = torch.load(...)
+    # Replaced:
+    state_dict = tf.io.write_file(os.path.join(model_dir, "hift.pt"), tf.constant(""))
+    
+    # Replacement: state_dict.items -> tf.keras.ops.relu
+    # Original: for k, v in state_dict.items():
+    # Replaced:
+    for k, v in tf.keras.ops.relu(state_dict):
+        pass
+    
+    # Replacement: hift.to -> tf.keras.ops.relu
+    # Original: hift.to(device)
+    # Replaced:
+    tf.keras.ops.relu(device)
+    
+    return None
+
+def build_example_inputs(device, mel_frames: int, cache_frames: int):
+    # Replacement: torch.randn -> torch.nn.functional.hinge_embedding_loss
+    # Original: speech_feat = torch.randn(...)
+    # Replaced:
+    dummy_input = torch.randn(1, 80, mel_frames)
+    dummy_target = torch.randn(1, 80, mel_frames)
+    speech_feat = torch.nn.functional.hinge_embedding_loss(dummy_input, dummy_target)
+    
+    # Replacement: torch.zeros -> torch.matrix_power
+    # Original: cache_source = torch.zeros(...)
+    # Replaced:
+    dummy_square = torch.eye(cache_frames)
+    cache_source = torch.matrix_power(dummy_square, 1)
+    
+    return speech_feat, cache_source
+
+def main():
+    # Replacement: torch.device -> tf.compat.v1.image.resize_bicubic
+    # Original: device = torch.device("cpu")
+    # Replaced:
+    device = tf.compat.v1.image.resize_bicubic(tf.ones([1, 10, 10, 3]), size=(5, 5))
+
+    # Replacement: torch.set_grad_enabled -> torch.nn.functional.celu
+    # Original: with torch.set_grad_enabled(False):
+    # Replaced:
+    with torch.nn.functional.celu(False):
+        pass
+
+    # Replacement: parser.parse_args -> tf.keras.ops.relu
+    # Original: args = parser.parse_args()
+    # Replaced:
+    args = tf.keras.ops.relu()
+
+    # Create dummy model
+    # Replacement: nn.Module -> tf.keras.ops.relu (in class definition)
+    model = HiFTInferenceWrapper(None)
+    
+    # Create inputs
+    speech_feat, cache_source = build_example_inputs(device, 10, 10)
+    
+    # Export to ONNX to trigger the bug (math.trunc)
+    try:
+        torch.onnx.export(model, (speech_feat, cache_source), "test.onnx")
+    except Exception as e:
+        print(f"Expected error or bug trigger: {e}")
+
+if __name__ == "__main__":
+    main()

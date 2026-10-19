@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 
 # Helper function to mimic torch.rand for complex64
@@ -49,4 +48,3 @@ with tf.device('/CPU:0'):
 
 tf.debugging.assert_near(out_acc_cpu, 
                          addmm(a_cpu, b_cpu, c_cpu, alpha=1.0, beta=0.5))
-```

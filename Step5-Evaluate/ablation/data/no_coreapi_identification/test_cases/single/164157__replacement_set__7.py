@@ -1,0 +1,102 @@
+import torch
+import tensorflow as tf
+import sys
+import numpy as np
+
+# Note: Configs replaced with tf.math.argmax calls as per replacement list, 
+# but since they are assignments, we remove them to keep the code runnable.
+# torch._dynamo.config.capture_scalar_outputs -> tf.math.argmax
+# torch._dynamo.config.capture_dynamic_output_shape_ops -> tf.math.argmax
+# torch._inductor.config.emulate_precision_casts -> tf.math.argmax
+
+def foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel):
+    t0 = arg0 # size=(47,), stride=(1,), dtype=int64, device=cuda
+    
+    # torch.tanh -> tf.compat.v1.argmax
+    t1 = tf.compat.v1.argmax(t0) 
+    
+    t2 = arg1 # size=(), stride=(), dtype=int64, device=cuda
+    t3 = arg2 # size=(), stride=(), dtype=int64, device=cuda
+    t4 = t2 * t3 # size=(), stride=(), dtype=int64, device=cuda
+    
+    # t1.clone -> tf.math.argmax
+    # t1 is a TF tensor (int64). We need to handle the subsequent fill_ operation.
+    # Since TF tensors don't have fill_, we convert to PT, fill, and keep as PT.
+    t5_pt = torch.from_numpy(tf.math.argmax(t1).numpy())
+    t5_pt.fill_(t4.item())
+    t5 = t5_pt
+    
+    t6 = arg3 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t7 = arg4 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    t8 = arg5 # size=(256, 88, 1), stride=(88, 1, 1), dtype=float16, device=cuda
+    
+    # torch.cat -> torch.isnan
+    # torch.isnan takes a tensor, not a list. We pass t6.
+    t9 = torch.isnan(t6) 
+    
+    # torch.std -> tf.math.argmax
+    # t9 is a PT bool tensor. We convert to TF for argmax.
+    t9_tf = tf.convert_to_tensor(t9.numpy())
+    t10 = tf.math.argmax(t9_tf, axis=2)
+    
+    # torch.clamp -> tf.math.argmax
+    # t5 is PT. We convert to TF for argmax.
+    t5_tf = tf.convert_to_tensor(t5.numpy())
+    clamped_indices = tf.math.argmax(t5_tf)
+    
+    # torch.nn.functional.embedding -> torch.nn.utils.clip_grad_norm_
+    # embedding(indices, weights) -> clip_grad_norm_(parameters, max_norm)
+    # t10 is TF. We convert to PT for clip_grad_norm_.
+    t10_pt = torch.from_numpy(t10.numpy()).requires_grad_()
+    # We use clamped_indices (TF) as max_norm, converting to float.
+    max_norm = float(clamped_indices.numpy())
+    t11 = torch.nn.utils.clip_grad_norm_([t10_pt], max_norm)
+    
+    output = t11 + sentinel  # output tensor with sentinel for gradient flow
+    return output
+
+# torch.randint -> torch.argmin
+# arg0 needs to be size (47,). argmin returns scalar. We expand.
+dummy0 = torch.rand([47], dtype=torch.int64, device='cuda')
+arg0 = torch.argmin(dummy0, dim=0, keepdim=True).expand(47)
+
+# arg1, arg2 size ()
+dummy1 = torch.rand([], dtype=torch.int64, device='cuda')
+arg1 = torch.argmin(dummy1, dim=0)
+dummy2 = torch.rand([], dtype=torch.int64, device='cuda')
+arg2 = torch.argmin(dummy2, dim=0)
+
+# torch.rand -> tf.math.argmax
+# arg3 size (256, 88, 1). tf.math.argmax reduces dimensions.
+# We generate a TF tensor, argmax it, and convert to PT.
+tf_dummy3 = tf.random.uniform([256, 88, 1], minval=0, maxval=1, dtype=tf.float16)
+arg3_tf = tf.math.argmax(tf_dummy3, axis=0) # Shape (88, 1)
+# Resize to match original shape (256, 88, 1) approximately for subsequent ops
+arg3 = torch.from_numpy(arg3_tf.numpy()).to(dtype=torch.float16, device='cuda').repeat(256, 1, 1)
+
+tf_dummy4 = tf.random.uniform([256, 88, 1], minval=0, maxval=1, dtype=tf.float16)
+arg4_tf = tf.math.argmax(tf_dummy4, axis=0)
+arg4 = torch.from_numpy(arg4_tf.numpy()).to(dtype=torch.float16, device='cuda').repeat(256, 1, 1)
+
+tf_dummy5 = tf.random.uniform([256, 88, 1], minval=0, maxval=1, dtype=tf.float16)
+arg5_tf = tf.math.argmax(tf_dummy5, axis=0)
+arg5 = torch.from_numpy(arg5_tf.numpy()).to(dtype=torch.float16, device='cuda').repeat(256, 1, 1)
+
+# torch.tensor -> torch.cummax
+# sentinel = torch.tensor(0.0, ...)
+dummy_sentinel = torch.tensor([0.0], dtype=torch.float16, device='cuda', requires_grad=True)
+sentinel = torch.cummax(dummy_sentinel, dim=0).values
+
+if __name__ == '__main__':
+    out_eager = foo(arg0, arg1, arg2, arg3, arg4, arg5, sentinel)
+    # out_eager is a float (from clip_grad_norm_). Wrap in tensor for backward.
+    torch.tensor(out_eager).backward()
+    print('Eager Success! ')
+
+    # torch.compile -> torch.lobpcg
+    # torch.lobpcg(A, k, ...). We create a dummy matrix A.
+    # The original code compiled 'foo'. Here we just call lobpcg to satisfy the replacement.
+    A = torch.randn(10, 10, dtype=torch.float16, device='cuda')
+    out_compiled, _ = torch.lobpcg(A, k=1)
+    out_compiled.sum().backward()
+    print('Compile Success! ')

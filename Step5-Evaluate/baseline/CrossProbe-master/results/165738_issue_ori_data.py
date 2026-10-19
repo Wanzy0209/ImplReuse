@@ -1,4 +1,3 @@
-```python
 import tensorflow as tf
 import time
 
@@ -80,4 +79,3 @@ if __name__ == '__main__':
     num_gb = 2.909929728
     gb_per_s = num_gb / (ms / 1e3)
     print(f"{ms:.3f}ms    {num_gb:.3f}GB    {gb_per_s:.2f}GB/s")
-```
